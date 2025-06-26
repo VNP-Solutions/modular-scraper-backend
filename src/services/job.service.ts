@@ -15,6 +15,7 @@ import {
 import { IProperty, Property } from "../models/property.model.js";
 
 export interface CreateJobData {
+  name?: string;
   user_id: string;
   property_id?: string;
   portfolio_id?: string;
@@ -27,7 +28,8 @@ export interface CreateJobData {
   next_due_date: Date;
   ota_provider: OTAProvider;
   execution_type: string;
-  job_backoff_length: number;
+  job_backoff_length_loading: number;
+  job_backoff_length_selector: number;
   priority?: number;
   max_retries?: number;
   retry_delay_ms?: number;
@@ -228,6 +230,27 @@ export class JobService {
    */
   async failJob(jobId: string): Promise<IJob | null> {
     return await this.updateJobStatus(jobId, JobStatus.Failed);
+  }
+
+  /**
+   * Update job log link
+   */
+  async updateJobLogLink(jobId: string, logLink: string): Promise<IJob | null> {
+    try {
+      const objectId = this.validateObjectId(jobId, "jobId");
+
+      return await Job.findByIdAndUpdate(
+        objectId,
+        {
+          log_link: logLink,
+          updatedAt: new Date(),
+        },
+        { new: true }
+      );
+    } catch (error) {
+      console.error(`Error updating job log link: ${error}`);
+      return null;
+    }
   }
 
   /**

@@ -1,11 +1,13 @@
 import { Page } from "puppeteer";
 import { delay } from "../common/delay.js";
-import { scrapingStateManager } from "../common/scraping-state.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
+import { scrapingStateManager } from "../common/scraping-state.js";
+import { timeoutManager } from "../common/timeout-manager.js";
 
 export async function propertySearchAndClickReservation(
   page: Page,
-  propertyId: string
+  propertyId: string,
+  jobId?: string
 ): Promise<void> {
   try {
     // Check if scraping is paused before starting
@@ -15,11 +17,15 @@ export async function propertySearchAndClickReservation(
       throw new Error("Scraping was stopped during property search");
     }
 
+    // Get timeout configuration for this job
+    const selectorTimeout = await timeoutManager.getSelectorTimeout(jobId);
+    const loadingTimeout = await timeoutManager.getLoadingTimeout(jobId);
+
     if (propertyId) {
       // Wait for property table to load
       await page.waitForSelector(".fds-data-table-wrapper", {
         visible: true,
-        timeout: 30000,
+        timeout: selectorTimeout,
       });
 
       // Check pause state before proceeding
@@ -59,7 +65,7 @@ export async function propertySearchAndClickReservation(
         // Wait for search results to update
         await page.waitForSelector("tbody tr", {
           visible: true,
-          timeout: 10000,
+          timeout: loadingTimeout,
         });
 
         // Find and click the property link
@@ -81,13 +87,15 @@ export async function propertySearchAndClickReservation(
         }, String(propertyId));
 
         if (clicked) {
-          await dualLogInfo(`Found and clicked property with ID: ${propertyId}`);
+          await dualLogInfo(
+            `Found and clicked property with ID: ${propertyId}`
+          );
 
           // Wait for navigation
           await Promise.all([
             page.waitForNavigation({
               waitUntil: "networkidle0",
-              timeout: 30000,
+              timeout: loadingTimeout,
             }),
             delay(8000),
           ]);
@@ -116,7 +124,7 @@ export async function propertySearchAndClickReservation(
       // Wait for the drawer content to load
       await page.waitForSelector(".uitk-drawer-content", {
         visible: true,
-        timeout: 30000,
+        timeout: loadingTimeout,
       });
 
       // Click using JavaScript with the exact structure
@@ -148,7 +156,7 @@ export async function propertySearchAndClickReservation(
       await Promise.all([
         page.waitForNavigation({
           waitUntil: "networkidle0",
-          timeout: 80000,
+          timeout: loadingTimeout,
         }),
         delay(8000),
       ]);

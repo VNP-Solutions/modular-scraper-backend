@@ -3,6 +3,7 @@ import { Page } from "puppeteer";
 import { applyFilter } from "../apply-filter/apply-filter.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
+import { timeoutManager } from "../common/timeout-manager.js";
 import { splitDateRangeIntoChunks } from "./helper.js";
 dotenv.config();
 
@@ -22,11 +23,14 @@ export async function splitDateRange(
       throw new Error("Scraping was stopped during date splitting");
     }
 
+    // Get timeout configuration for this job
+    const selectorTimeout = await timeoutManager.getSelectorTimeout(jobId);
+
     // Wait for date filters to be visible
     await dualLogInfo("Waiting for date filters...");
     await page.waitForSelector('input[type="radio"][name="dateTypeFilter"]', {
       visible: true,
-      timeout: 80000,
+      timeout: selectorTimeout,
     });
 
     // Get the current URL

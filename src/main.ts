@@ -54,7 +54,7 @@ async function main(
       // Step 1: Setup browser and navigate to login page
       await dualLogInfo("Setting up browser...");
 
-      const { browser, page } = await browserSetup();
+      const { browser, page } = await browserSetup(jobId);
 
       await dualLogInfo(
         "Browser setup complete. Page is ready at login screen."
@@ -94,7 +94,7 @@ async function main(
             return;
           }
 
-          await login(browser, page, email, password);
+          await login(browser, page, email, password, jobId);
           await dualLogInfo(
             "Login completed successfully! User is now logged in."
           );
@@ -119,7 +119,7 @@ async function main(
             return;
           }
 
-          await handleOtpVerification(page);
+          await handleOtpVerification(page, jobId);
           await dualLogInfo("OTP verification completed successfully!");
         } catch (error: any) {
           await dualLogError("OTP verification failed:", error);
@@ -144,7 +144,7 @@ async function main(
               `Starting property search for Expedia ID: ${expediaId}`
             );
 
-            await propertySearchAndClickReservation(page, expediaId);
+            await propertySearchAndClickReservation(page, expediaId, jobId);
 
             await dualLogInfo(
               "Property search and reservation completed successfully!"

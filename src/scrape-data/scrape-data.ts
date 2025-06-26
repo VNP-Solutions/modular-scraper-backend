@@ -6,6 +6,7 @@ import {
   dualLogWarn,
 } from "../common/log-helper.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
+import { timeoutManager } from "../common/timeout-manager.js";
 import { CardInfo, PaymentInfo } from "../models/job-item.model.js";
 import { CreateJobItemData, jobService } from "../services/job.service.js";
 
@@ -24,6 +25,9 @@ export async function scrapeData(
       `Starting scrapeData with jobId: ${jobId}, expediaId: ${expediaId}`,
       { jobId, expediaId, start_date, end_date }
     );
+
+    // Get timeout configuration for this job
+    const selectorTimeout = await timeoutManager.getSelectorTimeout(jobId);
 
     // Get property_id from job for database storage
     let propertyIdForDb: string | null = null;
@@ -111,7 +115,7 @@ export async function scrapeData(
         // Wait for table data to load
         await page.waitForSelector("table.fds-data-table tbody tr", {
           visible: true,
-          timeout: 30000,
+          timeout: selectorTimeout,
         });
         await delay(5000);
 
@@ -262,12 +266,12 @@ export async function scrapeData(
                   await Promise.race([
                     page.waitForSelector(".fds-dialog", {
                       visible: true,
-                      timeout: 8000,
+                      timeout: selectorTimeout,
                     }),
                     new Promise((_, reject) =>
                       setTimeout(
                         () => reject(new Error("Dialog timeout")),
-                        8000
+                        selectorTimeout
                       )
                     ),
                   ]);
@@ -357,7 +361,7 @@ export async function scrapeData(
                         newPage = await browser.newPage();
                         await newPage.goto(buttonUrl, {
                           waitUntil: "networkidle0",
-                          timeout: 30000,
+                          timeout: selectorTimeout,
                         });
 
                         await dualLogInfo("New tab opened for card activity", {

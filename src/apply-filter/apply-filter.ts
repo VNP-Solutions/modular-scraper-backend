@@ -2,6 +2,7 @@ import { Page } from "puppeteer";
 import { delay } from "../common/delay.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
+import { timeoutManager } from "../common/timeout-manager.js";
 import { scrapeData } from "../scrape-data/scrape-data.js";
 import { setDateRange } from "./helper.js";
 
@@ -18,6 +19,10 @@ export async function applyFilter(
     if (!scrapingStateManager.isRunning()) {
       throw new Error("Scraping was stopped during filter application");
     }
+
+    // Get timeout configuration for this job
+    const selectorTimeout = await timeoutManager.getSelectorTimeout(jobId);
+    const loadingTimeout = await timeoutManager.getLoadingTimeout(jobId);
 
     // Click the "Checking out" radio button
     await dualLogInfo('Selecting "Checking out" filter...');
@@ -63,7 +68,7 @@ export async function applyFilter(
       "button.fds-button2.utility.fds-dropdown-trigger",
       {
         visible: true,
-        timeout: 10000,
+        timeout: selectorTimeout,
       }
     );
 
@@ -178,14 +183,14 @@ export async function applyFilter(
     await page
       .waitForSelector("td .fds-loader.is-loading.is-visible", {
         visible: true,
-        timeout: 10000,
+        timeout: selectorTimeout,
       })
       .catch(() => dualLogInfo("Loading indicator did not appear"));
 
     // Wait for the loading indicator to disappear
     await page.waitForSelector("td .fds-loader.is-loading.is-visible", {
       hidden: true,
-      timeout: 30000,
+      timeout: loadingTimeout,
     });
 
     await dualLogInfo("Loading completed, continuing with data processing...");
@@ -201,7 +206,7 @@ export async function applyFilter(
     // Wait for the table to be visible
     await page.waitForSelector("table.fds-data-table", {
       visible: true,
-      timeout: 30000,
+      timeout: selectorTimeout,
     });
 
     // Wait for data to load and stabilize
@@ -263,7 +268,7 @@ export async function applyFilter(
     await delay(3000);
     await page.waitForSelector("table.fds-data-table tbody tr", {
       visible: true,
-      timeout: 30000,
+      timeout: selectorTimeout,
     });
 
     // Final pause check before scraping
