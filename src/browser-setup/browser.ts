@@ -6,9 +6,10 @@ import {
   dualLogInfo,
   dualLogWarn,
 } from "../common/log-helper.js";
+import { timeoutManager } from "../common/timeout-manager.js";
 dotenv.config();
 
-export async function browserSetup(): Promise<{
+export async function browserSetup(jobId?: string): Promise<{
   browser: Browser;
   page: Page;
 }> {
@@ -29,6 +30,10 @@ export async function browserSetup(): Promise<{
     //     // "--proxy-server=brd.superproxy.io:33335",
     //   ],
     // });
+
+    // Get timeout configuration for this job
+    const loadingTimeout = await timeoutManager.getLoadingTimeout(jobId);
+    const selectorTimeout = await timeoutManager.getSelectorTimeout(jobId);
 
     browser = await puppeteer.connect({
       browserWSEndpoint: `wss://production-sfo.browserless.io/?token=${process.env.BROWSERLESS_TOKEN}`,
@@ -82,8 +87,9 @@ export async function browserSetup(): Promise<{
     //   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
     // );
 
-    await page.setDefaultNavigationTimeout(60000);
-    await page.setDefaultTimeout(60000);
+    // Set default timeouts based on job configuration
+    await page.setDefaultNavigationTimeout(loadingTimeout);
+    await page.setDefaultTimeout(selectorTimeout);
 
     // Navigate to partner central with retry logic
     await dualLogInfo("Navigating to Expedia Partner Central...");
@@ -102,7 +108,7 @@ export async function browserSetup(): Promise<{
           "https://www.expediapartnercentral.com/Account/Logon?signedOff=true",
           {
             waitUntil: "domcontentloaded",
-            timeout: 30000,
+            timeout: loadingTimeout,
           }
         );
 
@@ -110,7 +116,7 @@ export async function browserSetup(): Promise<{
         await delay(3000);
 
         // Check if page loaded successfully by looking for a common element
-        await page.waitForSelector("body", { timeout: 500000 });
+        await page.waitForSelector("body", { timeout: selectorTimeout });
 
         navigationSuccess = true;
         await dualLogInfo("Navigation successful!", { attempt });

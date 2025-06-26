@@ -2,12 +2,14 @@ import { Browser, Page } from "puppeteer";
 import { delay } from "../common/delay.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
+import { timeoutManager } from "../common/timeout-manager.js";
 
 async function login(
   browser: Browser,
   page: Page,
   email: string,
-  password: string
+  password: string,
+  jobId?: string
 ) {
   // Check if scraping is paused before starting login
   await scrapingStateManager.waitWhilePaused();
@@ -15,6 +17,9 @@ async function login(
     await dualLogError("Scraping was stopped during login");
     throw new Error("Scraping was stopped during login");
   }
+
+  // Get timeout configuration for this job
+  const selectorTimeout = await timeoutManager.getSelectorTimeout(jobId);
 
   await page.evaluate(() => {
     window.scrollBy(0, 200);
@@ -59,7 +64,7 @@ async function login(
       // First try to find #password-input
       const passwordInput = await page.waitForSelector("#password-input", {
         visible: true,
-        timeout: 15000, // Shorter timeout for first attempt
+        timeout: selectorTimeout, // Use dynamic timeout instead of hardcoded 15000
       });
 
       if (passwordInput) {
@@ -77,7 +82,9 @@ async function login(
         });
 
         if (!isInputReady) {
-          await dualLogInfo("Password input not fully ready, waiting longer...");
+          await dualLogInfo(
+            "Password input not fully ready, waiting longer..."
+          );
           await delay(2000);
         }
 
@@ -103,7 +110,9 @@ async function login(
         }
 
         // Wait longer before clicking submit to ensure password is fully entered
-        await dualLogInfo("Password entered, waiting before clicking submit...");
+        await dualLogInfo(
+          "Password entered, waiting before clicking submit..."
+        );
         await delay(5000);
 
         // Verify password was entered correctly
@@ -177,7 +186,9 @@ async function login(
         });
 
         if (!isInputReady) {
-          await dualLogInfo("Password input not fully ready, waiting longer...");
+          await dualLogInfo(
+            "Password input not fully ready, waiting longer..."
+          );
           await delay(2000);
         }
 
@@ -203,7 +214,9 @@ async function login(
         }
 
         // Wait longer before clicking submit to ensure password is fully entered
-        await dualLogInfo("Password entered, waiting before clicking submit...");
+        await dualLogInfo(
+          "Password entered, waiting before clicking submit..."
+        );
         await delay(5000);
 
         // Verify password was entered correctly

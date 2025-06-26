@@ -1,13 +1,16 @@
+import { jobService } from "../services/job.service.js";
 import { JobLogger } from "./logger.js";
 
 // Store the current job logger globally for the running job
 let currentJobLogger: JobLogger | null = null;
+let currentJobId: string | null = null;
 
 /**
  * Initialize logging for a job
  */
 export function initializeJobLogging(jobId: string): JobLogger {
   currentJobLogger = JobLogger.getInstance(jobId);
+  currentJobId = jobId;
   return currentJobLogger;
 }
 
@@ -73,10 +76,28 @@ export async function logDebug(message: string, metadata?: any): Promise<void> {
 export async function finalizeJobLogging(
   jobStatus: "success" | "failed" | "partial"
 ): Promise<string | null> {
-  if (currentJobLogger) {
-    const s3Url = await currentJobLogger.finalize(jobStatus);
-    currentJobLogger = null; // Clear the reference
-    return s3Url;
+  if (currentJobLogger && currentJobId) {
+    try {
+      const s3Url = await currentJobLogger.finalize(jobStatus);
+
+      // Save the log URL to the job document
+      if (s3Url) {
+        await jobService.updateJobLogLink(currentJobId, s3Url);
+        console.log(`✅ Log URL saved to job ${currentJobId}: ${s3Url}`);
+      }
+
+      currentJobLogger = null; // Clear the reference
+      currentJobId = null; // Clear the job ID
+      return s3Url;
+    } catch (error) {
+      console.error(
+        `Error finalizing job logging for job ${currentJobId}:`,
+        error
+      );
+      currentJobLogger = null; // Clear the reference even on error
+      currentJobId = null; // Clear the job ID even on error
+      return null;
+    }
   }
   return null;
 }

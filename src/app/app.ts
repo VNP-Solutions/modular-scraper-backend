@@ -1023,6 +1023,94 @@ app.get("/api/jobs/:jobId/items", (async (
   }
 }) as any);
 
+/**
+ * @swagger
+ * /api/jobs/{jobId}/log:
+ *   get:
+ *     tags:
+ *       - Job Monitoring
+ *     summary: Get job log link
+ *     description: Get the S3 URL for the job's log file
+ *     parameters:
+ *       - in: path
+ *         name: jobId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: The job ID to get log link for
+ *     responses:
+ *       200:
+ *         description: Job log link retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 200
+ *                 message:
+ *                   type: string
+ *                   example: "Job log link retrieved successfully"
+ *                 job:
+ *                   type: object
+ *                   properties:
+ *                     id:
+ *                       type: string
+ *                     status:
+ *                       type: string
+ *                     property_name:
+ *                       type: string
+ *                     log_link:
+ *                       type: string
+ *                       description: S3 URL of the job log file
+ *       404:
+ *         description: Job not found or no log available
+ *       500:
+ *         description: Server error
+ */
+app.get("/api/jobs/:jobId/log", (async (
+  req: express.Request,
+  res: express.Response
+) => {
+  try {
+    const { jobId } = req.params;
+
+    const job = await jobService.getJobById(jobId);
+    if (!job) {
+      return res.status(404).json({
+        status: 404,
+        message: "Job not found",
+      });
+    }
+
+    if (!job.log_link) {
+      return res.status(404).json({
+        status: 404,
+        message: "No log file available for this job",
+      });
+    }
+
+    res.status(200).json({
+      status: 200,
+      message: "Job log link retrieved successfully",
+      job: {
+        id: job._id,
+        status: job.job_status,
+        property_name: job.property_name,
+        log_link: job.log_link,
+      },
+    });
+  } catch (err: any) {
+    console.error("Error getting job log link:", err);
+    res.status(500).json({
+      status: 500,
+      message: "Error retrieving job log link",
+      error: err.message,
+    });
+  }
+}) as any);
+
 // * Global error handle middleware
 app.use((err: any, req: any, res: any, next: any) => {
   if (res.headersSent) {

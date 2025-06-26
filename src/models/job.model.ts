@@ -30,6 +30,7 @@ export enum InvitationStatus {
 // Interface for the Job document (simplified for updates only)
 export interface IJob extends Document {
   _id: Types.ObjectId;
+  name?: string;
   job_status: JobStatus;
   portfolio_id?: Types.ObjectId;
   sub_portfolio_id?: Types.ObjectId;
@@ -50,7 +51,9 @@ export interface IJob extends Document {
   max_retries: number;
   retry_delay_ms?: number;
   priority: number;
-  job_backoff_length: number;
+  job_backoff_length_loading: number;
+  job_backoff_length_selector: number;
+  log_link?: string;
   queue_name?: string;
   worker_assigned?: string;
   batch_execution_id?: string;
@@ -61,6 +64,10 @@ export interface IJob extends Document {
 // Mongoose Schema (read-only, updates only)
 const JobSchema = new Schema<IJob>(
   {
+    name: {
+      type: String,
+      required: false,
+    },
     job_status: {
       type: String,
       enum: Object.values(JobStatus),
@@ -155,9 +162,17 @@ const JobSchema = new Schema<IJob>(
       default: 0,
       required: true,
     },
-    job_backoff_length: {
+    job_backoff_length_loading: {
       type: Number,
       required: true,
+    },
+    job_backoff_length_selector: {
+      type: Number,
+      required: true,
+    },
+    log_link: {
+      type: String,
+      required: false,
     },
     queue_name: {
       type: String,
