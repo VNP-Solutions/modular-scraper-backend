@@ -1,10 +1,9 @@
 import dotenv from "dotenv";
 import mongoose from "mongoose";
+import open from "open";
 import app from "./app/app.js";
 import loadToken from "./common/load-token.js";
 dotenv.config();
-import open from "open";
-
 
 const port: number = parseInt(process.env.PORT || "3000");
 
