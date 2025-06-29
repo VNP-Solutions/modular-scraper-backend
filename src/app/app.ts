@@ -13,6 +13,8 @@ import { jobService } from "../services/job.service.js";
 
 const app = express();
 
+app.set("trust proxy", true);
+
 app.use("/webhook", bodyParser.raw({ type: "*/*" }));
 // app.use(bodyParser.raw({ type: '*/*' }))
 app.use(bodyParser.json());
