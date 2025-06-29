@@ -8,8 +8,11 @@ import {
   finalizeJobLogging,
   initializeJobLogging,
 } from "./common/log-helper.js";
+import { progressManager } from "./common/progress-manager.js";
 import { scrapingStateManager } from "./common/scraping-state.js";
+import { timeManager } from "./common/time-manager.js";
 import { splitDateRange } from "./date-split/date-split.js";
+import { getNextDateFromCompleted } from "./date-split/helper.js";
 import login from "./login/login.js";
 import handleOtpVerification from "./otp-verification/otp-verification.js";
 import { propertySearchAndClickReservation } from "./property-search/property-search.js";
@@ -25,6 +28,10 @@ async function main(
   user_password?: string
 ): Promise<void> {
   let jobLogger = null;
+  let browser = null;
+
+  // Initialize time management
+  await timeManager.startSession(jobId);
 
   try {
     // Initialize job logging if jobId is provided
@@ -35,7 +42,24 @@ async function main(
         startDate,
         endDate,
         user_email: user_email ? "[REDACTED]" : undefined,
+        timeSession: timeManager.getSessionInfo(),
       });
+
+      // Check if job should resume from a specific date
+      const resumeInfo = progressManager.shouldJobResume(jobId);
+      if (resumeInfo.shouldResume && resumeInfo.resumeDate && startDate) {
+        const nextStartDate = getNextDateFromCompleted(resumeInfo.resumeDate);
+        await dualLogInfo(
+          `Job resuming from date: ${nextStartDate} (last completed: ${resumeInfo.resumeDate})`,
+          {
+            jobId,
+            originalStartDate: startDate,
+            resumeStartDate: nextStartDate,
+            lastProcessedDate: resumeInfo.resumeDate,
+          }
+        );
+        startDate = nextStartDate;
+      }
     }
 
     // const client = new Steel({
@@ -51,10 +75,104 @@ async function main(
     // console.log(`Debug URL: ${debugUrl}`);
     // console.log(session);
     try {
+      // Start the main scraping loop that handles browser restarts
+      await runScrapingWithRestart(
+        expediaId,
+        startDate,
+        endDate,
+        jobId,
+        user_email,
+        user_password
+      );
+
+      // End time session on successful completion
+      await timeManager.endSession();
+
+      // Finalize logging with success status
+      if (jobId) {
+        await finalizeJobLogging("success");
+      }
+    } catch (error) {
+      await dualLogError("Main function error:", error);
+
+      // End time session on error
+      await timeManager.endSession();
+
+      // Clean up progress file on inner main function error
+      if (jobId) {
+        await progressManager.handleJobError(jobId, error);
+      }
+
+      // Finalize logging with failed status
+      if (jobId) {
+        await finalizeJobLogging("failed");
+      }
+      throw error;
+    }
+  } catch (error) {
+    await dualLogError("Main function error:", error);
+
+    // End time session on error
+    await timeManager.endSession();
+
+    // Clean up progress file on main function error
+    if (jobId) {
+      await progressManager.handleJobError(jobId, error);
+    }
+
+    // Finalize logging with failed status
+    if (jobId) {
+      await finalizeJobLogging("failed");
+    }
+    throw error;
+  }
+}
+
+async function runScrapingWithRestart(
+  expediaId?: string,
+  startDate?: string,
+  endDate?: string,
+  jobId?: string,
+  user_email?: string,
+  user_password?: string
+): Promise<void> {
+  let currentStartDate = startDate;
+  let attemptCount = 0;
+  const maxAttempts = 100; // Prevent infinite loops
+
+  // Helper function to compare dates in MM/DD/YYYY format
+  const compareDates = (date1: string, date2: string): number => {
+    const parseDate = (dateStr: string): Date => {
+      const [month, day, year] = dateStr.split("/").map(Number);
+      return new Date(year, month - 1, day);
+    };
+    const d1 = parseDate(date1);
+    const d2 = parseDate(date2);
+    return d1.getTime() - d2.getTime();
+  };
+
+  while (
+    currentStartDate &&
+    endDate &&
+    compareDates(currentStartDate, endDate) <= 0 &&
+    attemptCount < maxAttempts
+  ) {
+    attemptCount++;
+    let browser = null;
+
+    try {
+      await dualLogInfo(`Starting scraping attempt ${attemptCount}`, {
+        currentStartDate,
+        endDate,
+        jobId,
+        timeSession: timeManager.getSessionInfo(),
+      });
+
       // Step 1: Setup browser and navigate to login page
       await dualLogInfo("Setting up browser...");
-
-      const { browser, page } = await browserSetup(jobId);
+      const setupResult = await browserSetup(jobId);
+      browser = setupResult.browser;
+      const page = setupResult.page;
 
       await dualLogInfo(
         "Browser setup complete. Page is ready at login screen."
@@ -62,8 +180,6 @@ async function main(
 
       // Check if scraping is paused and wait if needed
       await scrapingStateManager.waitWhilePaused();
-
-      // Check if scraping was stopped while paused
       if (!scrapingStateManager.isRunning()) {
         await dualLogInfo("Scraping was stopped, exiting...");
         await browser.close();
@@ -143,9 +259,7 @@ async function main(
             await dualLogInfo(
               `Starting property search for Expedia ID: ${expediaId}`
             );
-
             await propertySearchAndClickReservation(page, expediaId, jobId);
-
             await dualLogInfo(
               "Property search and reservation completed successfully!"
             );
@@ -159,8 +273,9 @@ async function main(
           );
         }
 
+        // Step 4: Process date range with time management
         try {
-          if (startDate && endDate && expediaId) {
+          if (currentStartDate && endDate && expediaId) {
             // Check pause state before date splitting
             await scrapingStateManager.waitWhilePaused();
             if (!scrapingStateManager.isRunning()) {
@@ -172,48 +287,125 @@ async function main(
               return;
             }
 
-            await splitDateRange(page, startDate, endDate, expediaId, jobId);
+            await splitDateRange(
+              page,
+              currentStartDate,
+              endDate,
+              expediaId,
+              jobId
+            );
+
+            // If we reach here, all dates were processed successfully
+            await dualLogInfo("All dates processed successfully!");
+            break; // Exit the retry loop
           } else {
             await dualLogInfo(
               "No start date or end date, or expedia ID provided, skipping date selection."
             );
+            break; // Exit the retry loop
           }
-          await dualLogInfo("Date selection completed successfully!");
         } catch (error: any) {
-          await dualLogError("Date selection failed:", error);
-          throw error;
+          // Check if this is a browser restart error
+          if (error.message.startsWith("BROWSER_RESTART_NEEDED:")) {
+            const resumeDate = error.message.split(":")[1];
+            await dualLogInfo(
+              `Browser restart needed. Will resume from: ${resumeDate}`,
+              {
+                jobId,
+                resumeDate,
+                currentStartDate,
+                endDate,
+                attemptCount,
+                timeSession: timeManager.getSessionInfo(),
+                dateComparison: endDate
+                  ? compareDates(resumeDate, endDate)
+                  : null,
+              }
+            );
+
+            // Close current browser
+            if (browser) {
+              await browser.close();
+              browser = null;
+            }
+
+            // Reset time session for next attempt
+            await timeManager.resetSession(jobId);
+
+            // Update the start date for next iteration
+            currentStartDate = resumeDate;
+
+            await dualLogInfo(`Updated currentStartDate for next iteration`, {
+              jobId,
+              newCurrentStartDate: currentStartDate,
+              endDate,
+              willContinue:
+                currentStartDate && endDate
+                  ? compareDates(currentStartDate, endDate) <= 0
+                  : false,
+              attemptCount: attemptCount + 1,
+            });
+
+            // Continue to next iteration (browser restart)
+            continue;
+          } else {
+            // Other errors should be propagated
+            await dualLogError("Date selection failed:", error);
+            throw error;
+          }
         }
       } else {
         await dualLogInfo("No login credentials provided.");
+        break; // Exit the retry loop
       }
 
-      // Close browser when done
-      await browser.close();
-      // await client.sessions.release(session.id);
+      // Close browser when done with this attempt
+      if (browser) {
+        await browser.close();
+        browser = null;
+      }
       await dualLogInfo("Browser closed successfully.");
-
-      // Finalize logging with success status
-      if (jobId) {
-        await finalizeJobLogging("success");
-      }
     } catch (error) {
-      await dualLogError("Main function error:", error);
+      await dualLogError(`Scraping attempt ${attemptCount} failed:`, error);
 
-      // Finalize logging with failed status
-      if (jobId) {
-        await finalizeJobLogging("failed");
+      // Close browser on error
+      if (browser) {
+        try {
+          await browser.close();
+        } catch (closeError) {
+          await dualLogError("Error closing browser:", closeError);
+        }
       }
-      throw error;
-    }
-  } catch (error) {
-    await dualLogError("Main function error:", error);
 
-    // Finalize logging with failed status
-    if (jobId) {
-      await finalizeJobLogging("failed");
+      // If it's not a browser restart error, clean up progress and propagate
+      if (
+        !(error instanceof Error) ||
+        !error.message.startsWith("BROWSER_RESTART_NEEDED:")
+      ) {
+        // Clean up progress file on error
+        if (jobId) {
+          await progressManager.handleJobError(jobId, error);
+        }
+        throw error;
+      }
     }
-    throw error;
   }
+
+  if (attemptCount >= maxAttempts) {
+    const maxAttemptsError = new Error(
+      `Maximum restart attempts (${maxAttempts}) exceeded`
+    );
+    // Clean up progress file when max attempts exceeded
+    if (jobId) {
+      await progressManager.handleJobError(jobId, maxAttemptsError);
+    }
+    throw maxAttemptsError;
+  }
+
+  await dualLogInfo("Scraping completed successfully!", {
+    totalAttempts: attemptCount,
+    jobId,
+  });
 }
 
 export default main;
