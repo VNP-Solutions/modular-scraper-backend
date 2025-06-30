@@ -7,7 +7,7 @@ dotenv.config();
 const CLIENT_ID = process.env.CLIENT_ID;
 const CLIENT_SECRET = process.env.CLIENT_SECRET;
 const port = process.env.PORT;
-const REDIRECT_URI = `http://localhost:${port}/oauth2callback`;
+const REDIRECT_URI = process.env.REDIRECT_URI;
 const SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"];
 
 const oauth2Client = new google.auth.OAuth2(
