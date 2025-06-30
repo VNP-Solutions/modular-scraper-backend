@@ -254,6 +254,27 @@ export class JobService {
   }
 
   /**
+   * Update job live URL
+   */
+  async updateJobLiveUrl(jobId: string, liveUrl: string): Promise<IJob | null> {
+    try {
+      const objectId = this.validateObjectId(jobId, "jobId");
+
+      return await Job.findByIdAndUpdate(
+        objectId,
+        {
+          live_url: liveUrl,
+          updatedAt: new Date(),
+        },
+        { new: true }
+      );
+    } catch (error) {
+      console.error(`Error updating job live URL: ${error}`);
+      return null;
+    }
+  }
+
+  /**
    * Check if job exists and is in valid state
    */
   async validateJob(
