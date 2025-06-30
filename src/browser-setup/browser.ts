@@ -35,10 +35,23 @@ export async function browserSetup(jobId?: string): Promise<{
     const loadingTimeout = await timeoutManager.getLoadingTimeout(jobId);
     const selectorTimeout = await timeoutManager.getSelectorTimeout(jobId);
 
-    browser = await puppeteer.connect({
-      browserWSEndpoint: `wss://production-sfo.browserless.io/?token=${process.env.BROWSERLESS_TOKEN}`,
+    const launchArgs = {
+      headless: false,
+      stealth: false,
+      args: ['--window-size=1920,1080']
+    };
+    
+    // Create query parameters
+    const queryParams = new URLSearchParams({
+      token: `${process.env.BROWSERLESS_TOKEN}`,
+      // proxy: 'residential',
+      // proxyCountry: 'us',
+      launch: JSON.stringify(launchArgs)
     });
-
+    
+     browser = await puppeteer.connect({
+      browserWSEndpoint: `wss://production-sfo.browserless.io?${queryParams.toString()}`,
+    });
     const page: Page = await browser.newPage();
     const cdp = await page.createCDPSession();
     await (cdp as any).send("Browserless.startRecording");
