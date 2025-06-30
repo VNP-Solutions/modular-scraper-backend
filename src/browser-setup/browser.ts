@@ -7,6 +7,7 @@ import {
   dualLogWarn,
 } from "../common/log-helper.js";
 import { timeoutManager } from "../common/timeout-manager.js";
+import { JobService } from "../services/job.service.js";
 dotenv.config();
 
 export async function browserSetup(jobId?: string): Promise<{
@@ -38,18 +39,18 @@ export async function browserSetup(jobId?: string): Promise<{
     const launchArgs = {
       headless: false,
       stealth: false,
-      args: ['--window-size=1920,1080']
+      args: ["--window-size=1920,1080"],
     };
-    
+
     // Create query parameters
     const queryParams = new URLSearchParams({
       token: `${process.env.BROWSERLESS_TOKEN}`,
       // proxy: 'residential',
       // proxyCountry: 'us',
-      launch: JSON.stringify(launchArgs)
+      launch: JSON.stringify(launchArgs),
     });
-    
-     browser = await puppeteer.connect({
+
+    browser = await puppeteer.connect({
       browserWSEndpoint: `wss://production-sfo.browserless.io?${queryParams.toString()}`,
     });
     const page: Page = await browser.newPage();
@@ -57,7 +58,7 @@ export async function browserSetup(jobId?: string): Promise<{
     await (cdp as any).send("Browserless.startRecording");
     await dualLogInfo("Recording started successfully");
 
-    // Wait a bit before generating live URL
+    // // Wait a bit before generating live URL
     await delay(2000);
 
     // Generate live URL for user interaction
@@ -65,6 +66,21 @@ export async function browserSetup(jobId?: string): Promise<{
       timeout: 600_000,
     })) as { liveURL: string };
     await dualLogInfo("Click for live experience:", { liveURL });
+
+    // Store live URL in database if jobId is provided
+    if (jobId && liveURL) {
+      try {
+        const jobService = new JobService();
+        const updatedJob = await jobService.updateJobLiveUrl(jobId, liveURL);
+        if (updatedJob) {
+          await dualLogInfo(`Live URL stored successfully for job: ${jobId}`);
+        } else {
+          await dualLogWarn(`Failed to store live URL for job: ${jobId}`);
+        }
+      } catch (error) {
+        await dualLogError("Error storing live URL in database:", error);
+      }
+    }
 
     // const client = await page.createCDPSession();
     // console.log("client", client);
