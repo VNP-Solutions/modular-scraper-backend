@@ -13,6 +13,8 @@ import { jobService } from "../services/job.service.js";
 
 const app = express();
 
+app.set("trust proxy", true);
+
 app.use("/webhook", bodyParser.raw({ type: "*/*" }));
 // app.use(bodyParser.raw({ type: '*/*' }))
 app.use(bodyParser.json());
@@ -73,7 +75,7 @@ app.use((req, res, next) => {
 // ? API to check connection to servers (health api)
 app.get("/", (req, res, next) => {
   try {
-    res.status(200).json({ messge: "Connection established" });
+    res.status(200).json({ messge: "Connection established on time-gap branch" });
   } catch (err: any) {
     next(createError(err.status, err.message));
   }
