@@ -640,7 +640,7 @@ async function handleOtpVerification(
           );
 
           // Add delay before fetching verification code
-          await delay(30000); // Wait 30 seconds for email to arrive
+          await delay(5000); // Wait 5 seconds for email to arrive
 
           let code = await getVerificationCode();
           if (!code) {
@@ -773,9 +773,12 @@ async function handleOtpVerification(
     // Wait for successful login
     const loadingTimeout = await timeoutManager.getLoadingTimeout(jobId);
     await page.waitForNavigation({
-      waitUntil: "networkidle0",
+      waitUntil: "domcontentloaded",
       timeout: loadingTimeout,
     });
+
+    // Add a small delay to ensure page is fully loaded
+    await delay(15000);
 
     await dualLogInfo("Login successful!");
   } catch (error) {
