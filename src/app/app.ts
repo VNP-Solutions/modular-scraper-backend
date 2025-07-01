@@ -548,13 +548,13 @@ app.post("/api/expedia/property-run-job", (async (
     console.log(`Using expedia_id: ${expediaId} for scraping`);
 
     // 3. Check if scraping is already running (legacy state manager check)
-    if (scrapingStateManager.isRunning()) {
-      return res.status(409).json({
-        status: 409,
-        message: "Another scraping job is already running",
-        currentState: scrapingStateManager.getState(),
-      });
-    }
+    // if (scrapingStateManager.isRunning()) {
+    //   return res.status(409).json({
+    //     status: 409,
+    //     message: "Another scraping job is already running",
+    //     currentState: scrapingStateManager.getState(),
+    //   });
+    // }
 
     // 4. Update job status to Running
     console.log(`Starting job ${jobId}...`);
@@ -734,13 +734,13 @@ app.post("/api/expedia/reservation-run-job", (async (
     }
 
     // Check if scraping is already running
-    if (scrapingStateManager.isRunning()) {
-      return res.status(409).json({
-        status: 409,
-        message: "Scraping job is already running",
-        currentState: scrapingStateManager.getState(),
-      });
-    }
+    // if (scrapingStateManager.isRunning()) {
+    //   return res.status(409).json({
+    //     status: 409,
+    //     message: "Scraping job is already running",
+    //     currentState: scrapingStateManager.getState(),
+    //   });
+    // }
 
     // Generate job ID and start scraping state for reservations
     const jobId = `reservation_job_${Date.now()}`;
