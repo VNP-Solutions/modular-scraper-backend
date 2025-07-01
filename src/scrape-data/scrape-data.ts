@@ -1,4 +1,4 @@
-import { Page } from "puppeteer";
+import { Browser, Page } from "puppeteer";
 import { delay } from "../common/delay.js";
 import {
   dualLogError,
@@ -19,6 +19,7 @@ export function clearProcessedReservations() {
 }
 
 export async function scrapeData(
+  browser: Browser,
   page: Page,
   expediaId: string = "",
   start_date: string = "",
@@ -842,6 +843,11 @@ export async function scrapeData(
     // Clear processed reservations even if there's an error
     clearProcessedReservations();
     await dualLogError("Error in scrapeData:", error, { jobId });
+    // Close browser when done with this attempt
+    if (browser) {
+      await browser.close();
+    }
+    await dualLogInfo("Browser closed successfully.");
     throw error;
   }
 }

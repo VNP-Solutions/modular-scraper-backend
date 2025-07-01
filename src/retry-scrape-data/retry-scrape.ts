@@ -1,10 +1,11 @@
-import { Page } from "puppeteer";
+import { Browser, Page } from "puppeteer";
 import { delay } from "../common/delay.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import { scrapeData } from "../scrape-data/scrape-data.js";
 
 
 export async function retryScrape(
+  browser: Browser,
   page: Page,
   propertyId: string,
   reservationId: string
@@ -88,7 +89,7 @@ export async function retryScrape(
     await delay(2000);
 
     console.log(`Starting retry scrape for reservation: ${reservationId}`);
-    await scrapeData(page, propertyId);
+    await scrapeData(browser, page, propertyId);
   } catch (error: any) {
     console.error("Error in retryScrape:", error);
     throw error;

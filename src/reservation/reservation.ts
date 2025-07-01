@@ -6,6 +6,7 @@ import login from "../login/login.js";
 import handleOtpVerification from "../otp-verification/otp-verification.js";
 import scrapeWithReservationId from "../retry-scrape-data/scrape-with-reservationid.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
+import { Browser } from "puppeteer";
 dotenv.config();
 
 // Initialize Steel client
@@ -13,7 +14,7 @@ dotenv.config();
 //   steelAPIKey: process.env.STEEL_API_KEY, // Optional
 // });
 
-async function reservation(reservations: any[]): Promise<void> {
+async function reservation(browser: Browser | null, reservations: any[]): Promise<void> {
   try {
     // Create a new session
     // const session = await client.sessions.create();
@@ -42,7 +43,7 @@ async function reservation(reservations: any[]): Promise<void> {
       }
 
       try {
-        await handleOtpVerification(page);
+        await handleOtpVerification(browser,page);
         console.log("OTP verification completed successfully!");
       } catch (error: any) {
         console.error("OTP verification failed:", error);
@@ -76,7 +77,7 @@ async function reservation(reservations: any[]): Promise<void> {
               }`
             ); 
 
-            await scrapeWithReservationId(page, reservation);
+            await scrapeWithReservationId(browser, page, reservation);
             processedCount++;
 
             // Update progress
@@ -96,9 +97,19 @@ async function reservation(reservations: any[]): Promise<void> {
       }
     } else {
       await dualLogInfo("No login credentials provided.");
+      // Close browser when done with this attempt
+      if (browser) {
+        await browser.close();
+      }
+      await dualLogInfo("Browser closed successfully.");
     }
   } catch (error) {
     await dualLogError("Reservation function error:", error);
+    // Close browser when done with this attempt
+    if (browser) {
+      await browser.close();
+    }
+    await dualLogInfo("Browser closed successfully.");
     throw error;
   }
 }

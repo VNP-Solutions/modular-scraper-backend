@@ -1,5 +1,5 @@
 import dotenv from "dotenv";
-import { Page } from "puppeteer";
+import { Browser, Page } from "puppeteer";
 import { applyFilter } from "../apply-filter/apply-filter.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
 import { progressManager } from "../common/progress-manager.js";
@@ -16,6 +16,7 @@ dotenv.config();
 const CHUNK_SIZE = parseInt(process.env.CHUNK_SIZE || "1", 10);
 
 export async function splitDateRange(
+  browser: Browser,
   page: Page,
   start_date: string,
   end_date: string,
@@ -146,7 +147,7 @@ export async function splitDateRange(
       );
 
       // Process the current chunk
-      await applyFilter(page, chunk.start, chunk.end, expediaId, jobId);
+      await applyFilter(browser, page, chunk.start, chunk.end, expediaId, jobId);
 
       // Update progress after completing a chunk
       if (jobId) {

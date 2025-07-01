@@ -1,10 +1,11 @@
-import { Page } from "puppeteer";
+import { Browser, Page } from "puppeteer";
 import { delay } from "../common/delay.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import { timeoutManager } from "../common/timeout-manager.js";
 
 export async function propertySearchAndClickReservation(
+  browser: Browser,
   page: Page,
   propertyId: string,
   jobId?: string
@@ -164,6 +165,11 @@ export async function propertySearchAndClickReservation(
       await dualLogInfo("Successfully navigated to Reservations page");
     } catch (error) {
       await dualLogError(`Error searching for property ${propertyId}:`, error);
+      // Close browser when done with this attempt
+      if (browser) {
+        await browser.close();
+      }
+      await dualLogInfo("Browser closed successfully.");
       throw error;
     }
   } catch (error: any) {
