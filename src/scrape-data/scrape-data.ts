@@ -13,6 +13,11 @@ import { CreateJobItemData, jobService } from "../services/job.service.js";
 const pageReservations: any[] = [];
 const processedReservationIds = new Set();
 
+// Function to clear processed reservations for new job runs
+export function clearProcessedReservations() {
+  processedReservationIds.clear();
+}
+
 export async function scrapeData(
   page: Page,
   expediaId: string = "",
@@ -827,7 +832,15 @@ export async function scrapeData(
       `Scraping completed. Processed ${processedCount} reservations.`,
       { jobId }
     );
+
+    // Clear processed reservations for next job run
+    clearProcessedReservations();
+    await dualLogInfo("Cleared processed reservations for next job run", {
+      jobId,
+    });
   } catch (error) {
+    // Clear processed reservations even if there's an error
+    clearProcessedReservations();
     await dualLogError("Error in scrapeData:", error, { jobId });
     throw error;
   }

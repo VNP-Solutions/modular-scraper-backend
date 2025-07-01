@@ -61,13 +61,13 @@ export async function browserSetup(jobId?: string): Promise<{
     // // Wait a bit before generating live URL
     await delay(2000);
 
-    // Generate live URL for user interaction
+     // Generate live URL for user interaction
     const { liveURL } = (await (cdp as any).send("Browserless.liveURL", {
       timeout: 600_000,
     })) as { liveURL: string };
     await dualLogInfo("Click for live experience:", { liveURL });
 
-    // Store live URL in database if jobId is provided
+     // Store live URL in database if jobId is provided
     if (jobId && liveURL) {
       try {
         const jobService = new JobService();

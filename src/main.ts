@@ -240,6 +240,7 @@ async function runScrapingWithRestart(
         } catch (error: any) {
           await dualLogError("OTP verification failed:", error);
           // Continue even if OTP fails as it might not be required
+          throw error;
         }
 
         // Step 3: Perform property search with the provided expedia ID
