@@ -75,7 +75,7 @@ app.use((req, res, next) => {
 // ? API to check connection to servers (health api)
 app.get("/", (req, res, next) => {
   try {
-    res.status(200).json({ messge: "Connection established on time-gap branch" });
+    res.status(200).json({ messge: "Connection established on time-gap2 branch" });
   } catch (err: any) {
     next(createError(err.status, err.message));
   }

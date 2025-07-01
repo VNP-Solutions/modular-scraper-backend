@@ -1,8 +1,8 @@
 import dotenv from "dotenv";
+import fs from "fs";
 import { google } from "googleapis";
 import { Page } from "puppeteer";
 import { delay } from "../common/delay.js";
-import { loadAndSetCredentials } from "../common/load-token.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import { timeoutManager } from "../common/timeout-manager.js";
@@ -10,22 +10,28 @@ import { oauth2Client } from "../config/google-config.js";
 
 dotenv.config();
 
-// Function to load and set credentials with auto-refresh
+// Function to load and set credentials
 async function loadCredentials() {
   try {
     const tokenPath = process.env.TOKEN_PATH || "token.json";
 
-    // Use enhanced function that includes auto-refresh
-    const credentialsLoaded = await loadAndSetCredentials(tokenPath);
-    if (!credentialsLoaded) {
+    if (!fs.existsSync(tokenPath)) {
       throw new Error(
-        "Failed to load Gmail credentials. Please complete authentication setup first."
+        `Token file not found at ${tokenPath}. Please run the authentication setup first.`
       );
     }
 
-    await dualLogInfo(
-      "Gmail credentials loaded successfully with auto-refresh"
-    );
+    const token = JSON.parse(fs.readFileSync(tokenPath, "utf8"));
+
+    // Check if refresh token exists
+    if (!token.refresh_token) {
+      throw new Error(
+        "No refresh token found. Please re-authenticate with offline access."
+      );
+    }
+
+    oauth2Client.setCredentials(token);
+    await dualLogInfo("Gmail credentials loaded successfully");
     return true;
   } catch (error) {
     await dualLogError("Error loading credentials:", error);
@@ -132,112 +138,40 @@ async function handleOtpVerification(
 
       // Add delay before fetching verification code
       await dualLogInfo("Waiting for verification email...");
-      await delay(30000); // Wait 30 seconds for email to arrive
+      await delay(15000); // Wait 15 seconds for email to arrive
 
       // Get verification code
-      let code = await getVerificationCode();
+      const code = await getVerificationCode();
       if (!code) {
         throw new Error("Failed to get verification code from email");
       }
       await dualLogInfo("Got verification code:", code);
 
-      // Enter verification code with retry mechanism
-      let retryCount = 0;
-      const maxRetries = 3;
-      let verificationSuccess = false;
+      // Enter verification code using the correct selector
+      await page.type('input[name="passcode-input"]', code, { delay: 100 });
+      await delay(1000);
 
-      while (!verificationSuccess && retryCount < maxRetries) {
-        try {
-          // Clear input field before entering new code
-          await page.focus('input[name="passcode-input"]');
-          await page.keyboard.down("Control");
-          await page.keyboard.press("KeyA");
-          await page.keyboard.up("Control");
-          await page.keyboard.press("Delete");
+      const verifyButtonHandle = await page.$(
+        'button[data-testid="passcode-submit-button"]'
+      );
 
-          // Enter verification code
-          await page.type('input[name="passcode-input"]', code, { delay: 100 });
-          await delay(1000);
-
-          const verifyButtonHandle = await page.$(
-            'button[data-testid="passcode-submit-button"]'
-          );
-
-          if (!verifyButtonHandle) {
-            throw new Error("Verify button not found");
-          }
-
-          // Check if the button is disabled
-          const isDisabled = await page.evaluate(
-            (button) => button.disabled,
-            verifyButtonHandle
-          );
-
-          if (isDisabled) {
-            throw new Error("Verify button is disabled");
-          }
-
-          // Click the button
-          await verifyButtonHandle.click();
-          await dualLogInfo("Clicked the verify button successfully!");
-
-          // Wait a bit for potential error message to appear
-          await delay(3000);
-
-          // Check for error message
-          const hasError = await page.$(
-            'span[data-testid="passcode-input-error"]'
-          );
-
-          if (hasError) {
-            const errorText = await page.evaluate(
-              (el) => el?.textContent || "",
-              hasError
-            );
-            await dualLogInfo(`Verification failed with error: ${errorText}`);
-
-            if (retryCount < maxRetries - 1) {
-              await dualLogInfo(
-                `Retrying verification (attempt ${
-                  retryCount + 2
-                }/${maxRetries})...`
-              );
-              await dualLogInfo("Waiting longer for new verification email...");
-              await delay(45000); // Wait 45 seconds for new email
-
-              // Get new verification code
-              const newCode = await getVerificationCode();
-              if (!newCode) {
-                throw new Error(
-                  "Failed to get new verification code from email"
-                );
-              }
-              code = newCode;
-              await dualLogInfo("Got new verification code:", code);
-              retryCount++;
-            } else {
-              throw new Error(
-                `Verification failed after ${maxRetries} attempts. Last error: ${errorText}`
-              );
-            }
-          } else {
-            verificationSuccess = true;
-            await dualLogInfo("Verification successful!");
-          }
-        } catch (error) {
-          if (retryCount < maxRetries - 1) {
-            await dualLogInfo(
-              `Verification attempt failed, retrying... (${
-                retryCount + 1
-              }/${maxRetries})`
-            );
-            retryCount++;
-            await delay(5000);
-          } else {
-            throw error;
-          }
-        }
+      if (!verifyButtonHandle) {
+        throw new Error("Verify button not found");
       }
+
+      // Check if the button is disabled
+      const isDisabled = await page.evaluate(
+        (button) => button.disabled,
+        verifyButtonHandle
+      );
+
+      if (isDisabled) {
+        throw new Error("Verify button is disabled");
+      }
+
+      // Click the button
+      await verifyButtonHandle.click();
+      await dualLogInfo("Clicked the verify button successfully!");
     } else {
       await dualLogInfo(
         `Phone numbers don't match! Looking for fallback verification options...`
@@ -333,12 +267,15 @@ async function handleOtpVerification(
         }
 
         // Now look for phone numbers in the fallback options
-        await dualLogInfo(`Looking for phone ending with: ${ourLastThree}`);
-        const matchingOption = await page.evaluate((ourLastThree) => {
+        const matchingOption = await page.evaluate(async (ourLastThree) => {
           try {
+            await dualLogInfo("Looking for phone ending with:", ourLastThree);
+
             const fallbackItems = document.querySelectorAll(
               '[data-testid="fallback-item"]'
             );
+
+            await dualLogInfo("Found fallback items:", fallbackItems.length);
 
             for (let i = 0; i < fallbackItems.length; i++) {
               const item = fallbackItems[i];
@@ -351,6 +288,8 @@ async function handleOtpVerification(
                 const phoneNumber = phoneHeader.textContent?.trim() || "";
                 const linkText = textLink.textContent?.trim() || "";
 
+                await dualLogInfo("Found item:", phoneNumber);
+
                 // Check if this is a phone number (contains asterisks and digits)
                 if (
                   phoneNumber.includes("*") &&
@@ -360,6 +299,7 @@ async function handleOtpVerification(
                   const phoneLastThree = phoneNumber.slice(-3);
 
                   if (phoneLastThree === ourLastThree) {
+                    await dualLogInfo("Found matching phone number!");
                     return {
                       found: true,
                       phoneNumber: phoneNumber,
@@ -370,8 +310,13 @@ async function handleOtpVerification(
               }
             }
 
+            await dualLogInfo("No matching phone number found");
             return { found: false, phoneNumber: null };
           } catch (error) {
+            await dualLogError(
+              "Error in page.evaluate:",
+              error instanceof Error ? error.message : "Unknown error"
+            );
             return {
               found: false,
               error: error instanceof Error ? error.message : "Unknown error",
@@ -381,20 +326,6 @@ async function handleOtpVerification(
 
         await dualLogInfo(`Matching option result:`, matchingOption);
 
-        if (matchingOption && matchingOption.found) {
-          await dualLogInfo(
-            `Found matching phone number: ${matchingOption.phoneNumber}`
-          );
-        } else if (matchingOption && matchingOption.error) {
-          await dualLogError(
-            `Error in page evaluation: ${matchingOption.error}`
-          );
-        } else {
-          await dualLogInfo(
-            "No matching phone number found in page evaluation"
-          );
-        }
-
         if (!matchingOption) {
           // If page.evaluate returned undefined, try a simpler approach
           await dualLogInfo(
@@ -402,9 +333,6 @@ async function handleOtpVerification(
           );
 
           // Try clicking on the first "Send me a text" link that contains digits ending with our number
-          await dualLogInfo(
-            "Trying alternative approach to click matching phone..."
-          );
           const alternativeClick = await page.evaluate((ourLastThree) => {
             try {
               const textLinks = Array.from(
@@ -440,8 +368,6 @@ async function handleOtpVerification(
             }
           }, ourLastThree);
 
-          await dualLogInfo("Alternative approach result:", alternativeClick);
-
           if (alternativeClick.success) {
             await dualLogInfo(
               `Alternative approach succeeded: clicked 'Send me a text' for ${alternativeClick.phoneNumber}`
@@ -457,113 +383,36 @@ async function handleOtpVerification(
             await dualLogInfo(
               "SMS verification page loaded, trying to get verification code from email..."
             );
-            await delay(30000);
+            await delay(15000);
 
-            let code = await getVerificationCode();
+            const code = await getVerificationCode();
             if (!code) {
               throw new Error("Failed to get verification code from email");
             }
             await dualLogInfo("Got verification code:", code);
 
-            // Enter verification code with retry mechanism
-            let retryCount = 0;
-            const maxRetries = 3;
-            let verificationSuccess = false;
+            await page.type('input[name="passcode-input"]', code, {
+              delay: 100,
+            });
+            await delay(1000);
 
-            while (!verificationSuccess && retryCount < maxRetries) {
-              try {
-                // Clear input field before entering new code
-                await page.focus('input[name="passcode-input"]');
-                await page.keyboard.down("Control");
-                await page.keyboard.press("KeyA");
-                await page.keyboard.up("Control");
-                await page.keyboard.press("Delete");
-
-                // Enter verification code
-                await page.type('input[name="passcode-input"]', code, {
-                  delay: 100,
-                });
-                await delay(1000);
-
-                const verifyButtonHandle = await page.$(
-                  'button[data-testid="passcode-submit-button"]'
-                );
-                if (!verifyButtonHandle) {
-                  throw new Error("Verify button not found");
-                }
-
-                const isDisabled = await page.evaluate(
-                  (button) => button.disabled,
-                  verifyButtonHandle
-                );
-                if (isDisabled) {
-                  throw new Error("Verify button is disabled");
-                }
-
-                await verifyButtonHandle.click();
-                await dualLogInfo("Clicked the verify button successfully!");
-
-                // Wait a bit for potential error message to appear
-                await delay(3000);
-
-                // Check for error message
-                const hasError = await page.$(
-                  'span[data-testid="passcode-input-error"]'
-                );
-
-                if (hasError) {
-                  const errorText = await page.evaluate(
-                    (el) => el?.textContent || "",
-                    hasError
-                  );
-                  await dualLogInfo(
-                    `Verification failed with error: ${errorText}`
-                  );
-
-                  if (retryCount < maxRetries - 1) {
-                    await dualLogInfo(
-                      `Retrying verification (attempt ${
-                        retryCount + 2
-                      }/${maxRetries})...`
-                    );
-                    await dualLogInfo(
-                      "Waiting longer for new verification email..."
-                    );
-                    await delay(45000); // Wait 45 seconds for new email
-
-                    // Get new verification code
-                    const newCode = await getVerificationCode();
-                    if (!newCode) {
-                      throw new Error(
-                        "Failed to get new verification code from email"
-                      );
-                    }
-                    code = newCode;
-                    await dualLogInfo("Got new verification code:", code);
-                    retryCount++;
-                  } else {
-                    throw new Error(
-                      `Verification failed after ${maxRetries} attempts. Last error: ${errorText}`
-                    );
-                  }
-                } else {
-                  verificationSuccess = true;
-                  await dualLogInfo("Verification successful!");
-                }
-              } catch (error) {
-                if (retryCount < maxRetries - 1) {
-                  await dualLogInfo(
-                    `Verification attempt failed, retrying... (${
-                      retryCount + 1
-                    }/${maxRetries})`
-                  );
-                  retryCount++;
-                  await delay(5000);
-                } else {
-                  throw error;
-                }
-              }
+            const verifyButtonHandle = await page.$(
+              'button[data-testid="passcode-submit-button"]'
+            );
+            if (!verifyButtonHandle) {
+              throw new Error("Verify button not found");
             }
+
+            const isDisabled = await page.evaluate(
+              (button) => button.disabled,
+              verifyButtonHandle
+            );
+            if (isDisabled) {
+              throw new Error("Verify button is disabled");
+            }
+
+            await verifyButtonHandle.click();
+            await dualLogInfo("Clicked the verify button successfully!");
           } else {
             throw new Error(
               `Both primary and alternative approaches failed: ${alternativeClick.error}`
@@ -577,9 +426,6 @@ async function handleOtpVerification(
           );
 
           // Click on "Send me a text" for the matching phone number
-          await dualLogInfo(
-            "Attempting to click 'Send me a text' for matching phone..."
-          );
           const clickResult = await page.evaluate((ourLastThree) => {
             try {
               const fallbackItems = document.querySelectorAll(
@@ -616,8 +462,6 @@ async function handleOtpVerification(
             }
           }, ourLastThree);
 
-          await dualLogInfo("Click result:", clickResult);
-
           if (!clickResult.success) {
             throw new Error(
               `Failed to click "Send me a text": ${clickResult.error}`
@@ -640,117 +484,39 @@ async function handleOtpVerification(
           );
 
           // Add delay before fetching verification code
-          await delay(5000); // Wait 5 seconds for email to arrive
+          await delay(15000); // Wait 15 seconds for email to arrive
 
-          let code = await getVerificationCode();
+          const code = await getVerificationCode();
           if (!code) {
             throw new Error("Failed to get verification code from email");
           }
-          await dualLogInfo("Got verification code:", code);
+          console.log("Got verification code:", code);
 
-          // Enter verification code with retry mechanism
-          let retryCount = 0;
-          const maxRetries = 3;
-          let verificationSuccess = false;
+          // Enter verification code using the correct selector
+          await page.type('input[name="passcode-input"]', code, { delay: 100 });
+          await delay(1000);
 
-          while (!verificationSuccess && retryCount < maxRetries) {
-            try {
-              // Clear input field before entering new code
-              await page.focus('input[name="passcode-input"]');
-              await page.keyboard.down("Control");
-              await page.keyboard.press("KeyA");
-              await page.keyboard.up("Control");
-              await page.keyboard.press("Delete");
+          const verifyButtonHandle = await page.$(
+            'button[data-testid="passcode-submit-button"]'
+          );
 
-              // Enter verification code
-              await page.type('input[name="passcode-input"]', code, {
-                delay: 100,
-              });
-              await delay(1000);
-
-              const verifyButtonHandle = await page.$(
-                'button[data-testid="passcode-submit-button"]'
-              );
-
-              if (!verifyButtonHandle) {
-                throw new Error("Verify button not found");
-              }
-
-              // Check if the button is disabled
-              const isDisabled = await page.evaluate(
-                (button) => button.disabled,
-                verifyButtonHandle
-              );
-
-              if (isDisabled) {
-                throw new Error("Verify button is disabled");
-              }
-
-              // Click the button
-              await verifyButtonHandle.click();
-              await dualLogInfo("Clicked the verify button successfully!");
-
-              // Wait a bit for potential error message to appear
-              await delay(3000);
-
-              // Check for error message
-              const hasError = await page.$(
-                'span[data-testid="passcode-input-error"]'
-              );
-
-              if (hasError) {
-                const errorText = await page.evaluate(
-                  (el) => el?.textContent || "",
-                  hasError
-                );
-                await dualLogInfo(
-                  `Verification failed with error: ${errorText}`
-                );
-
-                if (retryCount < maxRetries - 1) {
-                  await dualLogInfo(
-                    `Retrying verification (attempt ${
-                      retryCount + 2
-                    }/${maxRetries})...`
-                  );
-                  await dualLogInfo(
-                    "Waiting longer for new verification email..."
-                  );
-                  await delay(45000); // Wait 45 seconds for new email
-
-                  // Get new verification code
-                  const newCode = await getVerificationCode();
-                  if (!newCode) {
-                    throw new Error(
-                      "Failed to get new verification code from email"
-                    );
-                  }
-                  code = newCode;
-                  await dualLogInfo("Got new verification code:", code);
-                  retryCount++;
-                } else {
-                  throw new Error(
-                    `Verification failed after ${maxRetries} attempts. Last error: ${errorText}`
-                  );
-                }
-              } else {
-                verificationSuccess = true;
-                await dualLogInfo("Verification successful!");
-              }
-            } catch (error) {
-              if (retryCount < maxRetries - 1) {
-                await dualLogInfo(
-                  `Verification attempt failed, retrying... (${
-                    retryCount + 1
-                  }/${maxRetries})`
-                );
-                retryCount++;
-                await delay(5000);
-              } else {
-                throw error;
-              }
-            }
+          if (!verifyButtonHandle) {
+            throw new Error("Verify button not found");
           }
+
+          // Check if the button is disabled
+          const isDisabled = await page.evaluate(
+            (button) => button.disabled,
+            verifyButtonHandle
+          );
+
+          if (isDisabled) {
+            throw new Error("Verify button is disabled");
+          }
+
+          // Click the button
+          await verifyButtonHandle.click();
+          console.log("Clicked the verify button successfully!");
         } else {
           throw new Error(
             `No matching phone number found in fallback options. Expected ending with ${ourLastThree}. Available options: ${
@@ -763,7 +529,7 @@ async function handleOtpVerification(
           fallbackError instanceof Error
             ? fallbackError.message
             : "Unknown error";
-        await dualLogError(`Error with fallback verification: ${errorMessage}`);
+        console.log(`Error with fallback verification: ${errorMessage}`);
         throw new Error(
           `Phone number mismatch and fallback verification failed. Expected ending with ${ourLastThree}, but got ${currentLastThree}. Fallback error: ${errorMessage}`
         );
@@ -773,16 +539,13 @@ async function handleOtpVerification(
     // Wait for successful login
     const loadingTimeout = await timeoutManager.getLoadingTimeout(jobId);
     await page.waitForNavigation({
-      waitUntil: "domcontentloaded",
+      waitUntil: "networkidle0",
       timeout: loadingTimeout,
     });
 
-    // Add a small delay to ensure page is fully loaded
-    await delay(15000);
-
-    await dualLogInfo("Login successful!");
+    console.log("Login successful!");
   } catch (error) {
-    await dualLogError("Error in handleOtpVerification:", error);
+    console.error("Error in handleOtpVerification:", error);
     throw error;
   }
 }
