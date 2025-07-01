@@ -746,7 +746,7 @@ app.post("/api/expedia/reservation-run-job", (async (
     const jobId = `reservation_job_${Date.now()}`;
     scrapingStateManager.startScraping("reservations", jobId);
 
-    await reservation(reservations);
+    await reservation(null, reservations);
 
     // Mark scraping as completed
     scrapingStateManager.stopScraping();

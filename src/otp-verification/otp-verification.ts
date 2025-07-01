@@ -1,7 +1,7 @@
 import dotenv from "dotenv";
 import fs from "fs";
 import { google } from "googleapis";
-import { Page } from "puppeteer";
+import { Browser, Page } from "puppeteer";
 import { delay } from "../common/delay.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
@@ -89,6 +89,7 @@ async function getVerificationCode() {
 }
 
 async function handleOtpVerification(
+  browser: Browser,
   page: Page,
   jobId?: string
 ): Promise<void> {
@@ -546,6 +547,11 @@ async function handleOtpVerification(
     console.log("Login successful!");
   } catch (error) {
     console.error("Error in handleOtpVerification:", error);
+    // Close browser when done with this attempt
+    if (browser) {
+      await browser.close();
+    }
+    await dualLogInfo("Browser closed successfully.");
     throw error;
   }
 }

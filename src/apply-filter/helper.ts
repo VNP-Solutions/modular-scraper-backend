@@ -1,4 +1,5 @@
 import { Page } from "puppeteer";
+import { timeoutManager } from "../common/timeout-manager.js";
 
 const calculateMonthsToNavigate = (
   currentMonth: string,
@@ -20,10 +21,13 @@ const calculateMonthsToNavigate = (
 export async function setDateRange(
   page: Page,
   start_date: string,
-  end_date: string
+  end_date: string,
+  jobId?: string
 ) {
   const maxRetries = 3;
   let lastError: any;
+  const loadingTimeout = await timeoutManager.getLoadingTimeout(jobId);
+
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
@@ -72,9 +76,12 @@ export async function setDateRange(
 async function setDateRangeInternal(
   page: Page,
   start_date: string,
-  end_date: string
+  end_date: string,
+  jobId?: string
 ) {
   try {
+    const loadingTimeout = await timeoutManager.getLoadingTimeout(jobId);
+    const selectorTimeout = await timeoutManager.getSelectorTimeout(jobId);
     // The input dates from URL are in MM/DD/YYYY format
     // We need to convert them to DD/MM/YYYY format for Expedia interface
 
@@ -187,7 +194,7 @@ async function setDateRangeInternal(
       // Try one more time with the primary selector
       await page.waitForSelector(".first-month h2", {
         visible: true,
-        timeout: 10000,
+        timeout: loadingTimeout,
       });
     }
 

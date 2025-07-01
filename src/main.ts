@@ -220,6 +220,12 @@ async function runScrapingWithRestart(
           await delay(10000);
         } catch (loginError) {
           await dualLogError("Login failed:", loginError);
+          // Close browser when done with this attempt
+          if (browser) {
+            await browser.close();
+            browser = null;
+          }
+          await dualLogInfo("Browser closed successfully.");
           throw loginError;
         }
 
@@ -235,10 +241,16 @@ async function runScrapingWithRestart(
             return;
           }
 
-          await handleOtpVerification(page, jobId);
+          await handleOtpVerification(browser,page, jobId);
           await dualLogInfo("OTP verification completed successfully!");
         } catch (error: any) {
           await dualLogError("OTP verification failed:", error);
+          // Close browser when done with this attempt
+          if (browser) {
+            await browser.close();
+            browser = null;
+          }
+          await dualLogInfo("Browser closed successfully.");
           // Continue even if OTP fails as it might not be required
           throw error;
         }
@@ -260,7 +272,7 @@ async function runScrapingWithRestart(
             await dualLogInfo(
               `Starting property search for Expedia ID: ${expediaId}`
             );
-            await propertySearchAndClickReservation(page, expediaId, jobId);
+            await propertySearchAndClickReservation(browser, page, expediaId, jobId);
             await dualLogInfo(
               "Property search and reservation completed successfully!"
             );
@@ -289,6 +301,7 @@ async function runScrapingWithRestart(
             }
 
             await splitDateRange(
+              browser,
               page,
               currentStartDate,
               endDate,
@@ -298,6 +311,12 @@ async function runScrapingWithRestart(
 
             // If we reach here, all dates were processed successfully
             await dualLogInfo("All dates processed successfully!");
+            // Close browser when done with this attempt
+            if (browser) {
+              await browser.close();
+              browser = null;
+            }
+            await dualLogInfo("Browser closed successfully.");
             break; // Exit the retry loop
           } else {
             await dualLogInfo(
@@ -352,20 +371,24 @@ async function runScrapingWithRestart(
           } else {
             // Other errors should be propagated
             await dualLogError("Date selection failed:", error);
+            // Close browser when done with this attempt
+            if (browser) {
+              await browser.close();
+              browser = null;
+            }
+            await dualLogInfo("Browser closed successfully.");
             throw error;
           }
         }
       } else {
         await dualLogInfo("No login credentials provided.");
+        await dualLogInfo("Browser closed successfully.");
+        // Close browser when done with this attempt
+        if (browser) {
+          await browser.close();
+        }
         break; // Exit the retry loop
       }
-
-      // Close browser when done with this attempt
-      if (browser) {
-        await browser.close();
-        browser = null;
-      }
-      await dualLogInfo("Browser closed successfully.");
     } catch (error) {
       await dualLogError(`Scraping attempt ${attemptCount} failed:`, error);
 
