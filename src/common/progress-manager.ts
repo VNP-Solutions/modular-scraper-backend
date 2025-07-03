@@ -244,7 +244,11 @@ export class ProgressManager {
   /**
    * Handle job error and cleanup (called from error handlers)
    */
-  async handleJobError(jobId: string, error: any): Promise<void> {
+  async handleJobError(
+    jobId: string,
+    error: any,
+    status = "failed"
+  ): Promise<void> {
     const errorMessage = error?.message || error?.toString() || "Unknown error";
 
     // Update progress to failed state first
@@ -252,7 +256,7 @@ export class ProgressManager {
       jobId,
       undefined,
       undefined,
-      "failed",
+      status,
       undefined
     );
 

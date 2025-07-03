@@ -100,7 +100,7 @@ async function main(
 
       // Clean up progress file on inner main function error
       if (jobId) {
-        await progressManager.handleJobError(jobId, error);
+        await progressManager.handleJobError(jobId, error, "partial");
       }
 
       // Finalize logging with failed status
@@ -117,7 +117,7 @@ async function main(
 
     // Clean up progress file on main function error
     if (jobId) {
-      await progressManager.handleJobError(jobId, error);
+      await progressManager.handleJobError(jobId, error, "failed");
     }
 
     // Finalize logging with failed status
@@ -241,7 +241,7 @@ async function runScrapingWithRestart(
             return;
           }
 
-          await handleOtpVerification(browser,page, jobId);
+          await handleOtpVerification(browser, page, jobId);
           await dualLogInfo("OTP verification completed successfully!");
         } catch (error: any) {
           await dualLogError("OTP verification failed:", error);
@@ -272,7 +272,12 @@ async function runScrapingWithRestart(
             await dualLogInfo(
               `Starting property search for Expedia ID: ${expediaId}`
             );
-            await propertySearchAndClickReservation(browser, page, expediaId, jobId);
+            await propertySearchAndClickReservation(
+              browser,
+              page,
+              expediaId,
+              jobId
+            );
             await dualLogInfo(
               "Property search and reservation completed successfully!"
             );
@@ -408,7 +413,7 @@ async function runScrapingWithRestart(
       ) {
         // Clean up progress file on error
         if (jobId) {
-          await progressManager.handleJobError(jobId, error);
+          await progressManager.handleJobError(jobId, error, "partial");
         }
         throw error;
       }
@@ -421,7 +426,7 @@ async function runScrapingWithRestart(
     );
     // Clean up progress file when max attempts exceeded
     if (jobId) {
-      await progressManager.handleJobError(jobId, maxAttemptsError);
+      await progressManager.handleJobError(jobId, maxAttemptsError, "partial");
     }
     throw maxAttemptsError;
   }
