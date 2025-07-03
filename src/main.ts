@@ -100,7 +100,7 @@ async function main(
 
       // Clean up progress file on inner main function error
       if (jobId) {
-        await progressManager.handleJobError(jobId, error, "partial");
+        await progressManager.handleJobError(jobId, error);
       }
 
       // Finalize logging with failed status
@@ -117,7 +117,7 @@ async function main(
 
     // Clean up progress file on main function error
     if (jobId) {
-      await progressManager.handleJobError(jobId, error, "failed");
+      await progressManager.handleJobError(jobId, error);
     }
 
     // Finalize logging with failed status
@@ -413,7 +413,7 @@ async function runScrapingWithRestart(
       ) {
         // Clean up progress file on error
         if (jobId) {
-          await progressManager.handleJobError(jobId, error, "partial");
+          await progressManager.handleJobError(jobId, error);
         }
         throw error;
       }
@@ -426,7 +426,7 @@ async function runScrapingWithRestart(
     );
     // Clean up progress file when max attempts exceeded
     if (jobId) {
-      await progressManager.handleJobError(jobId, maxAttemptsError, "partial");
+      await progressManager.handleJobError(jobId, maxAttemptsError);
     }
     throw maxAttemptsError;
   }
