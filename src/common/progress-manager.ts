@@ -1,5 +1,6 @@
 import fs from "fs-extra";
 import path from "path";
+import { JobService } from "../services/job.service.js";
 import { dualLogError, dualLogInfo, dualLogWarn } from "./log-helper.js";
 
 export interface JobProgress {
@@ -19,10 +20,12 @@ export class ProgressManager {
   private static instance: ProgressManager;
   private progressMap: Map<string, JobProgress> = new Map();
   private progressDir: string;
+  private jobService: JobService;
 
   private constructor() {
     // Create a progress directory for job progress files
     this.progressDir = path.join(process.cwd(), "job-progress");
+    this.jobService = new JobService();
     this.ensureProgressDir();
     this.loadAllProgressFromDisk();
   }
@@ -244,14 +247,24 @@ export class ProgressManager {
   /**
    * Handle job error and cleanup (called from error handlers)
    */
-  async handleJobError(
-    jobId: string,
-    error: any,
-    status = "failed"
-  ): Promise<void> {
+  async handleJobError(jobId: string, error: any): Promise<void> {
     const errorMessage = error?.message || error?.toString() || "Unknown error";
 
-    // Update progress to failed state first
+    // Check if there's any scraped data to determine status
+    let status = "failed";
+    try {
+      const jobItemsCount = await this.jobService.getJobItemsCount(jobId);
+      if (jobItemsCount > 0) {
+        status = "partial";
+      }
+    } catch (dbError) {
+      await dualLogWarn(
+        `Failed to check job items count for ${jobId}, defaulting to failed status`,
+        { jobId, dbError }
+      );
+    }
+
+    // Update progress to failed/partial state first
     await this.updateJobProgress(
       jobId,
       undefined,
@@ -268,6 +281,7 @@ export class ProgressManager {
       {
         jobId,
         error: errorMessage,
+        finalStatus: status,
       }
     );
   }
