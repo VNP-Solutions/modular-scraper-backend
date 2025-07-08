@@ -10,28 +10,13 @@ import { timeoutManager } from "../common/timeout-manager.js";
 import { JobService } from "../services/job.service.js";
 dotenv.config();
 
-export async function browserSetup(jobId?: string): Promise<{
+export async function browserSetupProduction(jobId?: string): Promise<{
   browser: Browser;
   page: Page;
 }> {
   let browser: Browser | null = null;
 
   try {
-    // browser = await puppeteer.launch({
-    //   headless: false,
-    //   defaultViewport: null,
-    //   args: [
-    //     "--start-maximized",
-    //     "--no-sandbox",
-    //     "--disable-setuid-sandbox",
-    //     "--disable-web-security",
-    //     "--disable-features=IsolateOrigins,site-per-process",
-    //     "--disable-blink-features=AutomationControlled",
-    //     "--disable-extensions",
-    //     // "--proxy-server=brd.superproxy.io:33335",
-    //   ],
-    // });
-
     // Get timeout configuration for this job
     const loadingTimeout = await timeoutManager.getLoadingTimeout(jobId);
     const selectorTimeout = await timeoutManager.getSelectorTimeout(jobId);
@@ -61,13 +46,13 @@ export async function browserSetup(jobId?: string): Promise<{
     // // Wait a bit before generating live URL
     await delay(2000);
 
-     // Generate live URL for user interaction
+    // Generate live URL for user interaction
     const { liveURL } = (await (cdp as any).send("Browserless.liveURL", {
       timeout: 600_000,
     })) as { liveURL: string };
     await dualLogInfo("Click for live experience:", { liveURL });
 
-     // Store live URL in database if jobId is provided
+    // Store live URL in database if jobId is provided
     if (jobId && liveURL) {
       try {
         const jobService = new JobService();
@@ -111,10 +96,6 @@ export async function browserSetup(jobId?: string): Promise<{
     //   username: `${process.env.BRIGHT_DATA_USERNAME}`,
     //   password: `${process.env.BRIGHT_DATA_PASSWORD}`,
     // });
-    // Set user agent to avoid detection
-    // await page.setUserAgent(
-    //   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-    // );
 
     // Set default timeouts based on job configuration
     await page.setDefaultNavigationTimeout(loadingTimeout);

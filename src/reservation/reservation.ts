@@ -1,12 +1,13 @@
 import dotenv from "dotenv";
-import { browserSetup } from "../browser-setup/browser.js";
+import { Browser } from "puppeteer";
+import { browserSetupLocal } from "../browser-setup/browser-local.js";
+import { browserSetupProduction } from "../browser-setup/browser-prod.js";
 import { delay } from "../common/delay.js";
+import { dualLogError, dualLogInfo } from "../common/log-helper.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import login from "../login/login.js";
 import handleOtpVerification from "../otp-verification/otp-verification.js";
 import scrapeWithReservationId from "../retry-scrape-data/scrape-with-reservationid.js";
-import { dualLogError, dualLogInfo } from "../common/log-helper.js";
-import { Browser } from "puppeteer";
 dotenv.config();
 
 // Initialize Steel client
@@ -14,14 +15,25 @@ dotenv.config();
 //   steelAPIKey: process.env.STEEL_API_KEY, // Optional
 // });
 
-async function reservation(browser: Browser | null, reservations: any[]): Promise<void> {
+async function reservation(
+  browser: Browser | null,
+  reservations: any[]
+): Promise<void> {
   try {
+    const environment = process.env.ENVIRONMENT || "production";
     // Create a new session
     // const session = await client.sessions.create();
 
     // Step 1: Setup browser and navigate to login page
     await dualLogInfo("Setting up browser...");
-    const { browser, page } = await browserSetup();
+    let setupResult = null;
+    if (environment === "production") {
+      setupResult = await browserSetupProduction();
+    } else {
+      setupResult = await browserSetupLocal();
+    }
+    browser = setupResult.browser;
+    const page = setupResult.page;
     await dualLogInfo("Browser setup complete. Page is ready at login screen.");
 
     // Step 2: Check if login credentials are provided
@@ -29,7 +41,9 @@ async function reservation(browser: Browser | null, reservations: any[]): Promis
     const password = process.env.EXPEDIA_PASSWORD;
 
     if (email && password) {
-      await dualLogInfo("Login credentials found, performing automatic login...");
+      await dualLogInfo(
+        "Login credentials found, performing automatic login..."
+      );
 
       try {
         await login(browser, page, email, password);
@@ -43,7 +57,7 @@ async function reservation(browser: Browser | null, reservations: any[]): Promis
       }
 
       try {
-        await handleOtpVerification(browser,page);
+        await handleOtpVerification(browser, page);
         console.log("OTP verification completed successfully!");
       } catch (error: any) {
         console.error("OTP verification failed:", error);
@@ -75,7 +89,7 @@ async function reservation(browser: Browser | null, reservations: any[]): Promis
               `Processing reservation ${processedCount + 1}/${
                 reservations.length
               }`
-            ); 
+            );
 
             await scrapeWithReservationId(browser, page, reservation);
             processedCount++;
@@ -93,7 +107,9 @@ async function reservation(browser: Browser | null, reservations: any[]): Promis
           throw error;
         }
       } else {
-        await dualLogInfo("No reservations provided, skipping reservation search.");
+        await dualLogInfo(
+          "No reservations provided, skipping reservation search."
+        );
       }
     } else {
       await dualLogInfo("No login credentials provided.");

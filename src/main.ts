@@ -1,5 +1,6 @@
 import dotenv from "dotenv";
-import { browserSetup } from "./browser-setup/browser.js";
+import { browserSetupLocal } from "./browser-setup/browser-local.js";
+import { browserSetupProduction } from "./browser-setup/browser-prod.js";
 import { delay } from "./common/delay.js";
 import { decryptPassword } from "./common/encription.js";
 import {
@@ -136,6 +137,7 @@ async function runScrapingWithRestart(
   user_email?: string,
   user_password?: string
 ): Promise<void> {
+  const environment = process.env.ENVIRONMENT || "production";
   let currentStartDate = startDate;
   let attemptCount = 0;
   const maxAttempts = 100; // Prevent infinite loops
@@ -170,7 +172,12 @@ async function runScrapingWithRestart(
 
       // Step 1: Setup browser and navigate to login page
       await dualLogInfo("Setting up browser...");
-      const setupResult = await browserSetup(jobId);
+      let setupResult = null;
+      if (environment === "production") {
+        setupResult = await browserSetupProduction(jobId);
+      } else {
+        setupResult = await browserSetupLocal(jobId);
+      }
       browser = setupResult.browser;
       const page = setupResult.page;
 
