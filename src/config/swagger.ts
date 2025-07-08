@@ -6,6 +6,7 @@ dotenv.config();
 
 const port = process.env.PORT || "3000";
 const serverUrl = `http://localhost:${port}`;
+const serverUrl2 = "https://modular-api-2.vnpmanage.online";
 
 const options: swaggerJsdoc.Options = {
   definition: {
@@ -23,6 +24,10 @@ const options: swaggerJsdoc.Options = {
     servers: [
       {
         url: serverUrl,
+        description: "Local server",
+      },
+      {
+        url: serverUrl2,
         description: "Development server",
       },
     ],
