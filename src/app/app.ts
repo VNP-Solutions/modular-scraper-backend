@@ -10,6 +10,7 @@ import {
   initializeJobLogging,
 } from "../common/log-helper.js";
 import { progressManager } from "../common/progress-manager.js";
+import { progressManager } from "../common/progress-manager.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import { specs, swaggerUi } from "../config/swagger.js";
 import { getAccess, getOauth2Callback } from "../get-access/access.js";
@@ -913,7 +914,7 @@ app.post("/api/expedia/property-run-job", (async (
       // Mark job as failed on scraping error
       await dualLogError(`Job ${jobId} failed`, scrapingError, { jobId });
       await progressManager.handleJobError(jobId, scrapingError);
-      scrapingStateManager. ();
+      scrapingStateManager.stopScraping();
 
       // Finalize logging with failed status (this ensures log upload even on error)
       await finalizeJobLogging("failed");
