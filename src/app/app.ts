@@ -9,6 +9,7 @@ import {
   getCurrentJobLogger,
   initializeJobLogging,
 } from "../common/log-helper.js";
+import { progressManager } from "../common/progress-manager.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import { specs, swaggerUi } from "../config/swagger.js";
 import { getAccess, getOauth2Callback } from "../get-access/access.js";
@@ -654,7 +655,7 @@ app.post("/api/expedia/rerun-failed-job", (async (
       await dualLogError(`Job ${jobId} rerun failed`, error, { jobId });
 
       // Update job status to Failed
-      await jobService.failJob(jobId);
+      await progressManager.handleJobError(jobId, error);
 
       // Stop legacy state manager
       scrapingStateManager.stopScraping();
@@ -911,8 +912,8 @@ app.post("/api/expedia/property-run-job", (async (
     } catch (scrapingError) {
       // Mark job as failed on scraping error
       await dualLogError(`Job ${jobId} failed`, scrapingError, { jobId });
-      await jobService.failJob(jobId);
-      scrapingStateManager.stopScraping();
+      await progressManager.handleJobError(jobId, scrapingError);
+      scrapingStateManager. ();
 
       // Finalize logging with failed status (this ensures log upload even on error)
       await finalizeJobLogging("failed");
@@ -928,7 +929,7 @@ app.post("/api/expedia/property-run-job", (async (
         await dualLogError(`Property run job ${req.body.jobId} failed`, err, {
           jobId: req.body.jobId,
         });
-        await jobService.failJob(req.body.jobId);
+        await progressManager.handleJobError(req.body.jobId, err);
 
         // Finalize logging to ensure log upload even if error occurs early
         await finalizeJobLogging("failed");

@@ -108,19 +108,19 @@ export class JobLogger {
       ? `${message} | ${JSON.stringify(metadata)}`
       : message;
 
-    switch (level) {
-      case "error":
-        console.error(consoleMessage);
-        break;
-      case "warn":
-        console.warn(consoleMessage);
-        break;
-      case "debug":
-        console.debug(consoleMessage);
-        break;
-      default:
-        console.log(consoleMessage);
-    }
+    // switch (level) {
+    //   case "error":
+    //     console.error(consoleMessage);
+    //     break;
+    //   case "warn":
+    //     console.warn(consoleMessage);
+    //     break;
+    //   case "debug":
+    //     console.debug(consoleMessage);
+    //     break;
+    //   default:
+    //     console.log(consoleMessage);
+    // }
 
     // Write to log file
     await this.writeToFile(entry);
