@@ -913,7 +913,7 @@ app.post("/api/expedia/property-run-job", (async (
       // Mark job as failed on scraping error
       await dualLogError(`Job ${jobId} failed`, scrapingError, { jobId });
       await progressManager.handleJobError(jobId, scrapingError);
-      scrapingStateManager. ();
+      scrapingStateManager.stopScraping();
 
       // Finalize logging with failed status (this ensures log upload even on error)
       await finalizeJobLogging("failed");
