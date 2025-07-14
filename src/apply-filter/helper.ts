@@ -265,9 +265,9 @@ async function setDateRangeInternal(
     const targetYear = targetDate.getFullYear();
     const targetMonth = targetDate.toLocaleString("en-US", { month: "long" });
     // Validate year
-    if (targetYear > parseInt(currentYear)) {
-      throw new Error("Target year is greater than current year");
-    }
+    // if (targetYear > parseInt(currentYear)) {
+    //   throw new Error("Target year is greater than current year");
+    // }
 
     // Calculate months to navigate for start date
     const totalMonthsToNavigate = calculateMonthsToNavigate(
