@@ -2,20 +2,13 @@ import bodyParser from "body-parser";
 import cors from "cors";
 import express from "express";
 import createError from "../common/error.js";
-import {
-  dualLogError,
-  dualLogInfo,
-  finalizeJobLogging,
-  getCurrentJobLogger,
-  initializeJobLogging,
-} from "../common/log-helper.js";
 import { progressManager } from "../common/progress-manager.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
+import { workerPool } from "../common/worker-pool.js";
+import { WorkerJobData } from "../common/worker-types.js";
 import { specs, swaggerUi } from "../config/swagger.js";
 import { getAccess, getOauth2Callback } from "../get-access/access.js";
-import main from "../main.js";
 import { JobStatus } from "../models/job.model.js";
-import reservation from "../reservation/reservation.js";
 import { jobService } from "../services/job.service.js";
 
 const app = express();
@@ -530,6 +523,15 @@ app.post("/api/expedia/rerun-failed-job", (async (
       });
     }
 
+    // Check if worker threads are available
+    if (!workerPool.hasAvailableWorkers() && workerPool.isQueueFull()) {
+      return res.status(200).json({
+        status: 200,
+        message: "All server busy, try again",
+        workerStatus: workerPool.getStatus(),
+      });
+    }
+
     // 1. Get the job to check its current status
     const job = await jobService.getJobById(jobId);
 
@@ -555,7 +557,7 @@ app.post("/api/expedia/rerun-failed-job", (async (
     // Store original status for response
     const originalStatus = job.job_status;
 
-    // 4. Get expedia_id and credentials from job's property
+    // 3. Get expedia_id and credentials from job's property
     console.log(`Getting expedia_id for job ${jobId}...`);
     const jobData = await jobService.getExpediaIdFromJob(jobId);
 
@@ -579,105 +581,64 @@ app.post("/api/expedia/rerun-failed-job", (async (
       `Rerunning failed/partial job ${jobId} with expedia_id: ${expediaId}`
     );
 
-    // 5. Reset job status to Pending, then to Running
-    console.log(
-      `Resetting job ${jobId} status from ${originalStatus} to Pending...`
-    );
-    await jobService.updateJobStatus(jobId, JobStatus.Pending);
-
-    console.log(`Starting job ${jobId}...`);
-    await jobService.startJob(jobId);
-
-    // 6. Initialize job logging
-    initializeJobLogging(jobId);
-    await dualLogInfo(`Starting job rerun for ${jobId}`, {
+    // 4. Prepare worker job data
+    const workerJobData: WorkerJobData = {
+      jobType: "rerun-failed",
       jobId,
-      originalStatus,
-      expediaId,
       startDate,
       endDate,
-    });
+      expediaId,
+      user_email,
+      user_password,
+      originalStatus,
+    };
 
-    // 7. Start legacy state manager (for existing pause/resume functionality)
-    scrapingStateManager.startScraping(expediaId, jobId, startDate, endDate);
-
+    // 5. Execute job in worker thread
     try {
-      // 8. Run the main scraping function with expedia_id
-      await main(
-        expediaId,
-        startDate,
-        endDate,
-        jobId,
-        user_email,
-        user_password
-      );
+      console.log(`Submitting rerun job ${jobId} to worker pool...`);
 
-      // 9. Get final job statistics
-      const progress = await jobService.getJobProgress(jobId);
+      const result = await workerPool.executeJob(workerJobData);
 
-      // 10. Determine final status based on completion
-      let finalStatus = JobStatus.Completed;
-      if (progress.totalItems === 0) {
-        finalStatus = JobStatus.Failed;
-      } else if (progress.completionPercentage < 100) {
-        finalStatus = JobStatus.Partial;
+      if (result.success) {
+        return res.status(200).json(result.data);
+      } else {
+        return res.status(500).json({
+          status: 500,
+          message: "Job rerun execution failed",
+          error: result.error,
+          jobId: result.jobId,
+        });
+      }
+    } catch (workerError) {
+      console.error(`Worker error for rerun job ${jobId}:`, workerError);
+
+      // Ensure job is marked as failed
+      try {
+        await progressManager.handleJobError(jobId, workerError);
+      } catch (cleanupError) {
+        console.error("Error during cleanup:", cleanupError);
       }
 
-      // 11. Update final job status
-      await jobService.updateJobStatus(jobId, finalStatus);
-
-      // 12. Stop legacy state manager
-      scrapingStateManager.stopScraping();
-
-      // Get log file information if available
-      const logger = getCurrentJobLogger();
-      const logInfo = logger
-        ? {
-            logFilePath: logger.getLogFilePath(),
-            logEntriesCount: logger.getLogEntriesCount(),
-            note: "Log file uploaded to S3 and deleted locally after job completion",
-          }
-        : undefined;
-
-      console.log(`✅ Job ${jobId} rerun completed successfully`);
-
-      return res.status(200).json({
-        status: 200,
-        message: `${originalStatus} job rerun completed successfully`,
+      return res.status(500).json({
+        status: 500,
+        message: "Worker execution failed for job rerun",
+        error:
+          workerError instanceof Error
+            ? workerError.message
+            : String(workerError),
         jobId,
-        originalStatus,
-        finalStatus,
-        progress,
-        logInfo,
       });
-    } catch (error) {
-      console.error(`❌ Error during job ${jobId} rerun:`, error);
-      await dualLogError(`Job ${jobId} rerun failed`, error, { jobId });
-
-      // Update job status to Failed
-      await progressManager.handleJobError(jobId, error);
-
-      // Stop legacy state manager
-      scrapingStateManager.stopScraping();
-
-      // Finalize logging with failed status (this ensures log upload even on error)
-      await finalizeJobLogging("failed");
-
-      throw error;
     }
   } catch (err: any) {
-    console.error("Error in rerun-failed-job API:", err);
+    console.error("Error in /api/expedia/rerun-failed-job:", err);
 
-    // Try to finalize logging if a jobId was provided and logging was initialized
+    // Ensure job is marked as failed
     try {
       if (req.body.jobId) {
-        await dualLogError(`Rerun failed job ${req.body.jobId} error`, err, {
-          jobId: req.body.jobId,
-        });
-        await finalizeJobLogging("failed");
+        await progressManager.handleJobError(req.body.jobId, err);
       }
-    } catch (logError) {
-      console.error("Error finalizing logging:", logError);
+    } catch (cleanupError) {
+      console.error("Error during cleanup:", cleanupError);
     }
 
     res.status(500).json({
@@ -686,7 +647,7 @@ app.post("/api/expedia/rerun-failed-job", (async (
       error: err.message,
     });
   }
-}) as express.RequestHandler);
+}) as any);
 
 /**
  * @swagger
@@ -797,6 +758,15 @@ app.post("/api/expedia/property-run-job", (async (
       });
     }
 
+    // Check if worker threads are available
+    if (!workerPool.hasAvailableWorkers() && workerPool.isQueueFull()) {
+      return res.status(200).json({
+        status: 200,
+        message: "All server busy, try again",
+        workerStatus: workerPool.getStatus(),
+      });
+    }
+
     // 1. Validate job exists and can be run
     const validation = await jobService.validateJob(jobId);
 
@@ -837,104 +807,61 @@ app.post("/api/expedia/property-run-job", (async (
 
     console.log(`Using expedia_id: ${expediaId} for scraping`);
 
-    // 3. Check if scraping is already running (legacy state manager check)
-    // if (scrapingStateManager.isRunning()) {
-    //   return res.status(409).json({
-    //     status: 409,
-    //     message: "Another scraping job is already running",
-    //     currentState: scrapingStateManager.getState(),
-    //   });
-    // }
-
-    // 4. Update job status to Running
-    console.log(`Starting job ${jobId}...`);
-    await jobService.startJob(jobId);
-
-    // 5. Initialize job logging
-    initializeJobLogging(jobId);
-    await dualLogInfo(`Starting property scraping job ${jobId}`, {
+    // 3. Prepare worker job data
+    const workerJobData: WorkerJobData = {
+      jobType: "property-run",
       jobId,
-      expediaId,
       startDate,
       endDate,
-    });
+      expediaId,
+      user_email,
+      user_password,
+    };
 
-    // 6. Start legacy state manager (for existing pause/resume functionality)
-    scrapingStateManager.startScraping(expediaId, jobId, startDate, endDate);
-
+    // 4. Execute job in worker thread
     try {
-      // 7. Run the main scraping function with expedia_id
-      await main(
-        expediaId,
-        startDate,
-        endDate,
-        jobId,
-        user_email,
-        user_password
-      );
+      console.log(`Submitting job ${jobId} to worker pool...`);
 
-      // 8. Get final job statistics
-      const progress = await jobService.getJobProgress(jobId);
+      const result = await workerPool.executeJob(workerJobData);
 
-      // 9. Determine final status based on completion
-      let finalStatus = JobStatus.Completed;
-      if (progress.totalItems === 0) {
-        finalStatus = JobStatus.Failed;
-      } else if (progress.completionPercentage < 100) {
-        finalStatus = JobStatus.Partial;
+      if (result.success) {
+        return res.status(200).json(result.data);
+      } else {
+        return res.status(500).json({
+          status: 500,
+          message: "Job execution failed",
+          error: result.error,
+          jobId: result.jobId,
+        });
+      }
+    } catch (workerError) {
+      console.error(`Worker error for job ${jobId}:`, workerError);
+
+      // Ensure job is marked as failed
+      try {
+        await progressManager.handleJobError(jobId, workerError);
+      } catch (cleanupError) {
+        console.error("Error during cleanup:", cleanupError);
       }
 
-      // 10. Update final job status
-      await jobService.updateJobStatus(jobId, finalStatus);
-
-      // 11. Stop legacy state manager
-      scrapingStateManager.stopScraping();
-
-      // Get log file information if available
-      const logger = getCurrentJobLogger();
-      const logInfo = logger
-        ? {
-            logFilePath: logger.getLogFilePath(),
-            logEntriesCount: logger.getLogEntriesCount(),
-            note: "Log file uploaded to S3 and deleted locally after job completion",
-          }
-        : null;
-
-      res.status(200).json({
-        status: 200,
-        message: `Property scraping ${finalStatus.toLowerCase()} successfully`,
-        expediaId: expediaId,
-        jobId: jobId,
-        progress: progress,
-        finalStatus: finalStatus,
-        logInfo: logInfo,
+      return res.status(500).json({
+        status: 500,
+        message: "Worker execution failed",
+        error:
+          workerError instanceof Error
+            ? workerError.message
+            : String(workerError),
+        jobId,
       });
-    } catch (scrapingError) {
-      // Mark job as failed on scraping error
-      await dualLogError(`Job ${jobId} failed`, scrapingError, { jobId });
-      await progressManager.handleJobError(jobId, scrapingError);
-      scrapingStateManager.stopScraping();
-
-      // Finalize logging with failed status (this ensures log upload even on error)
-      await finalizeJobLogging("failed");
-
-      throw scrapingError;
     }
   } catch (err: any) {
     console.error("Error in /api/expedia/property-run-job:", err);
 
-    // Ensure job is marked as failed and state manager is stopped
+    // Ensure job is marked as failed
     try {
       if (req.body.jobId) {
-        await dualLogError(`Property run job ${req.body.jobId} failed`, err, {
-          jobId: req.body.jobId,
-        });
         await progressManager.handleJobError(req.body.jobId, err);
-
-        // Finalize logging to ensure log upload even if error occurs early
-        await finalizeJobLogging("failed");
       }
-      scrapingStateManager.stopScraping();
     } catch (cleanupError) {
       console.error("Error during cleanup:", cleanupError);
     }
@@ -1043,70 +970,56 @@ app.post("/api/expedia/reservation-run-job", (async (
       });
     }
 
-    // Check if scraping is already running
-    // if (scrapingStateManager.isRunning()) {
-    //   return res.status(409).json({
-    //     status: 409,
-    //     message: "Scraping job is already running",
-    //     currentState: scrapingStateManager.getState(),
-    //   });
-    // }
+    // Check if worker threads are available
+    if (!workerPool.hasAvailableWorkers() && workerPool.isQueueFull()) {
+      return res.status(200).json({
+        status: 200,
+        message: "All server busy, try again",
+        workerStatus: workerPool.getStatus(),
+      });
+    }
 
-    // Generate job ID and start scraping state for reservations
+    // Generate job ID and prepare worker job data
     const jobId = `reservation_job_${Date.now()}`;
 
-    // Initialize job logging for reservation job
-    initializeJobLogging(jobId);
-    await dualLogInfo(`Starting reservation scraping job ${jobId}`, {
+    const workerJobData: WorkerJobData = {
+      jobType: "reservation-run",
       jobId,
-      reservationCount: reservations.length,
-    });
+      reservations,
+    };
 
-    scrapingStateManager.startScraping("reservations", jobId);
-
+    // Execute job in worker thread
     try {
-      await reservation(null, reservations);
+      console.log(`Submitting reservation job ${jobId} to worker pool...`);
 
-      // Mark scraping as completed
-      scrapingStateManager.stopScraping();
+      const result = await workerPool.executeJob(workerJobData);
 
-      // Finalize logging with success status
-      await finalizeJobLogging("success");
+      if (result.success) {
+        return res.status(200).json(result.data);
+      } else {
+        return res.status(500).json({
+          status: 500,
+          message: "Reservation job execution failed",
+          error: result.error,
+          jobId: result.jobId,
+        });
+      }
+    } catch (workerError) {
+      console.error(`Worker error for reservation job ${jobId}:`, workerError);
 
-      res.status(200).json({
-        status: 200,
-        message: "Reservation search completed successfully",
-        reservations: reservations,
-        jobId: jobId,
-      });
-    } catch (reservationError) {
-      await dualLogError(`Reservation job ${jobId} failed`, reservationError, {
+      return res.status(500).json({
+        status: 500,
+        message: "Worker execution failed for reservation job",
+        error:
+          workerError instanceof Error
+            ? workerError.message
+            : String(workerError),
         jobId,
       });
-
-      // Mark scraping as stopped on error
-      scrapingStateManager.stopScraping();
-
-      // Finalize logging with failed status
-      await finalizeJobLogging("failed");
-
-      throw reservationError;
     }
   } catch (err: any) {
     console.error("Error in /api/expedia/reservation-run-job:", err);
 
-    // Try to finalize logging if we can determine the jobId
-    try {
-      // Extract jobId from generated timestamp if possible
-      const possibleJobId = `reservation_job_${Date.now()}`;
-      await dualLogError(`Reservation run job error`, err, { possibleJobId });
-      await finalizeJobLogging("failed");
-    } catch (logError) {
-      console.error("Error finalizing logging:", logError);
-    }
-
-    // Mark scraping as stopped on error
-    scrapingStateManager.stopScraping();
     res.status(500).json({
       status: 500,
       message: "Error processing reservation search",
@@ -1458,6 +1371,85 @@ app.get("/api/jobs/:jobId/log", (async (
     });
   }
 }) as any);
+
+/**
+ * @swagger
+ * /api/worker-pool/status:
+ *   get:
+ *     tags:
+ *       - Worker Pool
+ *     summary: Get worker pool status
+ *     description: Get detailed information about the worker pool including available workers, busy workers, and queue status
+ *     responses:
+ *       200:
+ *         description: Worker pool status retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 200
+ *                 message:
+ *                   type: string
+ *                   example: "Worker pool status retrieved successfully"
+ *                 workerPool:
+ *                   type: object
+ *                   properties:
+ *                     totalWorkers:
+ *                       type: integer
+ *                       example: 3
+ *                     availableWorkers:
+ *                       type: integer
+ *                       example: 2
+ *                     busyWorkers:
+ *                       type: integer
+ *                       example: 1
+ *                     queuedJobs:
+ *                       type: integer
+ *                       example: 0
+ *                     workers:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           id:
+ *                             type: string
+ *                           isAvailable:
+ *                             type: boolean
+ *                           currentJobId:
+ *                             type: string
+ *                           startTime:
+ *                             type: string
+ *                             format: date-time
+ *                           lastActivity:
+ *                             type: string
+ *                             format: date-time
+ *       500:
+ *         description: Server error
+ */
+app.get(
+  "/api/worker-pool/status",
+  (req: express.Request, res: express.Response) => {
+    try {
+      const workerPoolStatus = workerPool.getStatus();
+
+      res.status(200).json({
+        status: 200,
+        message: "Worker pool status retrieved successfully",
+        workerPool: workerPoolStatus,
+      });
+    } catch (err: any) {
+      console.error("Error getting worker pool status:", err);
+      res.status(500).json({
+        status: 500,
+        message: "Error retrieving worker pool status",
+        error: err.message,
+      });
+    }
+  }
+);
 
 // * Global error handle middleware
 app.use((err: any, req: any, res: any, next: any) => {

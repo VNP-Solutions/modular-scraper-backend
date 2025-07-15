@@ -137,7 +137,7 @@ async function runScrapingWithRestart(
   user_email?: string,
   user_password?: string
 ): Promise<void> {
-  const environment = process.env.ENVIRONMENT || "production";
+  const environment = process.env.ENVIRONMENT || "browserless";
   let currentStartDate = startDate;
   let attemptCount = 0;
   const maxAttempts = 100; // Prevent infinite loops
@@ -173,7 +173,7 @@ async function runScrapingWithRestart(
       // Step 1: Setup browser and navigate to login page
       await dualLogInfo("Setting up browser...");
       let setupResult = null;
-      if (environment === "production") {
+      if (environment === "browserless") {
         setupResult = await browserSetupProduction(jobId);
       } else {
         setupResult = await browserSetupLocal(jobId);

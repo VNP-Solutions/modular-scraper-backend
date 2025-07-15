@@ -1,10 +1,20 @@
 # Modular Scraper Backend
 
-A Node.js backend application for automated web scraping with time-based browser management and resume functionality.
+A Node.js backend application for automated web scraping with worker thread parallelization, time-based browser management and resume functionality.
 
 ## Features
 
-### ✨ New: Time-Based Browser Management & Resume Functionality
+### ✨ New: Worker Thread System
+
+- **Parallel Job Processing**: Multiple scraping jobs can run simultaneously using worker threads
+- **Thread Pool Management**: Configurable worker pool with automatic thread lifecycle management
+- **Queue Management**: Jobs are queued when all workers are busy, with configurable queue size
+- **Busy Response**: Returns "All server busy, try again" when no threads are available
+- **Graceful Shutdown**: Proper cleanup of worker threads on application shutdown
+- **Error Isolation**: Job failures in one worker don't affect other workers
+- **Resource Management**: Automatic worker recreation on crashes or timeouts
+
+### ✨ Time-Based Browser Management & Resume Functionality
 
 - **Automatic Browser Restarts**: Configurable time limits for browser sessions (default: 1 hour)
 - **Smart Time Management**: Uses 5 minutes buffer before the time limit to ensure clean browser restarts
@@ -31,6 +41,17 @@ DATABASE_URI=mongodb://localhost:27017/scraper_db
 
 # Server Configuration
 PORT=3000
+NODE_ENV=development
+
+# Worker Thread Configuration
+# Number of worker threads to create (default: 3)
+MAX_WORKER_THREADS=3
+
+# Worker timeout in milliseconds (default: 3600000 = 1 hour)
+WORKER_TIMEOUT=3600000
+
+# Maximum number of jobs to queue when all workers are busy (default: 10)
+WORKER_QUEUE_SIZE=10
 
 # Browser Time Management
 # Time limit for browser sessions with flexible units (default: 1h)
@@ -42,6 +63,35 @@ BROWSER_TIME_LIMIT=1h
 # Number of days to process in each chunk (default: 2)
 CHUNK_SIZE=2
 ```
+
+### Worker Thread Configuration
+
+The worker thread system can be configured with these environment variables:
+
+| Variable             | Default | Description                                 |
+| -------------------- | ------- | ------------------------------------------- |
+| `MAX_WORKER_THREADS` | 3       | Number of worker threads in the pool        |
+| `WORKER_TIMEOUT`     | 3600000 | Worker timeout in milliseconds (1 hour)     |
+| `WORKER_QUEUE_SIZE`  | 10      | Maximum jobs to queue when workers are busy |
+
+### Worker Thread Features
+
+- **Isolated Execution**: Each job runs in its own worker thread with isolated memory
+- **Automatic Scaling**: Configurable number of workers based on server capacity
+- **Queue Management**: Jobs are queued when all workers are busy
+- **Timeout Protection**: Workers are automatically restarted if jobs exceed timeout
+- **Graceful Degradation**: Returns busy message when queue is full
+- **Health Monitoring**: Track worker status via API endpoint
+
+### Job Processing Flow
+
+1. **Job Submission**: API receives job request
+2. **Worker Availability Check**: System checks for available workers
+3. **Queue Management**: If no workers available, job is queued (or rejected if queue full)
+4. **Worker Assignment**: Available worker picks up job from queue
+5. **Isolated Execution**: Job runs in dedicated worker thread
+6. **Result Collection**: Worker returns results to main thread
+7. **Resource Cleanup**: Worker becomes available for next job
 
 ### Progress File Management
 
@@ -103,116 +153,92 @@ Process:
 6. Progress file automatically deleted on completion
 ```
 
-#### Scenario 2: Job Interruption and Resume
-
-```
-Original Range: 01/21/2024 to 06/21/2024
-Completed: 01/21/2024 to 01/27/2024 (then stopped)
-
-Resume:
-1. System detects progress file: job-progress/{jobId}.json
-2. Reads last processed date: 01/27/2024
-3. Calculates next start date: 01/28/2024
-4. Resumes with range: 01/28/2024 to 06/21/2024
-5. Progress file deleted on successful completion
-```
-
-#### Scenario 3: Multiple Concurrent Jobs
-
-```
-Job A: 01/01/2024 to 03/31/2024 → job-progress/jobA.json
-Job B: 04/01/2024 to 06/30/2024 → job-progress/jobB.json
-
-Each job maintains independent progress files
-No interference between jobs
-Automatic cleanup when each job completes
-```
-
-## Installation
-
-1. Clone the repository
-2. Install dependencies:
-   ```bash
-   npm install
-   ```
-3. Set up your environment variables (see `.env.example`)
-4. Start the application:
-   ```bash
-   npm run dev
-   ```
-
-## Usage
-
-### Basic Scraping with Time Management
-
-The system automatically handles time-based browser restarts and resume functionality. Simply provide the date range and credentials:
-
-```javascript
-await main(
-  expediaId, // Property ID to scrape
-  "01/21/2024", // Start date (MM/DD/YYYY)
-  "06/21/2024", // End date (MM/DD/YYYY)
-  jobId, // Job ID for tracking
-  email, // Login email
-  password // Login password
-);
-```
-
-### Configuring Time Limits
-
-Adjust the `BROWSER_TIME_LIMIT` environment variable with flexible time units:
-
-```env
-# Minutes
-BROWSER_TIME_LIMIT=30m    # 30 minutes (25 minutes effective)
-BROWSER_TIME_LIMIT=90m    # 1.5 hours (85 minutes effective)
-
-# Hours
-BROWSER_TIME_LIMIT=2h     # 2 hours (1h 55m effective)
-BROWSER_TIME_LIMIT=6h     # 6 hours (5h 55m effective)
-
-# Days
-BROWSER_TIME_LIMIT=1d     # 24 hours (23h 55m effective)
-BROWSER_TIME_LIMIT=0.5d   # 12 hours (11h 55m effective)
-
-# Backward compatibility (plain numbers treated as hours)
-BROWSER_TIME_LIMIT=2      # 2 hours (same as 2h)
-```
-
-## Progress Tracking Storage
-
-Progress tracking is handled via an in-memory system with individual file persistence:
-
-- **In-Memory Storage**: Fast access to progress data during runtime
-- **Individual Files**: Each job gets its own `{jobId}.json` file in `job-progress/` directory
-- **No Database Changes**: Existing job schema remains unchanged
-- **Auto-Cleanup**: Progress files deleted automatically when jobs complete successfully
-- **Isolation**: No interference between different jobs
-- **Recovery**: Automatic progress restoration after application restarts
-
 ## API Endpoints
+
+### Worker Pool Management
+
+- `GET /api/worker-pool/status` - Get worker pool status and statistics
+
+### Job Management
+
+- `POST /api/expedia/property-run-job` - Start property scraping job (uses worker threads)
+- `POST /api/expedia/rerun-failed-job` - Rerun failed or partial jobs (uses worker threads)
+- `POST /api/expedia/reservation-run-job` - Start reservation scraping job (uses worker threads)
+
+### Progress Monitoring
 
 - `GET /api/jobs/:id/progress` - Get job progress and resume status
 - `POST /api/jobs/:id/resume` - Manually trigger job resume
 - `GET /api/jobs/:id/time-status` - Get current time session status
 
+### Scraping Control
+
+- `POST /api/scraping/pause` - Pause current scraping operations
+- `POST /api/scraping/resume` - Resume paused scraping operations
+- `POST /api/scraping/stop` - Stop current scraping operations
+
+### Worker Pool Status Response
+
+```json
+{
+  "status": 200,
+  "message": "Worker pool status retrieved successfully",
+  "workerPool": {
+    "totalWorkers": 3,
+    "availableWorkers": 2,
+    "busyWorkers": 1,
+    "queuedJobs": 0,
+    "workers": [
+      {
+        "id": "worker-0",
+        "isAvailable": false,
+        "currentJobId": "507f1f77bcf86cd799439011",
+        "startTime": "2024-01-15T10:30:00.000Z",
+        "lastActivity": "2024-01-15T10:35:00.000Z"
+      }
+    ]
+  }
+}
+```
+
+### Busy Server Response
+
+When all workers are busy and queue is full:
+
+```json
+{
+  "status": 200,
+  "message": "All server busy, try again",
+  "workerStatus": {
+    "totalWorkers": 3,
+    "availableWorkers": 0,
+    "busyWorkers": 3,
+    "queuedJobs": 10
+  }
+}
+```
+
 ## Logging
 
 The system provides comprehensive logging for:
 
+- Worker thread lifecycle events
+- Job assignment and completion
 - Time session management
 - Browser restart events
 - Resume operations
 - Progress tracking
-- Error handling
+- Error handling and recovery
 
 ## Error Recovery
 
 The system handles various error scenarios:
 
-- **Browser crashes**: Automatic restart and resume
+- **Worker crashes**: Automatic worker recreation and job retry
+- **Job timeouts**: Worker termination and recreation
+- **Browser crashes**: Automatic restart and resume within worker
 - **Network timeouts**: Retry with exponential backoff
-- **Time limit exceeded**: Clean browser restart
+- **Time limit exceeded**: Clean browser restart within worker
 - **Job interruption**: Resume from last processed date
 - **Job failures**: Automatic progress file cleanup on any error
 - **Corrupted progress files**: Auto-detection and cleanup of invalid JSON
@@ -221,6 +247,9 @@ The system handles various error scenarios:
 
 ### Key Components
 
+- `src/common/worker-pool.ts` - Worker thread pool management
+- `src/common/worker-types.ts` - TypeScript interfaces for worker communication
+- `src/workers/scraping-worker.ts` - Worker thread implementation
 - `src/common/time-manager.ts` - Time tracking and session management
 - `src/common/progress-manager.ts` - In-memory progress tracking with file persistence
 - `src/date-split/date-split.ts` - Date processing with restart support
@@ -233,6 +262,14 @@ The system handles various error scenarios:
 npm test
 ```
 
+### Development Mode
+
+```bash
+npm run dev
+```
+
+This runs the application with ts-node and enables worker threads to run TypeScript files directly.
+
 ### Building for Production
 
 ```bash
@@ -240,14 +277,94 @@ npm run build
 npm run build:start
 ```
 
-## Contributing
+In production mode, compiled JavaScript worker files are used for better performance.
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests for new functionality
-5. Submit a pull request
+### Environment Setup
 
-## License
+1. Copy environment variables:
 
-This project is licensed under the ISC License.
+```bash
+cp .env.example .env
+```
+
+2. Configure your database and worker settings
+
+3. Install dependencies:
+
+```bash
+npm install
+```
+
+4. Run in development:
+
+```bash
+npm run dev
+```
+
+## Performance Considerations
+
+### Worker Thread Scaling
+
+- **CPU-bound tasks**: Set `MAX_WORKER_THREADS` to number of CPU cores
+- **I/O-bound tasks**: Can exceed CPU core count (2-3x cores is often optimal)
+- **Memory usage**: Each worker creates its own V8 isolate (~10-30MB overhead per worker)
+- **Browser instances**: Each worker may create its own browser instance
+
+### Recommended Settings
+
+| Server Specs          | MAX_WORKER_THREADS | WORKER_QUEUE_SIZE | WORKER_TIMEOUT |
+| --------------------- | ------------------ | ----------------- | -------------- |
+| 2 CPU cores, 4GB RAM  | 2-3                | 5-10              | 3600000 (1h)   |
+| 4 CPU cores, 8GB RAM  | 3-6                | 10-20             | 3600000 (1h)   |
+| 8 CPU cores, 16GB RAM | 6-12               | 20-50             | 3600000 (1h)   |
+
+### Monitoring
+
+Monitor these metrics for optimal performance:
+
+- Worker pool utilization (`/api/worker-pool/status`)
+- Queue length and wait times
+- Job completion rates
+- Memory usage per worker
+- Browser resource consumption
+
+## Docker Support
+
+The worker thread system is fully compatible with Docker deployments. Make sure to:
+
+1. Set appropriate resource limits
+2. Configure `MAX_WORKER_THREADS` based on container resources
+3. Use production Node.js image for better worker performance
+4. Mount volumes for persistent progress files if needed
+
+## Production Deployment
+
+### Environment Variables
+
+Set these in production:
+
+```env
+NODE_ENV=production
+MAX_WORKER_THREADS=6
+WORKER_TIMEOUT=7200000
+WORKER_QUEUE_SIZE=20
+```
+
+### Process Management
+
+Use process managers like PM2 for production:
+
+```json
+{
+  "name": "modular-scraper",
+  "script": "dist/index.js",
+  "instances": 1,
+  "exec_mode": "fork",
+  "env": {
+    "NODE_ENV": "production",
+    "MAX_WORKER_THREADS": "6"
+  }
+}
+```
+
+Note: Use `fork` mode, not `cluster` mode, as worker threads provide the parallelization.
