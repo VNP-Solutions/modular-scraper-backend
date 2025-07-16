@@ -17,6 +17,7 @@ import { getNextDateFromCompleted } from "./date-split/helper.js";
 import login from "./login/login.js";
 import handleOtpVerification from "./otp-verification/otp-verification.js";
 import { propertySearchAndClickReservation } from "./property-search/property-search.js";
+import { jobQueueUrlService } from "./services/job-queue-url.service.js";
 
 dotenv.config();
 
@@ -93,7 +94,7 @@ async function main(
       if (jobId) {
         await finalizeJobLogging("success");
       }
-    } catch (error) {
+    } catch (error: any) {
       await dualLogError("Main function error:", error);
 
       // End time session on error
@@ -102,6 +103,13 @@ async function main(
       // Clean up progress file on inner main function error
       if (jobId) {
         await progressManager.handleJobError(jobId, error);
+
+        // Release URL back to Available status on error
+        await jobQueueUrlService.handleJobCompletion(
+          jobId,
+          "Failed",
+          error?.message || "Unknown error"
+        );
       }
 
       // Finalize logging with failed status
@@ -110,7 +118,7 @@ async function main(
       }
       throw error;
     }
-  } catch (error) {
+  } catch (error: any) {
     await dualLogError("Main function error:", error);
 
     // End time session on error
@@ -119,6 +127,13 @@ async function main(
     // Clean up progress file on main function error
     if (jobId) {
       await progressManager.handleJobError(jobId, error);
+
+      // Release URL back to Available status on outer error
+      await jobQueueUrlService.handleJobCompletion(
+        jobId,
+        "Failed",
+        error?.message || "Unknown error"
+      );
     }
 
     // Finalize logging with failed status
@@ -401,7 +416,7 @@ async function runScrapingWithRestart(
         }
         break; // Exit the retry loop
       }
-    } catch (error) {
+    } catch (error: any) {
       await dualLogError(`Scraping attempt ${attemptCount} failed:`, error);
 
       // Close browser on error
@@ -421,6 +436,13 @@ async function runScrapingWithRestart(
         // Clean up progress file on error
         if (jobId) {
           await progressManager.handleJobError(jobId, error);
+
+          // Release URL back to Available status on browser crash
+          await jobQueueUrlService.handleJobCompletion(
+            jobId,
+            "Failed",
+            error?.message || "Unknown error"
+          );
         }
         throw error;
       }
@@ -434,6 +456,13 @@ async function runScrapingWithRestart(
     // Clean up progress file when max attempts exceeded
     if (jobId) {
       await progressManager.handleJobError(jobId, maxAttemptsError);
+
+      // Release URL back to Available status when max attempts exceeded
+      await jobQueueUrlService.handleJobCompletion(
+        jobId,
+        "Failed",
+        maxAttemptsError.message
+      );
     }
     throw maxAttemptsError;
   }
