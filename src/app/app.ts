@@ -17,6 +17,7 @@ import { getAccess, getOauth2Callback } from "../get-access/access.js";
 import main from "../main.js";
 import { JobStatus } from "../models/job.model.js";
 import reservation from "../reservation/reservation.js";
+import { jobQueueUrlService } from "../services/job-queue-url.service.js";
 import { jobService } from "../services/job.service.js";
 
 const app = express();
@@ -627,7 +628,10 @@ app.post("/api/expedia/rerun-failed-job", (async (
       // 11. Update final job status
       await jobService.updateJobStatus(jobId, finalStatus);
 
-      // 12. Stop legacy state manager
+      // 12. Change URL status back to Available (URL assigned by another project)
+      await jobQueueUrlService.handleJobCompletion(jobId, finalStatus);
+
+      // 13. Stop legacy state manager
       scrapingStateManager.stopScraping();
 
       // Get log file information if available
@@ -651,12 +655,19 @@ app.post("/api/expedia/rerun-failed-job", (async (
         progress,
         logInfo,
       });
-    } catch (error) {
+    } catch (error: any) {
       console.error(`❌ Error during job ${jobId} rerun:`, error);
       await dualLogError(`Job ${jobId} rerun failed`, error, { jobId });
 
       // Update job status to Failed
       await progressManager.handleJobError(jobId, error);
+
+      // Release URL back to Available status on error
+      await jobQueueUrlService.handleJobCompletion(
+        jobId,
+        "Failed",
+        error?.message || "Unknown error"
+      );
 
       // Stop legacy state manager
       scrapingStateManager.stopScraping();
@@ -675,6 +686,14 @@ app.post("/api/expedia/rerun-failed-job", (async (
         await dualLogError(`Rerun failed job ${req.body.jobId} error`, err, {
           jobId: req.body.jobId,
         });
+
+        // Release URL back to Available status on outer error
+        await jobQueueUrlService.handleJobCompletion(
+          req.body.jobId,
+          "Failed",
+          err?.message || "Unknown error"
+        );
+
         await finalizeJobLogging("failed");
       }
     } catch (logError) {
@@ -888,7 +907,10 @@ app.post("/api/expedia/property-run-job", (async (
       // 10. Update final job status
       await jobService.updateJobStatus(jobId, finalStatus);
 
-      // 11. Stop legacy state manager
+      // 11. Change URL status back to Available (URL assigned by another project)
+      await jobQueueUrlService.handleJobCompletion(jobId, finalStatus);
+
+      // 12. Stop legacy state manager
       scrapingStateManager.stopScraping();
 
       // Get log file information if available
@@ -910,10 +932,18 @@ app.post("/api/expedia/property-run-job", (async (
         finalStatus: finalStatus,
         logInfo: logInfo,
       });
-    } catch (scrapingError) {
+    } catch (scrapingError: any) {
       // Mark job as failed on scraping error
       await dualLogError(`Job ${jobId} failed`, scrapingError, { jobId });
       await progressManager.handleJobError(jobId, scrapingError);
+
+      // Release URL back to Available status on error
+      await jobQueueUrlService.handleJobCompletion(
+        jobId,
+        "Failed",
+        scrapingError?.message || "Unknown error"
+      );
+
       scrapingStateManager.stopScraping();
 
       // Finalize logging with failed status (this ensures log upload even on error)
@@ -931,6 +961,13 @@ app.post("/api/expedia/property-run-job", (async (
           jobId: req.body.jobId,
         });
         await progressManager.handleJobError(req.body.jobId, err);
+
+        // Release URL back to Available status on outer error
+        await jobQueueUrlService.handleJobCompletion(
+          req.body.jobId,
+          "Failed",
+          err.message
+        );
 
         // Finalize logging to ensure log upload even if error occurs early
         await finalizeJobLogging("failed");
