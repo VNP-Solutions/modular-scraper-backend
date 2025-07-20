@@ -19,7 +19,6 @@ interface ActiveWorker {
   info: WorkerInfo;
   resolve?: (value: WorkerResponse) => void;
   reject?: (reason: any) => void;
-  timeout?: NodeJS.Timeout;
 }
 
 export class WorkerPool extends EventEmitter {
@@ -38,9 +37,6 @@ export class WorkerPool extends EventEmitter {
     this.config = {
       maxWorkers:
         config.maxWorkers || parseInt(process.env.MAX_WORKER_THREADS || "3"),
-      workerTimeout:
-        config.workerTimeout ||
-        parseInt(process.env.WORKER_TIMEOUT || "3600000"), // 1 hour default
       queueSize:
         config.queueSize || parseInt(process.env.WORKER_QUEUE_SIZE || "10"),
     };
@@ -171,12 +167,6 @@ export class WorkerPool extends EventEmitter {
     const activeWorker = this.workers.get(workerId);
     if (!activeWorker) return;
 
-    // Clear timeout
-    if (activeWorker.timeout) {
-      clearTimeout(activeWorker.timeout);
-      activeWorker.timeout = undefined;
-    }
-
     // Mark worker as available
     activeWorker.info.isAvailable = true;
     activeWorker.info.currentJobId = undefined;
@@ -210,12 +200,6 @@ export class WorkerPool extends EventEmitter {
   private handleJobError(workerId: string, message: WorkerMessage): void {
     const activeWorker = this.workers.get(workerId);
     if (!activeWorker) return;
-
-    // Clear timeout
-    if (activeWorker.timeout) {
-      clearTimeout(activeWorker.timeout);
-      activeWorker.timeout = undefined;
-    }
 
     // Mark worker as available
     activeWorker.info.isAvailable = true;
@@ -281,9 +265,6 @@ export class WorkerPool extends EventEmitter {
       // Clean up the old worker
       const activeWorker = this.workers.get(workerId);
       if (activeWorker) {
-        if (activeWorker.timeout) {
-          clearTimeout(activeWorker.timeout);
-        }
         try {
           activeWorker.worker.terminate();
         } catch (error) {
@@ -353,12 +334,6 @@ export class WorkerPool extends EventEmitter {
     activeWorker.resolve = resolve;
     activeWorker.reject = reject;
 
-    // Set timeout for the job
-    activeWorker.timeout = setTimeout(() => {
-      console.error(`Job ${jobData.jobId} on worker ${workerId} timed out`);
-      this.handleJobTimeout(workerId, jobData.jobId);
-    }, this.config.workerTimeout);
-
     // Send job to worker
     try {
       activeWorker.worker.postMessage(jobData);
@@ -373,31 +348,7 @@ export class WorkerPool extends EventEmitter {
       activeWorker.info.startTime = undefined;
       activeWorker.resolve = undefined;
       activeWorker.reject = undefined;
-
-      if (activeWorker.timeout) {
-        clearTimeout(activeWorker.timeout);
-        activeWorker.timeout = undefined;
-      }
     }
-  }
-
-  private handleJobTimeout(workerId: string, jobId: string): void {
-    const activeWorker = this.workers.get(workerId);
-    if (!activeWorker) return;
-
-    console.error(
-      `Job ${jobId} on worker ${workerId} timed out, terminating worker`
-    );
-
-    // Reject the current job
-    if (activeWorker.reject) {
-      activeWorker.reject(
-        new Error(`Job timeout after ${this.config.workerTimeout}ms`)
-      );
-    }
-
-    // Recreate the worker
-    this.recreateWorker(workerId);
   }
 
   private processQueue(): void {
@@ -465,10 +416,6 @@ export class WorkerPool extends EventEmitter {
     const shutdownPromises = Array.from(this.workers.values()).map(
       async (activeWorker) => {
         return new Promise<void>((resolve) => {
-          if (activeWorker.timeout) {
-            clearTimeout(activeWorker.timeout);
-          }
-
           // Give worker a chance to finish current job
           setTimeout(() => {
             activeWorker.worker

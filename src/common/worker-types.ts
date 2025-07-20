@@ -29,7 +29,6 @@ export interface WorkerResponse {
 
 export interface WorkerPoolConfig {
   maxWorkers: number;
-  workerTimeout: number; // in milliseconds
   queueSize: number;
 }
 

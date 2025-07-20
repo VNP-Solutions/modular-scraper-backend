@@ -44,6 +44,7 @@ export async function propertySearchAndClickReservation(
       // Get property ID from query params
       await dualLogInfo(`Searching for property ID: ${propertyId}`);
 
+      await delay(20000);
       // Type property ID in search
       await page.type(
         ".all-properties__search input.fds-field-input",

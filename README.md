@@ -47,8 +47,7 @@ NODE_ENV=development
 # Number of worker threads to create (default: 3)
 MAX_WORKER_THREADS=3
 
-# Worker timeout in milliseconds (default: 3600000 = 1 hour)
-WORKER_TIMEOUT=3600000
+
 
 # Maximum number of jobs to queue when all workers are busy (default: 10)
 WORKER_QUEUE_SIZE=10
@@ -71,7 +70,6 @@ The worker thread system can be configured with these environment variables:
 | Variable             | Default | Description                                 |
 | -------------------- | ------- | ------------------------------------------- |
 | `MAX_WORKER_THREADS` | 3       | Number of worker threads in the pool        |
-| `WORKER_TIMEOUT`     | 3600000 | Worker timeout in milliseconds (1 hour)     |
 | `WORKER_QUEUE_SIZE`  | 10      | Maximum jobs to queue when workers are busy |
 
 ### Worker Thread Features
@@ -79,7 +77,7 @@ The worker thread system can be configured with these environment variables:
 - **Isolated Execution**: Each job runs in its own worker thread with isolated memory
 - **Automatic Scaling**: Configurable number of workers based on server capacity
 - **Queue Management**: Jobs are queued when all workers are busy
-- **Timeout Protection**: Workers are automatically restarted if jobs exceed timeout
+
 - **Graceful Degradation**: Returns busy message when queue is full
 - **Health Monitoring**: Track worker status via API endpoint
 
@@ -235,7 +233,7 @@ The system provides comprehensive logging for:
 The system handles various error scenarios:
 
 - **Worker crashes**: Automatic worker recreation and job retry
-- **Job timeouts**: Worker termination and recreation
+
 - **Browser crashes**: Automatic restart and resume within worker
 - **Network timeouts**: Retry with exponential backoff
 - **Time limit exceeded**: Clean browser restart within worker
@@ -312,11 +310,11 @@ npm run dev
 
 ### Recommended Settings
 
-| Server Specs          | MAX_WORKER_THREADS | WORKER_QUEUE_SIZE | WORKER_TIMEOUT |
-| --------------------- | ------------------ | ----------------- | -------------- |
-| 2 CPU cores, 4GB RAM  | 2-3                | 5-10              | 3600000 (1h)   |
-| 4 CPU cores, 8GB RAM  | 3-6                | 10-20             | 3600000 (1h)   |
-| 8 CPU cores, 16GB RAM | 6-12               | 20-50             | 3600000 (1h)   |
+| Server Specs          | MAX_WORKER_THREADS | WORKER_QUEUE_SIZE |
+| --------------------- | ------------------ | ----------------- |
+| 2 CPU cores, 4GB RAM  | 2-3                | 5-10              |
+| 4 CPU cores, 8GB RAM  | 3-6                | 10-20             |
+| 8 CPU cores, 16GB RAM | 6-12               | 20-50             |
 
 ### Monitoring
 
@@ -346,7 +344,6 @@ Set these in production:
 ```env
 NODE_ENV=production
 MAX_WORKER_THREADS=6
-WORKER_TIMEOUT=7200000
 WORKER_QUEUE_SIZE=20
 ```
 
