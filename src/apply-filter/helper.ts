@@ -233,11 +233,11 @@ async function setDateRangeInternal(
               console.log("Scrolled down 300px");
 
               // Scroll back to original position
-              await page.evaluate((originalY) => {
-                window.scrollTo(0, originalY);
-              }, currentScrollY);
+              await page.evaluate(() => {
+                window.scrollTo(0, 0);
+              });
               await new Promise((r) => setTimeout(r, 1000));
-              console.log("Scrolled back to original position");
+              console.log("Scrolled to top of the page");
 
               // Try clicking the date input again
               await fromDateInput.click();
@@ -450,11 +450,11 @@ async function setDateRangeInternal(
               console.log("Scrolled down 300px for To date");
               
               // Scroll back to original position
-              await page.evaluate((originalY) => {
-                window.scrollTo(0, originalY);
-              }, currentScrollY);
+              await page.evaluate(() => {
+                window.scrollTo(0, 0);
+              });
               await new Promise((r) => setTimeout(r, 1000));
-              console.log("Scrolled back to original position for To date");
+              console.log("Scrolled to top of the page for To date");
               
               // Try clicking the To date input again
               await page.evaluate((el) => (el as HTMLElement).click(), toDateInput);

@@ -213,7 +213,7 @@ export async function applyFilter(
     // Wait for data to load and stabilize
     let previousCount = 0;
     let attempts = 0;
-    const maxAttempts = 15; // Increased max attempts
+    const maxAttempts = 3; // Increased max attempts
 
     while (attempts < maxAttempts) {
       // Check pause state during data stabilization
