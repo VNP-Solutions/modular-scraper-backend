@@ -213,6 +213,57 @@ async function setDateRangeInternal(
           console.log(`Successfully found .first-month h2 on retry ${retry}`);
         } catch (error) {
           console.log(`Retry ${retry} failed to find .first-month h2`);
+
+          // After 2 failed attempt
+          if (retry >= 2) {
+            console.log(
+              "Attempting scroll-based approach after 2 failed attempts..."
+            );
+
+            try {
+              // Get current scroll position
+              const currentScrollY = await page.evaluate(() => window.scrollY);
+              console.log(`Current scroll position: ${currentScrollY}`);
+
+              // Scroll down a bit
+              await page.evaluate(() => {
+                window.scrollBy(0, 300);
+              });
+              await new Promise((r) => setTimeout(r, 1000));
+              console.log("Scrolled down 300px");
+
+              // Scroll back to original position
+              await page.evaluate(() => {
+                window.scrollTo(0, 0);
+              });
+              await new Promise((r) => setTimeout(r, 1000));
+              console.log("Scrolled to top of the page");
+
+              // Try clicking the date input again
+              await fromDateInput.click();
+              await new Promise((r) => setTimeout(r, 2000));
+
+              // Try to find the calendar again
+              try {
+                await page.waitForSelector(".first-month h2", {
+                  visible: true,
+                  timeout: 10000,
+                });
+                monthHeaderFound = true;
+                console.log(
+                  "Successfully found .first-month h2 after scroll approach"
+                );
+                break;
+              } catch (scrollError) {
+                console.log(
+                  "Scroll approach also failed, continuing with next retry..."
+                );
+              }
+            } catch (scrollError) {
+              console.log("Error during scroll approach:", scrollError);
+            }
+          }
+
           // No delay between retries, just increase timeout for next attempt
         }
       }
@@ -407,11 +458,11 @@ async function setDateRangeInternal(
               console.log("Scrolled down 300px for To date");
 
               // Scroll back to original position
-              await page.evaluate((originalY) => {
-                window.scrollTo(0, originalY);
-              }, currentScrollY);
+              await page.evaluate(() => {
+                window.scrollTo(0, 0);
+              });
               await new Promise((r) => setTimeout(r, 1000));
-              console.log("Scrolled back to original position for To date");
+              console.log("Scrolled to top of the page for To date");
 
               // Try clicking the To date input again
               await page.evaluate(
