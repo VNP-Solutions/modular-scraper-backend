@@ -1,6 +1,5 @@
 import { Page } from "puppeteer";
 import { timeoutManager } from "../common/timeout-manager.js";
-import { delay } from "../common/delay.js";
 
 const calculateMonthsToNavigate = (
   currentMonth: string,
@@ -194,7 +193,7 @@ async function setDateRangeInternal(
       // Try to find .first-month h2 with retries and increasing timeout
       let monthHeaderFound = false;
       const maxHeaderRetries = 10;
-      
+
       for (
         let retry = 1;
         retry <= maxHeaderRetries && !monthHeaderFound;
@@ -214,10 +213,61 @@ async function setDateRangeInternal(
           console.log(`Successfully found .first-month h2 on retry ${retry}`);
         } catch (error) {
           console.log(`Retry ${retry} failed to find .first-month h2`);
+
+          // After 2 failed attempt
+          if (retry >= 2) {
+            console.log(
+              "Attempting scroll-based approach after 2 failed attempts..."
+            );
+
+            try {
+              // Get current scroll position
+              const currentScrollY = await page.evaluate(() => window.scrollY);
+              console.log(`Current scroll position: ${currentScrollY}`);
+
+              // Scroll down a bit
+              await page.evaluate(() => {
+                window.scrollBy(0, 300);
+              });
+              await new Promise((r) => setTimeout(r, 1000));
+              console.log("Scrolled down 300px");
+
+              // Scroll back to original position
+              await page.evaluate((originalY) => {
+                window.scrollTo(0, originalY);
+              }, currentScrollY);
+              await new Promise((r) => setTimeout(r, 1000));
+              console.log("Scrolled back to original position");
+
+              // Try clicking the date input again
+              await fromDateInput.click();
+              await new Promise((r) => setTimeout(r, 2000));
+
+              // Try to find the calendar again
+              try {
+                await page.waitForSelector(".first-month h2", {
+                  visible: true,
+                  timeout: 10000,
+                });
+                monthHeaderFound = true;
+                console.log(
+                  "Successfully found .first-month h2 after scroll approach"
+                );
+                break;
+              } catch (scrollError) {
+                console.log(
+                  "Scroll approach also failed, continuing with next retry..."
+                );
+              }
+            } catch (scrollError) {
+              console.log("Error during scroll approach:", scrollError);
+            }
+          }
+
           // No delay between retries, just increase timeout for next attempt
         }
       }
-      
+
       if (!monthHeaderFound) {
         throw new Error("Failed to find .first-month h2 after all retries");
       }
@@ -352,19 +402,89 @@ async function setDateRangeInternal(
     // Handle end date selection
     await new Promise((r) => setTimeout(r, 1000));
 
-    // Wait for and click the To date input
-    await page.waitForSelector(".to-input-label input.fds-field-input", {
-      visible: true,
-    });
-    const toDateInput = await page.$(".to-input-label input.fds-field-input");
-    if (!toDateInput) {
-      throw new Error("To date input not found");
-    }
-    await page.evaluate((el) => (el as HTMLElement).click(), toDateInput);
-    await new Promise((r) => setTimeout(r, 1000));
+    // Wait for and click the To date input with retry mechanism
+    let toDateCalendarVisible = false;
+    let toDateRetryCount = 0;
+    const maxToDateRetries = 3;
+    
+    while (!toDateCalendarVisible && toDateRetryCount < maxToDateRetries) {
+      try {
+        toDateRetryCount++;
+        console.log(`To date input attempt ${toDateRetryCount}/${maxToDateRetries}`);
+        
+        await page.waitForSelector(".to-input-label input.fds-field-input", {
+          visible: true,
+        });
+        const toDateInput = await page.$(".to-input-label input.fds-field-input");
+        if (!toDateInput) {
+          throw new Error("To date input not found");
+        }
+        await page.evaluate((el) => (el as HTMLElement).click(), toDateInput);
+        await new Promise((r) => setTimeout(r, 1000));
 
-    // Make sure calendar is visible before proceeding
-    await page.waitForSelector(".second-month h2", { visible: true });
+        // Try to find the second month header
+        try {
+          await page.waitForSelector(".second-month h2", { 
+            visible: true,
+            timeout: 10000 
+          });
+          toDateCalendarVisible = true;
+          console.log("Successfully found .second-month h2");
+        } catch (calendarError) {
+          console.log(`Calendar not found on attempt ${toDateRetryCount}`);
+          
+          // After 2 failed attempts, try scrolling approach
+          if (toDateRetryCount >= 2) {
+            console.log("Attempting scroll-based approach for To date after 2 failed attempts...");
+            
+            try {
+              // Get current scroll position
+              const currentScrollY = await page.evaluate(() => window.scrollY);
+              console.log(`Current scroll position for To date: ${currentScrollY}`);
+              
+              // Scroll down a bit
+              await page.evaluate(() => {
+                window.scrollBy(0, 300);
+              });
+              await new Promise((r) => setTimeout(r, 1000));
+              console.log("Scrolled down 300px for To date");
+              
+              // Scroll back to original position
+              await page.evaluate((originalY) => {
+                window.scrollTo(0, originalY);
+              }, currentScrollY);
+              await new Promise((r) => setTimeout(r, 1000));
+              console.log("Scrolled back to original position for To date");
+              
+              // Try clicking the To date input again
+              await page.evaluate((el) => (el as HTMLElement).click(), toDateInput);
+              await new Promise((r) => setTimeout(r, 2000));
+              
+              // Try to find the calendar again
+              try {
+                await page.waitForSelector(".second-month h2", {
+                  visible: true,
+                  timeout: 10000,
+                });
+                toDateCalendarVisible = true;
+                console.log("Successfully found .second-month h2 after scroll approach for To date");
+                break;
+              } catch (scrollError) {
+                console.log("Scroll approach also failed for To date, continuing with next retry...");
+              }
+            } catch (scrollError) {
+              console.log("Error during scroll approach for To date:", scrollError);
+            }
+          }
+        }
+      } catch (error: any) {
+        console.log(`To date input attempt ${toDateRetryCount} failed:`, error.message);
+        if (toDateRetryCount >= maxToDateRetries) {
+          throw new Error(`Failed to open To date calendar after ${maxToDateRetries} attempts`);
+        }
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+    }
 
     const secondMonthHeader = await page.$eval(
       ".second-month h2",
