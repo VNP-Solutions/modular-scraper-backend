@@ -102,7 +102,7 @@ JobQueueUrlSchema.statics.getAvailableUrl =
       status: JobQueueUrlStatus.Available,
       is_active: true,
     })
-      .sort({ priority: -1, last_used: 1 })
+      .sort({ _id: 1 })
       .exec();
   };
 
