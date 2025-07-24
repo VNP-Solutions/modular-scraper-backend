@@ -136,6 +136,53 @@ export class JobService {
   }
 
   /**
+   * Get booking_id from job's property
+   */
+  async getBookingIdFromJob(jobId: string): Promise<{
+    bookingId: string;
+    user_email?: string;
+    user_password?: string;
+  } | null> {
+    try {
+      const job = await this.getJobWithProperty(jobId);
+      if (!job) {
+        console.error(`Job not found: ${jobId}`);
+        return null;
+      }
+      if (!job.property_id) {
+        console.error(`Job ${jobId} has no property_id assigned`);
+        return null;
+      }
+      // Get property details
+      const property = await Property.findById(job.property_id);
+      if (!property) {
+        console.error(
+          `Property not found for job ${jobId}, property_id: ${job.property_id}`
+        );
+        return null;
+      }
+
+      // Check if booking_id exists and is valid
+      if (!property.booking_id || property.booking_id === "0") {
+        console.error(`Property ${job.property_id} has no valid booking_id`);
+        return null;
+      }
+
+      console.log(
+        `✅ Found booking_id: ${property.booking_id} for job: ${jobId}`
+      );
+      return {
+        bookingId: property.booking_id,
+        user_email: property.user_email,
+        user_password: property.user_password,
+      };
+    } catch (error) {
+      console.error(`Error getting booking_id for job ${jobId}:`, error);
+      return null;
+    }
+  }
+
+  /**
    * Create job (external jobs creation - read only for scraper)
    */
   async createJob(jobData: CreateJobData): Promise<IJob> {

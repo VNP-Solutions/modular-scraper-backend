@@ -1030,6 +1030,239 @@ app.post("/api/expedia/reservation-run-job", (async (
 
 /**
  * @swagger
+ * /api/booking/run-job:
+ *   post:
+ *     tags:
+ *       - Booking Jobs
+ *     summary: Start booking scraping job
+ *     description: Start a new booking scraping job for the specified portfolio, property, and date range
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - jobId
+ *               - portfolioId
+ *               - startDate
+ *               - endDate
+ *             properties:
+ *               jobId:
+ *                 type: string
+ *                 description: MongoDB ObjectId of the job to run
+ *                 example: "507f1f77bcf86cd799439011"
+ *               portfolioId:
+ *                 type: string
+ *                 description: MongoDB ObjectId of the portfolio
+ *                 example: "507f1f77bcf86cd799439012"
+ *               propertyId:
+ *                 type: string
+ *                 description: MongoDB ObjectId of the property (optional)
+ *                 example: "507f1f77bcf86cd799439013"
+ *               startDate:
+ *                 type: string
+ *                 description: Start date for booking scraping (MM/DD/YYYY format)
+ *                 example: "01/01/2024"
+ *               endDate:
+ *                 type: string
+ *                 description: End date for booking scraping (MM/DD/YYYY format)
+ *                 example: "01/31/2024"
+ *     responses:
+ *       200:
+ *         description: Booking scraping job completed successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 200
+ *                 message:
+ *                   type: string
+ *                   example: "Booking scraping job started successfully"
+ *                 jobId:
+ *                   type: string
+ *                   example: "507f1f77bcf86cd799439011"
+ *                 portfolioId:
+ *                   type: string
+ *                   example: "507f1f77bcf86cd799439012"
+ *                 propertyId:
+ *                   type: string
+ *                   example: "507f1f77bcf86cd799439013"
+ *       400:
+ *         description: Missing required parameters or invalid ObjectIds
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 400
+ *                 message:
+ *                   type: string
+ *                   example: "jobId, portfolioId, startDate and endDate are required"
+ *       404:
+ *         description: Job not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 404
+ *                 message:
+ *                   type: string
+ *                   example: "Job with ID 507f1f77bcf86cd799439011 not found"
+ *       409:
+ *         description: Job not in runnable state
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 409
+ *                 message:
+ *                   type: string
+ *                   example: "Job is not in a runnable state. Current status: Running"
+ *       500:
+ *         description: Error processing booking job
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
+app.post("/api/booking/run-job", (async (
+  req: express.Request,
+  res: express.Response
+) => {
+  try {
+    const { jobId, portfolioId, propertyId, startDate, endDate } = req.body;
+
+    // Validate required parameters
+    if (!jobId || !portfolioId || !startDate || !endDate) {
+      return res.status(400).json({
+        status: 400,
+        message: "jobId, portfolioId, startDate and endDate are required in request body",
+      });
+    }
+
+    // 1. Validate job exists and can be run
+    const validation = await jobService.validateJob(jobId);
+
+    if (!validation.exists) {
+      return res.status(404).json({
+        status: 404,
+        message: `Job with ID ${jobId} not found`,
+      });
+    }
+
+    if (!validation.canRun) {
+      return res.status(409).json({
+        status: 409,
+        message: `Job ${jobId} is not in a runnable state. Current status: ${validation.job?.job_status}`,
+        currentState: validation.job,
+      });
+    }
+
+    // 2. Get booking_id and credentials from job's property
+    console.log(`Getting booking_id for booking job ${jobId}...`);
+    const jobData = await jobService.getBookingIdFromJob(jobId);
+
+    if (!jobData || !jobData.bookingId) {
+      return res.status(400).json({
+        status: 400,
+        message: `Cannot retrieve valid booking_id for job ${jobId}. Property may not have booking_id assigned or booking_id is "0".`,
+      });
+    }
+
+    if (!jobData.user_email || !jobData.user_password) {
+      return res.status(400).json({
+        status: 400,
+        message: `Cannot retrieve valid user_email or user_password for job ${jobId}. Property may not have user_email or user_password assigned.`,
+      });
+    }
+
+    const { bookingId, user_email, user_password } = jobData;
+
+    console.log(`Using booking_id: ${bookingId} for booking scraping`);
+
+    // 3. Prepare worker job data
+    const workerJobData: WorkerJobData = {
+      jobType: "booking-run",
+      jobId,
+      portfolioId,
+      propertyId,
+      startDate,
+      endDate,
+      bookingId,
+      user_email,
+      user_password,
+    };
+
+    // 4. Execute job in worker thread
+    try {
+      console.log(`Submitting booking job ${jobId} to worker pool...`);
+
+      const result = await workerPool.executeJob(workerJobData);
+
+      if (result.success) {
+        return res.status(200).json(result.data);
+      } else {
+        return res.status(500).json({
+          status: 500,
+          message: "Booking job execution failed",
+          error: result.error,
+          jobId: result.jobId,
+        });
+      }
+    } catch (workerError) {
+      console.error(`Worker error for booking job ${jobId}:`, workerError);
+
+      // Ensure job is marked as failed
+      try {
+        await progressManager.handleJobError(jobId, workerError);
+      } catch (cleanupError) {
+        console.error("Error during cleanup:", cleanupError);
+      }
+
+      return res.status(500).json({
+        status: 500,
+        message: "Worker execution failed for booking job",
+        error:
+          workerError instanceof Error
+            ? workerError.message
+            : String(workerError),
+        jobId,
+      });
+    }
+  } catch (err: any) {
+    console.error("Error in /api/booking/run-job:", err);
+
+    // Ensure job is marked as failed
+    try {
+      if (req.body.jobId) {
+        await progressManager.handleJobError(req.body.jobId, err);
+      }
+    } catch (cleanupError) {
+      console.error("Error during cleanup:", cleanupError);
+    }
+
+    res.status(500).json({
+      status: 500,
+      message: "Error processing booking job",
+      error: err.message,
+    });
+  }
+}) as any);
+
+/**
+ * @swagger
  * /api/jobs/{jobId}/progress:
  *   get:
  *     tags:
