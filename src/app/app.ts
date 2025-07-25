@@ -1395,6 +1395,263 @@ app.post("/api/booking/stop-job", (async (
 
 /**
  * @swagger
+ * /api/booking/rerun-failed-job:
+ *   post:
+ *     tags:
+ *       - Booking Jobs
+ *     summary: Rerun failed booking scraping job
+ *     description: Re-execute a failed or cancelled booking job with retry tracking and record recovery
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - jobId
+ *               - startDate
+ *               - endDate
+ *             properties:
+ *               jobId:
+ *                 type: string
+ *                 description: MongoDB ObjectId of the failed or cancelled job to rerun
+ *                 example: "507f1f77bcf86cd799439011"
+ *               startDate:
+ *                 type: string
+ *                 description: Start date for booking scraping (MM/DD/YYYY format)
+ *                 example: "01/01/2024"
+ *               endDate:
+ *                 type: string
+ *                 description: End date for booking scraping (MM/DD/YYYY format)
+ *                 example: "01/31/2024"
+ *     responses:
+ *       200:
+ *         description: Failed booking job rerun completed successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 200
+ *                 message:
+ *                   type: string
+ *                   example: "Failed or cancelled booking job rerun completed successfully"
+ *                 jobId:
+ *                   type: string
+ *                   example: "507f1f77bcf86cd799439011"
+ *                 originalStatus:
+ *                   type: string
+ *                   example: "Failed"
+ *                 finalStatus:
+ *                   type: string
+ *                   example: "Completed"
+ *                 retryAttempt:
+ *                   type: integer
+ *                   example: 2
+ *                 progress:
+ *                   type: object
+ *                   properties:
+ *                     totalItems:
+ *                       type: integer
+ *                       example: 150
+ *                     itemsWithCardInfo:
+ *                       type: integer
+ *                       example: 140
+ *                     itemsWithPaymentInfo:
+ *                       type: integer
+ *                       example: 135
+ *                     completionPercentage:
+ *                       type: integer
+ *                       example: 90
+ *       400:
+ *         description: Invalid request or job not eligible for retry
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 400
+ *                 message:
+ *                   type: string
+ *                   example: "Job is not in Failed or Cancelled status. Current status: Completed"
+ *       404:
+ *         description: Job not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 404
+ *                 message:
+ *                   type: string
+ *                   example: "Job with ID 507f1f77bcf86cd799439011 not found"
+ *       500:
+ *         description: Error processing job rerun
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
+app.post("/api/booking/rerun-failed-job", (async (
+  req: express.Request,
+  res: express.Response
+) => {
+  try {
+    const { jobId, startDate, endDate } = req.body;
+
+    // Validate required parameters
+    if (!jobId || !startDate || !endDate) {
+      return res.status(400).json({
+        status: 400,
+        message: "jobId, startDate and endDate are required in request body",
+      });
+    }
+
+    // Check if worker threads are available
+    if (!workerPool.hasAvailableWorkers() && workerPool.isQueueFull()) {
+      return res.status(200).json({
+        status: 200,
+        message: "All server busy, try again",
+        workerStatus: workerPool.getStatus(),
+      });
+    }
+
+    // 1. Check if job can be retried
+    const retryCheck = await jobService.canRetryJob(jobId);
+    
+    if (!retryCheck.canRetry) {
+      return res.status(400).json({
+        status: 400,
+        message: retryCheck.reason,
+        jobId,
+        currentStatus: retryCheck.job?.job_status,
+        retryAttempts: retryCheck.job?.retries_attempted,
+        maxRetries: retryCheck.job?.max_retries,
+      });
+    }
+
+    const job = retryCheck.job!;
+    const originalStatus = job.job_status;
+
+    // 2. Increment retry attempts
+    const updatedJob = await jobService.incrementRetryAttempts(jobId);
+    if (!updatedJob) {
+      return res.status(500).json({
+        status: 500,
+        message: "Failed to update retry attempts",
+      });
+    }
+
+    // 3. Get booking_id and credentials from job's property
+    console.log(`Getting booking_id for failed job rerun ${jobId}...`);
+    const jobData = await jobService.getBookingIdFromJob(jobId);
+
+    if (!jobData || !jobData.bookingId) {
+      return res.status(400).json({
+        status: 400,
+        message: `Cannot retrieve valid booking_id for job ${jobId}. Property may not have booking_id assigned or booking_id is "0".`,
+      });
+    }
+
+    if (!jobData.user_email || !jobData.user_password) {
+      return res.status(400).json({
+        status: 400,
+        message: `Cannot retrieve valid user_email or user_password for job ${jobId}. Property may not have user_email or user_password assigned.`,
+      });
+    }
+
+    const { bookingId, user_email, user_password } = jobData;
+
+    console.log(
+      `Rerunning failed booking job ${jobId} (attempt ${updatedJob.retries_attempted}/${updatedJob.max_retries}) with booking_id: ${bookingId}`
+    );
+
+    // 4. Prepare worker job data for rerun
+    const workerJobData: WorkerJobData = {
+      jobType: "booking-rerun-failed",
+      jobId,
+      startDate,
+      endDate,
+      bookingId,
+      user_email,
+      user_password,
+      originalStatus,
+    };
+
+    // 5. Execute job in worker thread
+    try {
+      console.log(`Submitting booking rerun job ${jobId} to worker pool...`);
+
+      const result = await workerPool.executeJob(workerJobData);
+
+      if (result.success) {
+        // Get final progress after rerun
+        const progress = await jobService.getJobProgress(jobId);
+        
+        return res.status(200).json({
+          ...result.data,
+          originalStatus,
+          retryAttempt: updatedJob.retries_attempted,
+          progress,
+        });
+      } else {
+        return res.status(500).json({
+          status: 500,
+          message: "Booking job rerun execution failed",
+          error: result.error,
+          jobId: result.jobId,
+          retryAttempt: updatedJob.retries_attempted,
+        });
+      }
+    } catch (workerError) {
+      console.error(`Worker error for booking rerun job ${jobId}:`, workerError);
+
+      // Ensure job is marked as failed
+      try {
+        await progressManager.handleJobError(jobId, workerError);
+      } catch (cleanupError) {
+        console.error("Error during cleanup:", cleanupError);
+      }
+
+      return res.status(500).json({
+        status: 500,
+        message: "Worker execution failed for booking job rerun",
+        error:
+          workerError instanceof Error
+            ? workerError.message
+            : String(workerError),
+        jobId,
+        retryAttempt: updatedJob.retries_attempted,
+      });
+    }
+  } catch (err: any) {
+    console.error("Error in /api/booking/rerun-failed-job:", err);
+
+    // Ensure job is marked as failed
+    try {
+      if (req.body.jobId) {
+        await progressManager.handleJobError(req.body.jobId, err);
+      }
+    } catch (cleanupError) {
+      console.error("Error during cleanup:", cleanupError);
+    }
+
+    res.status(500).json({
+      status: 500,
+      message: "Error processing booking job rerun",
+      error: err.message,
+    });
+  }
+}) as any);
+
+/**
+ * @swagger
  * /api/jobs/{jobId}/progress:
  *   get:
  *     tags:

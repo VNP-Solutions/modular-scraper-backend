@@ -111,6 +111,10 @@ class ScrapingWorker {
           result = await this.handleBookingRun(jobData);
           break;
 
+        case "booking-rerun-failed":
+          result = await this.handleBookingRerunFailed(jobData);
+          break;
+
         default:
           throw new Error(`Unknown job type: ${jobData.jobType}`);
       }
@@ -500,6 +504,53 @@ class ScrapingWorker {
       trackingStatus: JobStatus.Completed, // Current: Pending -> Running -> Completed (immediate)
                                    // TODO: Should be "Running" until actual scraping completes
     };
+  }
+
+  private async handleBookingRerunFailed(jobData: WorkerJobData): Promise<any> {
+    const { jobId, originalStatus } = jobData;
+
+    if (!jobId) {
+      throw new Error("jobId is required for booking-rerun-failed jobs");
+    }
+
+    console.log(`Worker: Rerunning ${originalStatus} booking job ${jobId}...`);
+
+    // 1. Reset job status from Failed/Cancelled to Pending
+    console.log(`Worker: Resetting job ${jobId} status from ${originalStatus} to Pending...`);
+    await jobService.updateJobStatus(jobId, "Pending" as any);
+
+    // 2. Log the rerun attempt
+    initializeJobLogging(jobId);
+    await dualLogInfo(`Worker: Starting booking job rerun for ${jobId}`, {
+      jobId,
+      originalStatus,
+      retryReason: "Manual rerun of failed/cancelled job",
+    });
+
+    try {
+      // 3. Execute the same logic as handleBookingRun
+      // This ensures consistent behavior between new jobs and rerun jobs
+      const result = await this.handleBookingRun(jobData);
+
+      // 4. Update the response to indicate this was a rerun
+      return {
+        ...result,
+        message: `${originalStatus} booking job rerun completed successfully`,
+        originalStatus,
+        isRerun: true,
+      };
+    } catch (error) {
+      console.error(`Worker: ❌ Error during booking job ${jobId} rerun:`, error);
+      await dualLogError(`Worker: Booking job ${jobId} rerun failed`, error, { jobId });
+
+      // Update job status to Failed
+      await jobService.failJob(jobId);
+
+      // Finalize logging with failed status
+      await finalizeJobLogging("failed");
+
+      throw error;
+    }
   }
 
   private async shutdown(): Promise<void> {

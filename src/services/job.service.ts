@@ -280,6 +280,61 @@ export class JobService {
   }
 
   /**
+   * Increment retry attempts for a job
+   */
+  async incrementRetryAttempts(jobId: string): Promise<IJob | null> {
+    try {
+      const objectId = this.validateObjectId(jobId, "jobId");
+
+      return await Job.findByIdAndUpdate(
+        objectId,
+        {
+          $inc: { retries_attempted: 1 },
+          updatedAt: new Date(),
+        },
+        { new: true }
+      );
+    } catch (error) {
+      console.error(`Error incrementing retry attempts: ${error}`);
+      return null;
+    }
+  }
+
+  /**
+   * Check if job can be retried (not exceeded max retries)
+   */
+  async canRetryJob(jobId: string): Promise<{ canRetry: boolean; job?: IJob; reason?: string }> {
+    try {
+      const job = await this.getJobById(jobId);
+      
+      if (!job) {
+        return { canRetry: false, reason: "Job not found" };
+      }
+
+      if (job.job_status !== JobStatus.Failed && job.job_status !== JobStatus.Cancelled) {
+        return { 
+          canRetry: false, 
+          job, 
+          reason: `Job is not in Failed or Cancelled status. Current status: ${job.job_status}` 
+        };
+      }
+
+      if (job.retries_attempted >= job.max_retries) {
+        return { 
+          canRetry: false, 
+          job, 
+          reason: `Maximum retries exceeded (${job.retries_attempted}/${job.max_retries})` 
+        };
+      }
+
+      return { canRetry: true, job };
+    } catch (error) {
+      console.error(`Error checking if job can be retried: ${error}`);
+      return { canRetry: false, reason: "Error checking retry eligibility" };
+    }
+  }
+
+  /**
    * Update job log link
    */
   async updateJobLogLink(jobId: string, logLink: string): Promise<IJob | null> {

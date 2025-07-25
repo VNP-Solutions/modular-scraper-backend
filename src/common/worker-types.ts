@@ -1,5 +1,5 @@
 export interface WorkerJobData {
-  jobType: "property-run" | "rerun-failed" | "reservation-run" | "booking-run";
+  jobType: "property-run" | "rerun-failed" | "reservation-run" | "booking-run" | "booking-rerun-failed";
   jobId: string;
   portfolioId?: string;
   propertyId?: string;
