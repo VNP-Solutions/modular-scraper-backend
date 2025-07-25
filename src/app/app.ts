@@ -8,7 +8,7 @@ import { workerPool } from "../common/worker-pool.js";
 import { WorkerJobData } from "../common/worker-types.js";
 import { specs, swaggerUi } from "../config/swagger.js";
 import { getAccess, getOauth2Callback } from "../get-access/access.js";
-import { JobStatus } from "../models/job.model.js";
+import { Job, JobStatus } from "../models/job.model.js";
 import { jobService } from "../services/job.service.js";
 
 const app = express();
@@ -1256,6 +1256,138 @@ app.post("/api/booking/run-job", (async (
     res.status(500).json({
       status: 500,
       message: "Error processing booking job",
+      error: err.message,
+    });
+  }
+}) as any);
+
+/**
+ * @swagger
+ * /api/booking/stop-job:
+ *   post:
+ *     tags:
+ *       - Booking Jobs
+ *     summary: Stop booking scraping job
+ *     description: Stop a running booking scraping job and update job status to Cancelled
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - jobId
+ *             properties:
+ *               jobId:
+ *                 type: string
+ *                 description: MongoDB ObjectId of the job to stop
+ *                 example: "507f1f77bcf86cd799439011"
+ *     responses:
+ *       200:
+ *         description: Booking scraping job stopped successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 200
+ *                 message:
+ *                   type: string
+ *                   example: "Booking scraping job stopped successfully"
+ *                 jobId:
+ *                   type: string
+ *                   example: "507f1f77bcf86cd799439011"
+ *                 finalStatus:
+ *                   type: string
+ *                   example: "Cancelled"
+ *       400:
+ *         description: Invalid request or job not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 400
+ *                 message:
+ *                   type: string
+ *                   example: "Job ID is required"
+ *       404:
+ *         description: Job not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer  
+ *                   example: 404
+ *                 message:
+ *                   type: string
+ *                   example: "Job with ID 507f1f77bcf86cd799439011 not found"
+ *       500:
+ *         description: Error stopping job
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
+app.post("/api/booking/stop-job", (async (
+  req: express.Request,
+  res: express.Response
+) => {
+  try {
+    const { jobId } = req.body;
+
+    if (!jobId) {
+      return res.status(400).json({
+        status: 400,
+        message: "Job ID is required",
+      });
+    }
+
+    // 1. Check if job exists
+    const job = await jobService.getJobById(jobId);
+    if (!job) {
+      return res.status(404).json({
+        status: 404,
+        message: `Job with ID ${jobId} not found`,
+      });
+    }
+
+    // 2. Stop the scraping operation
+    const wasRunning = scrapingStateManager.isRunning();
+    if (wasRunning) {
+      scrapingStateManager.stopScraping();
+      console.log(`Stopping scraping for job ${jobId}`);
+    }
+
+    // 3. Update job status to Cancelled
+    const updatedJob = await jobService.updateJobStatus(jobId, JobStatus.Cancelled);
+    if (!updatedJob) {
+      return res.status(500).json({
+        status: 500,
+        message: `Failed to update job ${jobId} status`,
+      });
+    }
+
+    console.log(`Job ${jobId} has been stopped and marked as Cancelled`);
+
+    res.status(200).json({
+      status: 200,
+      message: "Booking scraping job stopped successfully",
+      jobId,
+      finalStatus: JobStatus.Cancelled,
+      wasRunning,
+    });
+  } catch (err: any) {
+    console.error("Error in /api/booking/stop-job:", err);
+    res.status(500).json({
+      status: 500,
+      message: "Error stopping booking job",
       error: err.message,
     });
   }
