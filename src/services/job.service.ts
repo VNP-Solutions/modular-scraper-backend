@@ -122,7 +122,7 @@ export class JobService {
       }
 
       console.log(
-        `✅ Found expedia_id: ${property.expedia_id} for job: ${jobId}`
+        `Found expedia_id: ${property.expedia_id} for job: ${jobId}`
       );
       return {
         expediaId: property.expedia_id,
@@ -169,7 +169,7 @@ export class JobService {
       }
 
       console.log(
-        `✅ Found booking_id: ${property.booking_id} for job: ${jobId}`
+        `Found booking_id: ${property.booking_id} for job: ${jobId}`
       );
       return {
         bookingId: property.booking_id,

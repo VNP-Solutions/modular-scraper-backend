@@ -936,13 +936,13 @@ async function saveReservationToDatabase(
 
     const savedItem = await jobService.createJobItem(jobItemData);
     await dualLogInfo(
-      `✅ Saved reservation ${basicData.reservationId} to database`,
+      `Saved reservation ${basicData.reservationId} to database`,
       { jobId }
     );
     return savedItem;
   } catch (dbError: any) {
     await dualLogError(
-      `❌ Failed to save reservation ${
+      `Failed to save reservation ${
         basicData?.reservationId || "unknown"
       } to database:`,
       dbError.message,

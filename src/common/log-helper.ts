@@ -83,7 +83,7 @@ export async function finalizeJobLogging(
       // Save the log URL to the job document
       if (s3Url) {
         await jobService.updateJobLogLink(currentJobId, s3Url);
-        console.log(`✅ Log URL saved to job ${currentJobId}: ${s3Url}`);
+        console.log(`Log URL saved to job ${currentJobId}: ${s3Url}`);
       }
 
       currentJobLogger = null; // Clear the reference

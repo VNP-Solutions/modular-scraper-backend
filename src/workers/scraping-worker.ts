@@ -540,7 +540,7 @@ class ScrapingWorker {
         isRerun: true,
       };
     } catch (error) {
-      console.error(`Worker: ❌ Error during booking job ${jobId} rerun:`, error);
+      console.error(`Worker: Error during booking job ${jobId} rerun:`, error);
       await dualLogError(`Worker: Booking job ${jobId} rerun failed`, error, { jobId });
 
       // Update job status to Failed
