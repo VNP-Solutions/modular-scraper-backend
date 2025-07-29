@@ -4,7 +4,16 @@ A Node.js backend application for automated web scraping with time-based browser
 
 ## Features
 
-### ✨ New: Time-Based Browser Management & Resume Functionality
+### ✨ New: Email Error Notifications
+
+- **Automatic Error Alerts**: Sends email notifications when jobs encounter errors
+- **Multiple Recipients**: Support for single or multiple email addresses per job
+- **Rich Email Content**: Detailed error information, job progress, and troubleshooting steps
+- **Multiple Email Providers**: Gmail, Outlook, Yahoo, or custom SMTP support
+- **Professional Templates**: HTML and plain text email formats with clear formatting
+- **Error Context**: Includes job details, progress percentage, and last processed date
+
+### ✨ Time-Based Browser Management & Resume Functionality
 
 - **Automatic Browser Restarts**: Configurable time limits for browser sessions (default: 1 hour)
 - **Smart Time Management**: Uses 5 minutes buffer before the time limit to ensure clean browser restarts
@@ -41,9 +50,51 @@ BROWSER_TIME_LIMIT=1h
 # Scraping Configuration
 # Number of days to process in each chunk (default: 2)
 CHUNK_SIZE=2
+
+# Email Notification Configuration
+# Email service provider (gmail, outlook, yahoo, or use custom SMTP)
+EMAIL_SERVICE=gmail
+EMAIL_USER=your_email@gmail.com
+EMAIL_PASSWORD=your_app_password_here
+EMAIL_FROM=Scraper System <your_email@gmail.com>
+
+# Custom SMTP Configuration (alternative to EMAIL_SERVICE)
+# SMTP_HOST=smtp.your-provider.com
+# SMTP_PORT=587
 ```
 
-### Progress File Management
+## Email Notifications Setup
+
+The system automatically sends error notifications to email addresses specified in the `watcher_emails` field of each job. See [EMAIL_CONFIGURATION.md](EMAIL_CONFIGURATION.md) for detailed setup instructions.
+
+### Quick Email Setup
+
+1. **Gmail**: Enable 2FA and generate an App Password
+2. **Add to .env**: Set `EMAIL_SERVICE=gmail`, `EMAIL_USER`, and `EMAIL_PASSWORD`
+3. **Job Configuration**: Add emails to `watcher_emails` field in your job records
+
+```javascript
+// Example job with email notifications
+const job = {
+  // ... other job fields
+  watcher_emails: [
+    "manager@company.com",
+    "developer@company.com"
+  ]
+};
+```
+
+### Email Error Coverage
+
+Email notifications are sent for:
+- Login/authentication failures
+- Browser crashes and timeouts
+- Data extraction errors
+- Date processing failures
+- Progress tracking issues
+- Job completion failures
+
+## Progress File Management
 
 Progress is automatically managed using individual JSON files per job:
 
@@ -205,16 +256,17 @@ The system provides comprehensive logging for:
 - Resume operations
 - Progress tracking
 - Error handling
+- Email notification events
 
 ## Error Recovery
 
 The system handles various error scenarios:
 
-- **Browser crashes**: Automatic restart and resume
-- **Network timeouts**: Retry with exponential backoff
-- **Time limit exceeded**: Clean browser restart
-- **Job interruption**: Resume from last processed date
-- **Job failures**: Automatic progress file cleanup on any error
+- **Browser crashes**: Automatic restart and resume with email notifications
+- **Network timeouts**: Retry with exponential backoff and error alerts
+- **Time limit exceeded**: Clean browser restart with progress save
+- **Job interruption**: Resume from last processed date with stakeholder notifications
+- **Job failures**: Automatic progress file cleanup and email alerts
 - **Corrupted progress files**: Auto-detection and cleanup of invalid JSON
 
 ## Development
@@ -223,6 +275,7 @@ The system handles various error scenarios:
 
 - `src/common/time-manager.ts` - Time tracking and session management
 - `src/common/progress-manager.ts` - In-memory progress tracking with file persistence
+- `src/common/email-notifier.ts` - Email notification system for error alerts
 - `src/date-split/date-split.ts` - Date processing with restart support
 - `src/main.ts` - Main orchestration with restart logic
 - `src/date-split/helper.ts` - Resume date calculation utilities
@@ -238,6 +291,15 @@ npm test
 ```bash
 npm run build
 npm run build:start
+```
+
+### Testing Email Notifications
+
+```javascript
+import { emailNotifier } from './src/common/email-notifier.js';
+
+// Test email configuration
+await emailNotifier.sendTestEmail('test@example.com');
 ```
 
 ## Contributing
