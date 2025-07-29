@@ -1,6 +1,7 @@
 import bodyParser from "body-parser";
 import cors from "cors";
 import express from "express";
+import { emailNotifier } from "../common/email-notifier.js";
 import createError from "../common/error.js";
 import {
   dualLogError,
@@ -934,6 +935,10 @@ app.post("/api/expedia/property-run-job", (async (
     } catch (scrapingError: any) {
       // Mark job as failed on scraping error
       await dualLogError(`Job ${jobId} failed`, scrapingError, { jobId });
+
+      // Send email notification for scraping error
+      await notifyApiError(jobId, scrapingError, "property_scraping");
+
       await progressManager.handleJobError(jobId, scrapingError);
 
       // Release URL back to Available status on error
@@ -952,6 +957,9 @@ app.post("/api/expedia/property-run-job", (async (
     }
   } catch (err: any) {
     console.error("Error in /api/expedia/property-run-job:", err);
+
+    // Send email notification for API error
+    await notifyApiError(req.body.jobId, err, "property_run_job");
 
     // Ensure job is marked as failed and state manager is stopped
     try {
@@ -1121,6 +1129,9 @@ app.post("/api/expedia/reservation-run-job", (async (
         jobId,
       });
 
+      // Send email notification for reservation error
+      await notifyApiError(jobId, reservationError, "reservation_scraping");
+
       // Mark scraping as stopped on error
       scrapingStateManager.stopScraping();
 
@@ -1132,10 +1143,12 @@ app.post("/api/expedia/reservation-run-job", (async (
   } catch (err: any) {
     console.error("Error in /api/expedia/reservation-run-job:", err);
 
+    // Send email notification for reservation API error
+    const possibleJobId = `reservation_job_${Date.now()}`;
+    await notifyApiError(possibleJobId, err, "reservation_run_job");
+
     // Try to finalize logging if we can determine the jobId
     try {
-      // Extract jobId from generated timestamp if possible
-      const possibleJobId = `reservation_job_${Date.now()}`;
       await dualLogError(`Reservation run job error`, err, { possibleJobId });
       await finalizeJobLogging("failed");
     } catch (logError) {
@@ -1495,6 +1508,37 @@ app.get("/api/jobs/:jobId/log", (async (
     });
   }
 }) as any);
+
+// Add email notification for API endpoint errors
+const notifyApiError = async (
+  jobId: string | undefined,
+  error: any,
+  stage: string
+) => {
+  if (jobId) {
+    try {
+      await emailNotifier.notifyJobError(
+        jobId,
+        `API endpoint error in ${stage}: ${
+          error?.message || "Unknown API error"
+        }`,
+        error,
+        {
+          stage: `api_${stage}`,
+          progressPercentage:
+            progressManager.getJobProgress(jobId)?.progressPercentage,
+          lastProcessedDate:
+            progressManager.getJobLastProcessedDate(jobId) || undefined,
+        }
+      );
+    } catch (emailError) {
+      await dualLogError(
+        `Failed to send API error notification for ${stage}:`,
+        emailError
+      );
+    }
+  }
+};
 
 // * Global error handle middleware
 app.use((err: any, req: any, res: any, next: any) => {

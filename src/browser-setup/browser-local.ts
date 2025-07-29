@@ -6,6 +6,8 @@ import {
   dualLogInfo,
   dualLogWarn,
 } from "../common/log-helper.js";
+import { emailNotifier } from "../common/email-notifier.js";
+import { progressManager } from "../common/progress-manager.js";
 import { timeoutManager } from "../common/timeout-manager.js";
 dotenv.config();
 
@@ -16,19 +18,41 @@ export async function browserSetupLocal(jobId?: string): Promise<{
   let browser: Browser | null = null;
 
   try {
-    browser = await puppeteer.launch({
-      headless: false,
-      defaultViewport: null,
-      args: [
-        "--start-maximized",
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-web-security",
-        "--disable-features=IsolateOrigins,site-per-process",
-        "--disable-blink-features=AutomationControlled",
-        "--disable-extensions",
-      ],
-    });
+    try {
+      browser = await puppeteer.launch({
+        headless: false,
+        defaultViewport: null,
+        args: [
+          "--start-maximized",
+          "--no-sandbox",
+          "--disable-setuid-sandbox",
+          "--disable-web-security",
+          "--disable-features=IsolateOrigins,site-per-process",
+          "--disable-blink-features=AutomationControlled",
+          "--disable-extensions",
+        ],
+      });
+    } catch (error: any) {
+      await dualLogError("Error launching browser:", error);
+      
+      // Send email notification for browser launch error
+      if (jobId) {
+        try {
+          await emailNotifier.notifyJobError(
+            jobId,
+            `Failed to launch local browser: ${error?.message || "Browser launch failed"}`,
+            error,
+            {
+              stage: "browser_launch_local",
+              progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
+            }
+          );
+        } catch (emailError) {
+          await dualLogError("Failed to send browser launch error notification:", emailError);
+        }
+      }
+      throw error;
+    }
 
     // Get timeout configuration for this job
     const loadingTimeout = await timeoutManager.getLoadingTimeout(jobId);
@@ -87,21 +111,75 @@ export async function browserSetupLocal(jobId?: string): Promise<{
           await dualLogError("All navigation attempts failed", navError, {
             maxRetries,
           });
+          
+          // Send email notification for navigation failure
+          if (jobId) {
+            try {
+              await emailNotifier.notifyJobError(
+                jobId,
+                `Failed to navigate to Expedia Partner Central after ${maxRetries} attempts: ${navError?.message || "Navigation failed"}`,
+                navError,
+                {
+                  stage: "browser_navigation_local",
+                  progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
+                }
+              );
+            } catch (emailError) {
+              await dualLogError("Failed to send navigation error notification:", emailError);
+            }
+          }
+          
           throw navError;
         }
       }
     }
 
     if (!navigationSuccess) {
-      throw new Error(
+      const error = new Error(
         "Failed to navigate to the target page after all attempts"
       );
+      
+      // Send email notification for navigation failure
+      if (jobId) {
+        try {
+          await emailNotifier.notifyJobError(
+            jobId,
+            "Failed to navigate to target page after all attempts",
+            error,
+            {
+              stage: "browser_navigation_final_failure",
+              progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
+            }
+          );
+        } catch (emailError) {
+          await dualLogError("Failed to send final navigation error notification:", emailError);
+        }
+      }
+      
+      throw error;
     }
 
     await dualLogInfo("Browser setup completed successfully");
     return { browser, page };
-  } catch (error) {
+  } catch (error: any) {
     await dualLogError("Browser setup failed:", error);
+
+    // Send email notification for general browser setup error
+    if (jobId) {
+      try {
+        await emailNotifier.notifyJobError(
+          jobId,
+          `Local browser setup failed: ${error?.message || "Unknown browser setup error"}`,
+          error,
+          {
+            stage: "browser_setup_local",
+            progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
+          }
+        );
+      } catch (emailError) {
+        await dualLogError("Failed to send browser setup error notification:", emailError);
+      }
+    }
 
     // Clean up browser if it was created
     if (browser) {

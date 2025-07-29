@@ -3,7 +3,9 @@ import { Browser } from "puppeteer";
 import { browserSetupLocal } from "../browser-setup/browser-local.js";
 import { browserSetupProduction } from "../browser-setup/browser-prod.js";
 import { delay } from "../common/delay.js";
+import { emailNotifier } from "../common/email-notifier.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
+import { progressManager } from "../common/progress-manager.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import login from "../login/login.js";
 import handleOtpVerification from "../otp-verification/otp-verification.js";
@@ -19,6 +21,8 @@ async function reservation(
   browser: Browser | null,
   reservations: any[]
 ): Promise<void> {
+  const jobId = `reservation_job_${Date.now()}`; // Generate job ID for reservation function
+
   try {
     const environment = process.env.ENVIRONMENT || "production";
     // Create a new session
@@ -27,11 +31,39 @@ async function reservation(
     // Step 1: Setup browser and navigate to login page
     await dualLogInfo("Setting up browser...");
     let setupResult = null;
-    if (environment === "production") {
-      setupResult = await browserSetupProduction();
-    } else {
-      setupResult = await browserSetupLocal();
+
+    try {
+      if (environment === "production") {
+        setupResult = await browserSetupProduction(jobId);
+      } else {
+        setupResult = await browserSetupLocal(jobId);
+      }
+    } catch (error: any) {
+      await dualLogError("Browser setup failed:", error);
+
+      // Send email notification for browser setup error
+      try {
+        await emailNotifier.notifyJobError(
+          jobId,
+          `Browser setup failed in reservation function: ${
+            error?.message || "Browser setup failed"
+          }`,
+          error,
+          {
+            stage: "reservation_browser_setup",
+            progressPercentage: 0,
+          }
+        );
+      } catch (emailError) {
+        await dualLogError(
+          "Failed to send browser setup error notification:",
+          emailError
+        );
+      }
+
+      throw error;
     }
+
     browser = setupResult.browser;
     const page = setupResult.page;
     await dualLogInfo("Browser setup complete. Page is ready at login screen.");
@@ -46,21 +78,65 @@ async function reservation(
       );
 
       try {
-        await login(browser, page, email, password);
+        await login(browser, page, email, password, jobId);
         console.log("Login completed successfully! User is now logged in.");
 
         // Add your post-login automation here
         console.log("Ready for scraping operations...");
         await delay(10000);
-      } catch (loginError) {
+      } catch (loginError: any) {
         console.error("Login failed:", loginError);
+
+        // Send email notification for login error
+        try {
+          await emailNotifier.notifyJobError(
+            jobId,
+            `Login failed in reservation function: ${
+              loginError?.message || "Login failed"
+            }`,
+            loginError,
+            {
+              stage: "reservation_login",
+              progressPercentage: 10,
+            }
+          );
+        } catch (emailError) {
+          await dualLogError(
+            "Failed to send login error notification:",
+            emailError
+          );
+        }
+
+        throw loginError;
       }
 
       try {
-        await handleOtpVerification(browser, page);
+        await handleOtpVerification(browser, page, jobId);
         console.log("OTP verification completed successfully!");
       } catch (error: any) {
         console.error("OTP verification failed:", error);
+
+        // Send email notification for OTP verification error
+        try {
+          await emailNotifier.notifyJobError(
+            jobId,
+            `OTP verification failed in reservation function: ${
+              error?.message || "OTP verification failed"
+            }`,
+            error,
+            {
+              stage: "reservation_otp_verification",
+              progressPercentage: 20,
+            }
+          );
+        } catch (emailError) {
+          await dualLogError(
+            "Failed to send OTP verification error notification:",
+            emailError
+          );
+        }
+
+        throw error;
       }
 
       // Step 3: Perform reservation scraping
@@ -91,19 +167,75 @@ async function reservation(
               }`
             );
 
-            await scrapeWithReservationId(browser, page, reservation);
-            processedCount++;
+            try {
+              await scrapeWithReservationId(browser, page, reservation);
+              processedCount++;
 
-            // Update progress
-            scrapingStateManager.updateProgress(
-              undefined,
-              undefined,
-              processedCount,
-              reservations.length
-            );
+              // Update progress
+              scrapingStateManager.updateProgress(
+                undefined,
+                undefined,
+                processedCount,
+                reservations.length
+              );
+            } catch (reservationError: any) {
+              await dualLogError(
+                `Error processing reservation ${processedCount + 1}:`,
+                reservationError
+              );
+
+              // Send email notification for individual reservation error
+              try {
+                await emailNotifier.notifyJobError(
+                  jobId,
+                  `Failed to process reservation ${processedCount + 1}/${
+                    reservations.length
+                  }: ${
+                    reservationError?.message || "Reservation processing failed"
+                  }`,
+                  reservationError,
+                  {
+                    stage: "reservation_individual_processing",
+                    progressPercentage: Math.round(
+                      (processedCount / reservations.length) * 100
+                    ),
+                  }
+                );
+              } catch (emailError) {
+                await dualLogError(
+                  "Failed to send individual reservation error notification:",
+                  emailError
+                );
+              }
+
+              // Continue with next reservation instead of failing completely
+              processedCount++;
+              continue;
+            }
           }
         } catch (error: any) {
           await dualLogError("Reservation search failed:", error);
+
+          // Send email notification for general reservation processing error
+          try {
+            await emailNotifier.notifyJobError(
+              jobId,
+              `Reservation processing failed: ${
+                error?.message || "Unknown reservation processing error"
+              }`,
+              error,
+              {
+                stage: "reservation_processing_general",
+                progressPercentage: 30,
+              }
+            );
+          } catch (emailError) {
+            await dualLogError(
+              "Failed to send reservation processing error notification:",
+              emailError
+            );
+          }
+
           throw error;
         }
       } else {
@@ -112,15 +244,59 @@ async function reservation(
         );
       }
     } else {
+      const error = new Error("No login credentials provided");
       await dualLogInfo("No login credentials provided.");
+
+      // Send email notification for missing credentials
+      try {
+        await emailNotifier.notifyJobError(
+          jobId,
+          "No login credentials provided for reservation function",
+          error,
+          {
+            stage: "reservation_credentials_missing",
+            progressPercentage: 0,
+          }
+        );
+      } catch (emailError) {
+        await dualLogError(
+          "Failed to send credentials missing error notification:",
+          emailError
+        );
+      }
+
       // Close browser when done with this attempt
       if (browser) {
         await browser.close();
       }
       await dualLogInfo("Browser closed successfully.");
+
+      throw error;
     }
-  } catch (error) {
+  } catch (error: any) {
     await dualLogError("Reservation function error:", error);
+
+    // Send email notification for general reservation function error
+    try {
+      await emailNotifier.notifyJobError(
+        jobId,
+        `Reservation function failed: ${
+          error?.message || "Unknown reservation function error"
+        }`,
+        error,
+        {
+          stage: "reservation_function_general",
+          progressPercentage:
+            progressManager.getJobProgress(jobId)?.progressPercentage || 0,
+        }
+      );
+    } catch (emailError) {
+      await dualLogError(
+        "Failed to send reservation function error notification:",
+        emailError
+      );
+    }
+
     // Close browser when done with this attempt
     if (browser) {
       await browser.close();

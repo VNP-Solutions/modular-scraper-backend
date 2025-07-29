@@ -2,6 +2,7 @@ import dotenv from "dotenv";
 import { browserSetupLocal } from "./browser-setup/browser-local.js";
 import { browserSetupProduction } from "./browser-setup/browser-prod.js";
 import { delay } from "./common/delay.js";
+import { emailNotifier } from "./common/email-notifier.js";
 import { decryptPassword } from "./common/encription.js";
 import {
   dualLogError,
@@ -97,6 +98,29 @@ async function main(
     } catch (error: any) {
       await dualLogError("Main function error:", error);
 
+      // Send email notification for job error
+      if (jobId) {
+        try {
+          await emailNotifier.notifyJobError(
+            jobId,
+            error?.message || "Unknown error in main function",
+            error,
+            {
+              stage: "main_function",
+              progressPercentage:
+                progressManager.getJobProgress(jobId)?.progressPercentage,
+              lastProcessedDate:
+                progressManager.getJobLastProcessedDate(jobId) || undefined,
+            }
+          );
+        } catch (emailError) {
+          await dualLogError(
+            "Failed to send error notification email:",
+            emailError
+          );
+        }
+      }
+
       // End time session on error
       await timeManager.endSession();
 
@@ -120,6 +144,24 @@ async function main(
     }
   } catch (error: any) {
     await dualLogError("Main function error:", error);
+
+    // Send email notification for outer main function error
+    if (jobId) {
+      try {
+        await emailNotifier.notifyJobError(
+          jobId,
+          error?.message || "Unknown error in outer main function",
+          error,
+          {
+            stage: "outer_main_function",
+            progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
+            lastProcessedDate: progressManager.getJobLastProcessedDate(jobId) || undefined,
+          }
+        );
+      } catch (emailError) {
+        await dualLogError("Failed to send error notification email:", emailError);
+      }
+    }
 
     // End time session on error
     await timeManager.endSession();
@@ -267,6 +309,24 @@ async function runScrapingWithRestart(
           await dualLogInfo("OTP verification completed successfully!");
         } catch (error: any) {
           await dualLogError("OTP verification failed:", error);
+          
+          // Send email notification for OTP verification error
+          if (jobId) {
+            try {
+              await emailNotifier.notifyJobError(
+                jobId,
+                `OTP verification failed: ${error?.message || "Unknown OTP error"}`,
+                error,
+                {
+                  stage: "otp_verification",
+                  progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
+                }
+              );
+            } catch (emailError) {
+              await dualLogError("Failed to send OTP error notification email:", emailError);
+            }
+          }
+          
           // Close browser when done with this attempt
           if (browser) {
             await browser.close();
@@ -305,6 +365,24 @@ async function runScrapingWithRestart(
             );
           } catch (error: any) {
             await dualLogError("Property search failed:", error);
+            
+            // Send email notification for property search error
+            if (jobId) {
+              try {
+                await emailNotifier.notifyJobError(
+                  jobId,
+                  `Property search failed: ${error?.message || "Unknown property search error"}`,
+                  error,
+                  {
+                    stage: "property_search",
+                    progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
+                  }
+                );
+              } catch (emailError) {
+                await dualLogError("Failed to send property search error notification email:", emailError);
+              }
+            }
+            
             throw error;
           }
         } else {
@@ -398,6 +476,25 @@ async function runScrapingWithRestart(
           } else {
             // Other errors should be propagated
             await dualLogError("Date selection failed:", error);
+            
+            // Send email notification for date selection error
+            if (jobId) {
+              try {
+                await emailNotifier.notifyJobError(
+                  jobId,
+                  `Date selection failed: ${error?.message || "Unknown date selection error"}`,
+                  error,
+                  {
+                    stage: "date_selection",
+                    progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
+                    lastProcessedDate: progressManager.getJobLastProcessedDate(jobId) || undefined,
+                  }
+                );
+              } catch (emailError) {
+                await dualLogError("Failed to send date selection error notification email:", emailError);
+              }
+            }
+            
             // Close browser when done with this attempt
             if (browser) {
               await browser.close();
@@ -433,6 +530,24 @@ async function runScrapingWithRestart(
         !(error instanceof Error) ||
         !error.message.startsWith("BROWSER_RESTART_NEEDED:")
       ) {
+        // Send email notification for scraping attempt error
+        if (jobId) {
+          try {
+            await emailNotifier.notifyJobError(
+              jobId,
+              `Scraping attempt ${attemptCount} failed: ${error?.message || "Unknown scraping error"}`,
+              error,
+              {
+                stage: `scraping_attempt_${attemptCount}`,
+                progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
+                lastProcessedDate: progressManager.getJobLastProcessedDate(jobId) || undefined,
+              }
+            );
+          } catch (emailError) {
+            await dualLogError("Failed to send scraping attempt error notification email:", emailError);
+          }
+        }
+        
         // Clean up progress file on error
         if (jobId) {
           await progressManager.handleJobError(jobId, error);
@@ -453,6 +568,25 @@ async function runScrapingWithRestart(
     const maxAttemptsError = new Error(
       `Maximum restart attempts (${maxAttempts}) exceeded`
     );
+    
+    // Send email notification for max attempts exceeded
+    if (jobId) {
+      try {
+        await emailNotifier.notifyJobError(
+          jobId,
+          `Maximum restart attempts (${maxAttempts}) exceeded`,
+          maxAttemptsError,
+          {
+            stage: "max_attempts_exceeded",
+            progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
+            lastProcessedDate: progressManager.getJobLastProcessedDate(jobId) || undefined,
+          }
+        );
+      } catch (emailError) {
+        await dualLogError("Failed to send max attempts error notification email:", emailError);
+      }
+    }
+    
     // Clean up progress file when max attempts exceeded
     if (jobId) {
       await progressManager.handleJobError(jobId, maxAttemptsError);

@@ -2,6 +2,7 @@ import fs from "fs-extra";
 import path from "path";
 import { JobService } from "../services/job.service.js";
 import { dualLogError, dualLogInfo, dualLogWarn } from "./log-helper.js";
+import { emailNotifier } from "./email-notifier.js";
 
 export interface JobProgress {
   jobId: string;
@@ -226,6 +227,22 @@ export class ProgressManager {
    * Mark job as failed and clean up progress file
    */
   async markJobFailed(jobId: string, error?: string): Promise<void> {
+    // Send email notification for job failure
+    try {
+      await emailNotifier.notifyJobError(
+        jobId,
+        `Job marked as failed: ${error || "Unknown error"}`,
+        error ? new Error(error) : undefined,
+        {
+          stage: "job_failed",
+          progressPercentage: this.getJobProgress(jobId)?.progressPercentage,
+          lastProcessedDate: this.getJobLastProcessedDate(jobId) || undefined,
+        }
+      );
+    } catch (emailError) {
+      await dualLogError("Failed to send job failed notification:", emailError);
+    }
+
     await this.updateJobProgress(
       jobId,
       undefined,
@@ -249,6 +266,22 @@ export class ProgressManager {
    */
   async handleJobError(jobId: string, error: any): Promise<void> {
     const errorMessage = error?.message || error?.toString() || "Unknown error";
+
+    // Send email notification for job error before cleanup
+    try {
+      await emailNotifier.notifyJobError(
+        jobId,
+        `Job encountered an error and will be cleaned up: ${errorMessage}`,
+        error,
+        {
+          stage: "job_error_cleanup",
+          progressPercentage: this.getJobProgress(jobId)?.progressPercentage,
+          lastProcessedDate: this.getJobLastProcessedDate(jobId) || undefined,
+        }
+      );
+    } catch (emailError) {
+      await dualLogError("Failed to send job error cleanup notification:", emailError);
+    }
 
     // Check if there's any scraped data to determine status
     let status = "failed";

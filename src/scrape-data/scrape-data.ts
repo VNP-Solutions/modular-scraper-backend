@@ -1,10 +1,12 @@
 import { Browser, Page } from "puppeteer";
 import { delay } from "../common/delay.js";
+import { emailNotifier } from "../common/email-notifier.js";
 import {
   dualLogError,
   dualLogInfo,
   dualLogWarn,
 } from "../common/log-helper.js";
+import { progressManager } from "../common/progress-manager.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import { timeoutManager } from "../common/timeout-manager.js";
 import { CardInfo, PaymentInfo } from "../models/job-item.model.js";
@@ -52,33 +54,94 @@ export async function scrapeData(
             { jobId }
           );
         }
-      } catch (error) {
+      } catch (error: any) {
         await dualLogError(
           `Error getting property_id from job ${jobId}:`,
           error,
           { jobId }
         );
+        
+        // Send email notification for property_id fetch error
+        if (jobId) {
+          try {
+            await emailNotifier.notifyJobError(
+              jobId,
+              `Failed to get property_id from job: ${error?.message || "Unknown error"}`,
+              error,
+              {
+                stage: "property_id_fetch",
+                progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
+              }
+            );
+          } catch (emailError) {
+            await dualLogError("Failed to send property_id fetch error notification:", emailError);
+          }
+        }
       }
     }
 
     // Function to get total results count
     const getTotalResults = async () => {
-      const resultsText = await page.$eval(
-        ".fds-pagination-showing-result",
-        (el) => el.textContent || ""
-      );
-      const match = resultsText.match(/of (\d+) Results/);
-      return match ? parseInt(match[1]) : 0;
+      try {
+        const resultsText = await page.$eval(
+          ".fds-pagination-showing-result",
+          (el) => el.textContent || ""
+        );
+        const match = resultsText.match(/of (\d+) Results/);
+        return match ? parseInt(match[1]) : 0;
+      } catch (error: any) {
+        await dualLogError("Error getting total results count:", error);
+        
+        // Send email notification for total results fetch error
+        if (jobId) {
+          try {
+            await emailNotifier.notifyJobError(
+              jobId,
+              `Failed to get total results count: ${error?.message || "Unknown error"}`,
+              error,
+              {
+                stage: "total_results_fetch",
+                progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
+              }
+            );
+          } catch (emailError) {
+            await dualLogError("Failed to send total results fetch error notification:", emailError);
+          }
+        }
+        return 0;
+      }
     };
 
     // Function to check if there's a next page
     const hasNextPage = async () => {
-      return await page.evaluate(() => {
-        const nextButton = document.querySelector(
-          ".fds-pagination-button.next button"
-        ) as HTMLButtonElement;
-        return nextButton && !nextButton.disabled;
-      });
+      try {
+        return await page.evaluate(() => {
+          const nextButton = document.querySelector(
+            ".fds-pagination-button.next button"
+          ) as HTMLButtonElement;
+          return nextButton && !nextButton.disabled;
+        });
+      } catch (error: any) {
+        await dualLogError("Error checking for next page:", error);
+        
+        // Send email notification for next page check error
+        if (jobId) {
+          try {
+            await emailNotifier.notifyJobError(
+              jobId,
+              `Failed to check for next page: ${error?.message || "Unknown error"}`,
+              error,
+              {
+                stage: "next_page_check",
+                progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
+              }
+            );
+          } catch (emailError) {
+            await dualLogError("Failed to send next page check error notification:", emailError);
+          }
+        }
+        return false;
+      }
     };
 
     const totalResults = await getTotalResults();
@@ -283,7 +346,7 @@ export async function scrapeData(
                   ]);
                   // Wait a bit for content to load
                   await delay(2000);
-                } catch (error) {
+                } catch (error: any) {
                   await dualLogInfo(
                     "Dialog did not appear within timeout, skipping to next reservation",
                     { jobId }
@@ -737,7 +800,7 @@ export async function scrapeData(
 
                     retries++;
                     await delay(1000);
-                  } catch (e) {
+                  } catch (e: any) {
                     retries++;
                     await delay(1000);
                   }
@@ -754,7 +817,7 @@ export async function scrapeData(
                     await closeButton.click();
                     await delay(1500);
                   }
-                } catch (e) {
+                } catch (e: any) {
                   await dualLogInfo(
                     "Warning: Could not close dialog normally",
                     { jobId }
@@ -773,7 +836,7 @@ export async function scrapeData(
                 }
 
                 break; // Exit retry loop on success
-              } catch (retryError) {
+              } catch (retryError: any) {
                 await dualLogError(
                   `Retry ${i + 1} failed for reservation ${
                     basicData.reservationId
@@ -839,15 +902,27 @@ export async function scrapeData(
     await dualLogInfo("Cleared processed reservations for next job run", {
       jobId,
     });
-  } catch (error) {
-    // Clear processed reservations even if there's an error
-    clearProcessedReservations();
-    await dualLogError("Error in scrapeData:", error, { jobId });
-    // Close browser when done with this attempt
-    if (browser) {
-      await browser.close();
+  } catch (error: any) {
+    await dualLogError("Error in scrapeData function:", error, { jobId, expediaId });
+    
+    // Send email notification for general scrapeData error
+    if (jobId) {
+      try {
+        await emailNotifier.notifyJobError(
+          jobId,
+          `Data scraping failed: ${error?.message || "Unknown scraping error"}`,
+          error,
+          {
+            stage: "data_scraping",
+            progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
+            lastProcessedDate: progressManager.getJobLastProcessedDate(jobId) || undefined,
+          }
+        );
+      } catch (emailError) {
+        await dualLogError("Failed to send scrapeData error notification:", emailError);
+      }
     }
-    await dualLogInfo("Browser closed successfully.");
+    
     throw error;
   }
 }
