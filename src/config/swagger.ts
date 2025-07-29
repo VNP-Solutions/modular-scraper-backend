@@ -1,12 +1,28 @@
 import dotenv from "dotenv";
 import swaggerJsdoc from "swagger-jsdoc";
 import swaggerUi from "swagger-ui-express";
+import yaml from "yamljs";
+import path from "path";
+import fs from "fs";
 
 dotenv.config();
 
 const port = process.env.PORT || "3000";
 const serverUrl = `http://localhost:${port}`;
 const serverUrl2 = "https://modular-api-2.vnpmanage.online";
+
+// Load external YAML files
+function loadYamlDocs() {
+  const docsDir = path.resolve("src/docs/");
+  const files = fs.readdirSync(docsDir).filter(f => f.endsWith(".yaml"));
+  const paths: any = {};
+  for (const file of files) {
+    const doc = yaml.load(path.join(docsDir, file));
+    Object.assign(paths, doc);
+  }
+
+  return paths;
+}
 
 const options: swaggerJsdoc.Options = {
   definition: {
@@ -148,10 +164,15 @@ const options: swaggerJsdoc.Options = {
         description: "Endpoints for controlling scraping operations",
       },
       {
-        name: "Scraping Jobs",
-        description: "Endpoints for starting scraping jobs",
+        name: "Expedia Jobs",
+        description: "Endpoints for starting Expedia scraping jobs",
+      },
+      {
+        name: "Booking Jobs",
+        description: "Endpoints for starting Booking scraping jobs",
       },
     ],
+    paths: loadYamlDocs(),
   },
   apis: ["./src/app/*.ts"], // Path to the API docs
 };
