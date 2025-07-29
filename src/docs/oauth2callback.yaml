@@ -1,0 +1,27 @@
+"/oauth2callback":
+  get:
+    tags:
+      - Authentication
+    summary: OAuth callback endpoint
+    description: Handle OAuth callback after user authentication
+    parameters:
+      - in: query
+        name: code
+        required: true
+        schema:
+          type: string
+        description: Authorization code from OAuth provider
+      - in: query
+        name: state
+        schema:
+          type: string
+        description: State parameter for security
+    responses:
+      '200':
+        description: OAuth callback processed successfully
+      '400':
+        description: Invalid OAuth callback parameters
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ErrorResponse'

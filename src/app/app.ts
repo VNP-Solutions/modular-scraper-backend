@@ -5,7 +5,7 @@ import createError from "../common/error.js";
 import { progressManager } from "../common/progress-manager.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import { workerPool } from "../common/worker-pool.js";
-import { WorkerJobData } from "../common/worker-types.js";
+import { JobType, WorkerJobData } from "../common/worker-types.js";
 import { specs, swaggerUi } from "../config/swagger.js";
 import { getAccess, getOauth2Callback } from "../get-access/access.js";
 import { Job, JobStatus } from "../models/job.model.js";
@@ -46,33 +46,6 @@ app.use((req, res, next) => {
   next();
 });
 
-/**
- * @swagger
- * /:
- *   get:
- *     tags:
- *       - Health
- *     summary: Health check endpoint
- *     description: Check if the server is running and accessible
- *     responses:
- *       200:
- *         description: Server is running
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 messge:
- *                   type: string
- *                   example: "Connection established"
- *       500:
- *         description: Server error
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
- */
-// ? API to check connection to servers (health api)
 app.get("/", (req, res, next) => {
   try {
     res
@@ -83,90 +56,11 @@ app.get("/", (req, res, next) => {
   }
 });
 
-/**
- * @swagger
- * /auth:
- *   get:
- *     tags:
- *       - Authentication
- *     summary: Initiate OAuth authentication
- *     description: Start the OAuth authentication flow for accessing Expedia services
- *     responses:
- *       200:
- *         description: Authentication flow initiated
- *       500:
- *         description: Authentication error
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
- */
-// ~ Router starts here
+
 app.get("/auth", getAccess as any);
 
-/**
- * @swagger
- * /oauth2callback:
- *   get:
- *     tags:
- *       - Authentication
- *     summary: OAuth callback endpoint
- *     description: Handle OAuth callback after user authentication
- *     parameters:
- *       - in: query
- *         name: code
- *         required: true
- *         schema:
- *           type: string
- *         description: Authorization code from OAuth provider
- *       - in: query
- *         name: state
- *         schema:
- *           type: string
- *         description: State parameter for security
- *     responses:
- *       200:
- *         description: OAuth callback processed successfully
- *       400:
- *         description: Invalid OAuth callback parameters
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
- */
 app.get("/oauth2callback", getOauth2Callback as any);
 
-/**
- * @swagger
- * /api/scraping/status:
- *   get:
- *     tags:
- *       - Scraping Control
- *     summary: Get current scraping status
- *     description: Retrieve the current state and progress of scraping operations
- *     responses:
- *       200:
- *         description: Scraping status retrieved successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 status:
- *                   type: integer
- *                   example: 200
- *                 message:
- *                   type: string
- *                   example: "Scraping status retrieved successfully"
- *                 data:
- *                   $ref: '#/components/schemas/ScrapingState'
- *       500:
- *         description: Error retrieving scraping status
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
- */
 // API to get scraping status
 app.get(
   "/api/scraping/status",
@@ -189,50 +83,7 @@ app.get(
   }
 );
 
-/**
- * @swagger
- * /api/scraping/pause:
- *   post:
- *     tags:
- *       - Scraping Control
- *     summary: Pause current scraping job
- *     description: Gracefully pause the currently running scraping job. The current operation will complete before pausing.
- *     responses:
- *       200:
- *         description: Scraping paused successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 status:
- *                   type: integer
- *                   example: 200
- *                 message:
- *                   type: string
- *                   example: "Scraping paused successfully"
- *                 data:
- *                   $ref: '#/components/schemas/ScrapingState'
- *       400:
- *         description: Cannot pause scraping - no active job running
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 status:
- *                   type: integer
- *                   example: 400
- *                 message:
- *                   type: string
- *                   example: "Cannot pause scraping - no active scraping job running"
- *       500:
- *         description: Error pausing scraping
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
- */
+
 // API to pause scraping
 app.post(
   "/api/scraping/pause",
@@ -263,50 +114,6 @@ app.post(
   }
 );
 
-/**
- * @swagger
- * /api/scraping/resume:
- *   post:
- *     tags:
- *       - Scraping Control
- *     summary: Resume paused scraping job
- *     description: Resume a previously paused scraping job from where it left off
- *     responses:
- *       200:
- *         description: Scraping resumed successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 status:
- *                   type: integer
- *                   example: 200
- *                 message:
- *                   type: string
- *                   example: "Scraping resumed successfully"
- *                 data:
- *                   $ref: '#/components/schemas/ScrapingState'
- *       400:
- *         description: Cannot resume scraping - no paused job found
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 status:
- *                   type: integer
- *                   example: 400
- *                 message:
- *                   type: string
- *                   example: "Cannot resume scraping - no paused scraping job found"
- *       500:
- *         description: Error resuming scraping
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
- */
 // API to resume scraping
 app.post(
   "/api/scraping/resume",
@@ -337,37 +144,6 @@ app.post(
   }
 );
 
-/**
- * @swagger
- * /api/scraping/stop:
- *   post:
- *     tags:
- *       - Scraping Control
- *     summary: Stop current scraping job
- *     description: Completely stop the current scraping job. This cannot be resumed and will require starting a new job.
- *     responses:
- *       200:
- *         description: Scraping stopped successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 status:
- *                   type: integer
- *                   example: 200
- *                 message:
- *                   type: string
- *                   example: "Scraping stopped successfully"
- *                 data:
- *                   $ref: '#/components/schemas/ScrapingState'
- *       500:
- *         description: Error stopping scraping
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
- */
 // API to stop scraping
 app.post(
   "/api/scraping/stop",
@@ -400,108 +176,6 @@ app.post(
   }
 );
 
-/**
- * @swagger
- * /api/expedia/rerun-failed-job:
- *   post:
- *     tags:
- *       - Scraping Jobs
- *     summary: Rerun failed or partial failed job
- *     description: Rerun a job that has failed or partially completed. This endpoint specifically handles jobs with Failed or Partial status and resets them to run again.
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - startDate
- *               - endDate
- *               - jobId
- *             properties:
- *               startDate:
- *                 type: string
- *                 description: Start date for scraping (MM/DD/YYYY format)
- *                 example: "01/01/2024"
- *               endDate:
- *                 type: string
- *                 description: End date for scraping (MM/DD/YYYY format)
- *                 example: "01/31/2024"
- *               jobId:
- *                 type: string
- *                 description: MongoDB ObjectId of the failed/partial job to rerun
- *                 example: "507f1f77bcf86cd799439011"
- *     responses:
- *       200:
- *         description: Failed/partial job rerun completed successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 status:
- *                   type: integer
- *                   example: 200
- *                 message:
- *                   type: string
- *                   example: "Failed job rerun completed successfully"
- *                 jobId:
- *                   type: string
- *                   example: "507f1f77bcf86cd799439011"
- *                 originalStatus:
- *                   type: string
- *                   example: "Failed"
- *                 finalStatus:
- *                   type: string
- *                   example: "Completed"
- *                 progress:
- *                   type: object
- *                   properties:
- *                     totalItems:
- *                       type: integer
- *                       example: 150
- *                     itemsWithCardInfo:
- *                       type: integer
- *                       example: 140
- *                     itemsWithPaymentInfo:
- *                       type: integer
- *                       example: 135
- *                     completionPercentage:
- *                       type: integer
- *                       example: 90
- *       400:
- *         description: Invalid request or job not eligible for rerun
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 status:
- *                   type: integer
- *                   example: 400
- *                 message:
- *                   type: string
- *                   example: "Job is not in Failed or Partial status. Current status: Completed"
- *       404:
- *         description: Job not found
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 status:
- *                   type: integer
- *                   example: 404
- *                 message:
- *                   type: string
- *                   example: "Job with ID 507f1f77bcf86cd799439011 not found"
- *       500:
- *         description: Error processing job rerun
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
- */
 app.post("/api/expedia/rerun-failed-job", (async (
   req: express.Request,
   res: express.Response
@@ -583,7 +257,7 @@ app.post("/api/expedia/rerun-failed-job", (async (
 
     // 4. Prepare worker job data
     const workerJobData: WorkerJobData = {
-      jobType: "rerun-failed",
+      jobType: JobType.RerunFailed,
       jobId,
       startDate,
       endDate,
@@ -649,95 +323,7 @@ app.post("/api/expedia/rerun-failed-job", (async (
   }
 }) as any);
 
-/**
- * @swagger
- * /api/expedia/property-run-job:
- *   post:
- *     tags:
- *       - Scraping Jobs
- *     summary: Start property scraping job
- *     description: Start a new property scraping job for the specified property ID, date range, and job ID
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - startDate
- *               - endDate
- *               - jobId
- *             properties:
- *               startDate:
- *                 type: string
- *                 description: Start date for scraping (MM/DD/YYYY format)
- *                 example: "01/01/2024"
- *               endDate:
- *                 type: string
- *                 description: End date for scraping (MM/DD/YYYY format)
- *                 example: "01/31/2024"
- *               jobId:
- *                 type: string
- *                 description: MongoDB ObjectId of the job to run. The job's property must have a valid expedia_id (not "0")
- *                 example: "507f1f77bcf86cd799439011"
- *     responses:
- *       200:
- *         description: Property scraping job completed successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 status:
- *                   type: integer
- *                   example: 200
- *                 message:
- *                   type: string
- *                   example: "Property search completed successfully"
- *                 propertyId:
- *                   type: string
- *                   example: "12345"
- *                 jobId:
- *                   type: string
- *                   example: "job_12345_1703123456789"
- *       400:
- *         description: Missing required parameters in request body
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 status:
- *                   type: integer
- *                   example: 400
- *                 message:
- *                   type: string
- *                   example: "startDate and endDate are required in request body"
- *                   enum:
- *                     - "startDate and endDate are required in request body"
- *                     - "jobId is required in request body"
- *       409:
- *         description: Scraping job already running
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 status:
- *                   type: integer
- *                   example: 409
- *                 message:
- *                   type: string
- *                   example: "Scraping job is already running"
- *                 currentState:
- *                   $ref: '#/components/schemas/ScrapingState'
- *       500:
- *         description: Error processing property search
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
- */
+
 app.post("/api/expedia/property-run-job", (async (
   req: express.Request,
   res: express.Response
@@ -809,7 +395,7 @@ app.post("/api/expedia/property-run-job", (async (
 
     // 3. Prepare worker job data
     const workerJobData: WorkerJobData = {
-      jobType: "property-run",
+      jobType: JobType.PropertyRun,
       jobId,
       startDate,
       endDate,
@@ -874,89 +460,7 @@ app.post("/api/expedia/property-run-job", (async (
   }
 }) as any);
 
-/**
- * @swagger
- * /api/expedia/reservation-run-job:
- *   post:
- *     tags:
- *       - Scraping Jobs
- *     summary: Start reservation scraping job
- *     description: Start a new reservation scraping job for the specified reservations
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - reservations
- *             properties:
- *               reservations:
- *                 type: array
- *                 items:
- *                   $ref: '#/components/schemas/Reservation'
- *                 description: Array of reservations to scrape
- *                 example:
- *                   - reservationId: "RES123"
- *                     propertyId: "PROP456"
- *                   - reservationId: "RES124"
- *                     propertyId: "PROP457"
- *     responses:
- *       200:
- *         description: Reservation scraping job completed successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 status:
- *                   type: integer
- *                   example: 200
- *                 message:
- *                   type: string
- *                   example: "Reservation search completed successfully"
- *                 reservations:
- *                   type: array
- *                   items:
- *                     $ref: '#/components/schemas/Reservation'
- *                 jobId:
- *                   type: string
- *                   example: "reservation_job_1703123456789"
- *       400:
- *         description: Missing or invalid reservations array
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 status:
- *                   type: integer
- *                   example: 400
- *                 message:
- *                   type: string
- *                   example: "reservations array is required"
- *       409:
- *         description: Scraping job already running
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 status:
- *                   type: integer
- *                   example: 409
- *                 message:
- *                   type: string
- *                   example: "Scraping job is already running"
- *                 currentState:
- *                   $ref: '#/components/schemas/ScrapingState'
- *       500:
- *         description: Error processing reservation search
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
- */
+
 app.post("/api/expedia/reservation-run-job", (async (
   req: express.Request,
   res: express.Response
@@ -983,7 +487,7 @@ app.post("/api/expedia/reservation-run-job", (async (
     const jobId = `reservation_job_${Date.now()}`;
 
     const workerJobData: WorkerJobData = {
-      jobType: "reservation-run",
+      jobType: JobType.ReservationRun,
       jobId,
       reservations,
     };
@@ -1028,115 +532,6 @@ app.post("/api/expedia/reservation-run-job", (async (
   }
 }) as any);
 
-/**
- * @swagger
- * /api/booking/run-job:
- *   post:
- *     tags:
- *       - Booking Jobs
- *     summary: Start booking scraping job
- *     description: Start a new booking scraping job for the specified portfolio, property, and date range
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - jobId
- *               - portfolioId
- *               - startDate
- *               - endDate
- *             properties:
- *               jobId:
- *                 type: string
- *                 description: MongoDB ObjectId of the job to run
- *                 example: "507f1f77bcf86cd799439011"
- *               portfolioId:
- *                 type: string
- *                 description: MongoDB ObjectId of the portfolio
- *                 example: "507f1f77bcf86cd799439012"
- *               propertyId:
- *                 type: string
- *                 description: MongoDB ObjectId of the property (optional)
- *                 example: "507f1f77bcf86cd799439013"
- *               startDate:
- *                 type: string
- *                 description: Start date for booking scraping (MM/DD/YYYY format)
- *                 example: "01/01/2024"
- *               endDate:
- *                 type: string
- *                 description: End date for booking scraping (MM/DD/YYYY format)
- *                 example: "01/31/2024"
- *     responses:
- *       200:
- *         description: Booking scraping job completed successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 status:
- *                   type: integer
- *                   example: 200
- *                 message:
- *                   type: string
- *                   example: "Booking scraping job started successfully"
- *                 jobId:
- *                   type: string
- *                   example: "507f1f77bcf86cd799439011"
- *                 portfolioId:
- *                   type: string
- *                   example: "507f1f77bcf86cd799439012"
- *                 propertyId:
- *                   type: string
- *                   example: "507f1f77bcf86cd799439013"
- *       400:
- *         description: Missing required parameters or invalid ObjectIds
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 status:
- *                   type: integer
- *                   example: 400
- *                 message:
- *                   type: string
- *                   example: "jobId, portfolioId, startDate and endDate are required"
- *       404:
- *         description: Job not found
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 status:
- *                   type: integer
- *                   example: 404
- *                 message:
- *                   type: string
- *                   example: "Job with ID 507f1f77bcf86cd799439011 not found"
- *       409:
- *         description: Job not in runnable state
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 status:
- *                   type: integer
- *                   example: 409
- *                 message:
- *                   type: string
- *                   example: "Job is not in a runnable state. Current status: Running"
- *       500:
- *         description: Error processing booking job
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
- */
 app.post("/api/booking/run-job", (async (
   req: express.Request,
   res: express.Response
@@ -1194,7 +589,7 @@ app.post("/api/booking/run-job", (async (
 
     // 3. Prepare worker job data
     const workerJobData: WorkerJobData = {
-      jobType: "booking-run",
+      jobType: JobType.BookingRun,
       jobId,
       portfolioId,
       propertyId,
@@ -1261,80 +656,6 @@ app.post("/api/booking/run-job", (async (
   }
 }) as any);
 
-/**
- * @swagger
- * /api/booking/stop-job:
- *   post:
- *     tags:
- *       - Booking Jobs
- *     summary: Stop booking scraping job
- *     description: Stop a running booking scraping job and update job status to Cancelled
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - jobId
- *             properties:
- *               jobId:
- *                 type: string
- *                 description: MongoDB ObjectId of the job to stop
- *                 example: "507f1f77bcf86cd799439011"
- *     responses:
- *       200:
- *         description: Booking scraping job stopped successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 status:
- *                   type: integer
- *                   example: 200
- *                 message:
- *                   type: string
- *                   example: "Booking scraping job stopped successfully"
- *                 jobId:
- *                   type: string
- *                   example: "507f1f77bcf86cd799439011"
- *                 finalStatus:
- *                   type: string
- *                   example: "Cancelled"
- *       400:
- *         description: Invalid request or job not found
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 status:
- *                   type: integer
- *                   example: 400
- *                 message:
- *                   type: string
- *                   example: "Job ID is required"
- *       404:
- *         description: Job not found
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 status:
- *                   type: integer  
- *                   example: 404
- *                 message:
- *                   type: string
- *                   example: "Job with ID 507f1f77bcf86cd799439011 not found"
- *       500:
- *         description: Error stopping job
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
- */
 app.post("/api/booking/stop-job", (async (
   req: express.Request,
   res: express.Response
@@ -1393,111 +714,6 @@ app.post("/api/booking/stop-job", (async (
   }
 }) as any);
 
-/**
- * @swagger
- * /api/booking/rerun-failed-job:
- *   post:
- *     tags:
- *       - Booking Jobs
- *     summary: Rerun failed booking scraping job
- *     description: Re-execute a failed or cancelled booking job with retry tracking and record recovery
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - jobId
- *               - startDate
- *               - endDate
- *             properties:
- *               jobId:
- *                 type: string
- *                 description: MongoDB ObjectId of the failed or cancelled job to rerun
- *                 example: "507f1f77bcf86cd799439011"
- *               startDate:
- *                 type: string
- *                 description: Start date for booking scraping (MM/DD/YYYY format)
- *                 example: "01/01/2024"
- *               endDate:
- *                 type: string
- *                 description: End date for booking scraping (MM/DD/YYYY format)
- *                 example: "01/31/2024"
- *     responses:
- *       200:
- *         description: Failed booking job rerun completed successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 status:
- *                   type: integer
- *                   example: 200
- *                 message:
- *                   type: string
- *                   example: "Failed or cancelled booking job rerun completed successfully"
- *                 jobId:
- *                   type: string
- *                   example: "507f1f77bcf86cd799439011"
- *                 originalStatus:
- *                   type: string
- *                   example: "Failed"
- *                 finalStatus:
- *                   type: string
- *                   example: "Completed"
- *                 retryAttempt:
- *                   type: integer
- *                   example: 2
- *                 progress:
- *                   type: object
- *                   properties:
- *                     totalItems:
- *                       type: integer
- *                       example: 150
- *                     itemsWithCardInfo:
- *                       type: integer
- *                       example: 140
- *                     itemsWithPaymentInfo:
- *                       type: integer
- *                       example: 135
- *                     completionPercentage:
- *                       type: integer
- *                       example: 90
- *       400:
- *         description: Invalid request or job not eligible for retry
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 status:
- *                   type: integer
- *                   example: 400
- *                 message:
- *                   type: string
- *                   example: "Job is not in Failed or Cancelled status. Current status: Completed"
- *       404:
- *         description: Job not found
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 status:
- *                   type: integer
- *                   example: 404
- *                 message:
- *                   type: string
- *                   example: "Job with ID 507f1f77bcf86cd799439011 not found"
- *       500:
- *         description: Error processing job rerun
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
- */
 app.post("/api/booking/rerun-failed-job", (async (
   req: express.Request,
   res: express.Response
@@ -1523,20 +739,20 @@ app.post("/api/booking/rerun-failed-job", (async (
     }
 
     // 1. Check if job can be retried
-    const retryCheck = await jobService.canRetryJob(jobId);
+    await jobService.setJobIdForRetryCheck(jobId);
     
-    if (!retryCheck.canRetry) {
+    if (!jobService.canRetry) {
       return res.status(400).json({
         status: 400,
-        message: retryCheck.reason,
+        message: jobService.retryReason,
         jobId,
-        currentStatus: retryCheck.job?.job_status,
-        retryAttempts: retryCheck.job?.retries_attempted,
-        maxRetries: retryCheck.job?.max_retries,
+        currentStatus: jobService.currentJob?.job_status,
+        retryAttempts: jobService.currentJob?.retries_attempted,
+        maxRetries: jobService.currentJob?.max_retries,
       });
     }
 
-    const job = retryCheck.job!;
+    const job = jobService.currentJob!;
     const originalStatus = job.job_status;
 
     // 2. Increment retry attempts
@@ -1574,7 +790,7 @@ app.post("/api/booking/rerun-failed-job", (async (
 
     // 4. Prepare worker job data for rerun
     const workerJobData: WorkerJobData = {
-      jobType: "booking-rerun-failed",
+      jobType: JobType.BookingRerunFailed,
       jobId,
       startDate,
       endDate,
@@ -1594,6 +810,9 @@ app.post("/api/booking/rerun-failed-job", (async (
         // Get final progress after rerun
         const progress = await jobService.getJobProgress(jobId);
         
+        // Clean up retry check state
+        jobService.clearRetryCheck();
+        
         return res.status(200).json({
           ...result.data,
           originalStatus,
@@ -1601,6 +820,9 @@ app.post("/api/booking/rerun-failed-job", (async (
           progress,
         });
       } else {
+        // Clean up retry check state
+        jobService.clearRetryCheck();
+        
         return res.status(500).json({
           status: 500,
           message: "Booking job rerun execution failed",
@@ -1619,6 +841,9 @@ app.post("/api/booking/rerun-failed-job", (async (
         console.error("Error during cleanup:", cleanupError);
       }
 
+      // Clean up retry check state
+      jobService.clearRetryCheck();
+      
       return res.status(500).json({
         status: 500,
         message: "Worker execution failed for booking job rerun",
@@ -1647,66 +872,12 @@ app.post("/api/booking/rerun-failed-job", (async (
       message: "Error processing booking job rerun",
       error: err.message,
     });
+  } finally {
+    // Clean up retry check state
+    jobService.clearRetryCheck();
   }
 }) as any);
 
-/**
- * @swagger
- * /api/jobs/{jobId}/progress:
- *   get:
- *     tags:
- *       - Job Monitoring
- *     summary: Get job progress
- *     description: Get detailed progress information for a specific job including scraped data statistics
- *     parameters:
- *       - in: path
- *         name: jobId
- *         required: true
- *         schema:
- *           type: string
- *         description: The job ID to get progress for
- *         example: "507f1f77bcf86cd799439011"
- *     responses:
- *       200:
- *         description: Job progress retrieved successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 status:
- *                   type: integer
- *                   example: 200
- *                 message:
- *                   type: string
- *                   example: "Job progress retrieved successfully"
- *                 job:
- *                   type: object
- *                   properties:
- *                     id:
- *                       type: string
- *                     status:
- *                       type: string
- *                     property_name:
- *                       type: string
- *                     portfolio_name:
- *                       type: string
- *                 progress:
- *                   type: object
- *                   properties:
- *                     totalItems:
- *                       type: integer
- *                     itemsWithCardInfo:
- *                       type: integer
- *                     itemsWithPaymentInfo:
- *                       type: integer
- *                     completionPercentage:
- *                       type: integer
- *       404:
- *         description: Job not found
- *       500:
- *         description: Server error
- */
 app.get("/api/jobs/:jobId/progress", (async (
   req: express.Request,
   res: express.Response
@@ -1747,111 +918,7 @@ app.get("/api/jobs/:jobId/progress", (async (
   }
 }) as any);
 
-/**
- * @swagger
- * /api/jobs/{jobId}/items:
- *   get:
- *     tags:
- *       - Job Monitoring
- *     summary: Get job items
- *     description: Get scraped reservation data for a specific job
- *     parameters:
- *       - in: path
- *         name: jobId
- *         required: true
- *         schema:
- *           type: string
- *         description: The job ID to get items for
- *       - in: query
- *         name: page
- *         schema:
- *           type: integer
- *           default: 1
- *         description: Page number for pagination
- *       - in: query
- *         name: limit
- *         schema:
- *           type: integer
- *           default: 10
- *         description: Maximum number of items to return per page
- *       - in: query
- *         name: sortBy
- *         schema:
- *           type: string
- *           default: createdAt
- *         description: Field to sort by (e.g., guest_name, reservation_id, createdAt, etc.)
- *       - in: query
- *         name: sortOrder
- *         schema:
- *           type: string
- *           enum: [asc, desc]
- *           default: desc
- *         description: Sort order (asc or desc)
- *       - in: query
- *         name: search
- *         schema:
- *           type: string
- *         description: Search by guest name or reservation ID (partial match, case-insensitive)
- *       - in: query
- *         name: reasonForCharge
- *         schema:
- *           type: string
- *         description: Filter by reason for charge (partial match, case-insensitive)
- *     responses:
- *       200:
- *         description: Job items retrieved successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 status:
- *                   type: integer
- *                   example: 200
- *                 message:
- *                   type: string
- *                   example: "Job items retrieved successfully"
- *                 items:
- *                   type: array
- *                   items:
- *                     type: object
- *                     properties:
- *                       guest_name:
- *                         type: string
- *                       reservation_id:
- *                         type: string
- *                       confirmation_number:
- *                         type: string
- *                       check_in_date:
- *                         type: string
- *                         format: date
- *                       check_out_date:
- *                         type: string
- *                         format: date
- *                       room_type:
- *                         type: string
- *                       booking_amount:
- *                         type: number
- *                       has_card_info:
- *                         type: boolean
- *                       has_payment_info:
- *                         type: boolean
- *                 metadata:
- *                   type: object
- *                   properties:
- *                     totalDocuments:
- *                       type: integer
- *                     currentPage:
- *                       type: integer
- *                     totalPage:
- *                       type: integer
- *                     limit:
- *                       type: integer
- *       404:
- *         description: Job not found
- *       500:
- *         description: Server error
- */
+
 app.get("/api/jobs/:jobId/items", (async (
   req: express.Request,
   res: express.Response
@@ -1906,52 +973,6 @@ app.get("/api/jobs/:jobId/items", (async (
   }
 }) as any);
 
-/**
- * @swagger
- * /api/jobs/{jobId}/log:
- *   get:
- *     tags:
- *       - Job Monitoring
- *     summary: Get job log link
- *     description: Get the S3 URL for the job's log file
- *     parameters:
- *       - in: path
- *         name: jobId
- *         required: true
- *         schema:
- *           type: string
- *         description: The job ID to get log link for
- *     responses:
- *       200:
- *         description: Job log link retrieved successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 status:
- *                   type: integer
- *                   example: 200
- *                 message:
- *                   type: string
- *                   example: "Job log link retrieved successfully"
- *                 job:
- *                   type: object
- *                   properties:
- *                     id:
- *                       type: string
- *                     status:
- *                       type: string
- *                     property_name:
- *                       type: string
- *                     log_link:
- *                       type: string
- *                       description: S3 URL of the job log file
- *       404:
- *         description: Job not found or no log available
- *       500:
- *         description: Server error
- */
 app.get("/api/jobs/:jobId/log", (async (
   req: express.Request,
   res: express.Response
@@ -1994,63 +1015,6 @@ app.get("/api/jobs/:jobId/log", (async (
   }
 }) as any);
 
-/**
- * @swagger
- * /api/worker-pool/status:
- *   get:
- *     tags:
- *       - Worker Pool
- *     summary: Get worker pool status
- *     description: Get detailed information about the worker pool including available workers, busy workers, and queue status
- *     responses:
- *       200:
- *         description: Worker pool status retrieved successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 status:
- *                   type: integer
- *                   example: 200
- *                 message:
- *                   type: string
- *                   example: "Worker pool status retrieved successfully"
- *                 workerPool:
- *                   type: object
- *                   properties:
- *                     totalWorkers:
- *                       type: integer
- *                       example: 3
- *                     availableWorkers:
- *                       type: integer
- *                       example: 2
- *                     busyWorkers:
- *                       type: integer
- *                       example: 1
- *                     queuedJobs:
- *                       type: integer
- *                       example: 0
- *                     workers:
- *                       type: array
- *                       items:
- *                         type: object
- *                         properties:
- *                           id:
- *                             type: string
- *                           isAvailable:
- *                             type: boolean
- *                           currentJobId:
- *                             type: string
- *                           startTime:
- *                             type: string
- *                             format: date-time
- *                           lastActivity:
- *                             type: string
- *                             format: date-time
- *       500:
- *         description: Server error
- */
 app.get(
   "/api/worker-pool/status",
   (req: express.Request, res: express.Response) => {

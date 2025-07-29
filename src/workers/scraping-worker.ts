@@ -1,7 +1,7 @@
 import dotenv from "dotenv";
 import mongoose from "mongoose";
 import { parentPort } from "worker_threads";
-import { WorkerJobData, WorkerMessage } from "../common/worker-types.js";
+import { JobType, WorkerJobData, WorkerMessage, WorkerMessageType } from "../common/worker-types.js";
 
 // Import the main functions
 import {
@@ -47,7 +47,7 @@ class ScrapingWorker {
         await this.executeJob(jobData);
       } catch (error) {
         this.sendMessage({
-          type: "job-error",
+          type: WorkerMessageType.JobError,
           jobId: jobData.jobId,
           data: {
             error: error instanceof Error ? error.message : String(error),
@@ -92,7 +92,7 @@ class ScrapingWorker {
     this.currentJobId = jobData.jobId;
 
     this.sendMessage({
-      type: "job-start",
+      type: WorkerMessageType.JobStart,
       jobId: jobData.jobId,
       data: { jobType: jobData.jobType, startTime: new Date() },
       timestamp: new Date(),
@@ -102,23 +102,23 @@ class ScrapingWorker {
       let result;
 
       switch (jobData.jobType) {
-        case "property-run":
+        case JobType.PropertyRun:
           result = await this.handlePropertyRun(jobData);
           break;
 
-        case "rerun-failed":
+        case  JobType.RerunFailed:
           result = await this.handleRerunFailed(jobData);
           break;
 
-        case "reservation-run":
+        case JobType.ReservationRun:
           result = await this.handleReservationRun(jobData);
           break;
 
-        case "booking-run":
+        case JobType.BookingRun:
           result = await this.handleBookingRun(jobData);
           break;
 
-        case "booking-rerun-failed":
+        case JobType.BookingRerunFailed:
           result = await this.handleBookingRerunFailed(jobData);
           break;
 
@@ -127,7 +127,7 @@ class ScrapingWorker {
       }
 
       this.sendMessage({
-        type: "job-complete",
+        type: WorkerMessageType.JobComplete,
         jobId: jobData.jobId,
         data: result,
         timestamp: new Date(),
@@ -136,7 +136,7 @@ class ScrapingWorker {
       console.error(`Worker job ${jobData.jobId} failed:`, error);
 
       this.sendMessage({
-        type: "job-error",
+        type: WorkerMessageType.JobError,
         jobId: jobData.jobId,
         data: {
           error: error instanceof Error ? error.message : String(error),
@@ -262,7 +262,7 @@ class ScrapingWorker {
           }
         : null;
 
-      console.log(`Worker: ✅ Job ${jobId} completed successfully`);
+      console.log(`Worker: Job ${jobId} completed successfully`);
 
       return {
         status: 200,
@@ -392,7 +392,7 @@ class ScrapingWorker {
           }
         : undefined;
 
-      console.log(`Worker: ✅ Job ${jobId} rerun completed successfully`);
+      console.log(`Worker: Job ${jobId} rerun completed successfully`);
 
       return {
         status: 200,
@@ -404,7 +404,7 @@ class ScrapingWorker {
         logInfo,
       };
     } catch (error) {
-      console.error(`Worker: ❌ Error during job ${jobId} rerun:`, error);
+      console.error(`Worker: Error during job ${jobId} rerun:`, error);
       await dualLogError(`Worker: Job ${jobId} rerun failed`, error, { jobId });
 
       // Update job status to Failed
@@ -454,7 +454,7 @@ class ScrapingWorker {
       await finalizeJobLogging("success");
 
       console.log(
-        `Worker: ✅ Reservation job ${finalJobId} completed successfully`
+        `Worker: Reservation job ${finalJobId} completed successfully`
       );
 
       return {
@@ -617,7 +617,6 @@ class ScrapingWorker {
       };
       
     } catch (error) {
-      // Enhanced error logging for rerun failures
       await dualLogError(
         "Booking job rerun failed",
         error,
@@ -634,7 +633,6 @@ class ScrapingWorker {
         }
       );
 
-      // Log additional context about the rerun failure
       await dualLogInfo(`Booking job rerun failure details`, {
         jobId,
         originalStatus,

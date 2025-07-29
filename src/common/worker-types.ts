@@ -1,5 +1,20 @@
+export enum JobType {
+  PropertyRun = "property-run",
+  RerunFailed = "rerun-failed",
+  ReservationRun = "reservation-run",
+  BookingRun = "booking-run",
+  BookingRerunFailed = "booking-rerun-failed",
+}
+
+export enum WorkerMessageType {
+  JobStart = "job-start",
+  JobProgress = "job-progress",
+  JobComplete = "job-complete",
+  JobError = "job-error",
+  JobLog = "job-log",
+}
 export interface WorkerJobData {
-  jobType: "property-run" | "rerun-failed" | "reservation-run" | "booking-run" | "booking-rerun-failed";
+  jobType: JobType;
   jobId: string;
   portfolioId?: string;
   propertyId?: string;
@@ -14,7 +29,7 @@ export interface WorkerJobData {
 }
 
 export interface WorkerMessage {
-  type: "job-start" | "job-progress" | "job-complete" | "job-error" | "job-log";
+  type: WorkerMessageType;
   data: any;
   jobId: string;
   timestamp: Date;
