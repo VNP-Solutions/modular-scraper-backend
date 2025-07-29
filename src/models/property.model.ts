@@ -23,6 +23,15 @@ export interface IProperty extends Document {
   user_password?: string;
 }
 
+function isValidId(value: string): boolean {
+  if (!value) return false;
+  if (value === '0') return false;
+  if (value.trim() === '') return false;
+
+  return true;
+}
+
+
 // Mongoose Schema for Property
 const PropertySchema = new Schema<IProperty>(
   {
@@ -31,10 +40,7 @@ const PropertySchema = new Schema<IProperty>(
       required: true,
       unique: true,
       validate: {
-        validator: function (v: string): boolean {
-          // expedia_id cannot be "0" or empty
-          return !!(v && v !== "0" && v.trim().length > 0);
-        },
+        validator: isValidId,
         message: 'Expedia ID cannot be "0" or empty',
       },
     },
@@ -43,10 +49,7 @@ const PropertySchema = new Schema<IProperty>(
       required: false,
       unique: true,
       validate: {
-        validator: function (v: string): boolean {
-          // booking_id cannot be "0" or empty
-          return !!(v && v !== "0" && v.trim().length > 0);
-        },
+        validator: isValidId,
         message: 'Booking ID cannot be "0" or empty',
       },
     },

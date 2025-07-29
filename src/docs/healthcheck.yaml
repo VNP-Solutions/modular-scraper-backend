@@ -1,0 +1,23 @@
+"/":
+  get:
+    tags:
+      - Health
+    summary: Health check endpoint
+    description: Check if the server is running and accessible
+    responses:
+      '200':
+        description: Server is running
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                message:
+                  type: string
+                  example: "Connection established"
+      '500':
+        description: Server error
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ErrorResponse'
