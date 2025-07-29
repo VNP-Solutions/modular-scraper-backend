@@ -56,6 +56,38 @@ export interface CreateJobItemData {
 }
 
 export class JobService {
+  private currentJobId: string | null = null;
+  private currentRetryCheck: { canRetry: boolean; job?: IJob; reason?: string } | null = null;
+
+  /**
+   * Set the current job ID for retry checking
+   */
+  async setJobIdForRetryCheck(jobId: string): Promise<void> {
+    this.currentJobId = jobId;
+    this.currentRetryCheck = await this.canRetryJob(jobId);
+  }
+
+  /**
+   * Get canRetry status for the current job
+   */
+  get canRetry(): boolean {
+    return this.currentRetryCheck?.canRetry ?? false;
+  }
+
+  /**
+   * Get the current job for retry operations
+   */
+  get currentJob(): IJob | undefined {
+    return this.currentRetryCheck?.job;
+  }
+
+  /**
+   * Get the reason why retry is not allowed
+   */
+  get retryReason(): string | undefined {
+    return this.currentRetryCheck?.reason;
+  }
+
   /**
    * Validate and convert string to ObjectId
    */
@@ -66,6 +98,14 @@ export class JobService {
       );
     }
     return new Types.ObjectId(id);
+  }
+
+   /**
+   * Clear the current retry check state
+   */
+   clearRetryCheck(): void {
+    this.currentJobId = null;
+    this.currentRetryCheck = null;
   }
 
   /**

@@ -739,20 +739,20 @@ app.post("/api/booking/rerun-failed-job", (async (
     }
 
     // 1. Check if job can be retried
-    const retryCheck = await jobService.canRetryJob(jobId);
+    await jobService.setJobIdForRetryCheck(jobId);
     
-    if (!retryCheck.canRetry) {
+    if (!jobService.canRetry) {
       return res.status(400).json({
         status: 400,
-        message: retryCheck.reason,
+        message: jobService.retryReason,
         jobId,
-        currentStatus: retryCheck.job?.job_status,
-        retryAttempts: retryCheck.job?.retries_attempted,
-        maxRetries: retryCheck.job?.max_retries,
+        currentStatus: jobService.currentJob?.job_status,
+        retryAttempts: jobService.currentJob?.retries_attempted,
+        maxRetries: jobService.currentJob?.max_retries,
       });
     }
 
-    const job = retryCheck.job!;
+    const job = jobService.currentJob!;
     const originalStatus = job.job_status;
 
     // 2. Increment retry attempts
@@ -810,6 +810,9 @@ app.post("/api/booking/rerun-failed-job", (async (
         // Get final progress after rerun
         const progress = await jobService.getJobProgress(jobId);
         
+        // Clean up retry check state
+        jobService.clearRetryCheck();
+        
         return res.status(200).json({
           ...result.data,
           originalStatus,
@@ -817,6 +820,9 @@ app.post("/api/booking/rerun-failed-job", (async (
           progress,
         });
       } else {
+        // Clean up retry check state
+        jobService.clearRetryCheck();
+        
         return res.status(500).json({
           status: 500,
           message: "Booking job rerun execution failed",
@@ -835,6 +841,9 @@ app.post("/api/booking/rerun-failed-job", (async (
         console.error("Error during cleanup:", cleanupError);
       }
 
+      // Clean up retry check state
+      jobService.clearRetryCheck();
+      
       return res.status(500).json({
         status: 500,
         message: "Worker execution failed for booking job rerun",
@@ -863,6 +872,9 @@ app.post("/api/booking/rerun-failed-job", (async (
       message: "Error processing booking job rerun",
       error: err.message,
     });
+  } finally {
+    // Clean up retry check state
+    jobService.clearRetryCheck();
   }
 }) as any);
 
