@@ -519,7 +519,8 @@ class ScrapingWorker {
       };
       
     } catch (error) {
-      // Log the final error with enhanced metadata
+      await jobService.setJobIdForRetryCheck(jobId);
+
       await dualLogError(
         "Booking scraping job failed",
         error,
@@ -528,7 +529,9 @@ class ScrapingWorker {
           platform: 'booking',
           propertyId,
           portfolioId,
-          errorDescription: getBookingErrorDescription(BookingErrorType.UNKNOWN)
+          errorDescription: getBookingErrorDescription(BookingErrorType.UNKNOWN),
+          retryAttempt: jobService.retryAttempt,
+          maxRetries: jobService.maxRetries,
         }
       );
       
@@ -557,7 +560,8 @@ class ScrapingWorker {
       throw new Error("jobId is required for booking-rerun-failed jobs");
     }
 
-    // Enhanced logging for rerun start
+    await jobService.setJobIdForRetryCheck(jobId);
+
     await dualLogInfo(`Starting booking job rerun`, {
       jobId,
       originalStatus,
@@ -565,18 +569,19 @@ class ScrapingWorker {
       propertyId,
       platform: 'booking',
       rerunReason: "Manual rerun of failed/cancelled job",
-      rerunTimestamp: new Date().toISOString()
+      retryAttempt: jobService.retryAttempt,
+      maxRetries: jobService.maxRetries,
     });
 
     // 1. Reset job status from Failed/Cancelled to Pending
     await dualLogInfo(`Resetting job status for rerun`, {
       jobId,
       fromStatus: originalStatus,
-      toStatus: "Pending",
+      toStatus: JobStatus.Pending,
       platform: 'booking'
     });
     
-    await jobService.updateJobStatus(jobId, "Pending" as any);
+    await jobService.updateJobStatus(jobId, JobStatus.Pending);
 
     // 2. Initialize job logging for tracking
     initializeJobLogging(jobId);
@@ -603,7 +608,9 @@ class ScrapingWorker {
         propertyId,
         platform: 'booking',
         finalStatus: result.trackingStatus,
-        rerunSuccess: true
+        rerunSuccess: true,
+        retryAttempt: jobService.retryAttempt,
+        maxRetries: jobService.maxRetries,
       });
 
       // 5. Update the response to indicate this was a rerun
@@ -628,8 +635,8 @@ class ScrapingWorker {
           portfolioId,
           propertyId,
           errorDescription: getBookingErrorDescription(BookingErrorType.RERUN_FAILED),
-          rerunFailureReason: "Rerun execution failed",
-          rerunFailureTimestamp: new Date().toISOString()
+          retryAttempt: jobService.retryAttempt,
+          maxRetries: jobService.maxRetries,
         }
       );
 
@@ -639,7 +646,9 @@ class ScrapingWorker {
         platform: 'booking',
         errorMessage: error instanceof Error ? error.message : String(error),
         failurePhase: "rerun_execution",
-        shouldRetry: shouldRetryBookingError(BookingErrorType.RERUN_FAILED)
+        shouldRetry: shouldRetryBookingError(BookingErrorType.RERUN_FAILED),
+        retryAttempt: jobService.retryAttempt,
+        maxRetries: jobService.maxRetries,
       });
 
       // Update job status to Failed

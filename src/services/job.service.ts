@@ -89,6 +89,20 @@ export class JobService {
   }
 
   /**
+   * Get the current retry attempt count
+   */
+  get retryAttempt(): number {
+    return this.currentRetryCheck?.job?.retries_attempted || 0;
+  }
+
+  /**
+   * Get the maximum retry attempts allowed
+   */
+  get maxRetries(): number {
+    return this.currentRetryCheck?.job?.max_retries || 3;
+  }
+
+  /**
    * Validate and convert string to ObjectId
    */
   private validateObjectId(id: string, fieldName: string): Types.ObjectId {
