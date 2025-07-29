@@ -135,10 +135,12 @@ export class EmailNotifier {
       // Get property details if available
       let propertyName = job.property_name;
       let expediaId = "";
-      
+
       if (job.property_id) {
         try {
-          const jobWithProperty = await this.jobService.getJobWithProperty(jobId);
+          const jobWithProperty = await this.jobService.getJobWithProperty(
+            jobId
+          );
           if (jobWithProperty?.property) {
             expediaId = (jobWithProperty.property as any).expedia_id || "";
           }
@@ -195,7 +197,9 @@ export class EmailNotifier {
       throw new Error("Email transporter not initialized");
     }
 
-    const recipientsArray = Array.isArray(recipients) ? recipients : [recipients];
+    const recipientsArray = Array.isArray(recipients)
+      ? recipients
+      : [recipients];
     const validEmails = this.validateEmails(recipientsArray);
 
     if (validEmails.length === 0) {
@@ -279,27 +283,25 @@ export class EmailNotifier {
                 <div class="error-box">
                     <h3>Error Details</h3>
                     <p><strong>Message:</strong> ${data.errorMessage}</p>
-                    ${data.errorDetails ? `<p><strong>Details:</strong> <pre>${JSON.stringify(data.errorDetails, null, 2)}</pre></p>` : ''}
                 </div>
                 
                 <table class="info-table">
                     <tr><th>Job ID</th><td>${data.jobId}</td></tr>
-                    <tr><th>Job Name</th><td>${data.jobName || 'N/A'}</td></tr>
-                    <tr><th>Property</th><td>${data.propertyName || 'N/A'}</td></tr>
-                    <tr><th>Expedia ID</th><td>${data.expediaId || 'N/A'}</td></tr>
-                    <tr><th>Error Time</th><td>${formatDate(data.timestamp)}</td></tr>
-                    ${data.stage ? `<tr><th>Current Stage</th><td>${data.stage}</td></tr>` : ''}
-                    ${data.lastProcessedDate ? `<tr><th>Last Processed Date</th><td>${data.lastProcessedDate}</td></tr>` : ''}
-                    ${data.progressPercentage !== undefined ? `<tr><th>Progress</th><td>${data.progressPercentage}%</td></tr>` : ''}
+                    <tr><th>Property</th><td>${
+                      data.propertyName || "N/A"
+                    }</td></tr>
+                    <tr><th>Error Time</th><td>${formatDate(
+                      data.timestamp
+                    )}</td></tr>
                 </table>
 
                 <div style="background-color: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; border-radius: 5px; margin: 15px 0;">
                     <h4>🔧 Next Steps</h4>
                     <ul>
-                        <li>Check the application logs for detailed error information</li>
-                        <li>Verify the job configuration and credentials</li>
-                        <li>Consider restarting the job if appropriate</li>
-                        <li>Contact the development team if the issue persists</li>
+                        <li>Go to website, and check the job status.</li>
+                        <li>Update the Job status to Pending, and change start date and end date also</li>
+                        <li>run the job again</li>
+                        <li>If the issue persists, please contact the development team.</li>
                     </ul>
                 </div>
             </div>
@@ -335,17 +337,24 @@ A scraping job has encountered an error and requires attention.
 
 ERROR DETAILS:
 Message: ${data.errorMessage}
-${data.errorDetails ? `Details: ${JSON.stringify(data.errorDetails, null, 2)}` : ''}
 
 JOB INFORMATION:
 - Job ID: ${data.jobId}
-- Job Name: ${data.jobName || 'N/A'}
-- Property: ${data.propertyName || 'N/A'}
-- Expedia ID: ${data.expediaId || 'N/A'}
+- Job Name: ${data.jobName || "N/A"}
+- Property: ${data.propertyName || "N/A"}
+- Expedia ID: ${data.expediaId || "N/A"}
 - Error Time: ${formatDate(data.timestamp)}
-${data.stage ? `- Current Stage: ${data.stage}` : ''}
-${data.lastProcessedDate ? `- Last Processed Date: ${data.lastProcessedDate}` : ''}
-${data.progressPercentage !== undefined ? `- Progress: ${data.progressPercentage}%` : ''}
+${data.stage ? `- Current Stage: ${data.stage}` : ""}
+${
+  data.lastProcessedDate
+    ? `- Last Processed Date: ${data.lastProcessedDate}`
+    : ""
+}
+${
+  data.progressPercentage !== undefined
+    ? `- Progress: ${data.progressPercentage}%`
+    : ""
+}
 
 NEXT STEPS:
 1. Check the application logs for detailed error information
@@ -379,4 +388,4 @@ Please do not reply to this email.
 }
 
 // Export singleton instance
-export const emailNotifier = EmailNotifier.getInstance(); 
+export const emailNotifier = EmailNotifier.getInstance();
