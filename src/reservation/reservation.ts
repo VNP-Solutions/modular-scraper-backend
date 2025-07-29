@@ -168,7 +168,7 @@ async function reservation(
             );
 
             try {
-              await scrapeWithReservationId(browser, page, reservation);
+              await scrapeWithReservationId(browser, page, reservation, jobId);
               processedCount++;
 
               // Update progress

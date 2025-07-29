@@ -1,4 +1,6 @@
 import { Page } from "puppeteer";
+import { emailNotifier } from "../common/email-notifier.js";
+import { progressManager } from "../common/progress-manager.js";
 import { timeoutManager } from "../common/timeout-manager.js";
 
 const calculateMonthsToNavigate = (
@@ -31,12 +33,29 @@ export async function setDateRange(
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       console.log(`Date range setting attempt ${attempt}/${maxRetries}`);
-      await setDateRangeInternal(page, start_date, end_date);
+      await setDateRangeInternal(page, start_date, end_date, jobId);
       console.log("Date range set successfully");
       return;
     } catch (error: any) {
       console.error(`Date range attempt ${attempt} failed:`, error.message);
       lastError = error;
+
+      // Send email notification for date range setting error
+      if (jobId) {
+        try {
+          await emailNotifier.notifyJobError(
+            jobId,
+            `Date range setting attempt ${attempt}/${maxRetries} failed (${start_date} to ${end_date}): ${error?.message || "Date range setting failed"}`,
+            error,
+            {
+              stage: `date_range_setting_attempt_${attempt}`,
+              progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
+            }
+          );
+        } catch (emailError) {
+          console.error("Failed to send date range setting error notification:", emailError);
+        }
+      }
 
       if (attempt < maxRetries) {
         console.log("Retrying date range setting...");
@@ -64,6 +83,23 @@ export async function setDateRange(
           console.log("Reset attempt failed, continuing...");
         }
       }
+    }
+  }
+
+  // Send final email notification if all attempts failed
+  if (jobId) {
+    try {
+      await emailNotifier.notifyJobError(
+        jobId,
+        `Date range setting failed after ${maxRetries} attempts (${start_date} to ${end_date}): ${lastError?.message || "All date range attempts failed"}`,
+        lastError,
+        {
+          stage: "date_range_setting_final_failure",
+          progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
+        }
+      );
+    } catch (emailError) {
+      console.error("Failed to send final date range setting error notification:", emailError);
     }
   }
 
@@ -149,7 +185,26 @@ async function setDateRangeInternal(
       ".from-input-label input.fds-field-input"
     );
     if (!fromDateInput) {
-      throw new Error("From date input not found");
+      const error = new Error("From date input not found");
+      
+      // Send email notification for from date input not found
+      if (jobId) {
+        try {
+          await emailNotifier.notifyJobError(
+            jobId,
+            `From date input field not found during date range setting`,
+            error,
+            {
+              stage: "date_range_from_input_missing",
+              progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
+            }
+          );
+        } catch (emailError) {
+          console.error("Failed to send from date input error notification:", emailError);
+        }
+      }
+      
+      throw error;
     }
 
     // Ensure focus and click the input
@@ -694,8 +749,26 @@ async function setDateRangeInternal(
     }
 
     return { from: fromValue, to: toValue };
-  } catch (error) {
+  } catch (error: any) {
     console.error("Error setting date range:", error);
+    
+    // Send email notification for general date range setting error
+    if (jobId) {
+      try {
+        await emailNotifier.notifyJobError(
+          jobId,
+          `Date range setting internal error (${start_date} to ${end_date}): ${error?.message || "Unknown date range error"}`,
+          error,
+          {
+            stage: "date_range_setting_internal",
+            progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
+          }
+        );
+      } catch (emailError) {
+        console.error("Failed to send date range setting internal error notification:", emailError);
+      }
+    }
+    
     throw error;
   }
 }
