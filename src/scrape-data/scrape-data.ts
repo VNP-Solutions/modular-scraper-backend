@@ -1,6 +1,5 @@
 import { Browser, Page } from "puppeteer";
 import { delay } from "../common/delay.js";
-import { emailNotifier } from "../common/email-notifier.js";
 import {
   dualLogError,
   dualLogInfo,
@@ -63,17 +62,7 @@ export async function scrapeData(
         
         // Send email notification for property_id fetch error
         if (jobId) {
-          try {
-            await emailNotifier.notifyJobError(
-              jobId,
-              `Failed to get property_id from job: ${error?.message || "Unknown error"}`,
-              error,
-              {
-                stage: "property_id_fetch",
-                progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-              }
-            );
-          } catch (emailError) {
+          try {          } catch (emailError) {
             await dualLogError("Failed to send property_id fetch error notification:", emailError);
           }
         }
@@ -94,17 +83,7 @@ export async function scrapeData(
         
         // Send email notification for total results fetch error
         if (jobId) {
-          try {
-            await emailNotifier.notifyJobError(
-              jobId,
-              `Failed to get total results count: ${error?.message || "Unknown error"}`,
-              error,
-              {
-                stage: "total_results_fetch",
-                progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-              }
-            );
-          } catch (emailError) {
+          try {          } catch (emailError) {
             await dualLogError("Failed to send total results fetch error notification:", emailError);
           }
         }
@@ -126,17 +105,7 @@ export async function scrapeData(
         
         // Send email notification for next page check error
         if (jobId) {
-          try {
-            await emailNotifier.notifyJobError(
-              jobId,
-              `Failed to check for next page: ${error?.message || "Unknown error"}`,
-              error,
-              {
-                stage: "next_page_check",
-                progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-              }
-            );
-          } catch (emailError) {
+          try {          } catch (emailError) {
             await dualLogError("Failed to send next page check error notification:", emailError);
           }
         }
@@ -907,18 +876,7 @@ export async function scrapeData(
     
     // Send email notification for general scrapeData error
     if (jobId) {
-      try {
-        await emailNotifier.notifyJobError(
-          jobId,
-          `Data scraping failed: ${error?.message || "Unknown scraping error"}`,
-          error,
-          {
-            stage: "data_scraping",
-            progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-            lastProcessedDate: progressManager.getJobLastProcessedDate(jobId) || undefined,
-          }
-        );
-      } catch (emailError) {
+      try {      } catch (emailError) {
         await dualLogError("Failed to send scrapeData error notification:", emailError);
       }
     }

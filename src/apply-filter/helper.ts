@@ -1,5 +1,4 @@
 import { Page } from "puppeteer";
-import { emailNotifier } from "../common/email-notifier.js";
 import { progressManager } from "../common/progress-manager.js";
 import { timeoutManager } from "../common/timeout-manager.js";
 
@@ -42,17 +41,7 @@ export async function setDateRange(
 
       // Send email notification for date range setting error
       if (jobId) {
-        try {
-          await emailNotifier.notifyJobError(
-            jobId,
-            `Date range setting attempt ${attempt}/${maxRetries} failed (${start_date} to ${end_date}): ${error?.message || "Date range setting failed"}`,
-            error,
-            {
-              stage: `date_range_setting_attempt_${attempt}`,
-              progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-            }
-          );
-        } catch (emailError) {
+        try {        } catch (emailError) {
           console.error("Failed to send date range setting error notification:", emailError);
         }
       }
@@ -88,17 +77,7 @@ export async function setDateRange(
 
   // Send final email notification if all attempts failed
   if (jobId) {
-    try {
-      await emailNotifier.notifyJobError(
-        jobId,
-        `Date range setting failed after ${maxRetries} attempts (${start_date} to ${end_date}): ${lastError?.message || "All date range attempts failed"}`,
-        lastError,
-        {
-          stage: "date_range_setting_final_failure",
-          progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-        }
-      );
-    } catch (emailError) {
+    try {    } catch (emailError) {
       console.error("Failed to send final date range setting error notification:", emailError);
     }
   }
@@ -189,17 +168,7 @@ async function setDateRangeInternal(
       
       // Send email notification for from date input not found
       if (jobId) {
-        try {
-          await emailNotifier.notifyJobError(
-            jobId,
-            `From date input field not found during date range setting`,
-            error,
-            {
-              stage: "date_range_from_input_missing",
-              progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-            }
-          );
-        } catch (emailError) {
+        try {        } catch (emailError) {
           console.error("Failed to send from date input error notification:", emailError);
         }
       }
@@ -754,17 +723,7 @@ async function setDateRangeInternal(
     
     // Send email notification for general date range setting error
     if (jobId) {
-      try {
-        await emailNotifier.notifyJobError(
-          jobId,
-          `Date range setting internal error (${start_date} to ${end_date}): ${error?.message || "Unknown date range error"}`,
-          error,
-          {
-            stage: "date_range_setting_internal",
-            progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-          }
-        );
-      } catch (emailError) {
+      try {      } catch (emailError) {
         console.error("Failed to send date range setting internal error notification:", emailError);
       }
     }

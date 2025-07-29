@@ -2,7 +2,6 @@ import dotenv from "dotenv";
 import { Browser, Page } from "puppeteer";
 import { applyFilter } from "../apply-filter/apply-filter.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
-import { emailNotifier } from "../common/email-notifier.js";
 import { progressManager } from "../common/progress-manager.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import { timeManager } from "../common/time-manager.js";
@@ -46,17 +45,7 @@ export async function splitDateRange(
       
       // Send email notification for date filter error
       if (jobId) {
-        try {
-          await emailNotifier.notifyJobError(
-            jobId,
-            `Failed to find date filters: ${error?.message || "Date filters not found"}`,
-            error,
-            {
-              stage: "date_filters_wait",
-              progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-            }
-          );
-        } catch (emailError) {
+        try {        } catch (emailError) {
           await dualLogError("Failed to send date filters error notification:", emailError);
         }
       }
@@ -101,17 +90,7 @@ export async function splitDateRange(
         
         // Send email notification for progress initialization error
         if (jobId) {
-          try {
-            await emailNotifier.notifyJobError(
-              jobId,
-              `Failed to initialize job progress: ${error?.message || "Progress initialization failed"}`,
-              error,
-              {
-                stage: "progress_initialization",
-                progressPercentage: 0,
-              }
-            );
-          } catch (emailError) {
+          try {          } catch (emailError) {
             await dualLogError("Failed to send progress initialization error notification:", emailError);
           }
         }
@@ -165,18 +144,7 @@ export async function splitDateRange(
             await dualLogError("Failed to set job resumable before browser restart:", error);
             
             // Send email notification for resumable set error
-            try {
-              await emailNotifier.notifyJobError(
-                jobId,
-                `Failed to set job resumable before browser restart: ${error?.message || "Resume state save failed"}`,
-                error,
-                {
-                  stage: "browser_restart_save",
-                  progressPercentage: Math.round((i / dateChunks.length) * 100),
-                  lastProcessedDate: chunk.start,
-                }
-              );
-            } catch (emailError) {
+            try {            } catch (emailError) {
               await dualLogError("Failed to send resumable set error notification:", emailError);
             }
             throw error;
@@ -224,18 +192,7 @@ export async function splitDateRange(
             await dualLogError("Failed to update job progress after chunk:", error);
             
             // Send email notification for progress update error
-            try {
-              await emailNotifier.notifyJobError(
-                jobId,
-                `Failed to update job progress after processing chunk: ${error?.message || "Progress update failed"}`,
-                error,
-                {
-                  stage: "progress_update",
-                  progressPercentage: Math.round(((i + 1) / dateChunks.length) * 100),
-                  lastProcessedDate: chunk.end,
-                }
-              );
-            } catch (emailError) {
+            try {            } catch (emailError) {
               await dualLogError("Failed to send progress update error notification:", emailError);
             }
             // Don't throw here, continue processing
@@ -262,18 +219,7 @@ export async function splitDateRange(
 
         // Send email notification for chunk processing error
         if (jobId) {
-          try {
-            await emailNotifier.notifyJobError(
-              jobId,
-              `Failed to process date chunk ${i + 1} (${chunk.start} to ${chunk.end}): ${error?.message || "Chunk processing failed"}`,
-              error,
-              {
-                stage: `chunk_processing_${i + 1}`,
-                progressPercentage: Math.round((i / dateChunks.length) * 100),
-                lastProcessedDate: i > 0 ? dateChunks[i - 1].end : chunk.start,
-              }
-            );
-          } catch (emailError) {
+          try {          } catch (emailError) {
             await dualLogError("Failed to send chunk processing error notification:", emailError);
           }
         }
@@ -291,18 +237,7 @@ export async function splitDateRange(
         await dualLogError("Failed to mark job as completed:", error);
         
         // Send email notification for job completion error
-        try {
-          await emailNotifier.notifyJobError(
-            jobId,
-            `Failed to mark job as completed: ${error?.message || "Job completion marking failed"}`,
-            error,
-            {
-              stage: "job_completion",
-              progressPercentage: 100,
-              lastProcessedDate: dateChunks[dateChunks.length - 1]?.end,
-            }
-          );
-        } catch (emailError) {
+        try {        } catch (emailError) {
           await dualLogError("Failed to send job completion error notification:", emailError);
         }
         throw error;
@@ -318,18 +253,7 @@ export async function splitDateRange(
     
     // Send email notification for general splitDateRange error (if not already a browser restart)
     if (jobId && (!error.message || !error.message.startsWith("BROWSER_RESTART_NEEDED:"))) {
-      try {
-        await emailNotifier.notifyJobError(
-          jobId,
-          `Date range splitting failed: ${error?.message || "Unknown date splitting error"}`,
-          error,
-          {
-            stage: "date_range_splitting",
-            progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-            lastProcessedDate: progressManager.getJobLastProcessedDate(jobId) || undefined,
-          }
-        );
-      } catch (emailError) {
+      try {      } catch (emailError) {
         await dualLogError("Failed to send date range splitting error notification:", emailError);
       }
     }

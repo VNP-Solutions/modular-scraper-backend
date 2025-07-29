@@ -6,7 +6,6 @@ import {
   dualLogInfo,
   dualLogWarn,
 } from "../common/log-helper.js";
-import { emailNotifier } from "../common/email-notifier.js";
 import { progressManager } from "../common/progress-manager.js";
 import { timeoutManager } from "../common/timeout-manager.js";
 import { JobService } from "../services/job.service.js";
@@ -46,17 +45,7 @@ export async function browserSetupProduction(jobId?: string): Promise<{
       
       // Send email notification for browser connection error
       if (jobId) {
-        try {
-          await emailNotifier.notifyJobError(
-            jobId,
-            `Failed to connect to Browserless production service: ${error?.message || "Browserless connection failed"}`,
-            error,
-            {
-              stage: "browser_connect_production",
-              progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-            }
-          );
-        } catch (emailError) {
+        try {        } catch (emailError) {
           await dualLogError("Failed to send browser connection error notification:", emailError);
         }
       }
@@ -74,17 +63,7 @@ export async function browserSetupProduction(jobId?: string): Promise<{
       
       // Send email notification for recording start error
       if (jobId) {
-        try {
-          await emailNotifier.notifyJobError(
-            jobId,
-            `Failed to start browser recording: ${error?.message || "Recording start failed"}`,
-            error,
-            {
-              stage: "browser_recording_start",
-              progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-            }
-          );
-        } catch (emailError) {
+        try {        } catch (emailError) {
           await dualLogError("Failed to send recording start error notification:", emailError);
         }
       }
@@ -107,17 +86,7 @@ export async function browserSetupProduction(jobId?: string): Promise<{
       
       // Send email notification for live URL generation error
       if (jobId) {
-        try {
-          await emailNotifier.notifyJobError(
-            jobId,
-            `Failed to generate live URL: ${error?.message || "Live URL generation failed"}`,
-            error,
-            {
-              stage: "browser_live_url_generation",
-              progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-            }
-          );
-        } catch (emailError) {
+        try {        } catch (emailError) {
           await dualLogError("Failed to send live URL error notification:", emailError);
         }
       }
@@ -139,17 +108,7 @@ export async function browserSetupProduction(jobId?: string): Promise<{
         
         // Send email notification for live URL storage error
         if (jobId) {
-          try {
-            await emailNotifier.notifyJobError(
-              jobId,
-              `Failed to store live URL in database: ${error?.message || "Live URL storage failed"}`,
-              error,
-              {
-                stage: "browser_live_url_storage",
-                progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-              }
-            );
-          } catch (emailError) {
+          try {          } catch (emailError) {
             await dualLogError("Failed to send live URL storage error notification:", emailError);
           }
         }
@@ -207,17 +166,7 @@ export async function browserSetupProduction(jobId?: string): Promise<{
           
           // Send email notification for navigation failure
           if (jobId) {
-            try {
-              await emailNotifier.notifyJobError(
-                jobId,
-                `Failed to navigate to Expedia Partner Central after ${maxRetries} attempts: ${navError?.message || "Navigation failed"}`,
-                navError,
-                {
-                  stage: "browser_navigation_production",
-                  progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-                }
-              );
-            } catch (emailError) {
+            try {            } catch (emailError) {
               await dualLogError("Failed to send navigation error notification:", emailError);
             }
           }
@@ -234,17 +183,7 @@ export async function browserSetupProduction(jobId?: string): Promise<{
       
       // Send email notification for final navigation failure
       if (jobId) {
-        try {
-          await emailNotifier.notifyJobError(
-            jobId,
-            "Failed to navigate to target page after all attempts (production)",
-            error,
-            {
-              stage: "browser_navigation_final_failure_production",
-              progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-            }
-          );
-        } catch (emailError) {
+        try {        } catch (emailError) {
           await dualLogError("Failed to send final navigation error notification:", emailError);
         }
       }
@@ -259,17 +198,7 @@ export async function browserSetupProduction(jobId?: string): Promise<{
 
     // Send email notification for general browser setup error
     if (jobId) {
-      try {
-        await emailNotifier.notifyJobError(
-          jobId,
-          `Production browser setup failed: ${error?.message || "Unknown browser setup error"}`,
-          error,
-          {
-            stage: "browser_setup_production",
-            progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-          }
-        );
-      } catch (emailError) {
+      try {      } catch (emailError) {
         await dualLogError("Failed to send browser setup error notification:", emailError);
       }
     }
