@@ -1,0 +1,15 @@
+/auth:
+  get:
+    tags:
+      - Authentication
+    summary: Initiate OAuth authentication
+    description: Start the OAuth authentication flow for accessing Expedia services
+    responses:
+      '200':
+        description: Authentication flow initiated
+      '500':
+        description: Authentication error
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ErrorResponse'

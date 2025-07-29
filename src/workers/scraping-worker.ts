@@ -255,7 +255,7 @@ class ScrapingWorker {
           }
         : null;
 
-      console.log(`Worker: ✅ Job ${jobId} completed successfully`);
+      console.log(`Worker: Job ${jobId} completed successfully`);
 
       return {
         status: 200,
@@ -385,7 +385,7 @@ class ScrapingWorker {
           }
         : undefined;
 
-      console.log(`Worker: ✅ Job ${jobId} rerun completed successfully`);
+      console.log(`Worker: Job ${jobId} rerun completed successfully`);
 
       return {
         status: 200,
@@ -397,7 +397,7 @@ class ScrapingWorker {
         logInfo,
       };
     } catch (error) {
-      console.error(`Worker: ❌ Error during job ${jobId} rerun:`, error);
+      console.error(`Worker: Error during job ${jobId} rerun:`, error);
       await dualLogError(`Worker: Job ${jobId} rerun failed`, error, { jobId });
 
       // Update job status to Failed
@@ -447,7 +447,7 @@ class ScrapingWorker {
       await finalizeJobLogging("success");
 
       console.log(
-        `Worker: ✅ Reservation job ${finalJobId} completed successfully`
+        `Worker: Reservation job ${finalJobId} completed successfully`
       );
 
       return {
