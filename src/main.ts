@@ -374,7 +374,6 @@ async function runScrapingWithRestart(
                   `Property search failed: ${error?.message || "Unknown property search error"}`,
                   error,
                   {
-                    stage: "property_search",
                     progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
                   }
                 );

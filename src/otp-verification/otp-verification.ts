@@ -3,7 +3,6 @@ import fs from "fs";
 import { google } from "googleapis";
 import { Browser, Page } from "puppeteer";
 import { delay } from "../common/delay.js";
-import { emailNotifier } from "../common/email-notifier.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
 import { progressManager } from "../common/progress-manager.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
@@ -117,20 +116,7 @@ async function handleOtpVerification(
 
       // Send email notification for verification page error
       if (jobId) {
-        try {
-          await emailNotifier.notifyJobError(
-            jobId,
-            `Failed to find verification page: ${
-              error?.message || "Verification page not found"
-            }`,
-            error,
-            {
-              stage: "otp_verification_page_wait",
-              progressPercentage:
-                progressManager.getJobProgress(jobId)?.progressPercentage,
-            }
-          );
-        } catch (emailError) {
+        try {        } catch (emailError) {
           await dualLogError(
             "Failed to send verification page error notification:",
             emailError
@@ -180,18 +166,7 @@ async function handleOtpVerification(
 
           // Send email notification for verification code error
           if (jobId) {
-            try {
-              await emailNotifier.notifyJobError(
-                jobId,
-                "Failed to get verification code from email",
-                error,
-                {
-                  stage: "otp_verification_code_fetch",
-                  progressPercentage:
-                    progressManager.getJobProgress(jobId)?.progressPercentage,
-                }
-              );
-            } catch (emailError) {
+            try {            } catch (emailError) {
               await dualLogError(
                 "Failed to send verification code error notification:",
                 emailError
@@ -216,18 +191,7 @@ async function handleOtpVerification(
 
           // Send email notification for verify button error
           if (jobId) {
-            try {
-              await emailNotifier.notifyJobError(
-                jobId,
-                "Verify button not found on OTP page",
-                error,
-                {
-                  stage: "otp_verify_button_find",
-                  progressPercentage:
-                    progressManager.getJobProgress(jobId)?.progressPercentage,
-                }
-              );
-            } catch (emailError) {
+            try {            } catch (emailError) {
               await dualLogError(
                 "Failed to send verify button error notification:",
                 emailError
@@ -249,18 +213,7 @@ async function handleOtpVerification(
 
           // Send email notification for disabled button error
           if (jobId) {
-            try {
-              await emailNotifier.notifyJobError(
-                jobId,
-                "Verify button is disabled on OTP page",
-                error,
-                {
-                  stage: "otp_verify_button_disabled",
-                  progressPercentage:
-                    progressManager.getJobProgress(jobId)?.progressPercentage,
-                }
-              );
-            } catch (emailError) {
+            try {            } catch (emailError) {
               await dualLogError(
                 "Failed to send disabled button error notification:",
                 emailError
@@ -279,20 +232,7 @@ async function handleOtpVerification(
 
         // Send email notification for primary verification error
         if (jobId) {
-          try {
-            await emailNotifier.notifyJobError(
-              jobId,
-              `Primary OTP verification failed: ${
-                error?.message || "Unknown verification error"
-              }`,
-              error,
-              {
-                stage: "otp_primary_verification",
-                progressPercentage:
-                  progressManager.getJobProgress(jobId)?.progressPercentage,
-              }
-            );
-          } catch (emailError) {
+          try {          } catch (emailError) {
             await dualLogError(
               "Failed to send primary verification error notification:",
               emailError
@@ -322,18 +262,7 @@ async function handleOtpVerification(
 
           // Send email notification for no fallback options
           if (jobId) {
-            try {
-              await emailNotifier.notifyJobError(
-                jobId,
-                "No fallback verification options found for OTP",
-                error,
-                {
-                  stage: "otp_fallback_options_missing",
-                  progressPercentage:
-                    progressManager.getJobProgress(jobId)?.progressPercentage,
-                }
-              );
-            } catch (emailError) {
+            try {            } catch (emailError) {
               await dualLogError(
                 "Failed to send fallback options error notification:",
                 emailError
@@ -686,18 +615,7 @@ async function handleOtpVerification(
 
         // Send email notification for fallback verification error
         if (jobId) {
-          try {
-            await emailNotifier.notifyJobError(
-              jobId,
-              `Fallback OTP verification failed: ${errorMessage}`,
-              fallbackError,
-              {
-                stage: "otp_fallback_verification",
-                progressPercentage:
-                  progressManager.getJobProgress(jobId)?.progressPercentage,
-              }
-            );
-          } catch (emailError) {
+          try {          } catch (emailError) {
             await dualLogError(
               "Failed to send fallback verification error notification:",
               emailError
@@ -724,20 +642,7 @@ async function handleOtpVerification(
 
       // Send email notification for navigation error
       if (jobId) {
-        try {
-          await emailNotifier.notifyJobError(
-            jobId,
-            `Failed to navigate after OTP verification: ${
-              error?.message || "Navigation timeout"
-            }`,
-            error,
-            {
-              stage: "otp_post_verification_navigation",
-              progressPercentage:
-                progressManager.getJobProgress(jobId)?.progressPercentage,
-            }
-          );
-        } catch (emailError) {
+        try {        } catch (emailError) {
           await dualLogError(
             "Failed to send navigation error notification:",
             emailError
@@ -752,20 +657,7 @@ async function handleOtpVerification(
 
     // Send email notification for general OTP verification error
     if (jobId) {
-      try {
-        await emailNotifier.notifyJobError(
-          jobId,
-          `OTP verification failed: ${
-            error?.message || "Unknown OTP verification error"
-          }`,
-          error,
-          {
-            stage: "otp_verification_general",
-            progressPercentage:
-              progressManager.getJobProgress(jobId)?.progressPercentage,
-          }
-        );
-      } catch (emailError) {
+      try {      } catch (emailError) {
         await dualLogError(
           "Failed to send general OTP error notification:",
           emailError

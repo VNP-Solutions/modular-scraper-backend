@@ -1,7 +1,6 @@
 import { Browser, Page } from "puppeteer";
 import { delay } from "../common/delay.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
-import { emailNotifier } from "../common/email-notifier.js";
 import { progressManager } from "../common/progress-manager.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import { timeoutManager } from "../common/timeout-manager.js";
@@ -35,17 +34,7 @@ async function login(
     
     // Send email notification for email input field error
     if (jobId) {
-      try {
-        await emailNotifier.notifyJobError(
-          jobId,
-          `Failed to find email input field during login: ${error?.message || "Email input field not found"}`,
-          error,
-          {
-            stage: "login_email_input_wait",
-            progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-          }
-        );
-      } catch (emailError) {
+      try {      } catch (emailError) {
         await dualLogError("Failed to send email input field error notification:", emailError);
       }
     }
@@ -70,17 +59,7 @@ async function login(
     
     // Send email notification for email entry error
     if (jobId) {
-      try {
-        await emailNotifier.notifyJobError(
-          jobId,
-          `Failed to enter email during login: ${error?.message || "Email entry failed"}`,
-          error,
-          {
-            stage: "login_email_entry",
-            progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-          }
-        );
-      } catch (emailError) {
+      try {      } catch (emailError) {
         await dualLogError("Failed to send email entry error notification:", emailError);
       }
     }
@@ -95,17 +74,7 @@ async function login(
     
     // Send email notification for continue button error
     if (jobId) {
-      try {
-        await emailNotifier.notifyJobError(
-          jobId,
-          `Failed to click continue button during login: ${error?.message || "Continue button click failed"}`,
-          error,
-          {
-            stage: "login_continue_button",
-            progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-          }
-        );
-      } catch (emailError) {
+      try {      } catch (emailError) {
         await dualLogError("Failed to send continue button error notification:", emailError);
       }
     }
@@ -245,17 +214,7 @@ async function login(
           
           // Send email notification for password field not found
           if (jobId) {
-            try {
-              await emailNotifier.notifyJobError(
-                jobId,
-                "Password input field not found on login page",
-                error,
-                {
-                  stage: "login_password_field_missing",
-                  progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-                }
-              );
-            } catch (emailError) {
+            try {            } catch (emailError) {
               await dualLogError("Failed to send password field missing error notification:", emailError);
             }
           }
@@ -346,17 +305,7 @@ async function login(
         
         // Send email notification for password input handling error
         if (jobId) {
-          try {
-            await emailNotifier.notifyJobError(
-              jobId,
-              `Password input handling failed: ${error?.message || "Password handling error"}`,
-              error,
-              {
-                stage: "login_password_input_handling",
-                progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-              }
-            );
-          } catch (emailError) {
+          try {          } catch (emailError) {
             await dualLogError("Failed to send password input handling error notification:", emailError);
           }
         }
@@ -369,17 +318,7 @@ async function login(
     
     // Send email notification for general password entry error
     if (jobId) {
-      try {
-        await emailNotifier.notifyJobError(
-          jobId,
-          `Password entry failed during login: ${error?.message || "Unknown password entry error"}`,
-          error,
-          {
-            stage: "login_password_entry",
-            progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-          }
-        );
-      } catch (emailError) {
+      try {      } catch (emailError) {
         await dualLogError("Failed to send password entry error notification:", emailError);
       }
     }

@@ -1,7 +1,6 @@
 import { Browser, Page } from "puppeteer";
 import { delay } from "../common/delay.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
-import { emailNotifier } from "../common/email-notifier.js";
 import { progressManager } from "../common/progress-manager.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import { timeoutManager } from "../common/timeout-manager.js";
@@ -50,17 +49,7 @@ export async function applyFilter(
       
       // Send email notification for filter selection error
       if (jobId) {
-        try {
-          await emailNotifier.notifyJobError(
-            jobId,
-            `Failed to select 'Checking out' filter: ${error?.message || "Filter selection failed"}`,
-            error,
-            {
-              stage: "filter_checkout_selection",
-              progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-            }
-          );
-        } catch (emailError) {
+        try {        } catch (emailError) {
           await dualLogError("Failed to send filter selection error notification:", emailError);
         }
       }
@@ -86,17 +75,7 @@ export async function applyFilter(
       
       // Send email notification for date range error
       if (jobId) {
-        try {
-          await emailNotifier.notifyJobError(
-            jobId,
-            `Failed to set date range (${startDate} to ${endDate}): ${error?.message || "Date range setting failed"}`,
-            error,
-            {
-              stage: "date_range_setting",
-              progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-            }
-          );
-        } catch (emailError) {
+        try {        } catch (emailError) {
           await dualLogError("Failed to send date range error notification:", emailError);
         }
       }
@@ -124,17 +103,7 @@ export async function applyFilter(
       
       // Send email notification for more filters button error
       if (jobId) {
-        try {
-          await emailNotifier.notifyJobError(
-            jobId,
-            `Failed to find More filters button: ${error?.message || "More filters button not found"}`,
-            error,
-            {
-              stage: "more_filters_button_wait",
-              progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-            }
-          );
-        } catch (emailError) {
+        try {        } catch (emailError) {
           await dualLogError("Failed to send more filters button error notification:", emailError);
         }
       }
@@ -168,17 +137,7 @@ export async function applyFilter(
       
       // Send email notification for more filters click error
       if (jobId) {
-        try {
-          await emailNotifier.notifyJobError(
-            jobId,
-            `Failed to click More filters button: ${error?.message || "More filters button click failed"}`,
-            error,
-            {
-              stage: "more_filters_button_click",
-              progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-            }
-          );
-        } catch (emailError) {
+        try {        } catch (emailError) {
           await dualLogError("Failed to send more filters click error notification:", emailError);
         }
       }
@@ -246,17 +205,7 @@ export async function applyFilter(
       
       // Send email notification for checkbox selection error
       if (jobId) {
-        try {
-          await emailNotifier.notifyJobError(
-            jobId,
-            `Failed to select payment checkboxes: ${error?.message || "Checkbox selection failed"}`,
-            error,
-            {
-              stage: "payment_checkbox_selection",
-              progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-            }
-          );
-        } catch (emailError) {
+        try {        } catch (emailError) {
           await dualLogError("Failed to send checkbox selection error notification:", emailError);
         }
       }
@@ -292,17 +241,7 @@ export async function applyFilter(
       
       // Send email notification for apply button error
       if (jobId) {
-        try {
-          await emailNotifier.notifyJobError(
-            jobId,
-            `Failed to click Apply button: ${error?.message || "Apply button click failed"}`,
-            error,
-            {
-              stage: "apply_button_click",
-              progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-            }
-          );
-        } catch (emailError) {
+        try {        } catch (emailError) {
           await dualLogError("Failed to send apply button error notification:", emailError);
         }
       }
@@ -334,17 +273,7 @@ export async function applyFilter(
       
       // Send email notification for loading error
       if (jobId) {
-        try {
-          await emailNotifier.notifyJobError(
-            jobId,
-            `Failed to wait for data loading: ${error?.message || "Data loading timeout"}`,
-            error,
-            {
-              stage: "data_loading_wait",
-              progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-            }
-          );
-        } catch (emailError) {
+        try {        } catch (emailError) {
           await dualLogError("Failed to send data loading error notification:", emailError);
         }
       }
@@ -442,18 +371,7 @@ export async function applyFilter(
     
     // Send email notification for general apply filter error
     if (jobId) {
-      try {
-        await emailNotifier.notifyJobError(
-          jobId,
-          `Filter application failed: ${error?.message || "Unknown filter application error"}`,
-          error,
-          {
-            stage: "filter_application",
-            progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-            lastProcessedDate: progressManager.getJobLastProcessedDate(jobId) || undefined,
-          }
-        );
-      } catch (emailError) {
+      try {      } catch (emailError) {
         await dualLogError("Failed to send filter application error notification:", emailError);
       }
     }

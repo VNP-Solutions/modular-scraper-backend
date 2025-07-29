@@ -1,7 +1,6 @@
 import { Browser, Page } from "puppeteer";
 import { delay } from "../common/delay.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
-import { emailNotifier } from "../common/email-notifier.js";
 import { progressManager } from "../common/progress-manager.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import { timeoutManager } from "../common/timeout-manager.js";
@@ -36,17 +35,7 @@ export async function propertySearchAndClickReservation(
         
         // Send email notification for property table error
         if (jobId) {
-          try {
-            await emailNotifier.notifyJobError(
-              jobId,
-              `Failed to find property table: ${error?.message || "Property table not found"}`,
-              error,
-              {
-                stage: "property_table_wait",
-                progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-              }
-            );
-          } catch (emailError) {
+          try {          } catch (emailError) {
             await dualLogError("Failed to send property table error notification:", emailError);
           }
         }
@@ -70,17 +59,7 @@ export async function propertySearchAndClickReservation(
         
         // Send email notification for search input error
         if (jobId) {
-          try {
-            await emailNotifier.notifyJobError(
-              jobId,
-              `Failed to find property search input: ${error?.message || "Search input not found"}`,
-              error,
-              {
-                stage: "property_search_input_wait",
-                progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-              }
-            );
-          } catch (emailError) {
+          try {          } catch (emailError) {
             await dualLogError("Failed to send search input error notification:", emailError);
           }
         }
@@ -102,17 +81,7 @@ export async function propertySearchAndClickReservation(
         
         // Send email notification for property ID typing error
         if (jobId) {
-          try {
-            await emailNotifier.notifyJobError(
-              jobId,
-              `Failed to type property ID (${propertyId}): ${error?.message || "Property ID typing failed"}`,
-              error,
-              {
-                stage: "property_id_typing",
-                progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-              }
-            );
-          } catch (emailError) {
+          try {          } catch (emailError) {
             await dualLogError("Failed to send property ID typing error notification:", emailError);
           }
         }
@@ -175,17 +144,7 @@ export async function propertySearchAndClickReservation(
           
           // Send email notification for property not found
           if (jobId) {
-            try {
-              await emailNotifier.notifyJobError(
-                jobId,
-                `Property not found with ID: ${propertyId}`,
-                error,
-                {
-                  stage: "property_not_found",
-                  progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-                }
-              );
-            } catch (emailError) {
+            try {            } catch (emailError) {
               await dualLogError("Failed to send property not found error notification:", emailError);
             }
           }
@@ -197,17 +156,7 @@ export async function propertySearchAndClickReservation(
         
         // Send email notification for property click error
         if (jobId) {
-          try {
-            await emailNotifier.notifyJobError(
-              jobId,
-              `Failed to find or click property (${propertyId}): ${error?.message || "Property click failed"}`,
-              error,
-              {
-                stage: "property_click",
-                progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-              }
-            );
-          } catch (emailError) {
+          try {          } catch (emailError) {
             await dualLogError("Failed to send property click error notification:", emailError);
           }
         }
@@ -259,17 +208,7 @@ export async function propertySearchAndClickReservation(
         
         // Send email notification for reservations link error
         if (jobId) {
-          try {
-            await emailNotifier.notifyJobError(
-              jobId,
-              `Failed to find or click Reservations link for property ${propertyId}`,
-              error,
-              {
-                stage: "reservations_link_click",
-                progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-              }
-            );
-          } catch (emailError) {
+          try {          } catch (emailError) {
             await dualLogError("Failed to send reservations link error notification:", emailError);
           }
         }
@@ -292,17 +231,7 @@ export async function propertySearchAndClickReservation(
       
       // Send email notification for reservations navigation error
       if (jobId) {
-        try {
-          await emailNotifier.notifyJobError(
-            jobId,
-            `Failed to navigate to Reservations page for property ${propertyId}: ${error?.message || "Reservations navigation failed"}`,
-            error,
-            {
-              stage: "reservations_navigation",
-              progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-            }
-          );
-        } catch (emailError) {
+        try {        } catch (emailError) {
           await dualLogError("Failed to send reservations navigation error notification:", emailError);
         }
       }
@@ -319,17 +248,7 @@ export async function propertySearchAndClickReservation(
     
     // Send email notification for general property search error
     if (jobId) {
-      try {
-        await emailNotifier.notifyJobError(
-          jobId,
-          `Property search failed for ${propertyId}: ${error?.message || "Unknown property search error"}`,
-          error,
-          {
-            stage: "property_search_general",
-            progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-          }
-        );
-      } catch (emailError) {
+      try {      } catch (emailError) {
         await dualLogError("Failed to send general property search error notification:", emailError);
       }
     }

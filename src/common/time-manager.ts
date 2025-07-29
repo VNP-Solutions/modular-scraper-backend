@@ -1,7 +1,6 @@
 import dotenv from "dotenv";
 import { autoRefreshToken, getTokenRefreshInfo } from "./load-token.js";
 import { dualLogError, dualLogInfo, dualLogWarn } from "./log-helper.js";
-import { emailNotifier } from "./email-notifier.js";
 
 dotenv.config();
 
@@ -56,17 +55,7 @@ export class TimeManager {
         
         // Send email notification for token refresh failure
         if (this.currentSession?.jobId) {
-          try {
-            await emailNotifier.notifyJobError(
-              this.currentSession.jobId,
-              "Google OAuth2 token refresh was not successful",
-              new Error("Token refresh failed"),
-              {
-                stage: "oauth_token_refresh_failure",
-                progressPercentage: 0,
-              }
-            );
-          } catch (emailError) {
+          try {          } catch (emailError) {
             await dualLogError("Failed to send token refresh failure notification:", emailError);
           }
         }
@@ -82,17 +71,7 @@ export class TimeManager {
       
       // Send email notification for token refresh error
       if (this.currentSession?.jobId) {
-        try {
-          await emailNotifier.notifyJobError(
-            this.currentSession.jobId,
-            `Google OAuth2 token refresh error: ${error?.message || "Token refresh error"}`,
-            error,
-            {
-              stage: "oauth_token_refresh_error",
-              progressPercentage: 0,
-            }
-          );
-        } catch (emailError) {
+        try {        } catch (emailError) {
           await dualLogError("Failed to send token refresh error notification:", emailError);
         }
       }

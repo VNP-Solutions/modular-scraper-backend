@@ -3,7 +3,6 @@ import { Browser } from "puppeteer";
 import { browserSetupLocal } from "../browser-setup/browser-local.js";
 import { browserSetupProduction } from "../browser-setup/browser-prod.js";
 import { delay } from "../common/delay.js";
-import { emailNotifier } from "../common/email-notifier.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
 import { progressManager } from "../common/progress-manager.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
@@ -42,19 +41,7 @@ async function reservation(
       await dualLogError("Browser setup failed:", error);
 
       // Send email notification for browser setup error
-      try {
-        await emailNotifier.notifyJobError(
-          jobId,
-          `Browser setup failed in reservation function: ${
-            error?.message || "Browser setup failed"
-          }`,
-          error,
-          {
-            stage: "reservation_browser_setup",
-            progressPercentage: 0,
-          }
-        );
-      } catch (emailError) {
+      try {      } catch (emailError) {
         await dualLogError(
           "Failed to send browser setup error notification:",
           emailError
@@ -88,19 +75,7 @@ async function reservation(
         console.error("Login failed:", loginError);
 
         // Send email notification for login error
-        try {
-          await emailNotifier.notifyJobError(
-            jobId,
-            `Login failed in reservation function: ${
-              loginError?.message || "Login failed"
-            }`,
-            loginError,
-            {
-              stage: "reservation_login",
-              progressPercentage: 10,
-            }
-          );
-        } catch (emailError) {
+        try {        } catch (emailError) {
           await dualLogError(
             "Failed to send login error notification:",
             emailError
@@ -117,19 +92,7 @@ async function reservation(
         console.error("OTP verification failed:", error);
 
         // Send email notification for OTP verification error
-        try {
-          await emailNotifier.notifyJobError(
-            jobId,
-            `OTP verification failed in reservation function: ${
-              error?.message || "OTP verification failed"
-            }`,
-            error,
-            {
-              stage: "reservation_otp_verification",
-              progressPercentage: 20,
-            }
-          );
-        } catch (emailError) {
+        try {        } catch (emailError) {
           await dualLogError(
             "Failed to send OTP verification error notification:",
             emailError
@@ -185,23 +148,7 @@ async function reservation(
               );
 
               // Send email notification for individual reservation error
-              try {
-                await emailNotifier.notifyJobError(
-                  jobId,
-                  `Failed to process reservation ${processedCount + 1}/${
-                    reservations.length
-                  }: ${
-                    reservationError?.message || "Reservation processing failed"
-                  }`,
-                  reservationError,
-                  {
-                    stage: "reservation_individual_processing",
-                    progressPercentage: Math.round(
-                      (processedCount / reservations.length) * 100
-                    ),
-                  }
-                );
-              } catch (emailError) {
+              try {              } catch (emailError) {
                 await dualLogError(
                   "Failed to send individual reservation error notification:",
                   emailError
@@ -217,19 +164,7 @@ async function reservation(
           await dualLogError("Reservation search failed:", error);
 
           // Send email notification for general reservation processing error
-          try {
-            await emailNotifier.notifyJobError(
-              jobId,
-              `Reservation processing failed: ${
-                error?.message || "Unknown reservation processing error"
-              }`,
-              error,
-              {
-                stage: "reservation_processing_general",
-                progressPercentage: 30,
-              }
-            );
-          } catch (emailError) {
+          try {          } catch (emailError) {
             await dualLogError(
               "Failed to send reservation processing error notification:",
               emailError
@@ -248,17 +183,7 @@ async function reservation(
       await dualLogInfo("No login credentials provided.");
 
       // Send email notification for missing credentials
-      try {
-        await emailNotifier.notifyJobError(
-          jobId,
-          "No login credentials provided for reservation function",
-          error,
-          {
-            stage: "reservation_credentials_missing",
-            progressPercentage: 0,
-          }
-        );
-      } catch (emailError) {
+      try {      } catch (emailError) {
         await dualLogError(
           "Failed to send credentials missing error notification:",
           emailError
@@ -277,20 +202,7 @@ async function reservation(
     await dualLogError("Reservation function error:", error);
 
     // Send email notification for general reservation function error
-    try {
-      await emailNotifier.notifyJobError(
-        jobId,
-        `Reservation function failed: ${
-          error?.message || "Unknown reservation function error"
-        }`,
-        error,
-        {
-          stage: "reservation_function_general",
-          progressPercentage:
-            progressManager.getJobProgress(jobId)?.progressPercentage || 0,
-        }
-      );
-    } catch (emailError) {
+    try {    } catch (emailError) {
       await dualLogError(
         "Failed to send reservation function error notification:",
         emailError

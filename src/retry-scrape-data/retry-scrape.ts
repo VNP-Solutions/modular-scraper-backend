@@ -1,10 +1,8 @@
 import { Browser, Page } from "puppeteer";
 import { delay } from "../common/delay.js";
-import { emailNotifier } from "../common/email-notifier.js";
 import { progressManager } from "../common/progress-manager.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import { scrapeData } from "../scrape-data/scrape-data.js";
-
 
 export async function retryScrape(
   browser: Browser,
@@ -31,17 +29,7 @@ export async function retryScrape(
       
       // Send email notification for page layout error
       if (jobId) {
-        try {
-          await emailNotifier.notifyJobError(
-            jobId,
-            `Failed to wait for page layout during retry scrape: ${error?.message || "Page layout timeout"}`,
-            error,
-            {
-              stage: "retry_scrape_page_layout",
-              progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-            }
-          );
-        } catch (emailError) {
+        try {        } catch (emailError) {
           console.error("Failed to send page layout error notification:", emailError);
         }
       }
@@ -80,17 +68,7 @@ export async function retryScrape(
       
       // Send email notification for search input not found
       if (jobId) {
-        try {
-          await emailNotifier.notifyJobError(
-            jobId,
-            `Could not find search input field during retry scrape for reservation ${reservationId}`,
-            error,
-            {
-              stage: "retry_scrape_search_input_missing",
-              progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-            }
-          );
-        } catch (emailError) {
+        try {        } catch (emailError) {
           console.error("Failed to send search input missing error notification:", emailError);
         }
       }
@@ -107,17 +85,7 @@ export async function retryScrape(
       
       // Send email notification for search input click error
       if (jobId) {
-        try {
-          await emailNotifier.notifyJobError(
-            jobId,
-            `Failed to click search input during retry scrape: ${error?.message || "Search input click failed"}`,
-            error,
-            {
-              stage: "retry_scrape_search_input_click",
-              progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-            }
-          );
-        } catch (emailError) {
+        try {        } catch (emailError) {
           console.error("Failed to send search input click error notification:", emailError);
         }
       }
@@ -138,17 +106,7 @@ export async function retryScrape(
       
       // Send email notification for search input clear error
       if (jobId) {
-        try {
-          await emailNotifier.notifyJobError(
-            jobId,
-            `Failed to clear search input during retry scrape: ${error?.message || "Search input clear failed"}`,
-            error,
-            {
-              stage: "retry_scrape_search_input_clear",
-              progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-            }
-          );
-        } catch (emailError) {
+        try {        } catch (emailError) {
           console.error("Failed to send search input clear error notification:", emailError);
         }
       }
@@ -164,17 +122,7 @@ export async function retryScrape(
       
       // Send email notification for reservation ID typing error
       if (jobId) {
-        try {
-          await emailNotifier.notifyJobError(
-            jobId,
-            `Failed to type reservation ID (${reservationId}) during retry scrape: ${error?.message || "Reservation ID typing failed"}`,
-            error,
-            {
-              stage: "retry_scrape_reservation_id_typing",
-              progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-            }
-          );
-        } catch (emailError) {
+        try {        } catch (emailError) {
           console.error("Failed to send reservation ID typing error notification:", emailError);
         }
       }
@@ -192,17 +140,7 @@ export async function retryScrape(
       
       // Send email notification for save button wait error
       if (jobId) {
-        try {
-          await emailNotifier.notifyJobError(
-            jobId,
-            `Failed to find save button during retry scrape: ${error?.message || "Save button not found"}`,
-            error,
-            {
-              stage: "retry_scrape_save_button_wait",
-              progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-            }
-          );
-        } catch (emailError) {
+        try {        } catch (emailError) {
           console.error("Failed to send save button wait error notification:", emailError);
         }
       }
@@ -225,17 +163,7 @@ export async function retryScrape(
       
       // Send email notification for save button click error
       if (jobId) {
-        try {
-          await emailNotifier.notifyJobError(
-            jobId,
-            `Failed to click save button during retry scrape: ${error?.message || "Save button click failed"}`,
-            error,
-            {
-              stage: "retry_scrape_save_button_click",
-              progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-            }
-          );
-        } catch (emailError) {
+        try {        } catch (emailError) {
           console.error("Failed to send save button click error notification:", emailError);
         }
       }
@@ -250,17 +178,7 @@ export async function retryScrape(
       
       // Send email notification for scrapeData error
       if (jobId) {
-        try {
-          await emailNotifier.notifyJobError(
-            jobId,
-            `Scraping data failed during retry scrape for reservation ${reservationId}: ${error?.message || "Data scraping failed"}`,
-            error,
-            {
-              stage: "retry_scrape_data_scraping",
-              progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-            }
-          );
-        } catch (emailError) {
+        try {        } catch (emailError) {
           console.error("Failed to send scrape data error notification:", emailError);
         }
       }
@@ -271,17 +189,7 @@ export async function retryScrape(
     
     // Send email notification for general retry scrape error
     if (jobId) {
-      try {
-        await emailNotifier.notifyJobError(
-          jobId,
-          `Retry scrape failed for reservation ${reservationId}: ${error?.message || "Unknown retry scrape error"}`,
-          error,
-          {
-            stage: "retry_scrape_general",
-            progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-          }
-        );
-      } catch (emailError) {
+      try {      } catch (emailError) {
         console.error("Failed to send general retry scrape error notification:", emailError);
       }
     }

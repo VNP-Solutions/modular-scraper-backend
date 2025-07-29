@@ -1,6 +1,5 @@
 import { Browser, Page } from "puppeteer";
 import { delay } from "../common/delay.js";
-import { emailNotifier } from "../common/email-notifier.js";
 import { progressManager } from "../common/progress-manager.js";
 import { retryScrape } from "./retry-scrape.js";
 
@@ -20,17 +19,7 @@ async function scrapeWithReservationId(browser: Browser, page: Page, reservation
         
         // Send email notification for property table error
         if (jobId) {
-          try {
-            await emailNotifier.notifyJobError(
-              jobId,
-              `Failed to find property table for reservation ${reservationId}: ${error?.message || "Property table not found"}`,
-              error,
-              {
-                stage: "scrape_with_reservation_property_table",
-                progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-              }
-            );
-          } catch (emailError) {
+          try {          } catch (emailError) {
             console.error("Failed to send property table error notification:", emailError);
           }
         }
@@ -47,17 +36,7 @@ async function scrapeWithReservationId(browser: Browser, page: Page, reservation
         
         // Send email notification for search input error
         if (jobId) {
-          try {
-            await emailNotifier.notifyJobError(
-              jobId,
-              `Failed to find property search input for reservation ${reservationId}: ${error?.message || "Search input not found"}`,
-              error,
-              {
-                stage: "scrape_with_reservation_search_input",
-                progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-              }
-            );
-          } catch (emailError) {
+          try {          } catch (emailError) {
             console.error("Failed to send search input error notification:", emailError);
           }
         }
@@ -79,17 +58,7 @@ async function scrapeWithReservationId(browser: Browser, page: Page, reservation
         
         // Send email notification for typing error
         if (jobId) {
-          try {
-            await emailNotifier.notifyJobError(
-              jobId,
-              `Failed to type reservation ID ${reservationId}: ${error?.message || "Typing failed"}`,
-              error,
-              {
-                stage: "scrape_with_reservation_typing",
-                progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-              }
-            );
-          } catch (emailError) {
+          try {          } catch (emailError) {
             console.error("Failed to send typing error notification:", emailError);
           }
         }
@@ -149,17 +118,7 @@ async function scrapeWithReservationId(browser: Browser, page: Page, reservation
           
           // Send email notification for property not found
           if (jobId) {
-            try {
-              await emailNotifier.notifyJobError(
-                jobId,
-                `Property not found with reservation ID: ${reservationId}`,
-                error,
-                {
-                  stage: "scrape_with_reservation_property_not_found",
-                  progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-                }
-              );
-            } catch (emailError) {
+            try {            } catch (emailError) {
               console.error("Failed to send property not found error notification:", emailError);
             }
           }
@@ -171,17 +130,7 @@ async function scrapeWithReservationId(browser: Browser, page: Page, reservation
         
         // Send email notification for property click error
         if (jobId) {
-          try {
-            await emailNotifier.notifyJobError(
-              jobId,
-              `Failed to find or click property for reservation ${reservationId}: ${error?.message || "Property click failed"}`,
-              error,
-              {
-                stage: "scrape_with_reservation_property_click",
-                progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-              }
-            );
-          } catch (emailError) {
+          try {          } catch (emailError) {
             console.error("Failed to send property click error notification:", emailError);
           }
         }
@@ -224,17 +173,7 @@ async function scrapeWithReservationId(browser: Browser, page: Page, reservation
         
         // Send email notification for reservations link error
         if (jobId) {
-          try {
-            await emailNotifier.notifyJobError(
-              jobId,
-              `Failed to find or click Reservations link for reservation ${reservationId}`,
-              error,
-              {
-                stage: "scrape_with_reservation_reservations_link",
-                progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-              }
-            );
-          } catch (emailError) {
+          try {          } catch (emailError) {
             console.error("Failed to send reservations link error notification:", emailError);
           }
         }
@@ -265,17 +204,7 @@ async function scrapeWithReservationId(browser: Browser, page: Page, reservation
         
         // Send email notification for date filters error
         if (jobId) {
-          try {
-            await emailNotifier.notifyJobError(
-              jobId,
-              `Failed to find date filters for reservation ${reservationId}: ${error?.message || "Date filters not found"}`,
-              error,
-              {
-                stage: "scrape_with_reservation_date_filters",
-                progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-              }
-            );
-          } catch (emailError) {
+          try {          } catch (emailError) {
             console.error("Failed to send date filters error notification:", emailError);
           }
         }
@@ -297,17 +226,7 @@ async function scrapeWithReservationId(browser: Browser, page: Page, reservation
             
             // Send email notification for chunk processing error
             if (jobId) {
-              try {
-                await emailNotifier.notifyJobError(
-                  jobId,
-                  `Failed to process chunk ${chunk} for reservation ${reservationId}: ${error?.message || "Chunk processing failed"}`,
-                  error,
-                  {
-                    stage: "scrape_with_reservation_chunk_processing",
-                    progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-                  }
-                );
-              } catch (emailError) {
+              try {              } catch (emailError) {
                 console.error("Failed to send chunk processing error notification:", emailError);
               }
             }
@@ -322,17 +241,7 @@ async function scrapeWithReservationId(browser: Browser, page: Page, reservation
         
         // Send email notification for missing reservation data
         if (jobId) {
-          try {
-            await emailNotifier.notifyJobError(
-              jobId,
-              `Reservation or idList is undefined for reservation ${reservationId}`,
-              error,
-              {
-                stage: "scrape_with_reservation_missing_data",
-                progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-              }
-            );
-          } catch (emailError) {
+          try {          } catch (emailError) {
             console.error("Failed to send missing data error notification:", emailError);
           }
         }
@@ -377,17 +286,7 @@ async function scrapeWithReservationId(browser: Browser, page: Page, reservation
             
             // Send email notification for navigation logo error
             if (jobId) {
-              try {
-                await emailNotifier.notifyJobError(
-                  jobId,
-                  `Failed to find navigation logo link for reservation ${reservationId}`,
-                  error,
-                  {
-                    stage: "scrape_with_reservation_navigation_logo",
-                    progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-                  }
-                );
-              } catch (emailError) {
+              try {              } catch (emailError) {
                 console.error("Failed to send navigation logo error notification:", emailError);
               }
             }
@@ -410,17 +309,7 @@ async function scrapeWithReservationId(browser: Browser, page: Page, reservation
           
           // Send email notification for navigation failure
           if (jobId) {
-            try {
-              await emailNotifier.notifyJobError(
-                jobId,
-                `Failed to navigate to home page for reservation ${reservationId}: ${navError?.message || "Navigation failed"}`,
-                navError,
-                {
-                  stage: "scrape_with_reservation_navigation_home",
-                  progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-                }
-              );
-            } catch (emailError) {
+            try {            } catch (emailError) {
               console.error("Failed to send navigation failure error notification:", emailError);
             }
           }
@@ -437,17 +326,7 @@ async function scrapeWithReservationId(browser: Browser, page: Page, reservation
       
       // Send email notification for reservations processing error
       if (jobId) {
-        try {
-          await emailNotifier.notifyJobError(
-            jobId,
-            `Failed to process reservations for reservation ${reservationId}: ${error?.message || "Reservations processing failed"}`,
-            error,
-            {
-              stage: "scrape_with_reservation_reservations_processing",
-              progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-            }
-          );
-        } catch (emailError) {
+        try {        } catch (emailError) {
           console.error("Failed to send reservations processing error notification:", emailError);
         }
       }
@@ -459,17 +338,7 @@ async function scrapeWithReservationId(browser: Browser, page: Page, reservation
     
     // Send email notification for general scrapeWithReservationId error
     if (jobId) {
-      try {
-        await emailNotifier.notifyJobError(
-          jobId,
-          `scrapeWithReservationId failed for reservation ${reservation?.id || 'unknown'}: ${error?.message || "Unknown error"}`,
-          error,
-          {
-            stage: "scrape_with_reservation_general",
-            progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
-          }
-        );
-      } catch (emailError) {
+      try {      } catch (emailError) {
         console.error("Failed to send general scrapeWithReservationId error notification:", emailError);
       }
     }
