@@ -5,7 +5,7 @@ import createError from "../common/error.js";
 import { progressManager } from "../common/progress-manager.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import { workerPool } from "../common/worker-pool.js";
-import { WorkerJobData } from "../common/worker-types.js";
+import { JobType, WorkerJobData } from "../common/worker-types.js";
 import { specs, swaggerUi } from "../config/swagger.js";
 import { getAccess, getOauth2Callback } from "../get-access/access.js";
 import { Job, JobStatus } from "../models/job.model.js";
@@ -257,7 +257,7 @@ app.post("/api/expedia/rerun-failed-job", (async (
 
     // 4. Prepare worker job data
     const workerJobData: WorkerJobData = {
-      jobType: "rerun-failed",
+      jobType: JobType.RerunFailed,
       jobId,
       startDate,
       endDate,
@@ -395,7 +395,7 @@ app.post("/api/expedia/property-run-job", (async (
 
     // 3. Prepare worker job data
     const workerJobData: WorkerJobData = {
-      jobType: "property-run",
+      jobType: JobType.PropertyRun,
       jobId,
       startDate,
       endDate,
@@ -487,7 +487,7 @@ app.post("/api/expedia/reservation-run-job", (async (
     const jobId = `reservation_job_${Date.now()}`;
 
     const workerJobData: WorkerJobData = {
-      jobType: "reservation-run",
+      jobType: JobType.ReservationRun,
       jobId,
       reservations,
     };
@@ -589,7 +589,7 @@ app.post("/api/booking/run-job", (async (
 
     // 3. Prepare worker job data
     const workerJobData: WorkerJobData = {
-      jobType: "booking-run",
+      jobType: JobType.BookingRun,
       jobId,
       portfolioId,
       propertyId,
@@ -790,7 +790,7 @@ app.post("/api/booking/rerun-failed-job", (async (
 
     // 4. Prepare worker job data for rerun
     const workerJobData: WorkerJobData = {
-      jobType: "booking-rerun-failed",
+      jobType: JobType.BookingRerunFailed,
       jobId,
       startDate,
       endDate,

@@ -1,7 +1,7 @@
 import dotenv from "dotenv";
 import mongoose from "mongoose";
 import { parentPort } from "worker_threads";
-import { WorkerJobData, WorkerMessage } from "../common/worker-types.js";
+import { JobType, WorkerJobData, WorkerMessage, WorkerMessageType } from "../common/worker-types.js";
 
 // Import the main functions
 import {
@@ -40,7 +40,7 @@ class ScrapingWorker {
         await this.executeJob(jobData);
       } catch (error) {
         this.sendMessage({
-          type: "job-error",
+          type: WorkerMessageType.JobError,
           jobId: jobData.jobId,
           data: {
             error: error instanceof Error ? error.message : String(error),
@@ -85,7 +85,7 @@ class ScrapingWorker {
     this.currentJobId = jobData.jobId;
 
     this.sendMessage({
-      type: "job-start",
+      type: WorkerMessageType.JobStart,
       jobId: jobData.jobId,
       data: { jobType: jobData.jobType, startTime: new Date() },
       timestamp: new Date(),
@@ -95,23 +95,23 @@ class ScrapingWorker {
       let result;
 
       switch (jobData.jobType) {
-        case "property-run":
+        case JobType.PropertyRun:
           result = await this.handlePropertyRun(jobData);
           break;
 
-        case "rerun-failed":
+        case  JobType.RerunFailed:
           result = await this.handleRerunFailed(jobData);
           break;
 
-        case "reservation-run":
+        case JobType.ReservationRun:
           result = await this.handleReservationRun(jobData);
           break;
 
-        case "booking-run":
+        case JobType.BookingRun:
           result = await this.handleBookingRun(jobData);
           break;
 
-        case "booking-rerun-failed":
+        case JobType.BookingRerunFailed:
           result = await this.handleBookingRerunFailed(jobData);
           break;
 
@@ -120,7 +120,7 @@ class ScrapingWorker {
       }
 
       this.sendMessage({
-        type: "job-complete",
+        type: WorkerMessageType.JobComplete,
         jobId: jobData.jobId,
         data: result,
         timestamp: new Date(),
@@ -129,7 +129,7 @@ class ScrapingWorker {
       console.error(`Worker job ${jobData.jobId} failed:`, error);
 
       this.sendMessage({
-        type: "job-error",
+        type: WorkerMessageType.JobError,
         jobId: jobData.jobId,
         data: {
           error: error instanceof Error ? error.message : String(error),
