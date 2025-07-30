@@ -1,7 +1,7 @@
 import dotenv from "dotenv";
 import fs from "fs";
 import { google } from "googleapis";
-import { Page } from "puppeteer";
+import { Browser, Page } from "puppeteer";
 import { delay } from "../common/delay.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
@@ -89,6 +89,7 @@ async function getVerificationCode() {
 }
 
 async function handleOtpVerification(
+  browser: Browser,
   page: Page,
   jobId?: string
 ): Promise<void> {
@@ -108,7 +109,7 @@ async function handleOtpVerification(
       visible: true,
       timeout: selectorTimeout,
     });
-    const ourContact = "01828704004";
+    const ourContact = process.env.OUR_CONTACT || "01828704004";
 
     // Extract the phone number from the verification message
     const currentContact = await page.evaluate(() => {
@@ -267,15 +268,15 @@ async function handleOtpVerification(
         }
 
         // Now look for phone numbers in the fallback options
-        const matchingOption = await page.evaluate(async (ourLastThree) => {
-          try {
-            await dualLogInfo("Looking for phone ending with:", ourLastThree);
+        await dualLogInfo("Looking for phone ending with:", ourLastThree);
 
+        const matchingOption = await page.evaluate((ourLastThree) => {
+          try {
             const fallbackItems = document.querySelectorAll(
               '[data-testid="fallback-item"]'
             );
 
-            await dualLogInfo("Found fallback items:", fallbackItems.length);
+            console.log("Found fallback items:", fallbackItems.length);
 
             for (let i = 0; i < fallbackItems.length; i++) {
               const item = fallbackItems[i];
@@ -288,7 +289,7 @@ async function handleOtpVerification(
                 const phoneNumber = phoneHeader.textContent?.trim() || "";
                 const linkText = textLink.textContent?.trim() || "";
 
-                await dualLogInfo("Found item:", phoneNumber);
+                console.log("Found item:", phoneNumber);
 
                 // Check if this is a phone number (contains asterisks and digits)
                 if (
@@ -299,7 +300,7 @@ async function handleOtpVerification(
                   const phoneLastThree = phoneNumber.slice(-3);
 
                   if (phoneLastThree === ourLastThree) {
-                    await dualLogInfo("Found matching phone number!");
+                    console.log("Found matching phone number!");
                     return {
                       found: true,
                       phoneNumber: phoneNumber,
@@ -310,10 +311,10 @@ async function handleOtpVerification(
               }
             }
 
-            await dualLogInfo("No matching phone number found");
+            console.log("No matching phone number found");
             return { found: false, phoneNumber: null };
           } catch (error) {
-            await dualLogError(
+            console.error(
               "Error in page.evaluate:",
               error instanceof Error ? error.message : "Unknown error"
             );
@@ -546,6 +547,11 @@ async function handleOtpVerification(
     console.log("Login successful!");
   } catch (error) {
     console.error("Error in handleOtpVerification:", error);
+    // Close browser when done with this attempt
+    if (browser) {
+      await browser.close();
+    }
+    await dualLogInfo("Browser closed successfully.");
     throw error;
   }
 }

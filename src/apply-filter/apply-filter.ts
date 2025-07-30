@@ -1,4 +1,4 @@
-import { Page } from "puppeteer";
+import { Browser, Page } from "puppeteer";
 import { delay } from "../common/delay.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
@@ -7,6 +7,7 @@ import { scrapeData } from "../scrape-data/scrape-data.js";
 import { setDateRange } from "./helper.js";
 
 export async function applyFilter(
+  browser: Browser,
   page: Page,
   startDate: string,
   endDate: string,
@@ -53,7 +54,7 @@ export async function applyFilter(
 
     // Set the date range
     await dualLogInfo(`Processing date range: ${startDate} to ${endDate}`);
-    const dateValues = await setDateRange(page, startDate, endDate);
+    const dateValues = await setDateRange(page, startDate, endDate, jobId);
     await dualLogInfo("Set dates:", dateValues);
 
     // Check pause state before applying more filters
@@ -278,9 +279,14 @@ export async function applyFilter(
     }
 
     await dualLogInfo("Starting data scraping...");
-    await scrapeData(page, expediaId, startDate, endDate, jobId);
+    await scrapeData(browser, page, expediaId, startDate, endDate, jobId);
   } catch (error: any) {
     await dualLogError("Error in applyFilter:", error, { jobId });
+    // Close browser when done with this attempt
+    if (browser) {
+      await browser.close();
+    }
+    await dualLogInfo("Browser closed successfully.");
     throw error;
   }
 }

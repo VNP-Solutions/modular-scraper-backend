@@ -7,6 +7,7 @@ export enum JobStatus {
   Completed = "Completed",
   Partial = "Partial",
   Failed = "Failed",
+  Cancelled = "Cancelled",
 }
 
 export enum PostingType {
@@ -54,6 +55,7 @@ export interface IJob extends Document {
   job_backoff_length_loading: number;
   job_backoff_length_selector: number;
   log_link?: string;
+  live_url?: string;
   queue_name?: string;
   worker_assigned?: string;
   batch_execution_id?: string;
@@ -171,6 +173,10 @@ const JobSchema = new Schema<IJob>(
       required: true,
     },
     log_link: {
+      type: String,
+      required: false,
+    },
+    live_url: {
       type: String,
       required: false,
     },

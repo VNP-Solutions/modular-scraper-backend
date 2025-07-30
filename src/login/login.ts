@@ -259,6 +259,11 @@ async function login(
     }
   } catch (error: any) {
     await dualLogError("Error during password entry:", error.message);
+    // Close browser when done with this attempt
+    if (browser) {
+      await browser.close();
+    }
+    await dualLogInfo("Browser closed successfully.");
     throw error;
   }
 }

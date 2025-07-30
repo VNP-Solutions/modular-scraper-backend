@@ -1,4 +1,4 @@
-import { Page } from "puppeteer";
+import { Browser, Page } from "puppeteer";
 import { delay } from "../common/delay.js";
 import {
   dualLogError,
@@ -13,7 +13,13 @@ import { CreateJobItemData, jobService } from "../services/job.service.js";
 const pageReservations: any[] = [];
 const processedReservationIds = new Set();
 
+// Function to clear processed reservations for new job runs
+export function clearProcessedReservations() {
+  processedReservationIds.clear();
+}
+
 export async function scrapeData(
+  browser: Browser,
   page: Page,
   expediaId: string = "",
   start_date: string = "",
@@ -827,8 +833,21 @@ export async function scrapeData(
       `Scraping completed. Processed ${processedCount} reservations.`,
       { jobId }
     );
+
+    // Clear processed reservations for next job run
+    clearProcessedReservations();
+    await dualLogInfo("Cleared processed reservations for next job run", {
+      jobId,
+    });
   } catch (error) {
+    // Clear processed reservations even if there's an error
+    clearProcessedReservations();
     await dualLogError("Error in scrapeData:", error, { jobId });
+    // Close browser when done with this attempt
+    if (browser) {
+      await browser.close();
+    }
+    await dualLogInfo("Browser closed successfully.");
     throw error;
   }
 }
@@ -917,13 +936,13 @@ async function saveReservationToDatabase(
 
     const savedItem = await jobService.createJobItem(jobItemData);
     await dualLogInfo(
-      `✅ Saved reservation ${basicData.reservationId} to database`,
+      `Saved reservation ${basicData.reservationId} to database`,
       { jobId }
     );
     return savedItem;
   } catch (dbError: any) {
     await dualLogError(
-      `❌ Failed to save reservation ${
+      `Failed to save reservation ${
         basicData?.reservationId || "unknown"
       } to database:`,
       dbError.message,

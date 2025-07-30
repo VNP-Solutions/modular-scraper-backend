@@ -1,8 +1,8 @@
-import { Page } from "puppeteer";
+import { Browser, Page } from "puppeteer";
 import { delay } from "../common/delay.js";
 import { retryScrape } from "./retry-scrape.js";
 
-async function scrapeWithReservationId(page: Page, reservation: any) {
+async function scrapeWithReservationId(browser: Browser, page: Page, reservation: any) {
   try {
     const reservationId = reservation.id;
 
@@ -144,7 +144,7 @@ async function scrapeWithReservationId(page: Page, reservation: any) {
         for (const chunk of reservation.idList) {
           console.log(`Processing id: ${chunk}`);
 
-          await retryScrape(page, reservationId, chunk);
+          await retryScrape(browser, page, reservationId, chunk);
         }
       } else {
         console.error("Reservation or idList is undefined");

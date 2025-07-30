@@ -1,10 +1,10 @@
 import dotenv from "dotenv";
 import mongoose from "mongoose";
+import open from "open";
 import app from "./app/app.js";
 import loadToken from "./common/load-token.js";
+import { workerPool } from "./common/worker-pool.js";
 dotenv.config();
-import open from "open";
-
 
 const port: number = parseInt(process.env.PORT || "3000");
 
@@ -35,6 +35,31 @@ const disconnectDB = async (): Promise<void> => {
   }
 };
 
+// * Graceful shutdown function
+const gracefulShutdown = async (signal: string): Promise<void> => {
+  console.log(`Received ${signal}. Starting graceful shutdown...`);
+
+  try {
+    // Shutdown worker pool first
+    console.log("Shutting down worker pool...");
+    await workerPool.shutdown();
+
+    // Disconnect from database
+    console.log("Disconnecting from MongoDB...");
+    await disconnectDB();
+
+    console.log("Graceful shutdown completed");
+    process.exit(0);
+  } catch (error) {
+    console.error("Error during graceful shutdown:", error);
+    process.exit(1);
+  }
+};
+
+// * Setup signal handlers for graceful shutdown
+process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+process.on("SIGINT", () => gracefulShutdown("SIGINT"));
+
 // * Server listening port functionality
 app.listen(port, async () => {
   try {
@@ -45,6 +70,11 @@ app.listen(port, async () => {
       open(`http://localhost:${port}/auth`);
     }
     console.log(`Server is listening on port ${port}`);
+    console.log(
+      `Worker pool initialized with ${
+        workerPool.getStatus().totalWorkers
+      } workers`
+    );
   } catch (err) {
     console.log("Server cannot be connected because of the error:");
     console.log(err);
@@ -52,15 +82,14 @@ app.listen(port, async () => {
   }
 });
 
-// * Graceful shutdown handling
-process.on("SIGINT", async () => {
-  console.log("\nReceived SIGINT. Graceful shutdown...");
-  await disconnectDB();
-  process.exit(0);
+// * Handle uncaught exceptions
+process.on("uncaughtException", async (error) => {
+  console.error("Uncaught Exception:", error);
+  await gracefulShutdown("uncaughtException");
 });
 
-process.on("SIGTERM", async () => {
-  console.log("\nReceived SIGTERM. Graceful shutdown...");
-  await disconnectDB();
-  process.exit(0);
+// * Handle unhandled promise rejections
+process.on("unhandledRejection", async (reason, promise) => {
+  console.error("Unhandled Rejection at:", promise, "reason:", reason);
+  await gracefulShutdown("unhandledRejection");
 });

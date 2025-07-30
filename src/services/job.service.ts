@@ -56,6 +56,52 @@ export interface CreateJobItemData {
 }
 
 export class JobService {
+  private currentJobId: string | null = null;
+  private currentRetryCheck: { canRetry: boolean; job?: IJob; reason?: string } | null = null;
+
+  /**
+   * Set the current job ID for retry checking
+   */
+  async setJobIdForRetryCheck(jobId: string): Promise<void> {
+    this.currentJobId = jobId;
+    this.currentRetryCheck = await this.canRetryJob(jobId);
+  }
+
+  /**
+   * Get canRetry status for the current job
+   */
+  get canRetry(): boolean {
+    return this.currentRetryCheck?.canRetry ?? false;
+  }
+
+  /**
+   * Get the current job for retry operations
+   */
+  get currentJob(): IJob | undefined {
+    return this.currentRetryCheck?.job;
+  }
+
+  /**
+   * Get the reason why retry is not allowed
+   */
+  get retryReason(): string | undefined {
+    return this.currentRetryCheck?.reason;
+  }
+
+  /**
+   * Get the current retry attempt count
+   */
+  get retryAttempt(): number {
+    return this.currentRetryCheck?.job?.retries_attempted || 0;
+  }
+
+  /**
+   * Get the maximum retry attempts allowed
+   */
+  get maxRetries(): number {
+    return this.currentRetryCheck?.job?.max_retries || 3;
+  }
+
   /**
    * Validate and convert string to ObjectId
    */
@@ -66,6 +112,14 @@ export class JobService {
       );
     }
     return new Types.ObjectId(id);
+  }
+
+   /**
+   * Clear the current retry check state
+   */
+   clearRetryCheck(): void {
+    this.currentJobId = null;
+    this.currentRetryCheck = null;
   }
 
   /**
@@ -122,7 +176,7 @@ export class JobService {
       }
 
       console.log(
-        `✅ Found expedia_id: ${property.expedia_id} for job: ${jobId}`
+        `Found expedia_id: ${property.expedia_id} for job: ${jobId}`
       );
       return {
         expediaId: property.expedia_id,
@@ -131,6 +185,53 @@ export class JobService {
       };
     } catch (error) {
       console.error(`Error getting expedia_id for job ${jobId}:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Get booking_id from job's property
+   */
+  async getBookingIdFromJob(jobId: string): Promise<{
+    bookingId: string;
+    user_email?: string;
+    user_password?: string;
+  } | null> {
+    try {
+      const job = await this.getJobWithProperty(jobId);
+      if (!job) {
+        console.error(`Job not found: ${jobId}`);
+        return null;
+      }
+      if (!job.property_id) {
+        console.error(`Job ${jobId} has no property_id assigned`);
+        return null;
+      }
+      // Get property details
+      const property = await Property.findById(job.property_id);
+      if (!property) {
+        console.error(
+          `Property not found for job ${jobId}, property_id: ${job.property_id}`
+        );
+        return null;
+      }
+
+      // Check if booking_id exists and is valid
+      if (!property.booking_id || property.booking_id === "0") {
+        console.error(`Property ${job.property_id} has no valid booking_id`);
+        return null;
+      }
+
+      console.log(
+        `Found booking_id: ${property.booking_id} for job: ${jobId}`
+      );
+      return {
+        bookingId: property.booking_id,
+        user_email: property.user_email,
+        user_password: property.user_password,
+      };
+    } catch (error) {
+      console.error(`Error getting booking_id for job ${jobId}:`, error);
       return null;
     }
   }
@@ -233,6 +334,61 @@ export class JobService {
   }
 
   /**
+   * Increment retry attempts for a job
+   */
+  async incrementRetryAttempts(jobId: string): Promise<IJob | null> {
+    try {
+      const objectId = this.validateObjectId(jobId, "jobId");
+
+      return await Job.findByIdAndUpdate(
+        objectId,
+        {
+          $inc: { retries_attempted: 1 },
+          updatedAt: new Date(),
+        },
+        { new: true }
+      );
+    } catch (error) {
+      console.error(`Error incrementing retry attempts: ${error}`);
+      return null;
+    }
+  }
+
+  /**
+   * Check if job can be retried (not exceeded max retries)
+   */
+  async canRetryJob(jobId: string): Promise<{ canRetry: boolean; job?: IJob; reason?: string }> {
+    try {
+      const job = await this.getJobById(jobId);
+      
+      if (!job) {
+        return { canRetry: false, reason: "Job not found" };
+      }
+
+      if (job.job_status !== JobStatus.Failed && job.job_status !== JobStatus.Cancelled) {
+        return { 
+          canRetry: false, 
+          job, 
+          reason: `Job is not in Failed or Cancelled status. Current status: ${job.job_status}` 
+        };
+      }
+
+      if (job.retries_attempted >= job.max_retries) {
+        return { 
+          canRetry: false, 
+          job, 
+          reason: `Maximum retries exceeded (${job.retries_attempted}/${job.max_retries})` 
+        };
+      }
+
+      return { canRetry: true, job };
+    } catch (error) {
+      console.error(`Error checking if job can be retried: ${error}`);
+      return { canRetry: false, reason: "Error checking retry eligibility" };
+    }
+  }
+
+  /**
    * Update job log link
    */
   async updateJobLogLink(jobId: string, logLink: string): Promise<IJob | null> {
@@ -249,6 +405,27 @@ export class JobService {
       );
     } catch (error) {
       console.error(`Error updating job log link: ${error}`);
+      return null;
+    }
+  }
+
+  /**
+   * Update job live URL
+   */
+  async updateJobLiveUrl(jobId: string, liveUrl: string): Promise<IJob | null> {
+    try {
+      const objectId = this.validateObjectId(jobId, "jobId");
+
+      return await Job.findByIdAndUpdate(
+        objectId,
+        {
+          live_url: liveUrl,
+          updatedAt: new Date(),
+        },
+        { new: true }
+      );
+    } catch (error) {
+      console.error(`Error updating job live URL: ${error}`);
       return null;
     }
   }

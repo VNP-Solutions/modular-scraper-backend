@@ -1,0 +1,28 @@
+"/api/scraping/stop":
+  post:
+    tags:
+      - Scraping Control
+    summary: Stop current scraping job
+    description: Completely stop the current scraping job. This cannot be resumed and will require starting a new job.
+    responses:
+      '200':
+        description: Scraping stopped successfully
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: integer
+                  example: 200
+                message:
+                  type: string
+                  example: Scraping stopped successfully
+                data:
+                  $ref: '#/components/schemas/ScrapingState'
+      '500':
+        description: Error stopping scraping
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ErrorResponse'

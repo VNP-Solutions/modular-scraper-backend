@@ -1,4 +1,6 @@
 import { Page } from "puppeteer";
+import { timeoutManager } from "../common/timeout-manager.js";
+import { delay } from "../common/delay.js";
 
 const calculateMonthsToNavigate = (
   currentMonth: string,
@@ -20,10 +22,12 @@ const calculateMonthsToNavigate = (
 export async function setDateRange(
   page: Page,
   start_date: string,
-  end_date: string
+  end_date: string,
+  jobId?: string
 ) {
   const maxRetries = 3;
   let lastError: any;
+  const loadingTimeout = await timeoutManager.getLoadingTimeout(jobId);
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
@@ -72,9 +76,12 @@ export async function setDateRange(
 async function setDateRangeInternal(
   page: Page,
   start_date: string,
-  end_date: string
+  end_date: string,
+  jobId?: string
 ) {
   try {
+    const loadingTimeout = await timeoutManager.getLoadingTimeout(jobId);
+    const selectorTimeout = await timeoutManager.getSelectorTimeout(jobId);
     // The input dates from URL are in MM/DD/YYYY format
     // We need to convert them to DD/MM/YYYY format for Expedia interface
 
@@ -184,11 +191,36 @@ async function setDateRangeInternal(
       await fromDateInput.click();
       await new Promise((r) => setTimeout(r, 3000));
 
-      // Try one more time with the primary selector
-      await page.waitForSelector(".first-month h2", {
-        visible: true,
-        timeout: 10000,
-      });
+      // Try to find .first-month h2 with retries and increasing timeout
+      let monthHeaderFound = false;
+      const maxHeaderRetries = 10;
+      
+      for (
+        let retry = 1;
+        retry <= maxHeaderRetries && !monthHeaderFound;
+        retry++
+      ) {
+        try {
+          // Increase timeout by 20 seconds for each retry
+          const currentTimeout = loadingTimeout + (retry - 1) * 20000;
+          console.log(
+            `Attempting to find .first-month h2 - Retry ${retry}/${maxHeaderRetries} (timeout: ${currentTimeout}ms)`
+          );
+          await page.waitForSelector(".first-month h2", {
+            visible: true,
+            timeout: currentTimeout,
+          });
+          monthHeaderFound = true;
+          console.log(`Successfully found .first-month h2 on retry ${retry}`);
+        } catch (error) {
+          console.log(`Retry ${retry} failed to find .first-month h2`);
+          // No delay between retries, just increase timeout for next attempt
+        }
+      }
+      
+      if (!monthHeaderFound) {
+        throw new Error("Failed to find .first-month h2 after all retries");
+      }
     }
 
     // Additional wait to ensure calendar is fully rendered
@@ -258,9 +290,9 @@ async function setDateRangeInternal(
     const targetYear = targetDate.getFullYear();
     const targetMonth = targetDate.toLocaleString("en-US", { month: "long" });
     // Validate year
-    if (targetYear > parseInt(currentYear)) {
-      throw new Error("Target year is greater than current year");
-    }
+    // if (targetYear > parseInt(currentYear)) {
+    //   throw new Error("Target year is greater than current year");
+    // }
 
     // Calculate months to navigate for start date
     const totalMonthsToNavigate = calculateMonthsToNavigate(
