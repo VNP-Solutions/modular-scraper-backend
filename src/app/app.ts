@@ -5,7 +5,7 @@ import createError from "../common/error.js";
 import { progressManager } from "../common/progress-manager.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import { workerPool } from "../common/worker-pool.js";
-import { WorkerJobData } from "../common/worker-types.js";
+import { JobType, WorkerJobData } from "../common/worker-types.js";
 import { specs, swaggerUi } from "../config/swagger.js";
 import { getAccess, getOauth2Callback } from "../get-access/access.js";
 import { Job, JobStatus } from "../models/job.model.js";
@@ -257,7 +257,7 @@ app.post("/api/expedia/rerun-failed-job", (async (
 
     // 4. Prepare worker job data
     const workerJobData: WorkerJobData = {
-      jobType: "rerun-failed",
+      jobType: JobType.RerunFailed,
       jobId,
       startDate,
       endDate,
@@ -395,7 +395,7 @@ app.post("/api/expedia/property-run-job", (async (
 
     // 3. Prepare worker job data
     const workerJobData: WorkerJobData = {
-      jobType: "property-run",
+      jobType: JobType.PropertyRun,
       jobId,
       startDate,
       endDate,
@@ -487,7 +487,7 @@ app.post("/api/expedia/reservation-run-job", (async (
     const jobId = `reservation_job_${Date.now()}`;
 
     const workerJobData: WorkerJobData = {
-      jobType: "reservation-run",
+      jobType: JobType.ReservationRun,
       jobId,
       reservations,
     };
@@ -589,7 +589,7 @@ app.post("/api/booking/run-job", (async (
 
     // 3. Prepare worker job data
     const workerJobData: WorkerJobData = {
-      jobType: "booking-run",
+      jobType: JobType.BookingRun,
       jobId,
       portfolioId,
       propertyId,
@@ -711,6 +711,170 @@ app.post("/api/booking/stop-job", (async (
       message: "Error stopping booking job",
       error: err.message,
     });
+  }
+}) as any);
+
+app.post("/api/booking/rerun-failed-job", (async (
+  req: express.Request,
+  res: express.Response
+) => {
+  try {
+    const { jobId, startDate, endDate } = req.body;
+
+    // Validate required parameters
+    if (!jobId || !startDate || !endDate) {
+      return res.status(400).json({
+        status: 400,
+        message: "jobId, startDate and endDate are required in request body",
+      });
+    }
+
+    // Check if worker threads are available
+    if (!workerPool.hasAvailableWorkers() && workerPool.isQueueFull()) {
+      return res.status(200).json({
+        status: 200,
+        message: "All server busy, try again",
+        workerStatus: workerPool.getStatus(),
+      });
+    }
+
+    // 1. Check if job can be retried
+    await jobService.setJobIdForRetryCheck(jobId);
+    
+    if (!jobService.canRetry) {
+      return res.status(400).json({
+        status: 400,
+        message: jobService.retryReason,
+        jobId,
+        currentStatus: jobService.currentJob?.job_status,
+        retryAttempts: jobService.currentJob?.retries_attempted,
+        maxRetries: jobService.currentJob?.max_retries,
+      });
+    }
+
+    const job = jobService.currentJob!;
+    const originalStatus = job.job_status;
+
+    // 2. Increment retry attempts
+    const updatedJob = await jobService.incrementRetryAttempts(jobId);
+    if (!updatedJob) {
+      return res.status(500).json({
+        status: 500,
+        message: "Failed to update retry attempts",
+      });
+    }
+
+    // 3. Get booking_id and credentials from job's property
+    console.log(`Getting booking_id for failed job rerun ${jobId}...`);
+    const jobData = await jobService.getBookingIdFromJob(jobId);
+
+    if (!jobData || !jobData.bookingId) {
+      return res.status(400).json({
+        status: 400,
+        message: `Cannot retrieve valid booking_id for job ${jobId}. Property may not have booking_id assigned or booking_id is "0".`,
+      });
+    }
+
+    if (!jobData.user_email || !jobData.user_password) {
+      return res.status(400).json({
+        status: 400,
+        message: `Cannot retrieve valid user_email or user_password for job ${jobId}. Property may not have user_email or user_password assigned.`,
+      });
+    }
+
+    const { bookingId, user_email, user_password } = jobData;
+
+    console.log(
+      `Rerunning failed booking job ${jobId} (attempt ${updatedJob.retries_attempted}/${updatedJob.max_retries}) with booking_id: ${bookingId}`
+    );
+
+    // 4. Prepare worker job data for rerun
+    const workerJobData: WorkerJobData = {
+      jobType: JobType.BookingRerunFailed,
+      jobId,
+      startDate,
+      endDate,
+      bookingId,
+      user_email,
+      user_password,
+      originalStatus,
+    };
+
+    // 5. Execute job in worker thread
+    try {
+      console.log(`Submitting booking rerun job ${jobId} to worker pool...`);
+
+      const result = await workerPool.executeJob(workerJobData);
+
+      if (result.success) {
+        // Get final progress after rerun
+        const progress = await jobService.getJobProgress(jobId);
+        
+        // Clean up retry check state
+        jobService.clearRetryCheck();
+        
+        return res.status(200).json({
+          ...result.data,
+          originalStatus,
+          retryAttempt: updatedJob.retries_attempted,
+          progress,
+        });
+      } else {
+        // Clean up retry check state
+        jobService.clearRetryCheck();
+        
+        return res.status(500).json({
+          status: 500,
+          message: "Booking job rerun execution failed",
+          error: result.error,
+          jobId: result.jobId,
+          retryAttempt: updatedJob.retries_attempted,
+        });
+      }
+    } catch (workerError) {
+      console.error(`Worker error for booking rerun job ${jobId}:`, workerError);
+
+      // Ensure job is marked as failed
+      try {
+        await progressManager.handleJobError(jobId, workerError);
+      } catch (cleanupError) {
+        console.error("Error during cleanup:", cleanupError);
+      }
+
+      // Clean up retry check state
+      jobService.clearRetryCheck();
+      
+      return res.status(500).json({
+        status: 500,
+        message: "Worker execution failed for booking job rerun",
+        error:
+          workerError instanceof Error
+            ? workerError.message
+            : String(workerError),
+        jobId,
+        retryAttempt: updatedJob.retries_attempted,
+      });
+    }
+  } catch (err: any) {
+    console.error("Error in /api/booking/rerun-failed-job:", err);
+
+    // Ensure job is marked as failed
+    try {
+      if (req.body.jobId) {
+        await progressManager.handleJobError(req.body.jobId, err);
+      }
+    } catch (cleanupError) {
+      console.error("Error during cleanup:", cleanupError);
+    }
+
+    res.status(500).json({
+      status: 500,
+      message: "Error processing booking job rerun",
+      error: err.message,
+    });
+  } finally {
+    // Clean up retry check state
+    jobService.clearRetryCheck();
   }
 }) as any);
 
