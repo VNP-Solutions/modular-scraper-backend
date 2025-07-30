@@ -10,6 +10,7 @@ import main from "../main.js";
 import { JobStatus } from "../models/job.model.js";
 import reservation from "../reservation/reservation.js";
 import { jobService } from "../services/job.service.js";
+import multiPlatformScraperRoutes from "../routes/multi-platform-scraper.js";
 
 const app = express();
 
@@ -1110,6 +1111,10 @@ app.get("/api/jobs/:jobId/log", (async (
     });
   }
 }) as any);
+
+
+// Multi-platform scraper routes
+app.use("/api/scrape", multiPlatformScraperRoutes);
 
 // * Global error handle middleware
 app.use((err: any, req: any, res: any, next: any) => {
