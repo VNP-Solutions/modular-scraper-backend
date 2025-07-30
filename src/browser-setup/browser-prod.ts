@@ -38,7 +38,8 @@ export async function browserSetupProduction(jobId?: string): Promise<{
 
     try {
       browser = await puppeteer.connect({
-        browserWSEndpoint: `wss://production-sfo.browserless.io?${queryParams.toString()}`,
+        // browserWSEndpoint: `wss://production-sfo.browserless.io?${queryParams.toString()}`,
+        browserWSEndpoint: "wss://production-sfo.browserless.io?token=2SXlnLjeZpwR2tV6ab1698bfe680a3959c2c681f06939ee3b"
       });
     } catch (error: any) {
       await dualLogError("Error connecting to Browserless:", error);

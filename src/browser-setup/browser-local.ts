@@ -19,7 +19,7 @@ export async function browserSetupLocal(jobId?: string): Promise<{
   try {
     try {
       browser = await puppeteer.launch({
-        headless: false,
+        headless: true,
         defaultViewport: null,
         args: [
           "--start-maximized",
