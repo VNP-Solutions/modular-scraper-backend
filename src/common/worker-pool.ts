@@ -6,6 +6,7 @@ import {
   WorkerInfo,
   WorkerJobData,
   WorkerMessage,
+  WorkerMessageType,
   WorkerPoolConfig,
   WorkerPoolStatus,
   WorkerResponse,
@@ -115,7 +116,7 @@ export class WorkerPool extends EventEmitter {
     activeWorker.info.lastActivity = new Date();
 
     switch (message.type) {
-      case "job-start":
+      case WorkerMessageType.JobStart:
         console.log(`Worker ${workerId} started job ${message.jobId}`);
         this.emit("jobStart", {
           workerId,
@@ -124,7 +125,7 @@ export class WorkerPool extends EventEmitter {
         });
         break;
 
-      case "job-progress":
+      case WorkerMessageType.JobProgress:
         console.log(
           `Worker ${workerId} progress for job ${message.jobId}:`,
           message.data
@@ -136,12 +137,12 @@ export class WorkerPool extends EventEmitter {
         });
         break;
 
-      case "job-complete":
+      case WorkerMessageType.JobComplete:
         console.log(`Worker ${workerId} completed job ${message.jobId}`);
         this.handleJobComplete(workerId, message);
         break;
 
-      case "job-error":
+      case WorkerMessageType.JobError:
         console.error(
           `Worker ${workerId} error for job ${message.jobId}:`,
           message.data
@@ -149,7 +150,7 @@ export class WorkerPool extends EventEmitter {
         this.handleJobError(workerId, message);
         break;
 
-      case "job-log":
+      case WorkerMessageType.JobLog:
         console.log(
           `Worker ${workerId} log for job ${message.jobId}:`,
           message.data

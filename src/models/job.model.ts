@@ -7,6 +7,7 @@ export enum JobStatus {
   Completed = "Completed",
   Partial = "Partial",
   Failed = "Failed",
+  Cancelled = "Cancelled",
 }
 
 export enum PostingType {
