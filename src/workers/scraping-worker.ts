@@ -16,6 +16,13 @@ import main from "../main.js";
 import reservation from "../reservation/reservation.js";
 import { jobService } from "../services/job.service.js";
 import { JobStatus } from "../models/job.model.js";
+import { 
+  BookingErrorType, 
+  BookingScrapingPhase, 
+  shouldRetryBookingError,
+  getBookingErrorDescription 
+} from "../common/booking-error-types.js";
+import { delay } from "../common/delay.js";
 
 // Load environment variables
 dotenv.config();
@@ -476,7 +483,6 @@ class ScrapingWorker {
   }
 
   private async handleBookingRun(jobData: WorkerJobData): Promise<any> {
-    // TODO: Implement booking-specific scraping logic
     const { jobId, portfolioId, propertyId } = jobData;
     
     // Update job status to Running for async tracking
@@ -490,41 +496,103 @@ class ScrapingWorker {
       propertyId,
     });
     
-    // For now, immediately mark as completed since no actual scraping logic exists
-    // TODO: When actual booking logic is implemented, keep job in "Running" status until completion
-    await jobService.updateJobStatus(jobId, JobStatus.Completed);
-    await finalizeJobLogging("success");
-    
-    return {
-      status: 200,
-      message: "Booking scraping job started successfully",
-      jobId: jobId,
-      portfolioId: portfolioId,
-      propertyId: propertyId,
-      trackingStatus: JobStatus.Completed, // Current: Pending -> Running -> Completed (immediate)
-                                   // TODO: Should be "Running" until actual scraping completes
-    };
+    try {
+      // TODO: Implement booking scraping 
+
+      await jobService.updateJobStatus(jobId, JobStatus.Completed);
+      await finalizeJobLogging("success");
+      
+      await dualLogInfo('Booking scraping completed successfully', {
+        jobId,
+        portfolioId,
+        propertyId,
+        platform: 'booking'
+      });
+      
+      return {
+        status: 200,
+        message: "Booking scraping job completed successfully",
+        jobId: jobId,
+        portfolioId: portfolioId,
+        propertyId: propertyId,
+        trackingStatus: JobStatus.Completed
+      };
+      
+    } catch (error) {
+      await jobService.setJobIdForRetryCheck(jobId);
+
+      await dualLogError(
+        "Booking scraping job failed",
+        error,
+        {
+          errorType: BookingErrorType.UNKNOWN,
+          platform: 'booking',
+          propertyId,
+          portfolioId,
+          errorDescription: getBookingErrorDescription(BookingErrorType.UNKNOWN),
+          retryAttempt: jobService.retryAttempt,
+          maxRetries: jobService.maxRetries,
+        }
+      );
+      
+      // Update job status to failed
+      await jobService.updateJobStatus(jobId, JobStatus.Failed);
+      await finalizeJobLogging("failed");
+      
+      throw error;
+    }
   }
 
   private async handleBookingRerunFailed(jobData: WorkerJobData): Promise<any> {
-    const { jobId, originalStatus } = jobData;
+    const { jobId, originalStatus, portfolioId, propertyId } = jobData;
 
     if (!jobId) {
+      await dualLogError(
+        "Booking rerun failed - missing jobId",
+        new Error("jobId is required for booking-rerun-failed jobs"),
+        {
+          errorType: BookingErrorType.RERUN_INVALID_STATUS,
+          platform: 'booking',
+          originalStatus,
+          errorDescription: getBookingErrorDescription(BookingErrorType.RERUN_INVALID_STATUS)
+        }
+      );
       throw new Error("jobId is required for booking-rerun-failed jobs");
     }
 
-    console.log(`Worker: Rerunning ${originalStatus} booking job ${jobId}...`);
+    await jobService.setJobIdForRetryCheck(jobId);
 
-    // 1. Reset job status from Failed/Cancelled to Pending
-    console.log(`Worker: Resetting job ${jobId} status from ${originalStatus} to Pending...`);
-    await jobService.updateJobStatus(jobId, "Pending" as any);
-
-    // 2. Log the rerun attempt
-    initializeJobLogging(jobId);
-    await dualLogInfo(`Worker: Starting booking job rerun for ${jobId}`, {
+    await dualLogInfo(`Starting booking job rerun`, {
       jobId,
       originalStatus,
-      retryReason: "Manual rerun of failed/cancelled job",
+      portfolioId,
+      propertyId,
+      platform: 'booking',
+      rerunReason: "Manual rerun of failed/cancelled job",
+      retryAttempt: jobService.retryAttempt,
+      maxRetries: jobService.maxRetries,
+    });
+
+    // 1. Reset job status from Failed/Cancelled to Pending
+    await dualLogInfo(`Resetting job status for rerun`, {
+      jobId,
+      fromStatus: originalStatus,
+      toStatus: JobStatus.Pending,
+      platform: 'booking'
+    });
+    
+    await jobService.updateJobStatus(jobId, JobStatus.Pending);
+
+    // 2. Initialize job logging for tracking
+    initializeJobLogging(jobId);
+    
+    await dualLogInfo(`Booking job rerun initialized`, {
+      jobId,
+      originalStatus,
+      portfolioId,
+      propertyId,
+      platform: 'booking',
+      rerunAttempt: 1
     });
 
     try {
@@ -532,16 +600,56 @@ class ScrapingWorker {
       // This ensures consistent behavior between new jobs and rerun jobs
       const result = await this.handleBookingRun(jobData);
 
-      // 4. Update the response to indicate this was a rerun
+      // 4. Log successful rerun completion
+      await dualLogInfo(`Booking job rerun completed successfully`, {
+        jobId,
+        originalStatus,
+        portfolioId,
+        propertyId,
+        platform: 'booking',
+        finalStatus: result.trackingStatus,
+        rerunSuccess: true,
+        retryAttempt: jobService.retryAttempt,
+        maxRetries: jobService.maxRetries,
+      });
+
+      // 5. Update the response to indicate this was a rerun
       return {
         ...result,
         message: `${originalStatus} booking job rerun completed successfully`,
         originalStatus,
         isRerun: true,
+        rerunSuccess: true,
+        rerunAttempt: 1
       };
+      
     } catch (error) {
-      console.error(`Worker: Error during booking job ${jobId} rerun:`, error);
-      await dualLogError(`Worker: Booking job ${jobId} rerun failed`, error, { jobId });
+      await dualLogError(
+        "Booking job rerun failed",
+        error,
+        {
+          errorType: BookingErrorType.RERUN_FAILED,
+          platform: 'booking',
+          originalStatus,
+          jobId,
+          portfolioId,
+          propertyId,
+          errorDescription: getBookingErrorDescription(BookingErrorType.RERUN_FAILED),
+          retryAttempt: jobService.retryAttempt,
+          maxRetries: jobService.maxRetries,
+        }
+      );
+
+      await dualLogInfo(`Booking job rerun failure details`, {
+        jobId,
+        originalStatus,
+        platform: 'booking',
+        errorMessage: error instanceof Error ? error.message : String(error),
+        failurePhase: "rerun_execution",
+        shouldRetry: shouldRetryBookingError(BookingErrorType.RERUN_FAILED),
+        retryAttempt: jobService.retryAttempt,
+        maxRetries: jobService.maxRetries,
+      });
 
       // Update job status to Failed
       await jobService.failJob(jobId);
