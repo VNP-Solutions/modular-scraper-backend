@@ -1,0 +1,41 @@
+"/api/scraping/resume":
+  post:
+    tags:
+      - Scraping Control
+    summary: Resume paused scraping job
+    description: Resume a previously paused scraping job from where it left off
+    responses:
+      '200':
+        description: Scraping resumed successfully
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: integer
+                  example: 200
+                message:
+                  type: string
+                  example: Scraping resumed successfully
+                data:
+                  $ref: '#/components/schemas/ScrapingState'
+      '400':
+        description: Cannot resume scraping - no paused job found
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: integer
+                  example: 400
+                message:
+                  type: string
+                  example: Cannot resume scraping - no paused scraping job found
+      '500':
+        description: Error resuming scraping
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ErrorResponse'

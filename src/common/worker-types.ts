@@ -1,9 +1,12 @@
 export interface WorkerJobData {
-  jobType: "property-run" | "rerun-failed" | "reservation-run";
+  jobType: "property-run" | "rerun-failed" | "reservation-run" | "booking-run";
   jobId: string;
+  portfolioId?: string;
+  propertyId?: string;
   startDate?: string;
   endDate?: string;
   expediaId?: string;
+  bookingId?: string;
   user_email?: string;
   user_password?: string;
   reservations?: any[];

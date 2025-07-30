@@ -15,6 +15,7 @@ import { scrapingStateManager } from "../common/scraping-state.js";
 import main from "../main.js";
 import reservation from "../reservation/reservation.js";
 import { jobService } from "../services/job.service.js";
+import { JobStatus } from "../models/job.model.js";
 
 // Load environment variables
 dotenv.config();
@@ -104,6 +105,10 @@ class ScrapingWorker {
 
         case "reservation-run":
           result = await this.handleReservationRun(jobData);
+          break;
+
+        case "booking-run":
+          result = await this.handleBookingRun(jobData);
           break;
 
         default:
@@ -246,7 +251,7 @@ class ScrapingWorker {
           }
         : null;
 
-      console.log(`Worker: ✅ Job ${jobId} completed successfully`);
+      console.log(`Worker: Job ${jobId} completed successfully`);
 
       return {
         status: 200,
@@ -376,7 +381,7 @@ class ScrapingWorker {
           }
         : undefined;
 
-      console.log(`Worker: ✅ Job ${jobId} rerun completed successfully`);
+      console.log(`Worker: Job ${jobId} rerun completed successfully`);
 
       return {
         status: 200,
@@ -388,7 +393,7 @@ class ScrapingWorker {
         logInfo,
       };
     } catch (error) {
-      console.error(`Worker: ❌ Error during job ${jobId} rerun:`, error);
+      console.error(`Worker: Error during job ${jobId} rerun:`, error);
       await dualLogError(`Worker: Job ${jobId} rerun failed`, error, { jobId });
 
       // Update job status to Failed
@@ -438,7 +443,7 @@ class ScrapingWorker {
       await finalizeJobLogging("success");
 
       console.log(
-        `Worker: ✅ Reservation job ${finalJobId} completed successfully`
+        `Worker: Reservation job ${finalJobId} completed successfully`
       );
 
       return {
@@ -464,6 +469,37 @@ class ScrapingWorker {
 
       throw reservationError;
     }
+  }
+
+  private async handleBookingRun(jobData: WorkerJobData): Promise<any> {
+    // TODO: Implement booking-specific scraping logic
+    const { jobId, portfolioId, propertyId } = jobData;
+    
+    // Update job status to Running for async tracking
+    await jobService.startJob(jobId);
+    
+    // Initialize job logging for tracking
+    initializeJobLogging(jobId);
+    await dualLogInfo(`Worker: Starting booking scraping job ${jobId}`, {
+      jobId,
+      portfolioId,
+      propertyId,
+    });
+    
+    // For now, immediately mark as completed since no actual scraping logic exists
+    // TODO: When actual booking logic is implemented, keep job in "Running" status until completion
+    await jobService.updateJobStatus(jobId, JobStatus.Completed);
+    await finalizeJobLogging("success");
+    
+    return {
+      status: 200,
+      message: "Booking scraping job started successfully",
+      jobId: jobId,
+      portfolioId: portfolioId,
+      propertyId: propertyId,
+      trackingStatus: JobStatus.Completed, // Current: Pending -> Running -> Completed (immediate)
+                                   // TODO: Should be "Running" until actual scraping completes
+    };
   }
 
   private async shutdown(): Promise<void> {
