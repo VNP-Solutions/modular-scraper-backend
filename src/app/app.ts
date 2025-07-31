@@ -1,4 +1,4 @@
-import { propertyCredentialsService } from './../services/job-credentials.service';
+import { propertyCredentialsService } from '../services/job-credentials.service.js';
 import bodyParser from "body-parser";
 import cors from "cors";
 import express from "express";
