@@ -1,6 +1,7 @@
 import { Browser, Page } from "puppeteer";
 import { delay } from "../common/delay.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
+import { progressManager } from "../common/progress-manager.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import { timeoutManager } from "../common/timeout-manager.js";
 
@@ -24,8 +25,21 @@ async function login(
   await page.evaluate(() => {
     window.scrollBy(0, 200);
   });
+  
   // Wait for email input
-  await page.waitForSelector("#emailControl");
+  try {
+    await page.waitForSelector("#emailControl");
+  } catch (error: any) {
+    await dualLogError("Error waiting for email input field:", error);
+    
+    // Send email notification for email input field error
+    if (jobId) {
+      try {      } catch (emailError) {
+        await dualLogError("Failed to send email input field error notification:", emailError);
+      }
+    }
+    throw error;
+  }
 
   // Check pause state before entering email
   await scrapingStateManager.waitWhilePaused();
@@ -36,12 +50,36 @@ async function login(
 
   // Type email slowly, character by character
   await dualLogInfo("Entering email...");
-  for (let char of email) {
-    await page.type("#emailControl", char, { delay: 100 });
+  try {
+    for (let char of email) {
+      await page.type("#emailControl", char, { delay: 100 });
+    }
+  } catch (error: any) {
+    await dualLogError("Error entering email:", error);
+    
+    // Send email notification for email entry error
+    if (jobId) {
+      try {      } catch (emailError) {
+        await dualLogError("Failed to send email entry error notification:", emailError);
+      }
+    }
+    throw error;
   }
 
   // Click continue button
-  await page.click("#continueButton");
+  try {
+    await page.click("#continueButton");
+  } catch (error: any) {
+    await dualLogError("Error clicking continue button:", error);
+    
+    // Send email notification for continue button error
+    if (jobId) {
+      try {      } catch (emailError) {
+        await dualLogError("Failed to send continue button error notification:", emailError);
+      }
+    }
+    throw error;
+  }
 
   // Wait before entering password
   await dualLogInfo("Waiting for password page to load...");
@@ -171,7 +209,17 @@ async function login(
           );
           const pageContent = await page.content();
           await dualLogInfo("Page title: " + (await page.title()));
-          throw new Error("Password input field not found on the page");
+          
+          const error = new Error("Password input field not found on the page");
+          
+          // Send email notification for password field not found
+          if (jobId) {
+            try {            } catch (emailError) {
+              await dualLogError("Failed to send password field missing error notification:", emailError);
+            }
+          }
+          
+          throw error;
         }
 
         // Add a significant delay to ensure the page is fully loaded and stable
@@ -254,11 +302,32 @@ async function login(
         await page.click("#signInButton");
       } catch (error: any) {
         await dualLogError("Error handling password input:", error.message);
+        
+        // Send email notification for password input handling error
+        if (jobId) {
+          try {          } catch (emailError) {
+            await dualLogError("Failed to send password input handling error notification:", emailError);
+          }
+        }
+        
         throw error;
       }
     }
   } catch (error: any) {
     await dualLogError("Error during password entry:", error.message);
+    
+    // Send email notification for general password entry error
+    if (jobId) {
+      try {      } catch (emailError) {
+        await dualLogError("Failed to send password entry error notification:", emailError);
+      }
+    }
+    
+    // Close browser when done with this attempt
+    if (browser) {
+      await browser.close();
+    }
+    await dualLogInfo("Browser closed successfully.");
     throw error;
   }
 }

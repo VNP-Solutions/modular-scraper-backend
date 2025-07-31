@@ -1,10 +1,10 @@
 import dotenv from "dotenv";
 import mongoose from "mongoose";
+import open from "open";
 import app from "./app/app.js";
 import loadToken from "./common/load-token.js";
+import { jobQueueUrlService } from "./services/job-queue-url.service.js";
 dotenv.config();
-import open from "open";
-
 
 const port: number = parseInt(process.env.PORT || "3000");
 
@@ -25,6 +25,24 @@ const connectDB = async (): Promise<void> => {
   }
 };
 
+// * Initialize job queue URLs on startup
+const initializeJobQueueUrls = async (): Promise<void> => {
+  try {
+    console.log("Initializing job queue URLs...");
+
+    // Show URL statistics (URLs are managed by another project)
+    const stats = await jobQueueUrlService.getUrlStatistics();
+    console.log("Job Queue URL Statistics:", stats);
+
+    console.log(
+      "✅ URL status monitoring initialized. URLs are managed by another project."
+    );
+  } catch (err) {
+    console.error("Error initializing job queue URLs:", err);
+    // Don't exit the process, as this is not critical for server startup
+  }
+};
+
 // * MongoDB disconnection function
 const disconnectDB = async (): Promise<void> => {
   try {
@@ -39,6 +57,9 @@ const disconnectDB = async (): Promise<void> => {
 app.listen(port, async () => {
   try {
     await connectDB();
+
+    // Initialize job queue URLs after database connection
+    await initializeJobQueueUrls();
 
     if (!loadToken(process.env.TOKEN_PATH || "token.json")) {
       console.log("Opening browser for authentication...");

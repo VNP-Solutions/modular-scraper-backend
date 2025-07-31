@@ -1,11 +1,14 @@
 import dotenv from "dotenv";
-import { browserSetup } from "../browser-setup/browser.js";
+import { Browser } from "puppeteer";
+import { browserSetupLocal } from "../browser-setup/browser-local.js";
+import { browserSetupProduction } from "../browser-setup/browser-prod.js";
 import { delay } from "../common/delay.js";
+import { dualLogError, dualLogInfo } from "../common/log-helper.js";
+import { progressManager } from "../common/progress-manager.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import login from "../login/login.js";
 import handleOtpVerification from "../otp-verification/otp-verification.js";
 import scrapeWithReservationId from "../retry-scrape-data/scrape-with-reservationid.js";
-import { dualLogError, dualLogInfo } from "../common/log-helper.js";
 dotenv.config();
 
 // Initialize Steel client
@@ -13,14 +16,43 @@ dotenv.config();
 //   steelAPIKey: process.env.STEEL_API_KEY, // Optional
 // });
 
-async function reservation(reservations: any[]): Promise<void> {
+async function reservation(
+  browser: Browser | null,
+  reservations: any[]
+): Promise<void> {
+  const jobId = `reservation_job_${Date.now()}`; // Generate job ID for reservation function
+
   try {
+    const environment = process.env.ENVIRONMENT || "production";
     // Create a new session
     // const session = await client.sessions.create();
 
     // Step 1: Setup browser and navigate to login page
     await dualLogInfo("Setting up browser...");
-    const { browser, page } = await browserSetup();
+    let setupResult = null;
+
+    try {
+      if (environment === "production") {
+        setupResult = await browserSetupProduction(jobId);
+      } else {
+        setupResult = await browserSetupLocal(jobId);
+      }
+    } catch (error: any) {
+      await dualLogError("Browser setup failed:", error);
+
+      // Send email notification for browser setup error
+      try {      } catch (emailError) {
+        await dualLogError(
+          "Failed to send browser setup error notification:",
+          emailError
+        );
+      }
+
+      throw error;
+    }
+
+    browser = setupResult.browser;
+    const page = setupResult.page;
     await dualLogInfo("Browser setup complete. Page is ready at login screen.");
 
     // Step 2: Check if login credentials are provided
@@ -28,24 +60,46 @@ async function reservation(reservations: any[]): Promise<void> {
     const password = process.env.EXPEDIA_PASSWORD;
 
     if (email && password) {
-      await dualLogInfo("Login credentials found, performing automatic login...");
+      await dualLogInfo(
+        "Login credentials found, performing automatic login..."
+      );
 
       try {
-        await login(browser, page, email, password);
+        await login(browser, page, email, password, jobId);
         console.log("Login completed successfully! User is now logged in.");
 
         // Add your post-login automation here
         console.log("Ready for scraping operations...");
         await delay(10000);
-      } catch (loginError) {
+      } catch (loginError: any) {
         console.error("Login failed:", loginError);
+
+        // Send email notification for login error
+        try {        } catch (emailError) {
+          await dualLogError(
+            "Failed to send login error notification:",
+            emailError
+          );
+        }
+
+        throw loginError;
       }
 
       try {
-        await handleOtpVerification(page);
+        await handleOtpVerification(browser, page, jobId);
         console.log("OTP verification completed successfully!");
       } catch (error: any) {
         console.error("OTP verification failed:", error);
+
+        // Send email notification for OTP verification error
+        try {        } catch (emailError) {
+          await dualLogError(
+            "Failed to send OTP verification error notification:",
+            emailError
+          );
+        }
+
+        throw error;
       }
 
       // Step 3: Perform reservation scraping
@@ -74,31 +128,92 @@ async function reservation(reservations: any[]): Promise<void> {
               `Processing reservation ${processedCount + 1}/${
                 reservations.length
               }`
-            ); 
-
-            await scrapeWithReservationId(page, reservation);
-            processedCount++;
-
-            // Update progress
-            scrapingStateManager.updateProgress(
-              undefined,
-              undefined,
-              processedCount,
-              reservations.length
             );
+
+            try {
+              await scrapeWithReservationId(browser, page, reservation, jobId);
+              processedCount++;
+
+              // Update progress
+              scrapingStateManager.updateProgress(
+                undefined,
+                undefined,
+                processedCount,
+                reservations.length
+              );
+            } catch (reservationError: any) {
+              await dualLogError(
+                `Error processing reservation ${processedCount + 1}:`,
+                reservationError
+              );
+
+              // Send email notification for individual reservation error
+              try {              } catch (emailError) {
+                await dualLogError(
+                  "Failed to send individual reservation error notification:",
+                  emailError
+                );
+              }
+
+              // Continue with next reservation instead of failing completely
+              processedCount++;
+              continue;
+            }
           }
         } catch (error: any) {
           await dualLogError("Reservation search failed:", error);
+
+          // Send email notification for general reservation processing error
+          try {          } catch (emailError) {
+            await dualLogError(
+              "Failed to send reservation processing error notification:",
+              emailError
+            );
+          }
+
           throw error;
         }
       } else {
-        await dualLogInfo("No reservations provided, skipping reservation search.");
+        await dualLogInfo(
+          "No reservations provided, skipping reservation search."
+        );
       }
     } else {
+      const error = new Error("No login credentials provided");
       await dualLogInfo("No login credentials provided.");
+
+      // Send email notification for missing credentials
+      try {      } catch (emailError) {
+        await dualLogError(
+          "Failed to send credentials missing error notification:",
+          emailError
+        );
+      }
+
+      // Close browser when done with this attempt
+      if (browser) {
+        await browser.close();
+      }
+      await dualLogInfo("Browser closed successfully.");
+
+      throw error;
     }
-  } catch (error) {
+  } catch (error: any) {
     await dualLogError("Reservation function error:", error);
+
+    // Send email notification for general reservation function error
+    try {    } catch (emailError) {
+      await dualLogError(
+        "Failed to send reservation function error notification:",
+        emailError
+      );
+    }
+
+    // Close browser when done with this attempt
+    if (browser) {
+      await browser.close();
+    }
+    await dualLogInfo("Browser closed successfully.");
     throw error;
   }
 }

@@ -54,6 +54,8 @@ export interface IJob extends Document {
   job_backoff_length_loading: number;
   job_backoff_length_selector: number;
   log_link?: string;
+  live_url?: string;
+  watcher_emails?: string[];
   queue_name?: string;
   worker_assigned?: string;
   batch_execution_id?: string;
@@ -173,6 +175,15 @@ const JobSchema = new Schema<IJob>(
     log_link: {
       type: String,
       required: false,
+    },
+    live_url: {
+      type: String,
+      required: false,
+    },
+    watcher_emails: {
+      type: [String],
+      required: false,
+      default: [],
     },
     queue_name: {
       type: String,
