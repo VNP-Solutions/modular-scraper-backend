@@ -18,8 +18,6 @@ export interface IProperty extends Document {
   created_by: Types.ObjectId;
   createdAt: Date;
   updatedAt: Date;
-  user_email?: string;
-  user_password?: string;
 }
 
 // Mongoose Schema for Property
@@ -86,14 +84,6 @@ const PropertySchema = new Schema<IProperty>(
       type: Schema.Types.ObjectId,
       ref: "User",
       required: true,
-    },
-    user_email: {
-      type: String,
-      required: false,
-    },
-    user_password: {
-      type: String,
-      required: false,
     },
   },
   {

@@ -1,3 +1,4 @@
+import { propertyCredentialsService } from './../services/job-credentials.service';
 import bodyParser from "body-parser";
 import cors from "cors";
 import express from "express";
@@ -559,6 +560,7 @@ app.post("/api/expedia/rerun-failed-job", (async (
     // 4. Get expedia_id and credentials from job's property
     console.log(`Getting expedia_id for job ${jobId}...`);
     const jobData = await jobService.getExpediaIdFromJob(jobId);
+    const propertyCredentials = await propertyCredentialsService.getCredentialsByJobId(jobId);
 
     if (!jobData || !jobData.expediaId) {
       return res.status(400).json({
@@ -567,14 +569,15 @@ app.post("/api/expedia/rerun-failed-job", (async (
       });
     }
 
-    if (!jobData.user_email || !jobData.user_password) {
+    if (!propertyCredentials?.expediaUsername || !propertyCredentials?.expediaPassword) {
       return res.status(400).json({
         status: 400,
-        message: `Cannot retrieve valid user_email or user_password for job ${jobId}. Property may not have user_email or user_password assigned.`,
+        message: `Cannot retrieve valid expediaUsername or expediaPassword for job ${jobId}. Property may not have expediaUsername or expediaPassword assigned.`,
       });
     }
 
-    const { expediaId, user_email, user_password } = jobData;
+    const { expediaId } = jobData;
+    const { expediaUsername, expediaPassword } = propertyCredentials;
 
     console.log(
       `Rerunning failed/partial job ${jobId} with expedia_id: ${expediaId}`
@@ -609,8 +612,8 @@ app.post("/api/expedia/rerun-failed-job", (async (
         startDate,
         endDate,
         jobId,
-        user_email,
-        user_password
+        expediaUsername,
+        expediaPassword
       );
 
       // 9. Get final job statistics
@@ -837,6 +840,7 @@ app.post("/api/expedia/property-run-job", (async (
     // 2. Get expedia_id from job's property
     console.log(`Getting expedia_id for job ${jobId}...`);
     const jobData = await jobService.getExpediaIdFromJob(jobId);
+    const propertyCredentials = await propertyCredentialsService.getCredentialsByJobId(jobId);
 
     if (!jobData || !jobData.expediaId) {
       return res.status(400).json({
@@ -845,14 +849,15 @@ app.post("/api/expedia/property-run-job", (async (
       });
     }
 
-    if (!jobData.user_email || !jobData.user_password) {
+    if (!propertyCredentials?.expediaUsername || !propertyCredentials?.expediaPassword) {
       return res.status(400).json({
         status: 400,
-        message: `Cannot retrieve valid user_email or user_password for job ${jobId}. Property may not have user_email or user_password assigned.`,
+        message: `Cannot retrieve valid expediaUsername or expediaPassword for job ${jobId}. Property may not have expediaUsername or expediaPassword assigned.`,
       });
     }
 
-    const { expediaId, user_email, user_password } = jobData;
+    const { expediaId } = jobData;
+    const { expediaUsername, expediaPassword } = propertyCredentials;
 
     console.log(`Using expedia_id: ${expediaId} for scraping`);
 
@@ -888,8 +893,8 @@ app.post("/api/expedia/property-run-job", (async (
         startDate,
         endDate,
         jobId,
-        user_email,
-        user_password
+        expediaUsername,
+        expediaPassword
       );
 
       // 8. Get final job statistics
