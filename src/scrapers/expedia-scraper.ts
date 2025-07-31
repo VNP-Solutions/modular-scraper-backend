@@ -1,6 +1,7 @@
 import puppeteer, { Browser, Page } from "puppeteer";
 import { BaseScraper, LoginCredentials, CaptchaHandlerOptions, TwoFactorAuthOptions, ScrapingJobParams, ScrapingResult } from "./base-scraper.js";
-import { browserSetup } from "../browser-setup/browser.js";
+import { browserSetupProduction } from "../browser-setup/browser-prod.js";
+import { browserSetupLocal } from "../browser-setup/browser-local.js";
 import login from "../login/login.js";
 import handleOtpVerification from "../otp-verification/otp-verification.js";
 import { propertySearchAndClickReservation } from "../property-search/property-search.js";
@@ -16,8 +17,10 @@ export class ExpediaScraper extends BaseScraper {
     try {
       await this.logInfo('Setting up Expedia browser');
       
-      // Use existing browser setup logic
-      const { browser, page } = await browserSetup(jobId);
+      // Use existing browser setup logic - choose based on environment
+      const { browser, page } = process.env.NODE_ENV === 'production' 
+        ? await browserSetupProduction(jobId)
+        : await browserSetupLocal(jobId);
       
       await this.logInfo('Expedia browser setup completed');
       return { browser, page };
@@ -39,7 +42,7 @@ export class ExpediaScraper extends BaseScraper {
         throw new Error('Scraping was stopped during login');
       }
 
-      // Use existing login logic
+      // Use existing login logic - pass browser and page separately
       await login(this.browser, this.page, credentials.email, credentials.password, this.jobId);
       
       await this.logInfo('Expedia login completed successfully');
@@ -57,7 +60,7 @@ export class ExpediaScraper extends BaseScraper {
   }
 
   async handle2FA(options?: TwoFactorAuthOptions): Promise<boolean> {
-    if (!this.page) return false;
+    if (!this.page || !this.browser) return false;
 
     try {
       await this.logInfo('Handling Expedia OTP verification');
@@ -68,8 +71,8 @@ export class ExpediaScraper extends BaseScraper {
         throw new Error('Scraping was stopped during 2FA');
       }
 
-      // Use existing OTP verification logic
-      await handleOtpVerification(this.page, this.jobId);
+      // Use existing OTP verification logic - pass browser, page, and jobId
+      await handleOtpVerification(this.browser, this.page, this.jobId);
       
       await this.logInfo('Expedia OTP verification completed');
       return true;
@@ -81,7 +84,7 @@ export class ExpediaScraper extends BaseScraper {
   }
 
   async searchProperty(propertyId: string): Promise<boolean> {
-    if (!this.page) throw new Error('Page not initialized');
+    if (!this.page || !this.browser) throw new Error('Browser not initialized');
 
     try {
       await this.logInfo('Searching for Expedia property', { propertyId });
@@ -92,8 +95,8 @@ export class ExpediaScraper extends BaseScraper {
         throw new Error('Scraping was stopped during property search');
       }
 
-      // Use existing property search logic
-      await propertySearchAndClickReservation(this.page, propertyId, this.jobId);
+      // Use existing property search logic - pass browser, page, propertyId, and jobId
+      await propertySearchAndClickReservation(this.browser, this.page, propertyId, this.jobId);
       
       await this.logInfo('Expedia property search completed successfully');
       return true;
@@ -121,7 +124,7 @@ export class ExpediaScraper extends BaseScraper {
         });
 
         // Use existing date splitting logic
-        await splitDateRange(this.page!, params.startDate, params.endDate, params.propertyId, this.jobId);
+        await splitDateRange(this.browser!, this.page!, params.startDate, params.endDate, params.propertyId, this.jobId);
         
         await this.logInfo('Date selection completed successfully');
       } else {
