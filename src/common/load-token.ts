@@ -31,11 +31,15 @@ let lastRefreshTime: Date | null = null;
  * Original load google auth json file function (maintained for backward compatibility)
  */
 function loadToken(tokenPath: string): boolean {
-  if (fs.existsSync(tokenPath)) {
-    const token = JSON.parse(fs.readFileSync(tokenPath, "utf8"));
-    oauth2Client.setCredentials(token);
-    return true;
-  }
+  try {
+    if (fs.existsSync(tokenPath)) {
+      const token = JSON.parse(fs.readFileSync(tokenPath, "utf8"));
+      oauth2Client.setCredentials(token);
+      return true;
+    }
+   } catch (error) {
+    console.log(`Token loading failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+   }
   return false;
 }
 

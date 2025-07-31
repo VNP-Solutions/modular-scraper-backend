@@ -10,6 +10,7 @@ import { specs, swaggerUi } from "../config/swagger.js";
 import { getAccess, getOauth2Callback } from "../get-access/access.js";
 import { Job, JobStatus } from "../models/job.model.js";
 import { jobService } from "../services/job.service.js";
+import multiPlatformScraperRoutes from "../routes/multi-platform-scraper.js";
 
 const app = express();
 
@@ -1014,6 +1015,9 @@ app.get("/api/jobs/:jobId/log", (async (
     });
   }
 }) as any);
+
+// Multi-platform scraper routes
+app.use("/api/scrape", multiPlatformScraperRoutes);
 
 app.get(
   "/api/worker-pool/status",
