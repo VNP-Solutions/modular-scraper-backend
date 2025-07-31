@@ -10,38 +10,118 @@ export class BookingScraper extends BaseScraper {
   private browserlessToken: string;
   private sessionUrl?: string;
 
+  private static readonly SELECTORS = {
+    email: [
+      'input[name="loginname"]',
+      'input[name="username"]',
+      '#username',
+      'input[type="email"]',
+      'input[placeholder*="email"]'
+    ],
+    password: [
+      'input[type="password"]',
+      '#password',
+      'input[name="password"]',
+      'input[name="passwd"]',
+      'input[placeholder*="password"]'
+    ],
+    loginButton: [
+      'button[type="submit"]',
+      'input[type="submit"]',
+    ],
+    continueButton: [
+      'button[type="submit"]',
+      'button:contains("Next")',
+      'button:contains("Continue")',
+      'input[type="submit"]'
+    ],
+    tfaSelectors: [
+      'input[type="text"][maxlength="6"]',
+      'input[name="pin"]',
+      'input[name="code"]',
+      'input[placeholder*="code"]',
+      'input[autocomplete="one-time-code"]'
+    ]
+  };
+
   constructor() {
-    super('booking', 'https://account.booking.com/sign-in');
+    super('booking', 'https://admin.booking.com');
     this.browserlessToken = process.env.BROWSERLESS_TOKEN || '2SXlnLjeZpwR2tV6ab1698bfe680a3959c2c681f06939ee3b';
   }
 
   async setupBrowser(jobId?: string): Promise<{ browser: Browser; page: Page }> {
     try {
-      await this.logInfo('Setting up Booking.com browser with Browserless');
-
-      // Try to create a UI-accessible session
-      const session = await this.createBrowserlessSession();
-      if (session) {
-        this.sessionUrl = `https://production-sfo.browserless.io/sessions/${session.id}`;
-        await this.logInfo('Browserless UI session created', { sessionUrl: this.sessionUrl });
-      }
+      await this.logInfo('Setting up Booking.com browser with Browserless session');
 
       // Get timeout configuration
       const loadingTimeout = jobId ? await timeoutManager.getLoadingTimeout(jobId) : 120000;
       const selectorTimeout = jobId ? await timeoutManager.getSelectorTimeout(jobId) : 30000;
 
-      // Connect to Browserless
+      // Create Browserless session for UI access
+      const session = await this.createBrowserlessSession();
+      if (session && session.id) {
+        this.sessionUrl = `https://production-sfo.browserless.io/sessions/${session.id}?token=${this.browserlessToken}`;
+        await this.logInfo("Browserless UI session created", { sessionUrl: this.sessionUrl });
+        console.log("Session URL for manual access:", this.sessionUrl);
+      } else {
+        await this.logInfo("Failed to create Browserless session, falling back to local browser");
+        // Fallback to local browser
+        const browser = await puppeteer.launch({
+          headless: false,
+          defaultViewport: null,
+          args: [
+            "--start-maximized",
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-web-security",
+            "--disable-features=IsolateOrigins,site-per-process",
+            "--disable-blink-features=AutomationControlled",
+            "--disable-extensions",
+          ],
+        });
+        const page = await browser.newPage();
+        await page.setUserAgent(
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+        );
+        await this.logInfo("Local browser setup completed as fallback");
+        return { browser, page };
+      }
+
+      // Connect to the created Browserless session
       const browser = await puppeteer.connect({
-        browserWSEndpoint: `wss://production-sfo.browserless.io/?token=${this.browserlessToken}&stealth=true`,
-        protocolTimeout: 300000 // 5 minutes
+        browserWSEndpoint: session.connect,
+        protocolTimeout: 300000
       });
 
       const page = await browser.newPage();
+      
+      await this.logInfo("Connected to Browserless session successfully");
       
       // Set viewport and timeouts
       await page.setViewport({ width: 1920, height: 1080 });
       await page.setDefaultNavigationTimeout(loadingTimeout);
       await page.setDefaultTimeout(selectorTimeout);
+
+      // Start recording and generate live URL for captcha solving
+      const cdp = await page.createCDPSession();
+      await (cdp as any).send("Browserless.startRecording");
+      await this.logInfo("Recording started successfully");
+
+      await this.delay(2000);
+
+      try {
+        const { liveURL } = (await (cdp as any).send("Browserless.liveURL", {
+          timeout: 600_000,
+        })) as { liveURL: string };
+        
+        this.sessionUrl = liveURL;
+        await this.logInfo("Live URL generated for captcha solving:", { liveURL });
+
+      } catch (liveUrlError) {
+        await this.logError("Failed to generate live URL:", liveUrlError);
+        console.log("Live URL generation failed - will use session URL instead");
+        this.sessionUrl = `https://production-sfo.browserless.io?token=${this.browserlessToken}#/live/${session.id}`;
+      }
 
       // Load saved cookies if they exist
       if (fs.existsSync(this.cookiesFile)) {
@@ -88,92 +168,45 @@ export class BookingScraper extends BaseScraper {
 
       await this.logInfo('Starting login process');
 
-      // Wait for email input and enter email
+      await this.handleCaptcha({
+        type: 'browserless_ui',
+        sessionUrl: this.sessionUrl,
+        timeout: 180000
+      });
+
       await this.logInfo('Entering email address');
-      const emailSelectors = [
-        'input[name="username"]',
-        '#username',
-        'input[type="email"]',
-        'input[placeholder*="email"]'
-      ];
-
-      let emailField = null;
-      for (const selector of emailSelectors) {
-        try {
-          await this.page.waitForSelector(selector, { visible: true, timeout: 10000 });
-          emailField = await this.page.$(selector);
-          if (emailField) {
-            await this.logInfo(`Email field found: ${selector}`);
-            await this.page.click(selector);
-            await this.page.type(selector, credentials.email, { delay: 100 });
-            await this.logInfo(`Email entered: ${credentials.email}`);
-            break;
-          }
-        } catch (e) {
-          // Try next selector
-        }
-      }
-
-      if (!emailField) {
+      
+      const emailEntered = await this.enterEmail(credentials.email);
+      if (!emailEntered) {
         await this.takeScreenshot('booking-no-email-field.png');
         throw new Error('Email field not found');
       }
 
-      // Click Continue button
       await this.logInfo('Clicking Continue with email');
-      const continueButtonSelectors = [
-        'button[type="submit"]',
-        'button'
-      ];
-
-      let continueClicked = false;
-      for (const selector of continueButtonSelectors) {
-        try {
-          const continueBtn = await this.page.$(selector);
-          if (continueBtn) {
-            await this.page.click(selector);
-            await this.logInfo(`Continue button clicked: ${selector}`);
-            continueClicked = true;
-            break;
-          }
-        } catch (e) {
-          // Try next selector
-        }
-      }
+      const continueClicked = await this.clickContinueButton();
 
       if (!continueClicked) {
-        await this.page.keyboard.press('Enter');
-        await this.logInfo('Pressed Enter as fallback');
+        throw new Error('Continue Button not found');
       }
 
       await this.takeScreenshot('booking-after-email.png');
       await this.delay(5000);
 
       // Check for captcha after email submission
-      const pageContent = await this.page.content();
-      if (pageContent.includes("Let's make sure you're human") || 
-          pageContent.includes("Choose all the clocks")) {
-        await this.logInfo('Captcha detected after email submission');
-        const captchaHandled = await this.handleCaptcha({ type: 'browserless_ui', sessionUrl: this.sessionUrl });
-        if (!captchaHandled) {
-          throw new Error('Captcha not solved');
-        }
-      }
+      await this.handleCaptcha({
+        type: 'browserless_ui',
+        sessionUrl: this.sessionUrl,
+        timeout: 180000
+      });
 
-      // Wait for and enter password
       await this.logInfo('Looking for password field');
-      const passwordSelectors = [
-        'input[type="password"]',
-        'input[name="password"]',
-        '#password'
-      ];
-
+   
       let passwordField = null;
       let attempts = 0;
       const maxAttempts = 6;
 
       while (!passwordField && attempts < maxAttempts) {
-        for (const selector of passwordSelectors) {
+        for (const selector of BookingScraper.SELECTORS.password) {
           try {
             passwordField = await this.page.$(selector);
             if (passwordField) {
@@ -187,6 +220,7 @@ export class BookingScraper extends BaseScraper {
             }
           } catch (e) {
             // Try next selector
+            continue
           }
         }
 
@@ -202,28 +236,27 @@ export class BookingScraper extends BaseScraper {
         throw new Error('Password field not found after multiple attempts');
       }
 
-      // Enter password
-      await this.logInfo('Entering password');
-      for (const selector of passwordSelectors) {
-        try {
-          const field = await this.page.$(selector);
-          if (field) {
-            const isVisible = await field.isIntersectingViewport();
-            if (isVisible) {
-              await this.page.click(selector);
-              await this.page.type(selector, credentials.password, { delay: 100 });
-              await this.logInfo('Password entered');
-              break;
-            }
-          }
-        } catch (e) {
-          // Try next selector
-        }
+      // Enter password using the new function
+      const passwordEntered = await this.enterPassword(credentials.password);
+      if (!passwordEntered) {
+        await this.takeScreenshot('booking-password-entry-failed.png');
+        throw new Error('Failed to enter password');
       }
 
-      // Submit login
       await this.logInfo('Submitting login');
-      await this.page.keyboard.press('Enter');
+
+      const loginClicked = await this.clickLoginButton();
+      if (!loginClicked) {
+        throw new Error('Login Button not found');
+      }
+
+      // Check for captcha after login submission
+      await this.handleCaptcha({
+        type: 'browserless_ui',
+        sessionUrl: this.sessionUrl,
+        timeout: 180000
+      });      
+
       await this.takeScreenshot('booking-after-password.png');
 
       // Wait for navigation
@@ -239,7 +272,8 @@ export class BookingScraper extends BaseScraper {
         await this.logInfo(`Saved ${cookies.length} cookies for future sessions`);
         await this.takeScreenshot('booking-admin-dashboard.png');
       } else {
-        await this.logError('Login may have failed', { currentUrl: finalUrl });
+        // TODO
+        await this.logError('We should proceed with 2FA', { currentUrl: finalUrl });
         await this.takeScreenshot('booking-login-error.png');
       }
 
@@ -297,15 +331,7 @@ export class BookingScraper extends BaseScraper {
 
       await this.takeScreenshot('booking-2fa-page.png');
 
-      const tfaSelectors = [
-        'input[type="text"][maxlength="6"]',
-        'input[name="pin"]',
-        'input[name="code"]',
-        'input[placeholder*="code"]',
-        'input[autocomplete="one-time-code"]'
-      ];
-
-      for (const selector of tfaSelectors) {
+      for (const selector of BookingScraper.SELECTORS.tfaSelectors) {
         try {
           await this.page.waitForSelector(selector, { timeout: 10000 });
           await this.logInfo(`Found 2FA field: ${selector}`);
@@ -390,42 +416,52 @@ export class BookingScraper extends BaseScraper {
     }
   }
 
-  // Private helper methods
   private async createBrowserlessSession(): Promise<any> {
     try {
       await this.logInfo('Creating Browserless session with UI access');
-      
-      const response = await fetch(`https://production-sfo.browserless.io/sessions`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${this.browserlessToken}`
-        },
-        body: JSON.stringify({
-          url: this.baseUrl,
-          headless: false,
-          stealth: true,
-          launch: {
-            devtools: true,
-            args: ['--start-maximized']
-          }
-        })
-      });
-      
-      if (response.ok) {
-        const session = await response.json() as any;
-        await this.logInfo('Browserless session created', { sessionId: session.id });
-        return session;
-      } else {
-        await this.logError(`Session creation failed: ${response.status} ${response.statusText}`);
+
+      const sessionConfig = {
+        ttl: 180000, // 3 minutes
+        stealth: true,
+        headless: false,
+        args: [
+          "--no-sandbox",
+          "--disable-dev-shm-usage",
+          "--disable-background-timer-throttling"
+        ],
+      };
+  
+      const response = await fetch(
+        `https://production-sfo.browserless.io/session?token=${this.browserlessToken}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(sessionConfig),
+        }
+      );
+  
+      await this.logInfo(`Response status: ${response.status} ${response.statusText}`);
+  
+      if (!response.ok) {
+        const errorText = await response.text();
+        await this.logError(`Failed to create session: ${response.status} "${errorText}"`);
         return null;
       }
+  
+      const session = await response.json() as any;
+  
+      await this.logInfo('Browserless session created successfully', {
+        sessionId: session.id,
+        browserWSEndpoint: session.connect
+      });
+  
+      return session;
+  
     } catch (error) {
       await this.logError('Session creation failed', error);
       return null;
     }
   }
-
   private async solveCaptchaAutomatically(): Promise<boolean> {
     if (!this.page) return false;
 
@@ -576,5 +612,87 @@ export class BookingScraper extends BaseScraper {
         resolve(code);
       });
     });
+  }
+
+  // Helper function to try multiple selectors
+  private async trySelectors(
+    selectors: string[], 
+    action: (selector: string) => Promise<boolean>, 
+    timeout: number = 10000
+  ): Promise<boolean> {
+    if (!this.page) return false;
+
+    for (const selector of selectors) {
+      try {
+        // Wait for selector to be visible
+        await this.page.waitForSelector(selector, { visible: true, timeout });
+        
+        // Check if element exists and is visible
+        const element = await this.page.$(selector);
+        if (!element) continue;
+        
+        const isVisible = await element.isIntersectingViewport();
+        if (!isVisible) continue;
+        
+        // Try to perform the action
+        const success = await action(selector);
+        if (success) {
+          await this.logInfo(`Action successful with selector: ${selector}`);
+          return true;
+        }
+      } catch (error) {
+        // Try next selector silently
+        continue;
+      }
+    }
+    
+    await this.logError(`All selectors failed: ${selectors.join(', ')}`);
+    return false;
+  }
+
+  private async enterEmail(email: string): Promise<boolean> {
+    return await this.trySelectors(
+      BookingScraper.SELECTORS.email,
+      async (selector: string) => {
+        await this.page!.click(selector);
+        await this.page!.type(selector, email, { delay: 100 });
+        await this.logInfo(`Email entered: ${email}`);
+        return true;
+      }
+    );
+  }
+
+  private async enterPassword(password: string): Promise<boolean> {
+    return await this.trySelectors(
+      BookingScraper.SELECTORS.password,
+      async (selector: string) => {
+        await this.page!.click(selector);
+        await this.page!.type(selector, password, { delay: 100 });
+        await this.logInfo('Password entered');
+        return true;
+      }
+    );
+  }
+
+  private async clickLoginButton(): Promise<boolean> {
+    return await this.trySelectors(
+      BookingScraper.SELECTORS.loginButton,
+      async (selector: string) => {
+        await this.page!.click(selector);
+        await this.logInfo('Login button clicked');
+        return true;
+      }
+    );
+  }
+
+  private async clickContinueButton(): Promise<boolean> {
+    return await this.trySelectors(
+      BookingScraper.SELECTORS.continueButton,
+      async (selector: string) => {
+        await this.page!.click(selector);
+        await this.logInfo('Continue button clicked');
+        return true;
+      }
+    );
   }
 }
