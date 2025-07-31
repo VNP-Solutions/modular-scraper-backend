@@ -4,6 +4,7 @@ import readline from 'readline';
 import fetch from 'node-fetch';
 import { BaseScraper, LoginCredentials, CaptchaHandlerOptions, TwoFactorAuthOptions, ScrapingJobParams, ScrapingResult } from "./base-scraper.js";
 import { timeoutManager } from "../common/timeout-manager.js";
+import handleBookingOtpVerification from "../otp-verification/booking-otp-verification.js";
 
 export class BookingScraper extends BaseScraper {
   private cookiesFile = 'booking-admin-cookies.json';
@@ -124,11 +125,11 @@ export class BookingScraper extends BaseScraper {
       }
 
       // Load saved cookies if they exist
-      if (fs.existsSync(this.cookiesFile)) {
-        const cookies = JSON.parse(fs.readFileSync(this.cookiesFile, 'utf8'));
-        await page.setCookie(...cookies);
-        await this.logInfo(`Loaded ${cookies.length} saved cookies`);
-      }
+      // if (fs.existsSync(this.cookiesFile)) {
+      //   const cookies = JSON.parse(fs.readFileSync(this.cookiesFile, 'utf8'));
+      //   await page.setCookie(...cookies);
+      //   await this.logInfo(`Loaded ${cookies.length} saved cookies`);
+      // }
 
       // Navigate to login page
       await this.logInfo('Navigating to Booking.com admin portal');
@@ -272,9 +273,22 @@ export class BookingScraper extends BaseScraper {
         await this.logInfo(`Saved ${cookies.length} cookies for future sessions`);
         await this.takeScreenshot('booking-admin-dashboard.png');
       } else {
-        // TODO
-        await this.logError('We should proceed with 2FA', { currentUrl: finalUrl });
-        await this.takeScreenshot('booking-login-error.png');
+        await this.logInfo('Login requires 2FA verification', { currentUrl: finalUrl });
+        
+        // Try to handle 2FA automatically
+        const twoFASuccess = await this.handle2FA();
+        if (twoFASuccess) {
+          await this.logInfo('2FA completed successfully');
+          // Save cookies after successful 2FA
+          const cookies = await this.page.cookies();
+          fs.writeFileSync(this.cookiesFile, JSON.stringify(cookies, null, 2));
+          await this.logInfo(`Saved ${cookies.length} cookies after 2FA`);
+          await this.takeScreenshot('booking-admin-dashboard-after-2fa.png');
+        } else {
+          await this.logError('2FA verification failed');
+          await this.takeScreenshot('booking-2fa-failed.png');
+          throw new Error('2FA verification failed');
+        }
       }
 
     } catch (error) {
@@ -315,44 +329,73 @@ export class BookingScraper extends BaseScraper {
   }
 
   async handle2FA(options?: TwoFactorAuthOptions): Promise<boolean> {
-    if (!this.page) return false;
+    if (!this.page || !this.browser) return false;
 
     try {
       const currentUrl = this.page.url();
-      if (!currentUrl.includes('2fa') && !currentUrl.includes('verify') && !currentUrl.includes('authentication')) {
-        await this.logInfo('No 2FA required');
-        return true;
-      }
+      
+      // Check if we're on a verification-related page
+      const needsVerification = currentUrl.includes('2fa') || 
+                               currentUrl.includes('verify') || 
+                               currentUrl.includes('authentication') ||
+                               currentUrl.includes('sign-in/verification') ||
+                               currentUrl.includes('select-phone');
 
-      await this.logInfo('2FA required');
-      if (this.sessionUrl) {
-        await this.logInfo(`2FA can be completed in Browserless UI: ${this.sessionUrl}`);
-      }
-
-      await this.takeScreenshot('booking-2fa-page.png');
-
-      for (const selector of BookingScraper.SELECTORS.tfaSelectors) {
-        try {
-          await this.page.waitForSelector(selector, { timeout: 10000 });
-          await this.logInfo(`Found 2FA field: ${selector}`);
-          
-          const code = await this.prompt2FA(options?.timeout || 120000);
-          await this.page.type(selector, code, { delay: 100 });
-          await this.page.keyboard.press('Enter');
-          await this.logInfo('2FA code submitted');
-          
-          await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }).catch(() => {
-            this.logInfo('Navigation timeout after 2FA');
-          });
-          
+      if (!needsVerification) {
+        // Also check page content for verification indicators
+        const pageContent = await this.page.content();
+        const hasVerificationContent = pageContent.includes('Verification method') ||
+                                     pageContent.includes('nw-signin-verification') ||
+                                     pageContent.includes('verification-pulse-link') ||
+                                     pageContent.includes('sms-verification-link');
+        
+        if (!hasVerificationContent) {
+          await this.logInfo('No 2FA required');
           return true;
-        } catch (e) {
-          // Try next selector
         }
       }
 
-      await this.logError('2FA field not found');
-      return false;
+      await this.logInfo('2FA verification required, using automated OTP handler');
+      await this.takeScreenshot('booking-2fa-page.png');
+
+      try {
+        // Use the new automated OTP verification handler
+        await handleBookingOtpVerification(this.browser, this.page);
+        await this.logInfo('Automated OTP verification completed successfully');
+        return true;
+      } catch (otpError) {
+        await this.logError('Automated OTP verification failed, falling back to manual method', otpError);
+        
+        // Fallback to manual 2FA if automated fails
+        if (this.sessionUrl) {
+          await this.logInfo(`Manual 2FA can be completed in Browserless UI: ${this.sessionUrl}`);
+        }
+
+        // Try to find OTP input field for manual entry
+        for (const selector of BookingScraper.SELECTORS.tfaSelectors) {
+          try {
+            await this.page.waitForSelector(selector, { timeout: 10000 });
+            await this.logInfo(`Found 2FA field for manual entry: ${selector}`);
+            
+            const code = await this.prompt2FA(options?.timeout || 120000);
+            await this.page.type(selector, code, { delay: 100 });
+            await this.page.keyboard.press('Enter');
+            await this.logInfo('Manual 2FA code submitted');
+            
+            await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }).catch(() => {
+              this.logInfo('Navigation timeout after manual 2FA');
+            });
+            
+            return true;
+          } catch (e) {
+            // Try next selector
+            continue;
+          }
+        }
+
+        await this.logError('Both automated and manual 2FA methods failed');
+        return false;
+      }
     } catch (error) {
       await this.logError('2FA handling failed', error);
       return false;
