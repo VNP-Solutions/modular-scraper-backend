@@ -1,6 +1,8 @@
 import { Page } from "puppeteer";
 import { progressManager } from "../common/progress-manager.js";
 import { timeoutManager } from "../common/timeout-manager.js";
+import { progressManager } from "../common/progress-manager.js";
+import { timeoutManager } from "../common/timeout-manager.js";
 
 const calculateMonthsToNavigate = (
   currentMonth: string,
@@ -41,8 +43,12 @@ export async function setDateRange(
 
       // Send email notification for date range setting error
       if (jobId) {
-        try {        } catch (emailError) {
-          console.error("Failed to send date range setting error notification:", emailError);
+        try {
+        } catch (emailError) {
+          console.error(
+            "Failed to send date range setting error notification:",
+            emailError
+          );
         }
       }
 
@@ -77,8 +83,12 @@ export async function setDateRange(
 
   // Send final email notification if all attempts failed
   if (jobId) {
-    try {    } catch (emailError) {
-      console.error("Failed to send final date range setting error notification:", emailError);
+    try {
+    } catch (emailError) {
+      console.error(
+        "Failed to send final date range setting error notification:",
+        emailError
+      );
     }
   }
 
@@ -165,14 +175,18 @@ async function setDateRangeInternal(
     );
     if (!fromDateInput) {
       const error = new Error("From date input not found");
-      
+
       // Send email notification for from date input not found
       if (jobId) {
-        try {        } catch (emailError) {
-          console.error("Failed to send from date input error notification:", emailError);
+        try {
+        } catch (emailError) {
+          console.error(
+            "Failed to send from date input error notification:",
+            emailError
+          );
         }
       }
-      
+
       throw error;
     }
 
@@ -720,14 +734,18 @@ async function setDateRangeInternal(
     return { from: fromValue, to: toValue };
   } catch (error: any) {
     console.error("Error setting date range:", error);
-    
+
     // Send email notification for general date range setting error
     if (jobId) {
-      try {      } catch (emailError) {
-        console.error("Failed to send date range setting internal error notification:", emailError);
+      try {
+      } catch (emailError) {
+        console.error(
+          "Failed to send date range setting internal error notification:",
+          emailError
+        );
       }
     }
-    
+
     throw error;
   }
 }

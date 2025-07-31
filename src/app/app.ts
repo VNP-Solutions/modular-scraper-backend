@@ -10,7 +10,6 @@ import {
   initializeJobLogging,
 } from "../common/log-helper.js";
 import { progressManager } from "../common/progress-manager.js";
-import { progressManager } from "../common/progress-manager.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import { specs, swaggerUi } from "../config/swagger.js";
 import { getAccess, getOauth2Callback } from "../get-access/access.js";
@@ -1135,7 +1134,7 @@ app.post("/api/expedia/reservation-run-job", (async (
     console.error("Error in /api/expedia/reservation-run-job:", err);
 
     // Send email notification for reservation API error
-    const possibleJobId = `reservation_job_${Date.now()}`;// Try to finalize logging if we can determine the jobId
+    const possibleJobId = `reservation_job_${Date.now()}`; // Try to finalize logging if we can determine the jobId
     try {
       await dualLogError(`Reservation run job error`, err, { possibleJobId });
       await finalizeJobLogging("failed");
