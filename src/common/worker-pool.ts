@@ -54,23 +54,12 @@ export class WorkerPool extends EventEmitter {
 
   private createWorker(workerId: string): void {
     try {
-      // Determine the correct worker path based on environment
-      const isDevelopment = process.env.NODE_ENV !== "production";
-      let workerPath: string;
-
-      if (isDevelopment) {
-        // In development, use the TypeScript loader to run the .ts file
-        workerPath = path.resolve(__dirname, "../workers/scraping-worker.ts");
-      } else {
-        // In production, use the compiled .js file
-        workerPath = path.resolve(__dirname, "../workers/scraping-worker.js");
-      }
-
+      // Use the compiled JavaScript file from dist folder
+      const workerPath = path.resolve(__dirname, "../../dist/workers/scraping-worker.js");
+      
       console.log(`Creating worker with path: ${workerPath}`);
 
-      const worker = new Worker(workerPath, {
-        execArgv: isDevelopment ? ["--loader", "ts-node/esm"] : [],
-      });
+      const worker = new Worker(workerPath);
 
       const workerInfo: WorkerInfo = {
         id: workerId,

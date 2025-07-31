@@ -36,6 +36,48 @@ export function decrypt(encryptedData: {
   }
 }
 
+export function encrypt(text: string): {
+  encrypted: string;
+  iv: string;
+  authTag: string;
+} {
+  try {
+    if (!secretKey) {
+      throw new Error('ENCRYPTION_KEY environment variable is not set');
+    }
+
+    // Generate random IV
+    const iv = crypto.randomBytes(16);
+    
+    // Create cipher
+    const cipher = crypto.createCipheriv(algorithm, Buffer.from(secretKey), iv);
+    
+    // Encrypt the text
+    let encrypted = cipher.update(text, 'utf8', 'hex');
+    encrypted += cipher.final('hex');
+    
+    // Get auth tag
+    const authTag = cipher.getAuthTag();
+
+    return {
+      encrypted,
+      iv: iv.toString('hex'),
+      authTag: authTag.toString('hex')
+    };
+  } catch (error) {
+    throw new Error(`Encryption failed: ${error}`);
+  }
+}
+
+export function encryptPassword(password: string): string {
+  try {
+    const encryptedData = encrypt(password);
+    return JSON.stringify(encryptedData);
+  } catch (error) {
+    throw new Error(`Failed to encrypt password: ${error}`);
+  }
+}
+
 export function decryptPassword(encryptedPasswordJson: string | undefined | null): string {
   try {
     if (!encryptedPasswordJson) {
