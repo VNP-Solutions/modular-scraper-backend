@@ -1,8 +1,6 @@
 import { Page } from "puppeteer";
 import { progressManager } from "../common/progress-manager.js";
 import { timeoutManager } from "../common/timeout-manager.js";
-import { progressManager } from "../common/progress-manager.js";
-import { timeoutManager } from "../common/timeout-manager.js";
 
 const calculateMonthsToNavigate = (
   currentMonth: string,
