@@ -6,10 +6,30 @@ import { BaseScraper, LoginCredentials, CaptchaHandlerOptions, TwoFactorAuthOpti
 import { timeoutManager } from "../common/timeout-manager.js";
 import handleBookingOtpVerification from "../otp-verification/booking-otp-verification.js";
 
+// Network monitoring interface
+interface NetworkRequest {
+  url: string;
+  method: string;
+  resourceType: string;
+  timestamp: string;
+  failure?: any;
+}
+
+interface NetworkMonitor {
+  failedRequests: NetworkRequest[];
+  blockedRequests: NetworkRequest[];
+  captchaRequests: NetworkRequest[];
+  imageRequests: NetworkRequest[];
+  allRequests: NetworkRequest[];
+  consoleErrors: string[];
+  pageErrors: string[];
+}
+
 export class BookingScraper extends BaseScraper {
   private cookiesFile = 'booking-admin-cookies.json';
   private browserlessToken: string;
   private sessionUrl?: string;
+  private networkMonitor: NetworkMonitor;
 
   private static readonly SELECTORS = {
     email: [
@@ -48,6 +68,15 @@ export class BookingScraper extends BaseScraper {
   constructor() {
     super('booking', 'https://admin.booking.com');
     this.browserlessToken = process.env.BROWSERLESS_TOKEN || '2SXlnLjeZpwR2tV6ab1698bfe680a3959c2c681f06939ee3b';
+    this.networkMonitor = {
+      failedRequests: [],
+      blockedRequests: [],
+      captchaRequests: [],
+      imageRequests: [],
+      allRequests: [],
+      consoleErrors: [],
+      pageErrors: []
+    };
   }
 
   async setupBrowser(jobId?: string): Promise<{ browser: Browser; page: Page }> {
@@ -96,6 +125,12 @@ export class BookingScraper extends BaseScraper {
 
       const page = await browser.newPage();
       
+      // Setup network monitoring
+      this.setupNetworkMonitoring(page);
+      
+      // 🛡️ Configure page to handle CORS and captcha issues
+      await this.configurePageForCaptcha(page);
+      
       await this.logInfo("Connected to Browserless session successfully");
       
       // Set viewport and timeouts
@@ -130,7 +165,7 @@ export class BookingScraper extends BaseScraper {
         await page.setCookie(...cookies);
         await this.logInfo(`Loaded ${cookies.length} saved cookies`);
       }
-
+      
       // Navigate to login page
       await this.logInfo('Navigating to Booking.com admin portal');
       try {
@@ -169,6 +204,9 @@ export class BookingScraper extends BaseScraper {
 
       await this.logInfo('Starting login process');
 
+      // Check captcha elements before starting login
+      await this.checkCaptchaElements();
+
       await this.handleCaptcha({
         type: 'browserless_ui',
         sessionUrl: this.sessionUrl,
@@ -176,7 +214,7 @@ export class BookingScraper extends BaseScraper {
       });
 
       await this.logInfo('Entering email address');
-      
+      await this.delay(2000);
       const emailEntered = await this.enterEmail(credentials.email);
       if (!emailEntered) {
         await this.takeScreenshot('booking-no-email-field.png');
@@ -191,7 +229,7 @@ export class BookingScraper extends BaseScraper {
       }
 
       await this.takeScreenshot('booking-after-email.png');
-      await this.delay(5000);
+      await this.delay(6000);
 
       // Check for captcha after email submission
       await this.handleCaptcha({
@@ -450,10 +488,17 @@ export class BookingScraper extends BaseScraper {
 
   async cleanup(): Promise<void> {
     try {
+      // Print network monitoring summary
+      this.printNetworkSummary();
+      
+      // Save network debug information
+      this.saveNetworkDebugInfo();
+      
       if (this.browser) {
         await this.browser.close();
-        await this.logInfo('Browser closed successfully');
+        this.browser = null;
       }
+      await this.logInfo('Booking scraper cleanup completed');
     } catch (error) {
       await this.logError('Cleanup failed', error);
     }
@@ -470,7 +515,7 @@ export class BookingScraper extends BaseScraper {
         args: [
           "--no-sandbox",
           "--disable-dev-shm-usage",
-          "--disable-background-timer-throttling"
+          "--disable-background-timer-throttling",
         ],
       };
   
@@ -737,5 +782,246 @@ export class BookingScraper extends BaseScraper {
         return true;
       }
     );
+  }
+
+  // Check captcha elements on the page
+  private async checkCaptchaElements(): Promise<void> {
+    if (!this.page) return;
+
+    try {
+      const elements = await this.page.evaluate(() => {
+        return {
+          iframes: document.querySelectorAll('iframe[src*="recaptcha"]').length,
+          captchaDivs: document.querySelectorAll('.g-recaptcha').length,
+          captchaImages: document.querySelectorAll('img[src*="captcha"]').length,
+          allImages: document.querySelectorAll('img').length,
+          allIframes: document.querySelectorAll('iframe').length,
+          brokenImages: Array.from(document.querySelectorAll('img')).filter(img => !img.complete || img.naturalWidth === 0).length
+        };
+      });
+
+      this.logInfo('CAPTCHA ELEMENTS CHECK:');
+      this.logInfo(`Total iframes: ${elements.allIframes}`);
+      this.logInfo(`Captcha iframes: ${elements.iframes}`);
+      this.logInfo(`Total images: ${elements.allImages}`);
+      this.logInfo(`Captcha images: ${elements.captchaImages}`);
+      this.logInfo(`Broken images: ${elements.brokenImages}`);
+
+      // Take screenshot for debugging
+      await this.takeScreenshot('booking-captcha-elements.png');
+
+    } catch (error) {
+      this.logError('Failed to check captcha elements:', error);
+    }
+  }
+
+  // Configure page to handle CORS and captcha issues
+  private async configurePageForCaptcha(page: Page): Promise<void> {
+    this.logInfo('Configuring page for captcha handling...');
+
+    // Set extra headers to appear more like a real browser
+    await page.setExtraHTTPHeaders({
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.5',
+      'Accept-Encoding': 'gzip, deflate, br',
+      'DNT': '1',
+      'Connection': 'keep-alive',
+      'Upgrade-Insecure-Requests': '1',
+      'Sec-Fetch-Dest': 'document',
+      'Sec-Fetch-Mode': 'navigate',
+      'Sec-Fetch-Site': 'none',
+      'Sec-Fetch-User': '?1',
+      'Cache-Control': 'max-age=0'
+    });
+
+    // Set user agent to a more common one
+    await page.setUserAgent(
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    );
+
+    // Disable web security to handle CORS issues (for testing)
+    await page.setBypassCSP(true);
+
+    // Handle custom element registration conflicts
+    await page.evaluateOnNewDocument(() => {
+      // Prevent multiple captcha element registrations
+      const originalDefine = customElements.define;
+      const registeredElements = new Set();
+      
+      customElements.define = function(name, constructor, options) {
+        if (registeredElements.has(name)) {
+          console.log(`Skipping duplicate element registration: ${name}`);
+          return;
+        }
+        registeredElements.add(name);
+        return originalDefine.call(this, name, constructor, options);
+      };
+    });
+
+    this.logInfo('Page configured for captcha handling');
+  }
+
+  // Setup network monitoring on a page
+  private setupNetworkMonitoring(page: Page): void {
+    this.logInfo('Setting up network monitoring...');
+
+    // Monitor all requests
+    page.on('request', request => {
+      const url = request.url();
+      const resourceType = request.resourceType();
+      const method = request.method();
+      
+      const requestInfo: NetworkRequest = {
+        url,
+        resourceType,
+        method,
+        timestamp: new Date().toISOString()
+      };
+      
+      this.networkMonitor.allRequests.push(requestInfo);
+
+      // Track captcha-related requests
+      if (url.includes('captcha') || url.includes('recaptcha') || url.includes('gstatic') || url.includes('google')) {
+        this.networkMonitor.captchaRequests.push(requestInfo);
+        this.logInfo(`Captcha request: ${method} ${url}`);
+      }
+      
+      // Track image requests
+      if (resourceType === 'image') {
+        this.networkMonitor.imageRequests.push(requestInfo);
+        this.logInfo(`Image request: ${url}`);
+      }
+    });
+
+    // Monitor failed requests
+    page.on('requestfailed', (request: any) => {
+      const url = request.url();
+      const failure = request.failure();
+      
+      const failedRequest: NetworkRequest = {
+        url,
+        method: request.method(),
+        resourceType: request.resourceType(),
+        timestamp: new Date().toISOString(),
+        failure
+      };
+      
+      this.networkMonitor.failedRequests.push(failedRequest);
+      
+      this.logError(`============= Request failed: ${url}`);
+      this.logError(`   Method: ${request.method()}`);
+      this.logError(`   Resource Type: ${request.resourceType()}`);
+      this.logError(`   Failure: ${failure?.errorText || 'Unknown'}`);
+    });
+
+    // Monitor blocked requests
+    page.on('requestaborted', (request: any) => {
+      const url = request.url();
+      
+      const blockedRequest: NetworkRequest = {
+        url,
+        method: request.method(),
+        resourceType: request.resourceType(),
+        timestamp: new Date().toISOString()
+      };
+      
+      this.networkMonitor.blockedRequests.push(blockedRequest);
+      
+      this.logError(`=============== Request blocked: ${url}`);
+      this.logError(`   Method: ${request.method()}`);
+      this.logError(`   Resource Type: ${request.resourceType()}`);
+    });
+
+    // Monitor responses
+    page.on('response', response => {
+      const url = response.url();
+      const status = response.status();
+      
+      if (status >= 400) {
+        this.logError(`⚠️ Response error ${status}: ${url}`);
+      }
+      
+      // Check for captcha-related responses
+      if (url.includes('captcha') || url.includes('recaptcha')) {
+        this.logInfo(`Captcha response ${status}: ${url}`);
+      }
+    });
+
+    // Monitor console errors
+    page.on('console', msg => {
+      if (msg.type() === 'error') {
+        const errorMsg = `Console error: ${msg.text()}`;
+        this.networkMonitor.consoleErrors.push(errorMsg);
+        this.logError(`----------- ${errorMsg}`);
+      }
+    });
+
+    // Monitor page errors
+    page.on('pageerror', error => {
+      const errorMsg = `Page error: ${error.message}`;
+      this.networkMonitor.pageErrors.push(errorMsg);
+      this.logError(`----------- ${errorMsg}`);
+    });
+  }
+
+  // Get network monitoring summary
+  private getNetworkSummary(): any {
+    return {
+      totalRequests: this.networkMonitor.allRequests.length,
+      failedRequests: this.networkMonitor.failedRequests.length,
+      blockedRequests: this.networkMonitor.blockedRequests.length,
+      captchaRequests: this.networkMonitor.captchaRequests.length,
+      imageRequests: this.networkMonitor.imageRequests.length,
+      consoleErrors: this.networkMonitor.consoleErrors.length,
+      pageErrors: this.networkMonitor.pageErrors.length,
+      timestamp: new Date().toISOString()
+    };
+  }
+
+  // Print network monitoring summary
+  private printNetworkSummary(): void {
+    const summary = this.getNetworkSummary();
+    
+    this.logInfo('\n📋 NETWORK MONITOR SUMMARY:');
+    this.logInfo(`Total requests: ${summary.totalRequests}`);
+    this.logInfo(`Failed requests: ${summary.failedRequests}`);
+    this.logInfo(`Blocked requests: ${summary.blockedRequests}`);
+    this.logInfo(`Captcha requests: ${summary.captchaRequests}`);
+    this.logInfo(`Image requests: ${summary.imageRequests}`);
+    this.logInfo(`Console errors: ${summary.consoleErrors}`);
+    this.logInfo(`Page errors: ${summary.pageErrors}`);
+
+    if (this.networkMonitor.failedRequests.length > 0) {
+      this.logInfo('\nFAILED REQUESTS:');
+      this.networkMonitor.failedRequests.forEach(req => {
+        this.logError(`   ${req.method} ${req.url}`);
+        this.logError(`   Resource: ${req.resourceType}`);
+        this.logError(`   Error: ${req.failure?.errorText || 'Unknown'}`);
+      });
+    }
+
+    if (this.networkMonitor.captchaRequests.length > 0) {
+      this.logInfo('\nCAPTCHA REQUESTS:');
+      this.networkMonitor.captchaRequests.forEach(req => {
+        this.logInfo(`   ${req.method} ${req.url}`);
+      });
+    }
+  }
+
+  // Save network debug information
+  private saveNetworkDebugInfo(filename: string = 'booking-network-debug.json'): void {
+    const debugInfo = {
+      summary: this.getNetworkSummary(),
+      failedRequests: this.networkMonitor.failedRequests,
+      blockedRequests: this.networkMonitor.blockedRequests,
+      captchaRequests: this.networkMonitor.captchaRequests,
+      imageRequests: this.networkMonitor.imageRequests,
+      consoleErrors: this.networkMonitor.consoleErrors,
+      pageErrors: this.networkMonitor.pageErrors,
+      allRequests: this.networkMonitor.allRequests
+    };
+
+    fs.writeFileSync(filename, JSON.stringify(debugInfo, null, 2));
+    this.logInfo(`Network debug info saved to ${filename}`);
   }
 }
