@@ -125,11 +125,11 @@ export class BookingScraper extends BaseScraper {
       }
 
       // Load saved cookies if they exist
-      // if (fs.existsSync(this.cookiesFile)) {
-      //   const cookies = JSON.parse(fs.readFileSync(this.cookiesFile, 'utf8'));
-      //   await page.setCookie(...cookies);
-      //   await this.logInfo(`Loaded ${cookies.length} saved cookies`);
-      // }
+      if (fs.existsSync(this.cookiesFile)) {
+        const cookies = JSON.parse(fs.readFileSync(this.cookiesFile, 'utf8'));
+        await page.setCookie(...cookies);
+        await this.logInfo(`Loaded ${cookies.length} saved cookies`);
+      }
 
       // Navigate to login page
       await this.logInfo('Navigating to Booking.com admin portal');

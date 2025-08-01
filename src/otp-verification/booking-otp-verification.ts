@@ -1,93 +1,19 @@
 import dotenv from "dotenv";
-import fs from "fs";
-import { google } from "googleapis";
 import { Browser, Page } from "puppeteer";
 import { delay } from "../common/delay.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
-import { scrapingStateManager } from "../common/scraping-state.js";
-import { timeoutManager } from "../common/timeout-manager.js";
-import { oauth2Client } from "../config/google-config.js";
+import { getVerificationCode } from "./email-verification-utils.js";
+import { 
+  validatePhoneLastThreeDigits,
+  initializeStateManager,
+  getTimeoutConfig,
+  submitOtpForm,
+  waitForNavigation,
+  closeBrowserOnError
+} from "./otp-common-utils.js";
 
 dotenv.config();
 
-// Function to load and set credentials (reused from Expedia)
-async function loadCredentials() {
-  try {
-    const tokenPath = process.env.TOKEN_PATH || "token.json";
-
-    if (!fs.existsSync(tokenPath)) {
-      throw new Error(
-        `Token file not found at ${tokenPath}. Please run the authentication setup first.`
-      );
-    }
-
-    const token = JSON.parse(fs.readFileSync(tokenPath, "utf8"));
-
-    // Check if refresh token exists
-    if (!token.refresh_token) {
-      throw new Error(
-        "No refresh token found. Please re-authenticate with offline access."
-      );
-    }
-
-    oauth2Client.setCredentials(token);
-    await dualLogInfo("Gmail credentials loaded successfully");
-    return true;
-  } catch (error) {
-    await dualLogError("Error loading credentials:", error);
-    return false;
-  }
-}
-
-// Function to get verification code from email (reused from Expedia)
-async function getVerificationCode() {
-  try {
-    // Load credentials before making API calls
-    const credentialsLoaded = await loadCredentials();
-    if (!credentialsLoaded) {
-      throw new Error(
-        "Failed to load Gmail credentials. Please complete authentication setup first."
-      );
-    }
-
-    const gmail = google.gmail({ version: "v1", auth: oauth2Client });
-    const res = await gmail.users.messages.list({
-      userId: "me",
-      maxResults: 5,
-    });
-
-    if (!res.data.messages) {
-      await dualLogInfo("No new emails found.");
-      return null;
-    }
-
-    for (const msg of res.data.messages) {
-      if (!msg.id) {
-        continue;
-      }
-
-      const email = await gmail.users.messages.get({
-        userId: "me",
-        id: msg.id,
-      });
-
-      const body = email.data.snippet || "";
-      await dualLogInfo("Email body:", body);
-      const codeMatch = body.match(/\b\d{6,10}\b/);
-      await dualLogInfo("Code match:", codeMatch);
-
-      if (codeMatch) {
-        return codeMatch[0];
-      }
-    }
-
-    await dualLogInfo("No verification code found in recent emails.");
-    return null;
-  } catch (error: any) {
-    await dualLogError("Error fetching emails:", error.message);
-    return null;
-  }
-}
 
 async function handleBookingOtpVerification(
   browser: Browser,
@@ -95,19 +21,11 @@ async function handleBookingOtpVerification(
   // jobId?: string
 ): Promise<void> {
   try {
-    // Check if scraping is paused before starting OTP verification (skip in test mode)
-    try {
-      await scrapingStateManager.waitWhilePaused();
-      if (!scrapingStateManager.isRunning()) {
-        await dualLogInfo("Scraping state manager indicates stopped - continuing for test mode");
-      }
-    } catch (error) {
-      await dualLogInfo("Scraping state manager not available - running in test mode");
-    }
+    // Check if scraping is paused before starting OTP verification
+    await initializeStateManager();
 
     // Get timeout configuration for this job
-    // const selectorTimeout = await timeoutManager.getSelectorTimeout(jobId);
-    const selectorTimeout = 30000; // Default 30 seconds
+    const { selectorTimeout, loadingTimeout } = await getTimeoutConfig(/* jobId */);
 
     await dualLogInfo("Looking for Booking.com verification method selection page...");
 
@@ -167,9 +85,6 @@ async function handleBookingOtpVerification(
       await dualLogInfo("Phone number selected, waiting for OTP input page...");
       await delay(5000);
     }
-
-    // Now we should be on the OTP input page
-    await dualLogInfo("Looking for OTP input field...");
     
     // Wait a bit for the page to load after clicking send button
     await delay(5000);
@@ -186,25 +101,6 @@ async function handleBookingOtpVerification(
     const currentUrl = page.url();
     const pageTitle = await page.title();
     await dualLogInfo(`Current page URL: ${currentUrl}`);
-    await dualLogInfo(`Current page title: ${pageTitle}`);
-    
-    // First, let's debug what input fields are actually present
-    const allInputs = await page.evaluate(() => {
-      const inputs = Array.from(document.querySelectorAll('input'));
-      return inputs.map(input => ({
-        type: input.type,
-        name: input.name,
-        id: input.id,
-        className: input.className,
-        placeholder: input.placeholder,
-        maxLength: input.maxLength,
-        inputMode: input.inputMode,
-        autocomplete: input.autocomplete,
-        outerHTML: input.outerHTML.substring(0, 200) // Truncate for readability
-      }));
-    });
-    
-    await dualLogInfo("All input fields found on page:", JSON.stringify(allInputs, null, 2));
     
     // Wait for OTP input field using multiple possible selectors
     let otpInputSelector = null;
@@ -245,13 +141,11 @@ async function handleBookingOtpVerification(
 
     for (const selector of otpSelectors) {
       try {
-        await dualLogInfo(`Trying selector: ${selector}`);
         await page.waitForSelector(selector, {
           visible: true,
-          timeout: 3000, // Reduce timeout per selector to 3 seconds
+          timeout: 3000,
         });
         
-        // Verify the field is actually visible and interactable
         const element = await page.$(selector);
         if (element) {
           const isVisible = await element.isIntersectingViewport();
@@ -378,80 +272,16 @@ async function handleBookingOtpVerification(
     await delay(1000);
 
     // Look for and click submit button
-    const submitSelectors = [
-      'button[type="submit"]',
-      'input[type="submit"]',
-      'button:contains("Continue")',
-      'button:contains("Verify")',
-      'button:contains("Submit")'
-    ];
-
-    let submitClicked = false;
-    for (const selector of submitSelectors) {
-      try {
-        if (selector.includes('contains')) {
-          // Handle text-based selectors
-          const clicked = await page.evaluate((buttonText) => {
-            const buttons = Array.from(document.querySelectorAll('button'));
-            const button = buttons.find(btn => btn.textContent?.includes(buttonText.replace('button:contains("', '').replace('")', '')));
-            if (button && !(button as HTMLButtonElement).disabled) {
-              (button as HTMLElement).click();
-              return true;
-            }
-            return false;
-          }, selector);
-          
-          if (clicked) {
-            await dualLogInfo(`Clicked submit button: ${selector}`);
-            submitClicked = true;
-            break;
-          }
-        } else {
-          const submitButton = await page.$(selector);
-          if (submitButton) {
-            const isDisabled = await page.evaluate(
-              (button) => (button as HTMLButtonElement).disabled,
-              submitButton
-            );
-            
-            if (!isDisabled) {
-              await submitButton.click();
-              await dualLogInfo(`Clicked submit button: ${selector}`);
-              submitClicked = true;
-              break;
-            }
-          }
-        }
-      } catch (e) {
-        continue;
-      }
-    }
-
-    if (!submitClicked) {
-      // Try pressing Enter as fallback
-      await page.keyboard.press('Enter');
-      await dualLogInfo("Pressed Enter as fallback submit method");
-    }
+    await submitOtpForm(page);
 
     // Wait for successful verification
-    // const loadingTimeout = await timeoutManager.getLoadingTimeout(jobId);
-    const loadingTimeout = 120000; // Default 2 minutes
-    await page.waitForNavigation({
-      waitUntil: "networkidle0",
-      timeout: loadingTimeout,
-    }).catch(() => {
-      dualLogInfo("Navigation timeout after OTP submission");
-    });
+    await waitForNavigation(page, loadingTimeout);
 
     await dualLogInfo("Booking.com OTP verification completed successfully!");
 
   } catch (error) {
     await dualLogError("Error in handleBookingOtpVerification:", error);
-    // Close browser when done with this attempt
-    if (browser) {
-      await browser.close();
-    }
-    await dualLogInfo("Browser closed successfully.");
+    await closeBrowserOnError(browser);
     throw error;
   }
 }
@@ -475,7 +305,7 @@ async function selectCorrectPhoneNumber(page: Page /* , jobId?: string */): Prom
           const options = Array.from(phoneSelect.options);
           for (const option of options) {
             const phoneText = option.textContent?.trim() || '';
-            if (phoneText.includes('*') && phoneText.slice(-3) === targetLastThree) {
+            if (phoneText.includes('*') && validatePhoneLastThreeDigits(phoneText, process.env.OUR_CONTACT || "01828704004")) {
               phoneSelect.value = option.value;
               phoneSelect.dispatchEvent(new Event('change', { bubbles: true }));
               return { success: true, phoneNumber: phoneText, method: 'dropdown' };
@@ -489,9 +319,7 @@ async function selectCorrectPhoneNumber(page: Page /* , jobId?: string */): Prom
         for (const element of phoneElements) {
           const phoneText = element.textContent?.trim() || '';
           if (phoneText.includes('*') || phoneText.includes('••')) {
-            // Extract last 3 digits
-            const lastThree = phoneText.slice(-3);
-            if (lastThree === targetLastThree) {
+            if (validatePhoneLastThreeDigits(phoneText, process.env.OUR_CONTACT || "01828704004")) {
               // Look for associated click element (button, link, etc.)
               const clickableParent = element.closest('button, a, [role="button"], .clickable') as HTMLElement;
               if (clickableParent) {
@@ -510,7 +338,7 @@ async function selectCorrectPhoneNumber(page: Page /* , jobId?: string */): Prom
         const clickableElements = document.querySelectorAll('button, a, [role="button"], .clickable');
         for (const element of clickableElements) {
           const text = element.textContent?.trim() || '';
-          if ((text.includes('*') || text.includes('••')) && text.slice(-3) === targetLastThree) {
+          if ((text.includes('*') || text.includes('••')) && validatePhoneLastThreeDigits(text, process.env.OUR_CONTACT || "01828704004")) {
             (element as HTMLElement).click();
             return { success: true, phoneNumber: text, method: 'click_fallback' };
           }
