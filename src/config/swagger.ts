@@ -151,9 +151,16 @@ const options: swaggerJsdoc.Options = {
         name: "Scraping Jobs",
         description: "Endpoints for starting scraping jobs",
       },
+      {
+        name: "Job Monitoring",
+        description: "Endpoints for monitoring job progress and results",
+      },
     ],
   },
-  apis: ["./src/app/*.ts"], // Path to the API docs
+  apis: [
+    "./src/app/*.ts",
+    "./src/routes/**/*.ts", // Include all route files for API documentation
+  ],
 };
 
 const specs = swaggerJsdoc(options);
