@@ -27,8 +27,8 @@ async function main(
   startDate?: string,
   endDate?: string,
   jobId?: string,
-  user_email?: string,
-  user_password?: string
+  expediaUsername?: string,
+  expediaPassword?: string
 ): Promise<void> {
   let jobLogger = null;
   let browser = null;
@@ -44,7 +44,7 @@ async function main(
         expediaId,
         startDate,
         endDate,
-        user_email: user_email ? "[REDACTED]" : undefined,
+        expediaUsername: expediaUsername ? "[REDACTED]" : undefined,
         timeSession: timeManager.getSessionInfo(),
       });
 
@@ -84,8 +84,8 @@ async function main(
         startDate,
         endDate,
         jobId,
-        user_email,
-        user_password
+        expediaUsername,
+        expediaPassword
       );
 
       // End time session on successful completion
@@ -168,8 +168,8 @@ async function runScrapingWithRestart(
   startDate?: string,
   endDate?: string,
   jobId?: string,
-  user_email?: string,
-  user_password?: string
+  expediaUsername?: string,
+  expediaPassword?: string
 ): Promise<void> {
   const environment = process.env.ENVIRONMENT || "production";
   let currentStartDate = startDate;
@@ -231,8 +231,8 @@ async function runScrapingWithRestart(
       }
 
       // Step 2: Check if login credentials are provided
-      const email = user_email;
-      const password = decryptPassword(user_password);
+      const email = expediaUsername;
+      const password = decryptPassword(expediaPassword);
 
       if (email && password) {
         await dualLogInfo(
