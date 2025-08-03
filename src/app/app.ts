@@ -1,4 +1,3 @@
-import { propertyCredentialsService } from '../services/job-credentials.service.js';
 import bodyParser from "body-parser";
 import cors from "cors";
 import express from "express";
@@ -17,6 +16,7 @@ import { getAccess, getOauth2Callback } from "../get-access/access.js";
 import main from "../main.js";
 import { JobStatus } from "../models/job.model.js";
 import reservation from "../reservation/reservation.js";
+import { propertyCredentialsService } from "../services/job-credentials.service.js";
 import { jobQueueUrlService } from "../services/job-queue-url.service.js";
 import { jobService } from "../services/job.service.js";
 
@@ -560,7 +560,8 @@ app.post("/api/expedia/rerun-failed-job", (async (
     // 4. Get expedia_id and credentials from job's property
     console.log(`Getting expedia_id for job ${jobId}...`);
     const jobData = await jobService.getExpediaIdFromJob(jobId);
-    const propertyCredentials = await propertyCredentialsService.getCredentialsByJobId(jobId);
+    const propertyCredentials =
+      await propertyCredentialsService.getCredentialsByJobId(jobId);
 
     if (!jobData || !jobData.expediaId) {
       return res.status(400).json({
@@ -569,7 +570,10 @@ app.post("/api/expedia/rerun-failed-job", (async (
       });
     }
 
-    if (!propertyCredentials?.expediaUsername || !propertyCredentials?.expediaPassword) {
+    if (
+      !propertyCredentials?.expediaUsername ||
+      !propertyCredentials?.expediaPassword
+    ) {
       return res.status(400).json({
         status: 400,
         message: `Cannot retrieve valid expediaUsername or expediaPassword for job ${jobId}. Property may not have expediaUsername or expediaPassword assigned.`,
@@ -840,7 +844,8 @@ app.post("/api/expedia/property-run-job", (async (
     // 2. Get expedia_id from job's property
     console.log(`Getting expedia_id for job ${jobId}...`);
     const jobData = await jobService.getExpediaIdFromJob(jobId);
-    const propertyCredentials = await propertyCredentialsService.getCredentialsByJobId(jobId);
+    const propertyCredentials =
+      await propertyCredentialsService.getCredentialsByJobId(jobId);
 
     if (!jobData || !jobData.expediaId) {
       return res.status(400).json({
@@ -849,7 +854,10 @@ app.post("/api/expedia/property-run-job", (async (
       });
     }
 
-    if (!propertyCredentials?.expediaUsername || !propertyCredentials?.expediaPassword) {
+    if (
+      !propertyCredentials?.expediaUsername ||
+      !propertyCredentials?.expediaPassword
+    ) {
       return res.status(400).json({
         status: 400,
         message: `Cannot retrieve valid expediaUsername or expediaPassword for job ${jobId}. Property may not have expediaUsername or expediaPassword assigned.`,
