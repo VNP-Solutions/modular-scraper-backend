@@ -5,16 +5,25 @@ import fetch from 'node-fetch';
 import { BaseScraper, LoginCredentials, CaptchaHandlerOptions, TwoFactorAuthOptions, ScrapingJobParams, ScrapingResult } from "./base-scraper.js";
 import { timeoutManager } from "../common/timeout-manager.js";
 import handleBookingOtpVerification from "../otp-verification/booking-otp-verification.js";
+import { SelectorUtils } from "../common/selector-utils.js";
+import { 
+  BookingErrorType, 
+  BookingScrapingPhase, 
+  shouldRetryBookingError, 
+  getBookingErrorDescription 
+} from "../common/booking-error-types.js";
+import { dualLogError } from "../common/log-helper.js";
 
 export class BookingScraper extends BaseScraper {
   private cookiesFile = 'booking-admin-cookies.json';
   private browserlessToken: string;
   private sessionUrl?: string;
 
-  private static readonly SELECTORS = {
+  // Keep selectors in booking-scraper as exportable const
+  public static readonly SELECTORS = {
     email: [
-      'input[name="loginname"]',
       'input[name="username"]',
+      'input[name="loginname"]',
       '#username',
       'input[type="email"]',
       'input[placeholder*="email"]'
@@ -37,13 +46,20 @@ export class BookingScraper extends BaseScraper {
       'input[type="submit"]'
     ],
     tfaSelectors: [
+      'input[autocomplete="one-time-code"]',
       'input[type="text"][maxlength="6"]',
       'input[name="pin"]',
       'input[name="code"]',
-      'input[placeholder*="code"]',
-      'input[autocomplete="one-time-code"]'
+      'input[placeholder*="code"]'
+    ],
+    errorMessages: [
+      '.error-block',
+      '.error-message',
+      '.alert-error',
+      '.error',
+      '.login-error'
     ]
-  };
+  } as const;
 
   constructor() {
     super('booking', 'https://admin.booking.com');
@@ -61,9 +77,7 @@ export class BookingScraper extends BaseScraper {
       // Create Browserless session for UI access
       const session = await this.createBrowserlessSession();
       if (session && session.id) {
-        this.sessionUrl = `https://production-sfo.browserless.io/sessions/${session.id}?token=${this.browserlessToken}`;
-        await this.logInfo("Browserless UI session created", { sessionUrl: this.sessionUrl });
-        console.log("Session URL for manual access:", this.sessionUrl);
+        await this.logInfo("Browserless UI session created");
       } else {
         await this.logInfo("Failed to create Browserless session, falling back to local browser");
         // Fallback to local browser
@@ -264,6 +278,9 @@ export class BookingScraper extends BaseScraper {
       await this.logInfo('Waiting for login response');
       await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
 
+      // Check for login errors
+      await this.checkLoginErrors();
+
       // Save cookies on successful login
       const finalUrl = this.page.url();
       if ((finalUrl.includes('admin.booking.com') || finalUrl.includes('account.business.booking.com') || finalUrl.includes('partner')) && !finalUrl.includes('sign-in')) {
@@ -285,14 +302,29 @@ export class BookingScraper extends BaseScraper {
           await this.logInfo(`Saved ${cookies.length} cookies after 2FA`);
           await this.takeScreenshot('booking-admin-dashboard-after-2fa.png');
         } else {
-          await this.logError('2FA verification failed');
+          await dualLogError(
+            `[${new Date().toISOString()}] ${getBookingErrorDescription(BookingErrorType.TWO_FA_ERROR)}`,
+            {
+              errorType: BookingErrorType.TWO_FA_ERROR,
+              phase: BookingScrapingPhase.LOGIN,
+              platform: 'booking'
+            }
+          );
           await this.takeScreenshot('booking-2fa-failed.png');
           throw new Error('2FA verification failed');
         }
       }
 
     } catch (error) {
-      await this.logError('Login failed', error);
+      await dualLogError(
+        `[${new Date().toISOString()}] ${getBookingErrorDescription(BookingErrorType.LOGIN_FAILED)}`,
+        {
+          errorType: BookingErrorType.LOGIN_FAILED,
+          error: error,
+          phase: BookingScrapingPhase.LOGIN,
+          platform: 'booking'
+        }
+      );
       await this.takeScreenshot('booking-login-error.png');
       throw error;
     }
@@ -323,7 +355,15 @@ export class BookingScraper extends BaseScraper {
         return await this.solveCaptchaManually(options?.timeout || 180000);
       }
     } catch (error) {
-      await this.logError('Captcha handling failed', error);
+      await dualLogError(
+        `[${new Date().toISOString()}] ${getBookingErrorDescription(BookingErrorType.CAPTCHA)}`,
+        {
+          errorType: BookingErrorType.CAPTCHA,
+          error: error,
+          phase: BookingScrapingPhase.LOGIN,
+          platform: 'booking'
+        }
+      );
       return false;
     }
   }
@@ -364,7 +404,15 @@ export class BookingScraper extends BaseScraper {
         await this.logInfo('Automated OTP verification completed successfully');
         return true;
       } catch (otpError) {
-        await this.logError('Automated OTP verification failed, falling back to manual method', otpError);
+        await dualLogError(
+          `[${new Date().toISOString()}] [booking] Automated OTP verification failed, falling back to manual method`,
+          {
+            errorType: BookingErrorType.TWO_FA_ERROR,
+            error: otpError,
+            phase: BookingScrapingPhase.LOGIN,
+            platform: 'booking'
+          }
+        );
         
         // Fallback to manual 2FA if automated fails
         if (this.sessionUrl) {
@@ -393,11 +441,26 @@ export class BookingScraper extends BaseScraper {
           }
         }
 
-        await this.logError('Both automated and manual 2FA methods failed');
+        await dualLogError(
+          `[${new Date().toISOString()}] [booking] Both automated and manual 2FA methods failed`,
+          {
+            errorType: BookingErrorType.TWO_FA_ERROR,
+            phase: BookingScrapingPhase.LOGIN,
+            platform: 'booking'
+          }
+        );
         return false;
       }
     } catch (error) {
-      await this.logError('2FA handling failed', error);
+      await dualLogError(
+        `[${new Date().toISOString()}] ${getBookingErrorDescription(BookingErrorType.TWO_FA_ERROR)}`,
+        {
+          errorType: BookingErrorType.TWO_FA_ERROR,
+          error: error,
+          phase: BookingScrapingPhase.LOGIN,
+          platform: 'booking'
+        }
+      );
       return false;
     }
   }
@@ -412,7 +475,16 @@ export class BookingScraper extends BaseScraper {
       await this.logInfo('Property search not yet implemented for Booking.com');
       return true;
     } catch (error) {
-      await this.logError('Property search failed', error);
+      await dualLogError(
+        `[${new Date().toISOString()}] ${getBookingErrorDescription(BookingErrorType.PROPERTY_NOT_FOUND)}`,
+        {
+          errorType: BookingErrorType.PROPERTY_NOT_FOUND,
+          error: error,
+          phase: BookingScrapingPhase.PROPERTY_SEARCH,
+          propertyId,
+          platform: 'booking'
+        }
+      );
       return false;
     }
   }
@@ -439,7 +511,17 @@ export class BookingScraper extends BaseScraper {
         screenshots: ['booking-scraping-complete.png']
       };
     } catch (error) {
-      await this.logError('Data scraping failed', error);
+      await dualLogError(
+        `[${new Date().toISOString()}] ${getBookingErrorDescription(BookingErrorType.PRICE_NOT_FOUND)}`,
+        {
+          errorType: BookingErrorType.PRICE_NOT_FOUND,
+          error: error,
+          phase: BookingScrapingPhase.PRICE_EXTRACTION,
+          jobId: params.jobId,
+          propertyId: params.propertyId,
+          platform: 'booking'
+        }
+      );
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Scraping failed',
@@ -657,85 +739,124 @@ export class BookingScraper extends BaseScraper {
     });
   }
 
-  // Helper function to try multiple selectors
-  private async trySelectors(
-    selectors: string[], 
-    action: (selector: string) => Promise<boolean>, 
-    timeout: number = 10000
-  ): Promise<boolean> {
-    if (!this.page) return false;
-
-    for (const selector of selectors) {
-      try {
-        // Wait for selector to be visible
-        await this.page.waitForSelector(selector, { visible: true, timeout });
-        
-        // Check if element exists and is visible
-        const element = await this.page.$(selector);
-        if (!element) continue;
-        
-        const isVisible = await element.isIntersectingViewport();
-        if (!isVisible) continue;
-        
-        // Try to perform the action
-        const success = await action(selector);
-        if (success) {
-          await this.logInfo(`Action successful with selector: ${selector}`);
-          return true;
-        }
-      } catch (error) {
-        // Try next selector silently
-        continue;
-      }
-    }
-    
-    await this.logError(`All selectors failed: ${selectors.join(', ')}`);
-    return false;
-  }
-
   private async enterEmail(email: string): Promise<boolean> {
-    return await this.trySelectors(
-      BookingScraper.SELECTORS.email,
-      async (selector: string) => {
-        await this.page!.click(selector);
-        await this.page!.type(selector, email, { delay: 100 });
-        await this.logInfo(`Email entered: ${email}`);
-        return true;
-      }
-    );
+    return await SelectorUtils.findAndType(this.page!, [...BookingScraper.SELECTORS.email], email);
   }
 
   private async enterPassword(password: string): Promise<boolean> {
-    return await this.trySelectors(
-      BookingScraper.SELECTORS.password,
-      async (selector: string) => {
-        await this.page!.click(selector);
-        await this.page!.type(selector, password, { delay: 100 });
-        await this.logInfo('Password entered');
-        return true;
-      }
-    );
+    return await SelectorUtils.findAndType(this.page!, [...BookingScraper.SELECTORS.password], password);
   }
 
   private async clickLoginButton(): Promise<boolean> {
-    return await this.trySelectors(
-      BookingScraper.SELECTORS.loginButton,
-      async (selector: string) => {
-        await this.page!.click(selector);
-        await this.logInfo('Login button clicked');
-        return true;
-      }
-    );
+    return await SelectorUtils.findAndClick(this.page!, [...BookingScraper.SELECTORS.loginButton]);
   }
 
   private async clickContinueButton(): Promise<boolean> {
-    return await this.trySelectors(
-      BookingScraper.SELECTORS.continueButton,
-      async (selector: string) => {
-        await this.page!.click(selector);
-        await this.logInfo('Continue button clicked');
-        return true;
+    return await SelectorUtils.findAndClick(this.page!, [...BookingScraper.SELECTORS.continueButton]);
+  }
+
+  // Enhanced error check using booking error types
+  private async checkLoginErrors(): Promise<void> {
+    try {
+      // Wait a bit for any error messages to appear
+      await new Promise(resolve => setTimeout(resolve, 2000));
+
+      // Check for error messages using SelectorUtils.trySelectors
+      const hasError = await SelectorUtils.trySelectors(
+        this.page!,
+        [...BookingScraper.SELECTORS.errorMessages],
+        async (selector: string) => {
+          const element = await this.page!.$(selector);
+          if (element) {
+            const errorText = await element.evaluate(el => el.textContent?.trim());
+            if (errorText) {
+              // Determine error type based on error text content
+              const errorType = this.determineLoginErrorType(errorText);
+              const errorDescription = getBookingErrorDescription(errorType);
+              const shouldRetry = shouldRetryBookingError(errorType);
+              
+              // Log with proper error type and context
+              await dualLogError(
+                `[${new Date().toISOString()}] ${errorDescription}`,
+                {
+                  errorType,
+                  errorText,
+                  shouldRetry,
+                  phase: BookingScrapingPhase.LOGIN,
+                  selector,
+                  platform: 'booking'
+                }
+              );
+              
+              await this.takeScreenshot('booking-login-error.png');
+              return true;
+            }
+          }
+          return false;
+        },
+        5000 // 5 second timeout
+      );
+
+      if (hasError) {
+        throw new Error('Login failed - error message detected');
       }
-    );
+
+      await this.logInfo('Login error check passed - no errors detected');
+
+    } catch (error) {
+      await dualLogError(
+        `[${new Date().toISOString()}] ${getBookingErrorDescription(BookingErrorType.UNKNOWN)}`,
+        {
+          errorType: BookingErrorType.UNKNOWN,
+          error: error,
+          phase: BookingScrapingPhase.LOGIN,
+          platform: 'booking'
+        }
+      );
+      throw error;
+    }
+  }
+
+  // Helper method to determine error type from error text
+  private determineLoginErrorType(errorText: string): BookingErrorType {
+    const lowerErrorText = errorText.toLowerCase();
+    
+    // Authentication errors
+    if (lowerErrorText.includes("don't match") || 
+        lowerErrorText.includes("incorrect") || 
+        lowerErrorText.includes("invalid credentials")) {
+      return BookingErrorType.AUTHENTICATION_ERROR;
+    }
+    
+    // Account locked/blocked
+    if (lowerErrorText.includes("locked") || 
+        lowerErrorText.includes("blocked") || 
+        lowerErrorText.includes("suspended")) {
+      return BookingErrorType.BLOCKED;
+    }
+    
+    // Rate limiting
+    if (lowerErrorText.includes("too many") || 
+        lowerErrorText.includes("rate limit") || 
+        lowerErrorText.includes("try again later")) {
+      return BookingErrorType.RATE_LIMITED;
+    }
+    
+    // CAPTCHA
+    if (lowerErrorText.includes("captcha") || 
+        lowerErrorText.includes("verify") || 
+        lowerErrorText.includes("robot")) {
+      return BookingErrorType.CAPTCHA;
+    }
+    
+    // Network/connection issues
+    if (lowerErrorText.includes("connection") || 
+        lowerErrorText.includes("network") || 
+        lowerErrorText.includes("timeout")) {
+      return BookingErrorType.NETWORK_ERROR;
+    }
+    
+    // Default to login failed for other cases
+    return BookingErrorType.LOGIN_FAILED;
   }
 }
