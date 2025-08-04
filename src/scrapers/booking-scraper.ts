@@ -58,7 +58,16 @@ export class BookingScraper extends BaseScraper {
       '.alert-error',
       '.error',
       '.login-error'
-    ]
+    ],
+    navigation: {
+      financeMenu: 'li[data-nav-tag="finance"] button[data-tid="item-link"]',
+      vccsManagementLink: 'li[data-nav-tag="vccs_management"] a[data-tid="item-link"]',
+      financeMenuContainer: 'li[data-nav-tag="finance"]',
+      vccsManagementContainer: 'li[data-nav-tag="vccs_management"]'
+    },
+    vccs: {
+      vccsToChargeLink: 'a[href*="route=vccs_to_charge"]'
+    }
   } as const;
 
   constructor() {
@@ -489,6 +498,75 @@ export class BookingScraper extends BaseScraper {
     }
   }
 
+  async clickViewAllVccsToCharge(): Promise<boolean> {
+    return await SelectorUtils.findAndClick(this.page!, [BookingScraper.SELECTORS.vccs.vccsToChargeLink]);
+  }
+
+  async navigateToMenuSection(mainSection: string, subSection: string, expectedUrl: string): Promise<boolean> {
+    if (!this.page) throw new Error('Page not initialized');
+
+    try {
+      await this.logInfo(`Navigating to ${subSection} page`);
+      
+      // Wait for the main section menu to be available
+      const mainMenuSelector = `li[data-nav-tag="${mainSection}"]`;
+      await this.page.waitForSelector(mainMenuSelector, { timeout: 30000 });
+      await this.logInfo(`${mainSection} navigation menu found`);
+
+      // Click on the main section menu item to expand it
+      const mainMenuButton = await this.page.$(`${mainMenuSelector} button[data-tid="item-link"]`);
+      if (!mainMenuButton) {
+        throw new Error(`${mainSection} menu button not found`);
+      }
+      
+      await mainMenuButton.click();
+      await this.logInfo(`${mainSection} menu expanded`);
+      
+      // Wait for the submenu to appear
+      const subMenuSelector = `li[data-nav-tag="${subSection}"]`;
+      await this.page.waitForSelector(subMenuSelector, { timeout: 10000 });
+      await this.logInfo(`${subSection} menu item found`);
+
+      // Click on the sub-section link
+      const subSectionLink = await this.page.$(`${subMenuSelector} a[data-tid="item-link"]`);
+      if (!subSectionLink) {
+        throw new Error(`${subSection} link not found`);
+      }
+
+      await subSectionLink.click();
+      await this.logInfo(`Clicked on ${subSection} link`);
+
+      // Wait for navigation to complete
+      await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 });
+      
+      // Verify we're on the correct page
+      const currentUrl = this.page.url();
+      if (!currentUrl.includes(expectedUrl)) {
+        throw new Error(`Navigation failed - expected ${expectedUrl}, got: ${currentUrl}`);
+      }
+
+      await this.logInfo(`Successfully navigated to ${subSection} page`);
+      await this.takeScreenshot(`booking-${subSection}-page.png`);
+      
+      return true;
+
+    } catch (error) {
+      await dualLogError(
+        `[${new Date().toISOString()}] ${getBookingErrorDescription(BookingErrorType.DOM_NOT_FOUND)}`,
+        {
+          errorType: BookingErrorType.DOM_NOT_FOUND,
+          error: error,
+          phase: BookingScrapingPhase.NAVIGATION,
+          platform: 'booking',
+          targetPage: subSection,
+          mainSection: mainSection
+        }
+      );
+      await this.takeScreenshot('booking-navigation-error.png');
+      return false;
+    }
+  }
+
   async scrapeData(params: ScrapingJobParams): Promise<ScrapingResult> {
     try {
       await this.logInfo('Starting data scraping for Booking.com');
@@ -502,7 +580,6 @@ export class BookingScraper extends BaseScraper {
         propertyId: params.propertyId,
         // Add actual scraped data here
       };
-
       await this.takeScreenshot('booking-scraping-complete.png');
       
       return {
@@ -511,6 +588,7 @@ export class BookingScraper extends BaseScraper {
         screenshots: ['booking-scraping-complete.png']
       };
     } catch (error) {
+    
       await dualLogError(
         `[${new Date().toISOString()}] ${getBookingErrorDescription(BookingErrorType.PRICE_NOT_FOUND)}`,
         {
@@ -537,7 +615,16 @@ export class BookingScraper extends BaseScraper {
         await this.logInfo('Browser closed successfully');
       }
     } catch (error) {
-      await this.logError('Cleanup failed', error);
+      await dualLogError(
+        `[${new Date().toISOString()}] ${getBookingErrorDescription(BookingErrorType.UNKNOWN)}`,
+        {
+          errorType: BookingErrorType.UNKNOWN,
+          error: error,
+          phase: BookingScrapingPhase.NAVIGATION,
+          platform: 'booking',
+          action: 'cleanup'
+        }
+      );
     }
   }
 
