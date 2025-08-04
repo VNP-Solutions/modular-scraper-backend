@@ -11,7 +11,10 @@ import { timeoutManager } from "../common/timeout-manager.js";
 import { JobService } from "../services/job.service.js";
 dotenv.config();
 
-export async function browserSetupProduction(jobId?: string): Promise<{
+export async function browserSetupProduction(
+  jobId?: string,
+  platform?: "expedia" | "agoda"
+): Promise<{
   browser: Browser;
   page: Page;
 }> {
@@ -39,15 +42,20 @@ export async function browserSetupProduction(jobId?: string): Promise<{
     try {
       browser = await puppeteer.connect({
         // browserWSEndpoint: `wss://production-sfo.browserless.io?${queryParams.toString()}`,
-        browserWSEndpoint: "wss://production-sfo.browserless.io?token=2SXlnLjeZpwR2tV6ab1698bfe680a3959c2c681f06939ee3b"
+        browserWSEndpoint:
+          "wss://production-sfo.browserless.io?token=2SXlnLjeZpwR2tV6ab1698bfe680a3959c2c681f06939ee3b",
       });
     } catch (error: any) {
       await dualLogError("Error connecting to Browserless:", error);
-      
+
       // Send email notification for browser connection error
       if (jobId) {
-        try {        } catch (emailError) {
-          await dualLogError("Failed to send browser connection error notification:", emailError);
+        try {
+        } catch (emailError) {
+          await dualLogError(
+            "Failed to send browser connection error notification:",
+            emailError
+          );
         }
       }
       throw error;
@@ -55,17 +63,21 @@ export async function browserSetupProduction(jobId?: string): Promise<{
 
     const page: Page = await browser.newPage();
     const cdp = await page.createCDPSession();
-    
+
     try {
       await (cdp as any).send("Browserless.startRecording");
       await dualLogInfo("Recording started successfully");
     } catch (error: any) {
       await dualLogError("Error starting recording:", error);
-      
+
       // Send email notification for recording start error
       if (jobId) {
-        try {        } catch (emailError) {
-          await dualLogError("Failed to send recording start error notification:", emailError);
+        try {
+        } catch (emailError) {
+          await dualLogError(
+            "Failed to send recording start error notification:",
+            emailError
+          );
         }
       }
       // Don't throw here, recording is not critical
@@ -84,11 +96,15 @@ export async function browserSetupProduction(jobId?: string): Promise<{
       await dualLogInfo("Click for live experience:", { liveURL });
     } catch (error: any) {
       await dualLogError("Error generating live URL:", error);
-      
+
       // Send email notification for live URL generation error
       if (jobId) {
-        try {        } catch (emailError) {
-          await dualLogError("Failed to send live URL error notification:", emailError);
+        try {
+        } catch (emailError) {
+          await dualLogError(
+            "Failed to send live URL error notification:",
+            emailError
+          );
         }
       }
       // Continue without live URL
@@ -106,11 +122,15 @@ export async function browserSetupProduction(jobId?: string): Promise<{
         }
       } catch (error: any) {
         await dualLogError("Error storing live URL in database:", error);
-        
+
         // Send email notification for live URL storage error
         if (jobId) {
-          try {          } catch (emailError) {
-            await dualLogError("Failed to send live URL storage error notification:", emailError);
+          try {
+          } catch (emailError) {
+            await dualLogError(
+              "Failed to send live URL storage error notification:",
+              emailError
+            );
           }
         }
         // Continue even if storage fails
@@ -134,14 +154,20 @@ export async function browserSetupProduction(jobId?: string): Promise<{
           maxRetries,
         });
 
-        await page.goto(
-          "https://www.expediapartnercentral.com/Account/Logon?signedOff=true",
-          {
+        if (platform === "expedia") {
+          await page.goto(
+            "https://www.expediapartnercentral.com/Account/Logon?signedOff=true",
+            {
+              waitUntil: "domcontentloaded",
+              timeout: loadingTimeout,
+            }
+          );
+        } else if (platform === "agoda") {
+          await page.goto("https://www.ycs.agoda.com/mldc/en-us/public/login", {
             waitUntil: "domcontentloaded",
             timeout: loadingTimeout,
-          }
-        );
-
+          });
+        }
         // Wait for page to stabilize
         await delay(3000);
 
@@ -164,14 +190,18 @@ export async function browserSetupProduction(jobId?: string): Promise<{
           await dualLogError("All navigation attempts failed", navError, {
             maxRetries,
           });
-          
+
           // Send email notification for navigation failure
           if (jobId) {
-            try {            } catch (emailError) {
-              await dualLogError("Failed to send navigation error notification:", emailError);
+            try {
+            } catch (emailError) {
+              await dualLogError(
+                "Failed to send navigation error notification:",
+                emailError
+              );
             }
           }
-          
+
           throw navError;
         }
       }
@@ -181,14 +211,18 @@ export async function browserSetupProduction(jobId?: string): Promise<{
       const error = new Error(
         "Failed to navigate to the target page after all attempts"
       );
-      
+
       // Send email notification for final navigation failure
       if (jobId) {
-        try {        } catch (emailError) {
-          await dualLogError("Failed to send final navigation error notification:", emailError);
+        try {
+        } catch (emailError) {
+          await dualLogError(
+            "Failed to send final navigation error notification:",
+            emailError
+          );
         }
       }
-      
+
       throw error;
     }
 
@@ -199,8 +233,12 @@ export async function browserSetupProduction(jobId?: string): Promise<{
 
     // Send email notification for general browser setup error
     if (jobId) {
-      try {      } catch (emailError) {
-        await dualLogError("Failed to send browser setup error notification:", emailError);
+      try {
+      } catch (emailError) {
+        await dualLogError(
+          "Failed to send browser setup error notification:",
+          emailError
+        );
       }
     }
 

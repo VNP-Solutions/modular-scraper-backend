@@ -33,9 +33,9 @@ async function reservation(
 
     try {
       if (environment === "production") {
-        setupResult = await browserSetupProduction(jobId);
+        setupResult = await browserSetupProduction(jobId, "expedia");
       } else {
-        setupResult = await browserSetupLocal(jobId);
+        setupResult = await browserSetupLocal(jobId, "expedia");
       }
     } catch (error: any) {
       await dualLogError("Browser setup failed:", error);

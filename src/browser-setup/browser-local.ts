@@ -10,7 +10,10 @@ import { progressManager } from "../common/progress-manager.js";
 import { timeoutManager } from "../common/timeout-manager.js";
 dotenv.config();
 
-export async function browserSetupLocal(jobId?: string): Promise<{
+export async function browserSetupLocal(
+  jobId?: string,
+  platform?: "expedia" | "agoda"
+): Promise<{
   browser: Browser;
   page: Page;
 }> {
@@ -33,11 +36,15 @@ export async function browserSetupLocal(jobId?: string): Promise<{
       });
     } catch (error: any) {
       await dualLogError("Error launching browser:", error);
-      
+
       // Send email notification for browser launch error
       if (jobId) {
-        try {        } catch (emailError) {
-          await dualLogError("Failed to send browser launch error notification:", emailError);
+        try {
+        } catch (emailError) {
+          await dualLogError(
+            "Failed to send browser launch error notification:",
+            emailError
+          );
         }
       }
       throw error;
@@ -70,14 +77,20 @@ export async function browserSetupLocal(jobId?: string): Promise<{
           maxRetries,
         });
 
-        await page.goto(
-          "https://www.expediapartnercentral.com/Account/Logon?signedOff=true",
-          {
+        if (platform === "expedia") {
+          await page.goto(
+            "https://www.expediapartnercentral.com/Account/Logon?signedOff=true",
+            {
+              waitUntil: "domcontentloaded",
+              timeout: loadingTimeout,
+            }
+          );
+        } else if (platform === "agoda") {
+          await page.goto("https://www.ycs.agoda.com/mldc/en-us/public/login", {
             waitUntil: "domcontentloaded",
             timeout: loadingTimeout,
-          }
-        );
-
+          });
+        }
         // Wait for page to stabilize
         await delay(3000);
 
@@ -100,14 +113,18 @@ export async function browserSetupLocal(jobId?: string): Promise<{
           await dualLogError("All navigation attempts failed", navError, {
             maxRetries,
           });
-          
+
           // Send email notification for navigation failure
           if (jobId) {
-            try {            } catch (emailError) {
-              await dualLogError("Failed to send navigation error notification:", emailError);
+            try {
+            } catch (emailError) {
+              await dualLogError(
+                "Failed to send navigation error notification:",
+                emailError
+              );
             }
           }
-          
+
           throw navError;
         }
       }
@@ -117,14 +134,18 @@ export async function browserSetupLocal(jobId?: string): Promise<{
       const error = new Error(
         "Failed to navigate to the target page after all attempts"
       );
-      
+
       // Send email notification for navigation failure
       if (jobId) {
-        try {        } catch (emailError) {
-          await dualLogError("Failed to send final navigation error notification:", emailError);
+        try {
+        } catch (emailError) {
+          await dualLogError(
+            "Failed to send final navigation error notification:",
+            emailError
+          );
         }
       }
-      
+
       throw error;
     }
 
@@ -135,8 +156,12 @@ export async function browserSetupLocal(jobId?: string): Promise<{
 
     // Send email notification for general browser setup error
     if (jobId) {
-      try {      } catch (emailError) {
-        await dualLogError("Failed to send browser setup error notification:", emailError);
+      try {
+      } catch (emailError) {
+        await dualLogError(
+          "Failed to send browser setup error notification:",
+          emailError
+        );
       }
     }
 
