@@ -382,7 +382,7 @@ export class BookingScraper extends BaseScraper {
                                currentUrl.includes('select-phone');
 
       if (!needsVerification) {
-        // Also check page content for verification indicators
+        // Check page content for verification indicators
         const pageContent = await this.page.content();
         const hasVerificationContent = pageContent.includes('Verification method') ||
                                      pageContent.includes('nw-signin-verification') ||
@@ -399,7 +399,6 @@ export class BookingScraper extends BaseScraper {
       await this.takeScreenshot('booking-2fa-page.png');
 
       try {
-        // Use the new automated OTP verification handler
         await handleBookingOtpVerification(this.browser, this.page);
         await this.logInfo('Automated OTP verification completed successfully');
         return true;
@@ -419,7 +418,7 @@ export class BookingScraper extends BaseScraper {
           await this.logInfo(`Manual 2FA can be completed in Browserless UI: ${this.sessionUrl}`);
         }
 
-        // Try to find OTP input field for manual entry
+        // Find OTP input field for manual entry
         for (const selector of BookingScraper.SELECTORS.tfaSelectors) {
           try {
             await this.page.waitForSelector(selector, { timeout: 10000 });
@@ -755,13 +754,12 @@ export class BookingScraper extends BaseScraper {
     return await SelectorUtils.findAndClick(this.page!, [...BookingScraper.SELECTORS.continueButton]);
   }
 
-  // Enhanced error check using booking error types
   private async checkLoginErrors(): Promise<void> {
     try {
-      // Wait a bit for any error messages to appear
+      // Wait for any error messages to appear
       await new Promise(resolve => setTimeout(resolve, 2000));
 
-      // Check for error messages using SelectorUtils.trySelectors
+      // Check for error messages
       const hasError = await SelectorUtils.trySelectors(
         this.page!,
         [...BookingScraper.SELECTORS.errorMessages],
@@ -770,12 +768,11 @@ export class BookingScraper extends BaseScraper {
           if (element) {
             const errorText = await element.evaluate(el => el.textContent?.trim());
             if (errorText) {
-              // Determine error type based on error text content
+              // Determine error type
               const errorType = this.determineLoginErrorType(errorText);
               const errorDescription = getBookingErrorDescription(errorType);
               const shouldRetry = shouldRetryBookingError(errorType);
               
-              // Log with proper error type and context
               await dualLogError(
                 `[${new Date().toISOString()}] ${errorDescription}`,
                 {
@@ -817,7 +814,7 @@ export class BookingScraper extends BaseScraper {
     }
   }
 
-  // Helper method to determine error type from error text
+  // Method to determine error type from error text
   private determineLoginErrorType(errorText: string): BookingErrorType {
     const lowerErrorText = errorText.toLowerCase();
     
