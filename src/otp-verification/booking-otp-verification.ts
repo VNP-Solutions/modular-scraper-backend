@@ -360,7 +360,6 @@ async function selectCorrectPhoneNumber(page: Page /* , jobId?: string */): Prom
         // Look for the specific send verification code button with the exact classes
         const sendButton = document.querySelector('button.nw-request-tfa') as HTMLButtonElement;
 
-        console.log("================", sendButton)
         if (sendButton && sendButton.textContent?.includes('Send verification code')) {
           sendButton.click();
           return true;
