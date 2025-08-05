@@ -6,6 +6,7 @@ import {
   dualLogInfo,
   dualLogWarn,
 } from "../common/log-helper.js";
+import { progressManager } from "../common/progress-manager.js";
 import { timeoutManager } from "../common/timeout-manager.js";
 import { JobService } from "../services/job.service.js";
 dotenv.config();
@@ -35,22 +36,63 @@ export async function browserSetupProduction(jobId?: string): Promise<{
       launch: JSON.stringify(launchArgs),
     });
 
-    browser = await puppeteer.connect({
-      browserWSEndpoint: `wss://production-sfo.browserless.io?${queryParams.toString()}`,
-    });
+    try {
+      browser = await puppeteer.connect({
+        // browserWSEndpoint: `wss://production-sfo.browserless.io?${queryParams.toString()}`,
+        browserWSEndpoint: "wss://production-sfo.browserless.io?token=2SXlnLjeZpwR2tV6ab1698bfe680a3959c2c681f06939ee3b"
+      });
+    } catch (error: any) {
+      await dualLogError("Error connecting to Browserless:", error);
+      
+      // Send email notification for browser connection error
+      if (jobId) {
+        try {        } catch (emailError) {
+          await dualLogError("Failed to send browser connection error notification:", emailError);
+        }
+      }
+      throw error;
+    }
+
     const page: Page = await browser.newPage();
     const cdp = await page.createCDPSession();
-    await (cdp as any).send("Browserless.startRecording");
-    await dualLogInfo("Recording started successfully");
+    
+    try {
+      await (cdp as any).send("Browserless.startRecording");
+      await dualLogInfo("Recording started successfully");
+    } catch (error: any) {
+      await dualLogError("Error starting recording:", error);
+      
+      // Send email notification for recording start error
+      if (jobId) {
+        try {        } catch (emailError) {
+          await dualLogError("Failed to send recording start error notification:", emailError);
+        }
+      }
+      // Don't throw here, recording is not critical
+    }
 
     // // Wait a bit before generating live URL
     await delay(2000);
 
     // Generate live URL for user interaction
-    const { liveURL } = (await (cdp as any).send("Browserless.liveURL", {
-      timeout: 600_000,
-    })) as { liveURL: string };
-    await dualLogInfo("Click for live experience:", { liveURL });
+    let liveURL: string | null = null;
+    try {
+      const liveUrlResponse = (await (cdp as any).send("Browserless.liveURL", {
+        timeout: 600_000,
+      })) as { liveURL: string };
+      liveURL = liveUrlResponse.liveURL;
+      await dualLogInfo("Click for live experience:", { liveURL });
+    } catch (error: any) {
+      await dualLogError("Error generating live URL:", error);
+      
+      // Send email notification for live URL generation error
+      if (jobId) {
+        try {        } catch (emailError) {
+          await dualLogError("Failed to send live URL error notification:", emailError);
+        }
+      }
+      // Continue without live URL
+    }
 
     // Store live URL in database if jobId is provided
     if (jobId && liveURL) {
@@ -62,40 +104,18 @@ export async function browserSetupProduction(jobId?: string): Promise<{
         } else {
           await dualLogWarn(`Failed to store live URL for job: ${jobId}`);
         }
-      } catch (error) {
+      } catch (error: any) {
         await dualLogError("Error storing live URL in database:", error);
+        
+        // Send email notification for live URL storage error
+        if (jobId) {
+          try {          } catch (emailError) {
+            await dualLogError("Failed to send live URL storage error notification:", emailError);
+          }
+        }
+        // Continue even if storage fails
       }
     }
-
-    // const client = await page.createCDPSession();
-    // console.log("client", client);
-    // await openDevtools(page, client);
-
-    //ip check
-
-    // try {
-    //   await page.goto("https://api.ipify.org/?format=json");
-    //   const ipData = await page.evaluate(() => document.body.textContent);
-    //   if (!ipData) {
-    //     throw new Error("Failed to get IP data");
-    //   }
-    //   const ip = JSON.parse(ipData).ip;
-    //   console.log("Current IP:", ip);
-    //   // const location = (await ipLocation(ip)) as any;
-    //   // console.log("Location:", location);
-    //   // if (location?.country?.code !== process.env.LOCATION_COUNTRY_CODE) {
-    //   //   console.log("Not in United States - Stopping server");
-    //   //   process.exit(1);
-    //   // }
-    // } catch (error) {
-    //   console.error("Error checking IP:", error);
-    //   process.exit(1);
-    // }
-
-    // await page.authenticate({
-    //   username: `${process.env.BRIGHT_DATA_USERNAME}`,
-    //   password: `${process.env.BRIGHT_DATA_PASSWORD}`,
-    // });
 
     // Set default timeouts based on job configuration
     await page.setDefaultNavigationTimeout(loadingTimeout);
@@ -144,21 +164,45 @@ export async function browserSetupProduction(jobId?: string): Promise<{
           await dualLogError("All navigation attempts failed", navError, {
             maxRetries,
           });
+          
+          // Send email notification for navigation failure
+          if (jobId) {
+            try {            } catch (emailError) {
+              await dualLogError("Failed to send navigation error notification:", emailError);
+            }
+          }
+          
           throw navError;
         }
       }
     }
 
     if (!navigationSuccess) {
-      throw new Error(
+      const error = new Error(
         "Failed to navigate to the target page after all attempts"
       );
+      
+      // Send email notification for final navigation failure
+      if (jobId) {
+        try {        } catch (emailError) {
+          await dualLogError("Failed to send final navigation error notification:", emailError);
+        }
+      }
+      
+      throw error;
     }
 
     await dualLogInfo("Browser setup completed successfully");
     return { browser, page };
-  } catch (error) {
+  } catch (error: any) {
     await dualLogError("Browser setup failed:", error);
+
+    // Send email notification for general browser setup error
+    if (jobId) {
+      try {      } catch (emailError) {
+        await dualLogError("Failed to send browser setup error notification:", emailError);
+      }
+    }
 
     // Clean up browser if it was created
     if (browser) {

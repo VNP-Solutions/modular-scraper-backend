@@ -2,6 +2,7 @@ import dotenv from "dotenv";
 import { browserSetupLocal } from "./browser-setup/browser-local.js";
 import { browserSetupProduction } from "./browser-setup/browser-prod.js";
 import { delay } from "./common/delay.js";
+import { emailNotifier } from "./common/email-notifier.js";
 import { decryptPassword } from "./common/encription.js";
 import {
   dualLogError,
@@ -17,6 +18,7 @@ import { getNextDateFromCompleted } from "./date-split/helper.js";
 import login from "./login/login.js";
 import handleOtpVerification from "./otp-verification/otp-verification.js";
 import { propertySearchAndClickReservation } from "./property-search/property-search.js";
+import { jobQueueUrlService } from "./services/job-queue-url.service.js";
 
 dotenv.config();
 
@@ -25,8 +27,8 @@ async function main(
   startDate?: string,
   endDate?: string,
   jobId?: string,
-  user_email?: string,
-  user_password?: string
+  expediaUsername?: string,
+  expediaPassword?: string
 ): Promise<void> {
   let jobLogger = null;
   let browser = null;
@@ -42,7 +44,7 @@ async function main(
         expediaId,
         startDate,
         endDate,
-        user_email: user_email ? "[REDACTED]" : undefined,
+        expediaUsername: expediaUsername ? "[REDACTED]" : undefined,
         timeSession: timeManager.getSessionInfo(),
       });
 
@@ -82,8 +84,8 @@ async function main(
         startDate,
         endDate,
         jobId,
-        user_email,
-        user_password
+        expediaUsername,
+        expediaPassword
       );
 
       // End time session on successful completion
@@ -93,7 +95,7 @@ async function main(
       if (jobId) {
         await finalizeJobLogging("success");
       }
-    } catch (error) {
+    } catch (error: any) {
       await dualLogError("Main function error:", error);
 
       // End time session on error
@@ -102,6 +104,13 @@ async function main(
       // Clean up progress file on inner main function error
       if (jobId) {
         await progressManager.handleJobError(jobId, error);
+
+        // Release URL back to Available status on error
+        await jobQueueUrlService.handleJobCompletion(
+          jobId,
+          "Failed",
+          error?.message || "Unknown error"
+        );
       }
 
       // Finalize logging with failed status
@@ -110,8 +119,26 @@ async function main(
       }
       throw error;
     }
-  } catch (error) {
+  } catch (error: any) {
     await dualLogError("Main function error:", error);
+
+    // Send email notification for outer main function error
+    if (jobId) {
+      try {
+        await emailNotifier.notifyJobError(
+          jobId,
+          error?.message || "Unknown error in outer main function",
+          error,
+          {
+            stage: "outer_main_function",
+            progressPercentage: progressManager.getJobProgress(jobId)?.progressPercentage,
+            lastProcessedDate: progressManager.getJobLastProcessedDate(jobId) || undefined,
+          }
+        );
+      } catch (emailError) {
+        await dualLogError("Failed to send error notification email:", emailError);
+      }
+    }
 
     // End time session on error
     await timeManager.endSession();
@@ -119,6 +146,13 @@ async function main(
     // Clean up progress file on main function error
     if (jobId) {
       await progressManager.handleJobError(jobId, error);
+
+      // Release URL back to Available status on outer error
+      await jobQueueUrlService.handleJobCompletion(
+        jobId,
+        "Failed",
+        error?.message || "Unknown error"
+      );
     }
 
     // Finalize logging with failed status
@@ -134,8 +168,8 @@ async function runScrapingWithRestart(
   startDate?: string,
   endDate?: string,
   jobId?: string,
-  user_email?: string,
-  user_password?: string
+  expediaUsername?: string,
+  expediaPassword?: string
 ): Promise<void> {
   const environment = process.env.ENVIRONMENT || "browserless";
   let currentStartDate = startDate;
@@ -197,8 +231,8 @@ async function runScrapingWithRestart(
       }
 
       // Step 2: Check if login credentials are provided
-      const email = user_email;
-      const password = decryptPassword(user_password);
+      const email = expediaUsername;
+      const password = decryptPassword(expediaPassword);
 
       if (email && password) {
         await dualLogInfo(
@@ -252,6 +286,7 @@ async function runScrapingWithRestart(
           await dualLogInfo("OTP verification completed successfully!");
         } catch (error: any) {
           await dualLogError("OTP verification failed:", error);
+          
           // Close browser when done with this attempt
           if (browser) {
             await browser.close();
@@ -290,6 +325,7 @@ async function runScrapingWithRestart(
             );
           } catch (error: any) {
             await dualLogError("Property search failed:", error);
+            
             throw error;
           }
         } else {
@@ -383,6 +419,7 @@ async function runScrapingWithRestart(
           } else {
             // Other errors should be propagated
             await dualLogError("Date selection failed:", error);
+            
             // Close browser when done with this attempt
             if (browser) {
               await browser.close();
@@ -401,7 +438,7 @@ async function runScrapingWithRestart(
         }
         break; // Exit the retry loop
       }
-    } catch (error) {
+    } catch (error: any) {
       await dualLogError(`Scraping attempt ${attemptCount} failed:`, error);
 
       // Close browser on error
@@ -418,9 +455,17 @@ async function runScrapingWithRestart(
         !(error instanceof Error) ||
         !error.message.startsWith("BROWSER_RESTART_NEEDED:")
       ) {
+        
         // Clean up progress file on error
         if (jobId) {
           await progressManager.handleJobError(jobId, error);
+
+          // Release URL back to Available status on browser crash
+          await jobQueueUrlService.handleJobCompletion(
+            jobId,
+            "Failed",
+            error?.message || "Unknown error"
+          );
         }
         throw error;
       }
@@ -431,9 +476,17 @@ async function runScrapingWithRestart(
     const maxAttemptsError = new Error(
       `Maximum restart attempts (${maxAttempts}) exceeded`
     );
+    
     // Clean up progress file when max attempts exceeded
     if (jobId) {
       await progressManager.handleJobError(jobId, maxAttemptsError);
+
+      // Release URL back to Available status when max attempts exceeded
+      await jobQueueUrlService.handleJobCompletion(
+        jobId,
+        "Failed",
+        maxAttemptsError.message
+      );
     }
     throw maxAttemptsError;
   }

@@ -35,10 +35,22 @@ export async function splitDateRange(
 
     // Wait for date filters to be visible
     await dualLogInfo("Waiting for date filters...");
-    await page.waitForSelector('input[type="radio"][name="dateTypeFilter"]', {
-      visible: true,
-      timeout: selectorTimeout,
-    });
+    try {
+      await page.waitForSelector('input[type="radio"][name="dateTypeFilter"]', {
+        visible: true,
+        timeout: selectorTimeout,
+      });
+    } catch (error: any) {
+      await dualLogError("Failed to find date filters:", error);
+      
+      // Send email notification for date filter error
+      if (jobId) {
+        try {        } catch (emailError) {
+          await dualLogError("Failed to send date filters error notification:", emailError);
+        }
+      }
+      throw error;
+    }
 
     // Get the current URL
     const currentUrl = page.url();
@@ -66,12 +78,24 @@ export async function splitDateRange(
       }
 
       // Initialize or update progress tracking
-      await progressManager.initializeJobProgress(
-        jobId,
-        resumeDate || start_date,
-        end_date,
-        dateChunks.length
-      );
+      try {
+        await progressManager.initializeJobProgress(
+          jobId,
+          resumeDate || start_date,
+          end_date,
+          dateChunks.length
+        );
+      } catch (error: any) {
+        await dualLogError("Failed to initialize job progress:", error);
+        
+        // Send email notification for progress initialization error
+        if (jobId) {
+          try {          } catch (emailError) {
+            await dualLogError("Failed to send progress initialization error notification:", emailError);
+          }
+        }
+        throw error;
+      }
     } else {
       // No job ID, start from beginning
       dateChunks = splitDateRangeIntoChunks(start_date, end_date, CHUNK_SIZE);
@@ -99,97 +123,141 @@ export async function splitDateRange(
         await dualLogInfo(
           `Time limit reached at chunk ${i + 1}/${
             dateChunks.length
-          }. Marking job for browser restart.`,
+          }. Triggering browser restart...`,
           {
-            chunkIndex: i + 1,
+            currentChunk: i + 1,
             totalChunks: dateChunks.length,
-            chunk,
+            lastProcessedDate: chunk.start,
             jobId,
-            timeSession: timeManager.getSessionInfo(),
           }
         );
 
-        // Update progress and mark for resume
+        // Save progress before restart
         if (jobId) {
-          await progressManager.updateJobProgress(
-            jobId,
-            chunk.start, // Save the current chunk start as last processed
-            Math.round((i / dateChunks.length) * 100),
-            `browser_restart_needed_at_${chunk.start}`,
-            i
-          );
-
-          await progressManager.setJobResumable(
-            jobId,
-            chunk.start,
-            "Time limit reached - browser restart needed"
-          );
+          try {
+            await progressManager.setJobResumable(
+              jobId,
+              chunk.start,
+              "Browser time limit reached"
+            );
+          } catch (error: any) {
+            await dualLogError("Failed to set job resumable before browser restart:", error);
+            
+            // Send email notification for resumable set error
+            try {            } catch (emailError) {
+              await dualLogError("Failed to send resumable set error notification:", emailError);
+            }
+            throw error;
+          }
         }
 
-        // End current time session
-        await timeManager.endSession();
-
-        // Return a special indicator that browser restart is needed
+        // Throw browser restart error to trigger restart in main
         throw new Error(`BROWSER_RESTART_NEEDED:${chunk.start}`);
       }
 
-      await dualLogInfo(
-        `Processing chunk ${i + 1}/${dateChunks.length}: ${chunk.start} to ${
-          chunk.end
-        }`,
-        {
+      try {
+        await dualLogInfo(
+          `Processing chunk ${i + 1}/${dateChunks.length}: ${chunk.start} to ${chunk.end}`,
+          {
+            currentChunk: i + 1,
+            totalChunks: dateChunks.length,
+            chunkStart: chunk.start,
+            chunkEnd: chunk.end,
+            jobId,
+          }
+        );
+
+        // Apply filter for this chunk
+        await applyFilter(
+          browser,
+          page,
+          chunk.start,
+          chunk.end,
+          expediaId,
+          jobId
+        );
+
+        // Update progress after successful chunk processing
+        if (jobId) {
+          try {
+            const progressPercentage = Math.round(((i + 1) / dateChunks.length) * 100);
+            await progressManager.updateJobProgress(
+              jobId,
+              chunk.end,
+              progressPercentage,
+              `processed_chunk_${i + 1}`,
+              i + 1
+            );
+          } catch (error: any) {
+            await dualLogError("Failed to update job progress after chunk:", error);
+            
+            // Send email notification for progress update error
+            try {            } catch (emailError) {
+              await dualLogError("Failed to send progress update error notification:", emailError);
+            }
+            // Don't throw here, continue processing
+          }
+        }
+
+        await dualLogInfo(
+          `Chunk ${i + 1}/${dateChunks.length} processed successfully`
+        );
+      } catch (error: any) {
+        // Check if this is a browser restart error
+        if (error.message && error.message.startsWith("BROWSER_RESTART_NEEDED:")) {
+          // Re-throw browser restart errors
+          throw error;
+        }
+
+        await dualLogError(`Error processing chunk ${i + 1}:`, error, {
           chunkIndex: i + 1,
           totalChunks: dateChunks.length,
-          chunk,
+          chunkStart: chunk.start,
+          chunkEnd: chunk.end,
           jobId,
-          timeSession: timeManager.getSessionInfo(),
+        });
+
+        // Send email notification for chunk processing error
+        if (jobId) {
+          try {          } catch (emailError) {
+            await dualLogError("Failed to send chunk processing error notification:", emailError);
+          }
         }
-      );
 
-      // Process the current chunk
-      await applyFilter(browser, page, chunk.start, chunk.end, expediaId, jobId);
-
-      // Update progress after completing a chunk
-      if (jobId) {
-        await progressManager.updateJobProgress(
-          jobId,
-          chunk.end, // Save the chunk end as last processed
-          Math.round(((i + 1) / dateChunks.length) * 100),
-          `completed_chunk_${i + 1}_of_${dateChunks.length}`,
-          i + 1
-        );
+        throw error;
       }
-
-      await dualLogInfo(`Completed chunk ${i + 1}/${dateChunks.length}`, {
-        chunkIndex: i + 1,
-        totalChunks: dateChunks.length,
-        chunk,
-        jobId,
-        timeSession: timeManager.getSessionInfo(),
-      });
     }
 
-    // Mark job as completed if we reach here
+    // Mark job as completed if we processed all chunks
     if (jobId) {
-      await progressManager.markJobCompleted(jobId);
+      try {
+        await progressManager.markJobCompleted(jobId);
+        await dualLogInfo(`All date chunks processed successfully for job ${jobId}`);
+      } catch (error: any) {
+        await dualLogError("Failed to mark job as completed:", error);
+        
+        // Send email notification for job completion error
+        try {        } catch (emailError) {
+          await dualLogError("Failed to send job completion error notification:", emailError);
+        }
+        throw error;
+      }
     }
 
-    await dualLogInfo("All date chunks processed successfully!", {
+    await dualLogInfo("Date range processing completed successfully", {
       totalChunks: dateChunks.length,
       jobId,
-      timeSession: timeManager.getSessionInfo(),
     });
-  } catch (error) {
-    // Check if this is a browser restart error
-    if (
-      error instanceof Error &&
-      error.message.startsWith("BROWSER_RESTART_NEEDED:")
-    ) {
-      // Re-throw browser restart errors to be handled by the main function
-      throw error;
+  } catch (error: any) {
+    await dualLogError("Error in splitDateRange:", error, { jobId, expediaId });
+    
+    // Send email notification for general splitDateRange error (if not already a browser restart)
+    if (jobId && (!error.message || !error.message.startsWith("BROWSER_RESTART_NEEDED:"))) {
+      try {      } catch (emailError) {
+        await dualLogError("Failed to send date range splitting error notification:", emailError);
+      }
     }
-
-    await dualLogError("Error in splitDateRange:", error, { jobId });
+    
     throw error;
   }
 }

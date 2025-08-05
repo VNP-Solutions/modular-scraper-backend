@@ -19,8 +19,6 @@ export interface IProperty extends Document {
   created_by: Types.ObjectId;
   createdAt: Date;
   updatedAt: Date;
-  user_email?: string;
-  user_password?: string;
 }
 
 function isValidId(value: string): boolean {
@@ -102,14 +100,6 @@ const PropertySchema = new Schema<IProperty>(
       type: Schema.Types.ObjectId,
       ref: "User",
       required: true,
-    },
-    user_email: {
-      type: String,
-      required: false,
-    },
-    user_password: {
-      type: String,
-      required: false,
     },
   },
   {
