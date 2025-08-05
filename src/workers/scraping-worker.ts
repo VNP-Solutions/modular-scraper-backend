@@ -238,15 +238,15 @@ class ScrapingWorker {
       const progress = await jobService.getJobProgress(jobId);
 
       // 8. Determine final status based on completion
-      let finalStatus = "Completed";
+      let finalStatus = JobStatus.Completed;
       if (progress.totalItems === 0) {
-        finalStatus = "Failed";
+        finalStatus = JobStatus.Failed;
       } else if (progress.completionPercentage < 100) {
-        finalStatus = "Partial";
+        finalStatus = JobStatus.Partial;
       }
 
       // 9. Update final job status
-      await jobService.updateJobStatus(jobId, finalStatus as any);
+      await jobService.updateJobStatus(jobId, finalStatus);
 
       // 10. Stop scraping state manager
       scrapingStateManager.stopScraping();
@@ -282,6 +282,9 @@ class ScrapingWorker {
       });
       await progressManager.handleJobError(jobId, scrapingError);
       scrapingStateManager.stopScraping();
+
+      // Update job status to Failed
+      await jobService.updateJobStatus(jobId, JobStatus.Failed);
 
       // Finalize logging with failed status
       await finalizeJobLogging("failed");
@@ -335,7 +338,7 @@ class ScrapingWorker {
     console.log(
       `Worker: Resetting job ${jobId} status from ${originalStatus} to Pending...`
     );
-    await jobService.updateJobStatus(jobId, "Pending" as any);
+    await jobService.updateJobStatus(jobId, JobStatus.Pending);
 
     console.log(`Worker: Starting job ${jobId}...`);
     await jobService.startJob(jobId);
@@ -411,6 +414,7 @@ class ScrapingWorker {
       await dualLogError(`Worker: Job ${jobId} rerun failed`, error, { jobId });
 
       // Update job status to Failed
+      await jobService.updateJobStatus(jobId, JobStatus.Failed);
       await progressManager.handleJobError(jobId, error);
 
       // Stop scraping state manager
@@ -572,15 +576,15 @@ class ScrapingWorker {
       const progress = await jobService.getJobProgress(jobId);
 
       // 8. Determine final status based on completion
-      let finalStatus = "Completed";
+      let finalStatus = JobStatus.Completed;
       if (progress.totalItems === 0) {
-        finalStatus = "Failed";
+        finalStatus = JobStatus.Failed;
       } else if (progress.completionPercentage < 100) {
-        finalStatus = "Partial";
+        finalStatus = JobStatus.Partial;
       }
 
       // 9. Update final job status
-      await jobService.updateJobStatus(jobId, finalStatus as any);
+      await jobService.updateJobStatus(jobId, finalStatus);
 
       // 10. Stop scraping state manager
       scrapingStateManager.stopScraping();
@@ -632,6 +636,9 @@ class ScrapingWorker {
       });
       await progressManager.handleJobError(jobId, error);
       scrapingStateManager.stopScraping();
+
+      // Update job status to Failed
+      await jobService.updateJobStatus(jobId, JobStatus.Failed);
 
       // Finalize logging with failed status
       await finalizeJobLogging("failed");
