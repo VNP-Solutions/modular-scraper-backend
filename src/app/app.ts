@@ -13,12 +13,20 @@ import { jobService } from "../services/job.service.js";
 import { bookingTrustScheduler } from "../services/booking-trust-scheduler.service.js";
 import { bookingTrustCron } from "../services/booking-trust-cron.service.js";
 
+// Import route modules
+import authRoutes from "../routes/shared/auth.routes.js";
+import healthRoutes from "../routes/shared/health.routes.js";
+
+// Expedia-specific routes
+import expediarJobsRoutes from "../routes/expedia/jobs.routes.js";
+import expediarScrapingControlRoutes from "../routes/expedia/scraping-control.routes.js";
+import expediarScrapingRoutes from "../routes/expedia/scraping.routes.js";
+
 const app = express();
 
 app.set("trust proxy", true);
 
 app.use("/webhook", bodyParser.raw({ type: "*/*" }));
-// app.use(bodyParser.raw({ type: '*/*' }))
 app.use(bodyParser.json());
 app.use(cors());
 
@@ -33,7 +41,7 @@ app.use(
   })
 );
 
-// * Logger middleware
+// Logger middleware
 app.use((req, res, next) => {
   res.on("finish", () => {
     console.log(
@@ -184,21 +192,17 @@ app.post("/api/expedia/rerun-failed-job", (async (
 ) => {
   try {
     const { startDate, endDate, jobId } = req.body;
+// Route registrations
+// Health and authentication routes (no prefix)
+app.use("/", healthRoutes);
+app.use("/", authRoutes);
 
-    // Validate required parameters
-    if (!startDate || !endDate) {
-      return res.status(400).json({
-        status: 400,
-        message: "startDate and endDate are required in request body",
-      });
-    }
-    if (!jobId) {
-      return res.status(400).json({
-        status: 400,
-        message: "jobId is required in request body",
-      });
-    }
+// API routes (keeping original endpoints)
+app.use("/api/scraping", expediarScrapingControlRoutes);
+app.use("/api/jobs", expediarJobsRoutes);
+app.use("/api/expedia", expediarScrapingRoutes);
 
+// Global error handle middleware
     // Check if worker threads are available
     if (!workerPool.hasAvailableWorkers() && workerPool.isQueueFull()) {
       return res.status(200).json({
@@ -749,7 +753,7 @@ app.post("/api/booking/rerun-failed-job", (async (
 
     // 1. Check if job can be retried
     await jobService.setJobIdForRetryCheck(jobId);
-    
+
     if (!jobService.canRetry) {
       return res.status(400).json({
         status: 400,
@@ -827,10 +831,10 @@ app.post("/api/booking/rerun-failed-job", (async (
       if (result.success) {
         // Get final progress after rerun
         const progress = await jobService.getJobProgress(jobId);
-        
+
         // Clean up retry check state
         jobService.clearRetryCheck();
-        
+
         return res.status(200).json({
           ...result.data,
           originalStatus,
@@ -840,7 +844,7 @@ app.post("/api/booking/rerun-failed-job", (async (
       } else {
         // Clean up retry check state
         jobService.clearRetryCheck();
-        
+
         return res.status(500).json({
           status: 500,
           message: "Booking job rerun execution failed",
@@ -861,7 +865,7 @@ app.post("/api/booking/rerun-failed-job", (async (
 
       // Clean up retry check state
       jobService.clearRetryCheck();
-      
+
       return res.status(500).json({
         status: 500,
         message: "Worker execution failed for booking job rerun",
@@ -1040,7 +1044,7 @@ app.get("/api/scraping/test-platforms", (async (
 ) => {
   try {
     const { mainMultiPlatform } = await import("../main-multi-platform.js");
-    
+
     res.status(200).json({
       status: 200,
       message: "Multi-platform scraper test endpoint",

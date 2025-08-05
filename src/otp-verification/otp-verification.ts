@@ -1,92 +1,23 @@
 import dotenv from "dotenv";
-import fs from "fs";
-import { google } from "googleapis";
 import { Browser, Page } from "puppeteer";
 import { delay } from "../common/delay.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
+import { getVerificationCode } from "./email-verification-utils.js";
+import {
+  validatePhoneLastThreeDigits,
+  initializeStateManager,
+  getTimeoutConfig,
+  submitOtpForm,
+  waitForNavigation,
+  closeBrowserOnError
+} from "./otp-common-utils.js";
+import { progressManager } from "../common/progress-manager.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import { timeoutManager } from "../common/timeout-manager.js";
 import { oauth2Client } from "../config/google-config.js";
 
 dotenv.config();
 
-// Function to load and set credentials
-async function loadCredentials() {
-  try {
-    const tokenPath = process.env.TOKEN_PATH || "token.json";
-
-    if (!fs.existsSync(tokenPath)) {
-      throw new Error(
-        `Token file not found at ${tokenPath}. Please run the authentication setup first.`
-      );
-    }
-
-    const token = JSON.parse(fs.readFileSync(tokenPath, "utf8"));
-
-    // Check if refresh token exists
-    if (!token.refresh_token) {
-      throw new Error(
-        "No refresh token found. Please re-authenticate with offline access."
-      );
-    }
-
-    oauth2Client.setCredentials(token);
-    await dualLogInfo("Gmail credentials loaded successfully");
-    return true;
-  } catch (error) {
-    await dualLogError("Error loading credentials:", error);
-    return false;
-  }
-}
-
-async function getVerificationCode() {
-  try {
-    // Load credentials before making API calls
-    const credentialsLoaded = await loadCredentials();
-    if (!credentialsLoaded) {
-      throw new Error(
-        "Failed to load Gmail credentials. Please complete authentication setup first."
-      );
-    }
-
-    const gmail = google.gmail({ version: "v1", auth: oauth2Client });
-    const res = await gmail.users.messages.list({
-      userId: "me",
-      maxResults: 5,
-    });
-
-    if (!res.data.messages) {
-      await dualLogInfo("No new emails found.");
-      return null;
-    }
-
-    for (const msg of res.data.messages) {
-      if (!msg.id) {
-        continue;
-      }
-
-      const email = await gmail.users.messages.get({
-        userId: "me",
-        id: msg.id,
-      });
-
-      const body = email.data.snippet || "";
-      await dualLogInfo("Email body:", body);
-      const codeMatch = body.match(/\b\d{6,10}\b/);
-      await dualLogInfo("Code match:", codeMatch);
-
-      if (codeMatch) {
-        return codeMatch[0];
-      }
-    }
-
-    await dualLogInfo("No verification code found in recent emails.");
-    return null;
-  } catch (error: any) {
-    await dualLogError("Error fetching emails:", error.message);
-    return null;
-  }
-}
 
 async function handleOtpVerification(
   browser: Browser,
@@ -95,20 +26,33 @@ async function handleOtpVerification(
 ): Promise<void> {
   try {
     // Check if scraping is paused before starting OTP verification
-    await scrapingStateManager.waitWhilePaused();
-    if (!scrapingStateManager.isRunning()) {
-      throw new Error("Scraping was stopped during OTP verification");
-    }
+    await initializeStateManager();
 
     // Get timeout configuration for this job
-    const selectorTimeout = await timeoutManager.getSelectorTimeout(jobId);
+    const { selectorTimeout, loadingTimeout } = await getTimeoutConfig(jobId);
 
     // Wait for verification code page using the correct selector
     await dualLogInfo("Waiting for verification page...");
-    await page.waitForSelector('input[name="passcode-input"]', {
-      visible: true,
-      timeout: selectorTimeout,
-    });
+    try {
+      await page.waitForSelector('input[name="passcode-input"]', {
+        visible: true,
+        timeout: selectorTimeout,
+      });
+    } catch (error: any) {
+      await dualLogError("Error waiting for verification page:", error);
+
+      // Send email notification for verification page error
+      if (jobId) {
+        try {        } catch (emailError) {
+          await dualLogError(
+            "Failed to send verification page error notification:",
+            emailError
+          );
+        }
+      }
+      throw error;
+    }
+
     const ourContact = process.env.OUR_CONTACT || "01828704004";
 
     // Extract the phone number from the verification message
@@ -126,13 +70,10 @@ async function handleOtpVerification(
     await dualLogInfo(`Our contact: ${ourContact}`);
 
     // Compare last three digits
-    const currentLastThree = currentContact ? currentContact.slice(-3) : "";
-    const ourLastThree = ourContact.slice(-3);
+    await dualLogInfo(`Current contact from page: ${currentContact}`);
+    await dualLogInfo(`Our contact: ${ourContact}`);
 
-    await dualLogInfo(`Current contact last 3 digits: ${currentLastThree}`);
-    await dualLogInfo(`Our contact last 3 digits: ${ourLastThree}`);
-
-    if (currentLastThree === ourLastThree) {
+    if (validatePhoneLastThreeDigits(currentContact || "", ourContact)) {
       await dualLogInfo(
         "Phone numbers match! Using email verification flow..."
       );
@@ -142,37 +83,89 @@ async function handleOtpVerification(
       await delay(15000); // Wait 15 seconds for email to arrive
 
       // Get verification code
-      const code = await getVerificationCode();
-      if (!code) {
-        throw new Error("Failed to get verification code from email");
+      try {
+        const code = await getVerificationCode();
+        if (!code) {
+          const error = new Error("Failed to get verification code from email");
+
+          // Send email notification for verification code error
+          if (jobId) {
+            try {            } catch (emailError) {
+              await dualLogError(
+                "Failed to send verification code error notification:",
+                emailError
+              );
+            }
+          }
+
+          throw error;
+        }
+        await dualLogInfo("Got verification code:", code);
+
+        // Enter verification code using the correct selector
+        await page.type('input[name="passcode-input"]', code, { delay: 100 });
+        await delay(1000);
+
+        const verifyButtonHandle = await page.$(
+          'button[data-testid="passcode-submit-button"]'
+        );
+
+        if (!verifyButtonHandle) {
+          const error = new Error("Verify button not found");
+
+          // Send email notification for verify button error
+          if (jobId) {
+            try {            } catch (emailError) {
+              await dualLogError(
+                "Failed to send verify button error notification:",
+                emailError
+              );
+            }
+          }
+
+          throw error;
+        }
+
+        // Check if the button is disabled
+        const isDisabled = await page.evaluate(
+          (button) => button.disabled,
+          verifyButtonHandle
+        );
+
+        if (isDisabled) {
+          const error = new Error("Verify button is disabled");
+
+          // Send email notification for disabled button error
+          if (jobId) {
+            try {            } catch (emailError) {
+              await dualLogError(
+                "Failed to send disabled button error notification:",
+                emailError
+              );
+            }
+          }
+
+          throw error;
+        }
+
+        // Click the button
+        await verifyButtonHandle.click();
+        await dualLogInfo("Clicked the verify button successfully!");
+      } catch (error: any) {
+        await dualLogError("Error in primary verification flow:", error);
+
+        // Send email notification for primary verification error
+        if (jobId) {
+          try {          } catch (emailError) {
+            await dualLogError(
+              "Failed to send primary verification error notification:",
+              emailError
+            );
+          }
+        }
+
+        throw error;
       }
-      await dualLogInfo("Got verification code:", code);
-
-      // Enter verification code using the correct selector
-      await page.type('input[name="passcode-input"]', code, { delay: 100 });
-      await delay(1000);
-
-      const verifyButtonHandle = await page.$(
-        'button[data-testid="passcode-submit-button"]'
-      );
-
-      if (!verifyButtonHandle) {
-        throw new Error("Verify button not found");
-      }
-
-      // Check if the button is disabled
-      const isDisabled = await page.evaluate(
-        (button) => button.disabled,
-        verifyButtonHandle
-      );
-
-      if (isDisabled) {
-        throw new Error("Verify button is disabled");
-      }
-
-      // Click the button
-      await verifyButtonHandle.click();
-      await dualLogInfo("Clicked the verify button successfully!");
     } else {
       await dualLogInfo(
         `Phone numbers don't match! Looking for fallback verification options...`
@@ -189,7 +182,19 @@ async function handleOtpVerification(
           .catch(() => null);
 
         if (!fallbacksExists) {
-          throw new Error("No fallback verification options found");
+          const error = new Error("No fallback verification options found");
+
+          // Send email notification for no fallback options
+          if (jobId) {
+            try {            } catch (emailError) {
+              await dualLogError(
+                "Failed to send fallback options error notification:",
+                emailError
+              );
+            }
+          }
+
+          throw error;
         }
 
         await dualLogInfo(
@@ -268,9 +273,9 @@ async function handleOtpVerification(
         }
 
         // Now look for phone numbers in the fallback options
-        await dualLogInfo("Looking for phone ending with:", ourLastThree);
+        await dualLogInfo("Looking for phone ending with:", ourContact.slice(-3));
 
-        const matchingOption = await page.evaluate((ourLastThree) => {
+        const matchingOption = await page.evaluate((ourContact) => {
           try {
             const fallbackItems = document.querySelectorAll(
               '[data-testid="fallback-item"]'
@@ -298,7 +303,7 @@ async function handleOtpVerification(
                 ) {
                   // Extract last 3 digits from the phone number
                   const phoneLastThree = phoneNumber.slice(-3);
-
+                  const ourLastThree = ourContact.slice(-3);
                   if (phoneLastThree === ourLastThree) {
                     console.log("Found matching phone number!");
                     return {
@@ -323,7 +328,7 @@ async function handleOtpVerification(
               error: error instanceof Error ? error.message : "Unknown error",
             };
           }
-        }, ourLastThree);
+        }, ourContact);
 
         await dualLogInfo(`Matching option result:`, matchingOption);
 
@@ -334,7 +339,7 @@ async function handleOtpVerification(
           );
 
           // Try clicking on the first "Send me a text" link that contains digits ending with our number
-          const alternativeClick = await page.evaluate((ourLastThree) => {
+          const alternativeClick = await page.evaluate((ourContact) => {
             try {
               const textLinks = Array.from(
                 document.querySelectorAll(".fds-list-item-link a")
@@ -349,7 +354,9 @@ async function handleOtpVerification(
                     );
                     if (phoneHeader) {
                       const phoneNumber = phoneHeader.textContent?.trim() || "";
-                      if (phoneNumber.slice(-3) === ourLastThree) {
+                      const phoneLastThree = phoneNumber.slice(-3);
+                      const ourLastThree = ourContact.slice(-3);
+                      if (phoneLastThree === ourLastThree) {
                         (link as HTMLElement).click();
                         return { success: true, phoneNumber: phoneNumber };
                       }
@@ -367,7 +374,7 @@ async function handleOtpVerification(
                 error: error instanceof Error ? error.message : "Unknown error",
               };
             }
-          }, ourLastThree);
+          }, ourContact);
 
           if (alternativeClick.success) {
             await dualLogInfo(
@@ -427,7 +434,7 @@ async function handleOtpVerification(
           );
 
           // Click on "Send me a text" for the matching phone number
-          const clickResult = await page.evaluate((ourLastThree) => {
+          const clickResult = await page.evaluate((ourContact) => {
             try {
               const fallbackItems = document.querySelectorAll(
                 '[data-testid="fallback-item"]'
@@ -445,7 +452,9 @@ async function handleOtpVerification(
                   textLink.textContent?.trim() === "Send me a text"
                 ) {
                   const phoneNumber = phoneHeader.textContent?.trim() || "";
-                  if (phoneNumber.slice(-3) === ourLastThree) {
+                  const phoneLastThree = phoneNumber.slice(-3);
+                  const ourLastThree = ourContact.slice(-3);
+                  if (phoneLastThree === ourLastThree) {
                     (textLink as HTMLElement).click();
                     return { success: true, phoneNumber: phoneNumber };
                   }
@@ -461,7 +470,7 @@ async function handleOtpVerification(
                 error: error instanceof Error ? error.message : "Unknown error",
               };
             }
-          }, ourLastThree);
+          }, ourContact);
 
           if (!clickResult.success) {
             throw new Error(
@@ -520,7 +529,7 @@ async function handleOtpVerification(
           console.log("Clicked the verify button successfully!");
         } else {
           throw new Error(
-            `No matching phone number found in fallback options. Expected ending with ${ourLastThree}. Available options: ${
+            `No matching phone number found in fallback options. Expected ending with ${ourContact.slice(-3)}. Available options: ${
               matchingOption.phoneNumber || "none found"
             }`
           );
@@ -530,23 +539,66 @@ async function handleOtpVerification(
           fallbackError instanceof Error
             ? fallbackError.message
             : "Unknown error";
-        console.log(`Error with fallback verification: ${errorMessage}`);
+        await dualLogError(`Error with fallback verification: ${errorMessage}`);
+
+        // Send email notification for fallback verification error
+        if (jobId) {
+          try {          } catch (emailError) {
+            await dualLogError(
+              "Failed to send fallback verification error notification:",
+              emailError
+            );
+          }
+        }
+
         throw new Error(
-          `Phone number mismatch and fallback verification failed. Expected ending with ${ourLastThree}, but got ${currentLastThree}. Fallback error: ${errorMessage}`
+          `Phone number mismatch and fallback verification failed. Expected ending with ${ourContact.slice(-3)}, but got ${(currentContact || "").slice(-3)}. Fallback error: ${errorMessage}`
         );
       }
     }
 
     // Wait for successful login
-    const loadingTimeout = await timeoutManager.getLoadingTimeout(jobId);
-    await page.waitForNavigation({
-      waitUntil: "networkidle0",
-      timeout: loadingTimeout,
-    });
+    await waitForNavigation(page, loadingTimeout);
 
     console.log("Login successful!");
   } catch (error) {
     console.error("Error in handleOtpVerification:", error);
+    await closeBrowserOnError(browser);
+    const loadingTimeout = await timeoutManager.getLoadingTimeout(jobId);
+    try {
+      await page.waitForNavigation({
+        waitUntil: "networkidle0",
+        timeout: loadingTimeout,
+      });
+      console.log("Login successful!");
+    } catch (error: any) {
+      await dualLogError("Error waiting for navigation after OTP:", error);
+
+      // Send email notification for navigation error
+      if (jobId) {
+        try {        } catch (emailError) {
+          await dualLogError(
+            "Failed to send navigation error notification:",
+            emailError
+          );
+        }
+      }
+
+      throw error;
+    }
+  } catch (error: any) {
+    await dualLogError("Error in handleOtpVerification:", error);
+
+    // Send email notification for general OTP verification error
+    if (jobId) {
+      try {      } catch (emailError) {
+        await dualLogError(
+          "Failed to send general OTP error notification:",
+          emailError
+        );
+      }
+    }
+
     // Close browser when done with this attempt
     if (browser) {
       await browser.close();

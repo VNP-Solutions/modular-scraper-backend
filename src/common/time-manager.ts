@@ -52,8 +52,15 @@ export class TimeManager {
             tokenInfo: getTokenRefreshInfo(),
           }
         );
+        
+        // Send email notification for token refresh failure
+        if (this.currentSession?.jobId) {
+          try {          } catch (emailError) {
+            await dualLogError("Failed to send token refresh failure notification:", emailError);
+          }
+        }
       }
-    } catch (error) {
+    } catch (error: any) {
       await dualLogError(
         "Error during automatic Google OAuth2 token refresh:",
         error,
@@ -61,6 +68,13 @@ export class TimeManager {
           tokenInfo: getTokenRefreshInfo(),
         }
       );
+      
+      // Send email notification for token refresh error
+      if (this.currentSession?.jobId) {
+        try {        } catch (emailError) {
+          await dualLogError("Failed to send token refresh error notification:", emailError);
+        }
+      }
     }
   }
 
