@@ -6,6 +6,7 @@ import { BaseScraper, LoginCredentials, CaptchaHandlerOptions, TwoFactorAuthOpti
 import { timeoutManager } from "../common/timeout-manager.js";
 import handleBookingOtpVerification from "../otp-verification/booking-otp-verification.js";
 import { SelectorUtils } from "../common/selector-utils.js";
+import { BOOKING_SELECTORS } from "../common/booking-selectors.js";
 import { 
   BookingErrorType, 
   BookingScrapingPhase, 
@@ -18,78 +19,6 @@ export class BookingScraper extends BaseScraper {
   private cookiesFile = 'booking-admin-cookies.json';
   private browserlessToken: string;
   private sessionUrl?: string;
-
-  // Keep selectors in booking-scraper as exportable const
-  public static readonly SELECTORS = {
-    email: [
-      'input[name="username"]',
-      'input[name="loginname"]',
-      '#username',
-      'input[type="email"]',
-      'input[placeholder*="email"]'
-    ],
-    password: [
-      'input[type="password"]',
-      '#password',
-      'input[name="password"]',
-      'input[name="passwd"]',
-      'input[placeholder*="password"]'
-    ],
-    loginButton: [
-      'button[type="submit"]',
-      'input[type="submit"]',
-    ],
-    continueButton: [
-      'button[type="submit"]',
-      'button:contains("Next")',
-      'button:contains("Continue")',
-      'input[type="submit"]'
-    ],
-    tfaSelectors: [
-      'input[autocomplete="one-time-code"]',
-      'input[type="text"][maxlength="6"]',
-      'input[name="pin"]',
-      'input[name="code"]',
-      'input[placeholder*="code"]'
-    ],
-    errorMessages: [
-      '.error-block',
-      '.error-message',
-      '.alert-error',
-      '.error',
-      '.login-error'
-    ],
-    navigation: {
-      mainMenu: (mainSection: string) => [
-        `li[data-nav-tag="${mainSection}"] button[data-tid="item-link"]`,
-        `li[data-nav-tag="${mainSection}"] .ext-navigation-top-item__link`,
-      ],
-      subMenu: (subSection: string) => [
-        `li[data-nav-tag="${subSection}"] a[data-tid="item-link"]`,
-        `a.ext-navigation-submenu-item__link[href*="${subSection}"]`,
-        `a[data-tid="item-link"][href*="${subSection}"]`,
-      ],
-    },
-    vccs: {
-      vccsToChargeLink: 'a[href*="route=vccs_to_charge"]'
-    },
-    pagination: {
-      nextPageButton: 'a[aria-label="Next page"]',
-      previousPageButton: 'a[aria-label="Previous page"]',
-      currentPageIndicator: '.pagination__current-page',
-      totalPagesIndicator: '.pagination__total-pages',
-      pageNumbers: '.pagination__page-number'
-    },
-    reservations: {
-      reservationRow: 'tbody.bui-table__body tr.bui-table__row',
-      reservationLink: 'a.bui-link--primary',
-      reservationDetailButton: 'a.pay-hub__view_cc_link',
-      reservationId: '[data-heading="Reservation info"] a',
-      reservationChargeBefore: '[data-heading="Charge before"] span',
-      reservationAmount: '[data-heading="Amount"]',
-      reservationCardholder: '[data-heading="Cardholder"]'
-    }
-  } as const;
 
   constructor() {
     super('booking', 'https://admin.booking.com');
@@ -251,7 +180,7 @@ export class BookingScraper extends BaseScraper {
       const maxAttempts = 6;
 
       while (!passwordField && attempts < maxAttempts) {
-        for (const selector of BookingScraper.SELECTORS.password) {
+        for (const selector of BOOKING_SELECTORS.password) {
           try {
             passwordField = await this.page.$(selector);
             if (passwordField) {
@@ -449,7 +378,7 @@ export class BookingScraper extends BaseScraper {
         }
 
         // Find OTP input field for manual entry
-        for (const selector of BookingScraper.SELECTORS.tfaSelectors) {
+        for (const selector of BOOKING_SELECTORS.tfaSelectors) {
           try {
             await this.page.waitForSelector(selector, { timeout: 10000 });
             await this.logInfo(`Found 2FA field for manual entry: ${selector}`);
@@ -519,15 +448,15 @@ export class BookingScraper extends BaseScraper {
   }
 
   async clickViewAllVccsToCharge(): Promise<boolean> {
-    return await SelectorUtils.findAndClick(this.page!, [BookingScraper.SELECTORS.vccs.vccsToChargeLink]);
+    return await SelectorUtils.findAndClick(this.page!, [BOOKING_SELECTORS.vccs.vccsToChargeLink]);
   }
 
   async getPaginationInfo(): Promise<{ currentPage: number; totalPages: number } | null> {
     if (!this.page) throw new Error('Page not initialized');
 
     try {
-      const currentPageElement = await this.page.$(BookingScraper.SELECTORS.pagination.currentPageIndicator);
-      const totalPagesElement = await this.page.$(BookingScraper.SELECTORS.pagination.totalPagesIndicator);
+      const currentPageElement = await this.page.$(BOOKING_SELECTORS.pagination.currentPageIndicator);
+      const totalPagesElement = await this.page.$(BOOKING_SELECTORS.pagination.totalPagesIndicator);
 
       if (currentPageElement && totalPagesElement) {
         const currentPage = await currentPageElement.evaluate(el => parseInt(el.textContent?.trim() || '1'));
@@ -545,11 +474,11 @@ export class BookingScraper extends BaseScraper {
   }
 
   async goToNextPage(): Promise<boolean> {
-    return await SelectorUtils.findAndClick(this.page!, [BookingScraper.SELECTORS.pagination.nextPageButton]);
+    return await SelectorUtils.findAndClick(this.page!, [BOOKING_SELECTORS.pagination.nextPageButton]);
   }
 
   async goToPreviousPage(): Promise<boolean> {
-    return await SelectorUtils.findAndClick(this.page!, [BookingScraper.SELECTORS.pagination.previousPageButton]);
+    return await SelectorUtils.findAndClick(this.page!, [BOOKING_SELECTORS.pagination.previousPageButton]);
   }
 
   async goToPage(pageNumber: number): Promise<boolean> {
@@ -559,7 +488,7 @@ export class BookingScraper extends BaseScraper {
       await this.logInfo(`Attempting to navigate to page ${pageNumber}`);
       
       // Try to find and click the specific page number
-      const pageSelector = `${BookingScraper.SELECTORS.pagination.pageNumbers}[data-page="${pageNumber}"]`;
+      const pageSelector = `${BOOKING_SELECTORS.pagination.pageNumbers}[data-page="${pageNumber}"]`;
       const pageElement = await this.page.$(pageSelector);
       
       if (pageElement) {
@@ -584,7 +513,7 @@ export class BookingScraper extends BaseScraper {
       await this.logInfo('Getting reservation rows from current page...');
       
       // Wait for the table to load
-      await this.page.waitForSelector(BookingScraper.SELECTORS.reservations.reservationRow, { timeout: 10000 });
+      await this.page.waitForSelector(BOOKING_SELECTORS.reservations.reservationRow, { timeout: 10000 });
       
       // Get all reservation IDs from the current page
       const reservationIds = await this.page.evaluate((selector) => {
@@ -592,11 +521,11 @@ export class BookingScraper extends BaseScraper {
         const ids: string[] = [];
         
         rows.forEach((row) => {
-          const idElement = row.querySelector('[data-heading="Reservation info"] a');
+          const idElement = row.querySelector(BOOKING_SELECTORS.reservations.reservationId);
           if (idElement) {
             const href = idElement.getAttribute('href');
             if (href) {
-              // Extract reservation ID from href: /hotel/hoteladmin/extranet_ng/manage/booking.html?res_id=6439430403&...
+              // Extract reservation ID from href
               const match = href.match(/res_id=(\d+)/);
               if (match) {
                 ids.push(match[1]);
@@ -606,7 +535,7 @@ export class BookingScraper extends BaseScraper {
         });
         
         return ids;
-      }, BookingScraper.SELECTORS.reservations.reservationRow);
+      }, BOOKING_SELECTORS.reservations.reservationRow);
 
       await this.logInfo(`Found ${reservationIds.length} reservations on current page`);
       return reservationIds;
@@ -620,7 +549,7 @@ export class BookingScraper extends BaseScraper {
           phase: BookingScrapingPhase.NAVIGATION,
           platform: 'booking',
           action: 'get_reservation_rows',
-          selector: BookingScraper.SELECTORS.reservations.reservationRow
+          selector: BOOKING_SELECTORS.reservations.reservationRow
         }
       );
       return [];
@@ -639,7 +568,7 @@ export class BookingScraper extends BaseScraper {
       await this.logInfo('Extracting reservation data from current page...');
       
       const reservationData = await this.page.evaluate(() => {
-        const rows = document.querySelectorAll('tbody.bui-table__body tr.bui-table__row');
+        const rows = document.querySelectorAll(BOOKING_SELECTORS.reservations.reservationRow);
         const data: Array<{
           id: string;
           chargeBefore: string;
@@ -648,10 +577,10 @@ export class BookingScraper extends BaseScraper {
         }> = [];
         
         rows.forEach((row) => {
-          const idElement = row.querySelector('[data-heading="Reservation info"] a');
-          const chargeBeforeElement = row.querySelector('[data-heading="Charge before"] span');
-          const amountElement = row.querySelector('[data-heading="Amount"]');
-          const cardholderElement = row.querySelector('[data-heading="Cardholder"]');
+          const idElement = row.querySelector(BOOKING_SELECTORS.reservations.reservationId);
+          const chargeBeforeElement = row.querySelector(BOOKING_SELECTORS.reservations.reservationChargeBefore);
+          const amountElement = row.querySelector(BOOKING_SELECTORS.reservations.reservationAmount);
+          const cardholderElement = row.querySelector(BOOKING_SELECTORS.reservations.reservationCardholder);
           
           if (idElement) {
             const href = idElement.getAttribute('href');
@@ -696,22 +625,36 @@ export class BookingScraper extends BaseScraper {
     try {
       await this.logInfo(`Attempting to open reservation detail for ID: ${reservationId}`);
       
-      // Find the reservation row by looking for the link with the specific reservation ID
+      // Get the current page (original tab)
+      const originalPage = this.page;
+      
+      // Listen for new page creation
+      const newPagePromise = this.browser!.waitForTarget(target => target.type() === 'page');
+      
+      // Click the reservation link
       const reservationLink = await this.page.$(`a[href*="res_id=${reservationId}"]`);
       if (!reservationLink) {
         throw new Error(`Reservation link with ID ${reservationId} not found`);
       }
-
-      // Click on the reservation link to open details
       await reservationLink.click();
-      await this.logInfo(`Clicked reservation link for ID ${reservationId}`);
-
-      // Wait for navigation or modal to appear
-      await new Promise(resolve => setTimeout(resolve, 2000));
       
-      await this.takeScreenshot(`reservation-detail-${reservationId}.png`);
+      // Wait for new page and switch to it
+      const newTarget = await newPagePromise;
+      const newPage = await newTarget.page();
+      if (!newPage) throw new Error('Failed to open new page');
+      
+      await this.logInfo(`Opened reservation detail in new tab`);
+      await newPage.waitForNetworkIdle();
+      
+      // Process the reservation detail here
+      // TODO: Add your reservation detail processing logic
+      await this.logInfo(`Processing reservation detail for ID: ${reservationId}`);
+      
+      // Close the new tab and switch back
+      await newPage.close();
+      await this.logInfo(`Closed reservation detail tab`);
+      
       return true;
-
     } catch (error) {
       await dualLogError(
         `[${new Date().toISOString()}] ${getBookingErrorDescription(BookingErrorType.DOM_NOT_FOUND)}`,
@@ -840,8 +783,8 @@ export class BookingScraper extends BaseScraper {
           // TODO: Add reservation detail processing logic here
           // await this.processReservationDetail(reservationId);
           
-          await this.page!.goBack();
-          await new Promise(resolve => setTimeout(resolve, 1000));
+          // The page.goBack() was removed as per the new_code, so we don't need to switch back here.
+          // The new_code handles switching back in clickReservationDetail.
         } else {
           errorCount++;
           await this.logInfo(`Failed to process reservation ${reservationId}`);
@@ -869,14 +812,14 @@ export class BookingScraper extends BaseScraper {
   }
 
   private async expandMainMenu(mainSection: string): Promise<boolean> {
-    const mainMenuSelectors = BookingScraper.SELECTORS.navigation.mainMenu(mainSection);
+    const mainMenuSelectors = BOOKING_SELECTORS.navigation.mainMenu(mainSection);
     return SelectorUtils.findAndClick(this.page!, mainMenuSelectors);
   }
 
   private async clickSubMenu(subSection: string): Promise<boolean> {
     // Submenu time to render
     await new Promise(resolve => setTimeout(resolve, 1000));
-    const subMenuSelectors = BookingScraper.SELECTORS.navigation.subMenu(subSection);
+    const subMenuSelectors = BOOKING_SELECTORS.navigation.subMenu(subSection);
     const clicked = await SelectorUtils.findAndClick(this.page!, subMenuSelectors);
 
     if (!clicked) {
@@ -1195,19 +1138,19 @@ export class BookingScraper extends BaseScraper {
   }
 
   private async enterEmail(email: string): Promise<boolean> {
-    return await SelectorUtils.findAndType(this.page!, [...BookingScraper.SELECTORS.email], email);
+    return await SelectorUtils.findAndType(this.page!, [...BOOKING_SELECTORS.email], email);
   }
 
   private async enterPassword(password: string): Promise<boolean> {
-    return await SelectorUtils.findAndType(this.page!, [...BookingScraper.SELECTORS.password], password);
+    return await SelectorUtils.findAndType(this.page!, [...BOOKING_SELECTORS.password], password);
   }
 
   private async clickLoginButton(): Promise<boolean> {
-    return await SelectorUtils.findAndClick(this.page!, [...BookingScraper.SELECTORS.loginButton]);
+    return await SelectorUtils.findAndClick(this.page!, [...BOOKING_SELECTORS.loginButton]);
   }
 
   private async clickContinueButton(): Promise<boolean> {
-    return await SelectorUtils.findAndClick(this.page!, [...BookingScraper.SELECTORS.continueButton]);
+    return await SelectorUtils.findAndClick(this.page!, [...BOOKING_SELECTORS.continueButton]);
   }
 
   private async checkLoginErrors(): Promise<void> {
@@ -1218,7 +1161,7 @@ export class BookingScraper extends BaseScraper {
       // Check for error messages
       const hasError = await SelectorUtils.trySelectors(
         this.page!,
-        [...BookingScraper.SELECTORS.errorMessages],
+        [...BOOKING_SELECTORS.errorMessages],
         async (selector: string) => {
           const element = await this.page!.$(selector);
           if (element) {
