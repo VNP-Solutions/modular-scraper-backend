@@ -148,3 +148,7 @@ Thumbs.db
 # Temporary files
 tmp/
 temp/
+
+# Docker files (per code review feedback)
+Dockerfile*
+docker-compose*.yml
