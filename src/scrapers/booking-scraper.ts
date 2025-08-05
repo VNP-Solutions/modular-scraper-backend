@@ -60,10 +60,15 @@ export class BookingScraper extends BaseScraper {
       '.login-error'
     ],
     navigation: {
-      financeMenu: 'li[data-nav-tag="finance"] button[data-tid="item-link"]',
-      vccsManagementLink: 'li[data-nav-tag="vccs_management"] a[data-tid="item-link"]',
-      financeMenuContainer: 'li[data-nav-tag="finance"]',
-      vccsManagementContainer: 'li[data-nav-tag="vccs_management"]'
+      mainMenu: (mainSection: string) => [
+        `li[data-nav-tag="${mainSection}"] button[data-tid="item-link"]`,
+        `li[data-nav-tag="${mainSection}"] .ext-navigation-top-item__link`,
+      ],
+      subMenu: (subSection: string) => [
+        `li[data-nav-tag="${subSection}"] a[data-tid="item-link"]`,
+        `a.ext-navigation-submenu-item__link[href*="${subSection}"]`,
+        `a[data-tid="item-link"][href*="${subSection}"]`,
+      ],
     },
     vccs: {
       vccsToChargeLink: 'a[href*="route=vccs_to_charge"]'
@@ -863,54 +868,56 @@ export class BookingScraper extends BaseScraper {
     return nextPageSuccess;
   }
 
+  private async expandMainMenu(mainSection: string): Promise<boolean> {
+    const mainMenuSelectors = BookingScraper.SELECTORS.navigation.mainMenu(mainSection);
+    return SelectorUtils.findAndClick(this.page!, mainMenuSelectors);
+  }
+
+  private async clickSubMenu(subSection: string): Promise<boolean> {
+    // Submenu time to render
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    const subMenuSelectors = BookingScraper.SELECTORS.navigation.subMenu(subSection);
+    const clicked = await SelectorUtils.findAndClick(this.page!, subMenuSelectors);
+
+    if (!clicked) {
+      // Fallback: try to find by visible text
+      const textFound = await this.page!.evaluate((text) => {
+        const links = Array.from(document.querySelectorAll('a[data-tid="item-link"]'));
+        for (const link of links) {
+          if (link.textContent && link.textContent.toLowerCase().includes(text.toLowerCase())) {
+            (link as HTMLElement).click();
+            return true;
+          }
+        }
+        return false;
+      }, subSection.replace(/_/g, ' '));
+      return !!textFound;
+    }
+    return true;
+  }
+
+  private async waitForNavigationAndVerify(expectedUrl: string): Promise<void> {
+    await this.page!.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 });
+    const currentUrl = this.page!.url();
+    if (!currentUrl.includes(expectedUrl)) {
+      throw new Error(`Navigation failed - expected ${expectedUrl}, got: ${currentUrl}`);
+    }
+  }
+
   async navigateToMenuSection(mainSection: string, subSection: string, expectedUrl: string): Promise<boolean> {
     if (!this.page) throw new Error('Page not initialized');
-
     try {
       await this.logInfo(`Navigating to ${subSection} page`);
-      
-      // Wait for the main section menu to be available
-      const mainMenuSelector = `li[data-nav-tag="${mainSection}"]`;
-      await this.page.waitForSelector(mainMenuSelector, { timeout: 30000 });
-      await this.logInfo(`${mainSection} navigation menu found`);
-
-      // Click on the main section menu item to expand it
-      const mainMenuButton = await this.page.$(`${mainMenuSelector} button[data-tid="item-link"]`);
-      if (!mainMenuButton) {
-        throw new Error(`${mainSection} menu button not found`);
-      }
-      
-      await mainMenuButton.click();
+      const mainMenuClicked = await this.expandMainMenu(mainSection);
+      if (!mainMenuClicked) throw new Error(`${mainSection} menu button not found`);
       await this.logInfo(`${mainSection} menu expanded`);
-      
-      // Wait for the submenu to appear
-      const subMenuSelector = `li[data-nav-tag="${subSection}"]`;
-      await this.page.waitForSelector(subMenuSelector, { timeout: 10000 });
-      await this.logInfo(`${subSection} menu item found`);
-
-      // Click on the sub-section link
-      const subSectionLink = await this.page.$(`${subMenuSelector} a[data-tid="item-link"]`);
-      if (!subSectionLink) {
-        throw new Error(`${subSection} link not found`);
-      }
-
-      await subSectionLink.click();
+      const subMenuClicked = await this.clickSubMenu(subSection);
+      if (!subMenuClicked) throw new Error(`${subSection} link not found by any selector or text`);
       await this.logInfo(`Clicked on ${subSection} link`);
-
-      // Wait for navigation to complete
-      await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 });
-      
-      // Verify we're on the correct page
-      const currentUrl = this.page.url();
-      if (!currentUrl.includes(expectedUrl)) {
-        throw new Error(`Navigation failed - expected ${expectedUrl}, got: ${currentUrl}`);
-      }
-
+      await this.waitForNavigationAndVerify(expectedUrl);
       await this.logInfo(`Successfully navigated to ${subSection} page`);
       await this.takeScreenshot(`booking-${subSection}-page.png`);
-      
       return true;
-
     } catch (error) {
       await dualLogError(
         `[${new Date().toISOString()}] ${getBookingErrorDescription(BookingErrorType.DOM_NOT_FOUND)}`,
