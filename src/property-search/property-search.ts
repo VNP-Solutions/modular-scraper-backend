@@ -1,7 +1,6 @@
 import { Browser, Page } from "puppeteer";
 import { delay } from "../common/delay.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
-import { progressManager } from "../common/progress-manager.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import { timeoutManager } from "../common/timeout-manager.js";
 
@@ -32,11 +31,15 @@ export async function propertySearchAndClickReservation(
         });
       } catch (error: any) {
         await dualLogError("Error waiting for property table:", error);
-        
+
         // Send email notification for property table error
         if (jobId) {
-          try {          } catch (emailError) {
-            await dualLogError("Failed to send property table error notification:", emailError);
+          try {
+          } catch (emailError) {
+            await dualLogError(
+              "Failed to send property table error notification:",
+              emailError
+            );
           }
         }
         throw error;
@@ -56,11 +59,15 @@ export async function propertySearchAndClickReservation(
         );
       } catch (error: any) {
         await dualLogError("Error waiting for property search input:", error);
-        
+
         // Send email notification for search input error
         if (jobId) {
-          try {          } catch (emailError) {
-            await dualLogError("Failed to send search input error notification:", emailError);
+          try {
+          } catch (emailError) {
+            await dualLogError(
+              "Failed to send search input error notification:",
+              emailError
+            );
           }
         }
         throw error;
@@ -78,11 +85,15 @@ export async function propertySearchAndClickReservation(
         );
       } catch (error: any) {
         await dualLogError("Error typing property ID:", error);
-        
+
         // Send email notification for property ID typing error
         if (jobId) {
-          try {          } catch (emailError) {
-            await dualLogError("Failed to send property ID typing error notification:", emailError);
+          try {
+          } catch (emailError) {
+            await dualLogError(
+              "Failed to send property ID typing error notification:",
+              emailError
+            );
           }
         }
         throw error;
@@ -140,27 +151,37 @@ export async function propertySearchAndClickReservation(
 
           await dualLogInfo("Successfully navigated to property page");
         } else {
-          const error = new Error(`Could not find property with ID: ${propertyId}`);
-          
+          const error = new Error(
+            `Could not find property with ID: ${propertyId}`
+          );
+
           // Send email notification for property not found
           if (jobId) {
-            try {            } catch (emailError) {
-              await dualLogError("Failed to send property not found error notification:", emailError);
+            try {
+            } catch (emailError) {
+              await dualLogError(
+                "Failed to send property not found error notification:",
+                emailError
+              );
             }
           }
-          
+
           throw error;
         }
       } catch (error: any) {
         await dualLogError(`Error finding/clicking property: ${error.message}`);
-        
+
         // Send email notification for property click error
         if (jobId) {
-          try {          } catch (emailError) {
-            await dualLogError("Failed to send property click error notification:", emailError);
+          try {
+          } catch (emailError) {
+            await dualLogError(
+              "Failed to send property click error notification:",
+              emailError
+            );
           }
         }
-        
+
         throw error;
       }
     }
@@ -205,14 +226,18 @@ export async function propertySearchAndClickReservation(
 
       if (!clicked) {
         const error = new Error("Could not find or click Reservations link");
-        
+
         // Send email notification for reservations link error
         if (jobId) {
-          try {          } catch (emailError) {
-            await dualLogError("Failed to send reservations link error notification:", emailError);
+          try {
+          } catch (emailError) {
+            await dualLogError(
+              "Failed to send reservations link error notification:",
+              emailError
+            );
           }
         }
-        
+
         throw error;
       }
 
@@ -225,17 +250,28 @@ export async function propertySearchAndClickReservation(
         delay(8000),
       ]);
 
+      const context = page.browserContext(); // puppeteer-er vabe context neoa
+      const cookies = await context.cookies(); // logged-in context er cookies
+      const cookieHeader = cookies
+        .map((c) => `${c.name}=${c.value}`)
+        .join("; ");
+      console.log("🍪 Cookie Header to use in GraphQL from reservation:", cookieHeader);
+
       await dualLogInfo("Successfully navigated to Reservations page");
     } catch (error: any) {
       await dualLogError(`Error searching for property ${propertyId}:`, error);
-      
+
       // Send email notification for reservations navigation error
       if (jobId) {
-        try {        } catch (emailError) {
-          await dualLogError("Failed to send reservations navigation error notification:", emailError);
+        try {
+        } catch (emailError) {
+          await dualLogError(
+            "Failed to send reservations navigation error notification:",
+            emailError
+          );
         }
       }
-      
+
       // Close browser when done with this attempt
       if (browser) {
         await browser.close();
@@ -245,14 +281,18 @@ export async function propertySearchAndClickReservation(
     }
   } catch (error: any) {
     await dualLogError(`Error searching for property ${propertyId}:`, error);
-    
+
     // Send email notification for general property search error
     if (jobId) {
-      try {      } catch (emailError) {
-        await dualLogError("Failed to send general property search error notification:", emailError);
+      try {
+      } catch (emailError) {
+        await dualLogError(
+          "Failed to send general property search error notification:",
+          emailError
+        );
       }
     }
-    
+
     throw error;
   }
 }

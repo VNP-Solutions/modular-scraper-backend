@@ -13,6 +13,7 @@ import { progressManager } from "../common/progress-manager.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import { specs, swaggerUi } from "../config/swagger.js";
 import { getAccess, getOauth2Callback } from "../get-access/access.js";
+import graphqlScraping from "../graphql.js";
 import main from "../main.js";
 import { JobStatus } from "../models/job.model.js";
 import reservation from "../reservation/reservation.js";
@@ -1504,6 +1505,362 @@ app.get("/api/jobs/:jobId/log", (async (
     res.status(500).json({
       status: 500,
       message: "Error retrieving job log link",
+      error: err.message,
+    });
+  }
+}) as any);
+
+/**
+ * @swagger
+ * /api/expedia/graphql-run-job:
+ *   post:
+ *     tags:
+ *       - Scraping Jobs
+ *     summary: Start GraphQL-based property scraping job
+ *     description: Start a new GraphQL-based property scraping job for the specified property ID, date range, and job ID. This endpoint uses GraphQL queries for more efficient data retrieval compared to traditional DOM scraping.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - startDate
+ *               - endDate
+ *               - jobId
+ *             properties:
+ *               startDate:
+ *                 type: string
+ *                 description: Start date for scraping (MM/DD/YYYY format)
+ *                 example: "01/01/2024"
+ *               endDate:
+ *                 type: string
+ *                 description: End date for scraping (MM/DD/YYYY format)
+ *                 example: "01/31/2024"
+ *               jobId:
+ *                 type: string
+ *                 description: MongoDB ObjectId of the job to run. The job's property must have a valid expedia_id (not "0")
+ *                 example: "507f1f77bcf86cd799439011"
+ *     responses:
+ *       200:
+ *         description: GraphQL property scraping job completed successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 200
+ *                 message:
+ *                   type: string
+ *                   example: "Property scraping completed successfully"
+ *                   enum:
+ *                     - "Property scraping completed successfully"
+ *                     - "Property scraping partial successfully"
+ *                     - "Property scraping failed successfully"
+ *                 expediaId:
+ *                   type: string
+ *                   description: The Expedia property ID that was scraped
+ *                   example: "12345"
+ *                 jobId:
+ *                   type: string
+ *                   description: The job ID that was processed
+ *                   example: "507f1f77bcf86cd799439011"
+ *                 progress:
+ *                   type: object
+ *                   description: Final scraping progress statistics
+ *                   properties:
+ *                     totalItems:
+ *                       type: integer
+ *                       description: Total number of reservations processed
+ *                       example: 150
+ *                     itemsWithCardInfo:
+ *                       type: integer
+ *                       description: Number of reservations with card information scraped
+ *                       example: 140
+ *                     itemsWithPaymentInfo:
+ *                       type: integer
+ *                       description: Number of reservations with payment information scraped
+ *                       example: 135
+ *                     completionPercentage:
+ *                       type: integer
+ *                       description: Percentage of successful scraping completion
+ *                       example: 90
+ *                 finalStatus:
+ *                   type: string
+ *                   enum: [Completed, Partial, Failed]
+ *                   description: Final status of the scraping job
+ *                   example: "Completed"
+ *                 logInfo:
+ *                   type: object
+ *                   nullable: true
+ *                   description: Information about the job log file (if available)
+ *                   properties:
+ *                     logFilePath:
+ *                       type: string
+ *                       description: Path to the log file
+ *                     logEntriesCount:
+ *                       type: integer
+ *                       description: Number of log entries
+ *                     note:
+ *                       type: string
+ *                       example: "Log file uploaded to S3 and deleted locally after job completion"
+ *       400:
+ *         description: Invalid request parameters
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 400
+ *                 message:
+ *                   type: string
+ *                   example: "startDate and endDate are required in request body"
+ *                   enum:
+ *                     - "startDate and endDate are required in request body"
+ *                     - "jobId is required in request body"
+ *                     - "Cannot retrieve valid expedia_id for job {jobId}. Property may not have expedia_id assigned or expedia_id is \"0\"."
+ *                     - "Cannot retrieve valid expediaUsername or expediaPassword for job {jobId}. Property may not have expediaUsername or expediaPassword assigned."
+ *       404:
+ *         description: Job not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 404
+ *                 message:
+ *                   type: string
+ *                   example: "Job with ID 507f1f77bcf86cd799439011 not found"
+ *       409:
+ *         description: Job cannot be run (invalid state)
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 409
+ *                 message:
+ *                   type: string
+ *                   example: "Job 507f1f77bcf86cd799439011 is not in a runnable state. Current status: Running"
+ *                 currentState:
+ *                   type: object
+ *                   description: Current job object with status information
+ *       500:
+ *         description: Internal server error during scraping process
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 500
+ *                 message:
+ *                   type: string
+ *                   example: "Error processing property search"
+ *                 error:
+ *                   type: string
+ *                   description: Detailed error message
+ *                   example: "GraphQL query failed: Network timeout"
+ */
+app.post("/api/expedia/graphql-run-job", (async (
+  req: express.Request,
+  res: express.Response
+) => {
+  try {
+    const { startDate, endDate, jobId } = req.body;
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({
+        status: 400,
+        message: "startDate and endDate are required in request body",
+      });
+    }
+    if (!jobId) {
+      return res.status(400).json({
+        status: 400,
+        message: "jobId is required in request body",
+      });
+    }
+
+    // 1. Validate job exists and can be run
+    const validation = await jobService.validateJob(jobId);
+
+    if (!validation.exists) {
+      return res.status(404).json({
+        status: 404,
+        message: `Job with ID ${jobId} not found`,
+      });
+    }
+
+    if (!validation.canRun) {
+      return res.status(409).json({
+        status: 409,
+        message: `Job ${jobId} is not in a runnable state. Current status: ${validation.job?.job_status}`,
+        currentState: validation.job,
+      });
+    }
+
+    // 2. Get expedia_id from job's property
+    console.log(`Getting expedia_id for job ${jobId}...`);
+    const jobData = await jobService.getExpediaIdFromJob(jobId);
+    const propertyCredentials =
+      await propertyCredentialsService.getCredentialsByJobId(jobId);
+
+    if (!jobData || !jobData.expediaId) {
+      return res.status(400).json({
+        status: 400,
+        message: `Cannot retrieve valid expedia_id for job ${jobId}. Property may not have expedia_id assigned or expedia_id is "0".`,
+      });
+    }
+
+    if (
+      !propertyCredentials?.expediaUsername ||
+      !propertyCredentials?.expediaPassword
+    ) {
+      return res.status(400).json({
+        status: 400,
+        message: `Cannot retrieve valid expediaUsername or expediaPassword for job ${jobId}. Property may not have expediaUsername or expediaPassword assigned.`,
+      });
+    }
+
+    const { expediaId } = jobData;
+    const { expediaUsername, expediaPassword } = propertyCredentials;
+
+    console.log(`Using expedia_id: ${expediaId} for scraping`);
+
+    // 3. Check if scraping is already running (legacy state manager check)
+    // if (scrapingStateManager.isRunning()) {
+    //   return res.status(409).json({
+    //     status: 409,
+    //     message: "Another scraping job is already running",
+    //     currentState: scrapingStateManager.getState(),
+    //   });
+    // }
+
+    // 4. Update job status to Running
+    console.log(`Starting job ${jobId}...`);
+    await jobService.startJob(jobId);
+
+    // 5. Initialize job logging
+    initializeJobLogging(jobId);
+    await dualLogInfo(`Starting property scraping job ${jobId}`, {
+      jobId,
+      expediaId,
+      startDate,
+      endDate,
+    });
+
+    // 6. Start legacy state manager (for existing pause/resume functionality)
+    scrapingStateManager.startScraping(expediaId, jobId, startDate, endDate);
+
+    try {
+      // 7. Run the main scraping function with expedia_id
+      await graphqlScraping(
+        expediaId,
+        startDate,
+        endDate,
+        jobId,
+        expediaUsername,
+        expediaPassword
+      );
+
+      // 8. Get final job statistics
+      const progress = await jobService.getJobProgress(jobId);
+
+      // 9. Determine final status based on completion
+      let finalStatus = JobStatus.Completed;
+      if (progress.totalItems === 0) {
+        finalStatus = JobStatus.Failed;
+      } else if (progress.completionPercentage < 100) {
+        finalStatus = JobStatus.Partial;
+      }
+
+      // 10. Update final job status
+      await jobService.updateJobStatus(jobId, finalStatus);
+
+      // 11. Change URL status back to Available (URL assigned by another project)
+      await jobQueueUrlService.handleJobCompletion(jobId, finalStatus);
+
+      // 12. Stop legacy state manager
+      scrapingStateManager.stopScraping();
+
+      // Get log file information if available
+      const logger = getCurrentJobLogger();
+      const logInfo = logger
+        ? {
+            logFilePath: logger.getLogFilePath(),
+            logEntriesCount: logger.getLogEntriesCount(),
+            note: "Log file uploaded to S3 and deleted locally after job completion",
+          }
+        : null;
+
+      res.status(200).json({
+        status: 200,
+        message: `Property scraping ${finalStatus.toLowerCase()} successfully`,
+        expediaId: expediaId,
+        jobId: jobId,
+        progress: progress,
+        finalStatus: finalStatus,
+        logInfo: logInfo,
+      });
+    } catch (scrapingError: any) {
+      // Mark job as failed on scraping error
+      await dualLogError(`Job ${jobId} failed`, scrapingError, { jobId });
+
+      // Send email notification for scraping errorawait progressManager.handleJobError(jobId, scrapingError);
+
+      // Release URL back to Available status on error
+      await jobQueueUrlService.handleJobCompletion(
+        jobId,
+        "Failed",
+        scrapingError?.message || "Unknown error"
+      );
+
+      scrapingStateManager.stopScraping();
+
+      // Finalize logging with failed status (this ensures log upload even on error)
+      await finalizeJobLogging("failed");
+
+      throw scrapingError;
+    }
+  } catch (err: any) {
+    console.error("Error in /api/expedia/property-run-job:", err);
+
+    // Send email notification for API error// Ensure job is marked as failed and state manager is stopped
+    try {
+      if (req.body.jobId) {
+        await dualLogError(`Property run job ${req.body.jobId} failed`, err, {
+          jobId: req.body.jobId,
+        });
+        await progressManager.handleJobError(req.body.jobId, err);
+
+        // Release URL back to Available status on outer error
+        await jobQueueUrlService.handleJobCompletion(
+          req.body.jobId,
+          "Failed",
+          err.message
+        );
+
+        // Finalize logging to ensure log upload even if error occurs early
+        await finalizeJobLogging("failed");
+      }
+      scrapingStateManager.stopScraping();
+    } catch (cleanupError) {
+      console.error("Error during cleanup:", cleanupError);
+    }
+
+    res.status(500).json({
+      status: 500,
+      message: "Error processing property search",
       error: err.message,
     });
   }
