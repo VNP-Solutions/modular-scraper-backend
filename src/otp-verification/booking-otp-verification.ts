@@ -107,11 +107,11 @@ async function handleBookingOtpVerification(
     let otpInputSelector = null;
     const otpSelectors = [
       // Original selectors
+      'input[autocomplete="one-time-code"]',
       'input[type="text"][maxlength="6"]',
       'input[name="pin"]',
       'input[name="code"]',
       'input[placeholder*="code" i]',
-      'input[autocomplete="one-time-code"]',
       'input[inputmode="numeric"]',
       // Additional comprehensive selectors
       'input[type="text"][maxlength="5"]',

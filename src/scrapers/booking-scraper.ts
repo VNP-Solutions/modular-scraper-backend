@@ -985,7 +985,11 @@ export class BookingScraper extends BaseScraper {
         args: [
           "--no-sandbox",
           "--disable-dev-shm-usage",
-          "--disable-background-timer-throttling"
+          "--disable-background-timer-throttling",
+          "--disable-backgrounding-occluded-windows",
+          "--disable-renderer-backgrounding",
+          "--enable-javascript",
+          "--disable-web-security"
         ],
       };
   
