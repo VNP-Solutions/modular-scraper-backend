@@ -9,6 +9,7 @@ export interface CaptchaHandlerOptions {
   type: 'manual' | 'automatic' | 'browserless_ui';
   timeout?: number;
   sessionUrl?: string;
+  page?: Page;
 }
 
 export interface TwoFactorAuthOptions {

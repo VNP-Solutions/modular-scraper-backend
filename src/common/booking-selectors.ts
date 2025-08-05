@@ -67,4 +67,26 @@ export const BOOKING_SELECTORS = {
     reservationAmount: '[data-heading="Amount"]',
     reservationCardholder: '[data-heading="Cardholder"]'
   }
-} as const; 
+};
+
+export const CAPTCHA_PATTERNS = [
+  /let'?s (make sure|confirm) you'?re? human/i,
+  /choose all the clocks/i,
+  /you are not a bot/i,
+  /confirm.*clocks/i
+];
+
+export const TWO_FA_PATTERNS = [
+  '2fa',
+  'verify',
+  'authentication',
+  'sign-in/verification',
+  'select-phone'
+];
+
+export const TWO_FA_TEXT_PATTERNS = [
+  'Verification method',
+  'nw-signin-verification',
+  'verification-pulse-link',
+  'sms-verification-link'
+];
