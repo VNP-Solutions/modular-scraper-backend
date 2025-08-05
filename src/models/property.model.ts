@@ -1,5 +1,11 @@
 import mongoose, { Document, Schema, Types } from "mongoose";
 
+// Enum for booking trust status
+export enum BookingTrustedStatus {
+  NotTrusted = "not_trusted",
+  Trusted = "trusted",
+}
+
 // Interface for the Property document
 export interface IProperty extends Document {
   _id: Types.ObjectId;
@@ -21,6 +27,9 @@ export interface IProperty extends Document {
   updatedAt: Date;
   user_email?: string;
   user_password?: string;
+  // Booking trust fields
+  booking_trusted_status?: BookingTrustedStatus;
+  booking_last_login?: Date;
 }
 
 function isValidId(value: string): boolean {
@@ -111,6 +120,17 @@ const PropertySchema = new Schema<IProperty>(
       type: String,
       required: false,
     },
+    // Booking trust tracking fields
+    booking_trusted_status: {
+      type: String,
+      enum: Object.values(BookingTrustedStatus),
+      default: BookingTrustedStatus.NotTrusted,
+      required: false,
+    },
+    booking_last_login: {
+      type: Date,
+      required: false,
+    },
   },
   {
     timestamps: true,
@@ -122,5 +142,8 @@ const PropertySchema = new Schema<IProperty>(
 PropertySchema.index({ created_by: 1 });
 PropertySchema.index({ status: 1 });
 PropertySchema.index({ property_name: 1 });
+// Booking trust scheduling indexes
+PropertySchema.index({ booking_trusted_status: 1, booking_last_login: 1 });
+PropertySchema.index({ booking_id: 1, booking_trusted_status: 1 });
 
 export const Property = mongoose.model<IProperty>("Property", PropertySchema);

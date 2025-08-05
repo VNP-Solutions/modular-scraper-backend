@@ -196,6 +196,8 @@ export class JobService {
     bookingId: string;
     user_email?: string;
     user_password?: string;
+    portfolioId?: string;
+    propertyId?: string;
   } | null> {
     try {
       const job = await this.getJobWithProperty(jobId);
@@ -229,6 +231,8 @@ export class JobService {
         bookingId: property.booking_id,
         user_email: property.user_email,
         user_password: property.user_password,
+        portfolioId: job.portfolio_id?.toString(),
+        propertyId: job.property_id?.toString(),
       };
     } catch (error) {
       console.error(`Error getting booking_id for job ${jobId}:`, error);

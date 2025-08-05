@@ -4,6 +4,7 @@ import open from "open";
 import app from "./app/app.js";
 import loadToken from "./common/load-token.js";
 import { workerPool } from "./common/worker-pool.js";
+import { bookingTrustCron } from "./services/booking-trust-cron.service.js";
 dotenv.config();
 
 const port: number = parseInt(process.env.PORT || "3000");
@@ -40,6 +41,10 @@ const gracefulShutdown = async (signal: string): Promise<void> => {
   console.log(`Received ${signal}. Starting graceful shutdown...`);
 
   try {
+    // Stop booking trust cron scheduler
+    console.log("Stopping booking trust scheduler...");
+    bookingTrustCron.stop();
+
     // Shutdown worker pool first
     console.log("Shutting down worker pool...");
     await workerPool.shutdown();
@@ -65,6 +70,10 @@ app.listen(port, async () => {
   try {
     await connectDB();
 
+    // Start booking trust scheduler after database connection
+    console.log("Starting booking trust verification scheduler...");
+    bookingTrustCron.start();
+
     if (!loadToken(process.env.TOKEN_PATH || "token.json")) {
       console.log("Opening browser for authentication...");
       open(`http://localhost:${port}/auth`);
@@ -75,6 +84,7 @@ app.listen(port, async () => {
         workerPool.getStatus().totalWorkers
       } workers`
     );
+    console.log("Booking trust verification scheduler started - running every hour");
   } catch (err) {
     console.log("Server cannot be connected because of the error:");
     console.log(err);
