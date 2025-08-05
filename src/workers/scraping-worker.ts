@@ -15,6 +15,7 @@ import { scrapingStateManager } from "../common/scraping-state.js";
 import main from "../main.js";
 import reservation from "../reservation/reservation.js";
 import { jobService } from "../services/job.service.js";
+import { mainMultiPlatform } from "../main-multi-platform.js";
 import { JobStatus } from "../models/job.model.js";
 import { 
   BookingErrorType, 
@@ -222,29 +223,30 @@ class ScrapingWorker {
     );
 
     try {
-      // 6. Run the main scraping function
-      await main(
-        finalExpediaId,
+      // 6. Run the multi-platform scraping function for Expedia
+      await mainMultiPlatform({
+        platform: 'expedia',
+        propertyId: finalExpediaId,
         startDate,
         endDate,
         jobId,
-        finalUserEmail,
-        finalUserPassword
-      );
+        user_email: finalUserEmail,
+        user_password: finalUserPassword
+      });
 
       // 7. Get final job statistics
       const progress = await jobService.getJobProgress(jobId);
 
       // 8. Determine final status based on completion
-      let finalStatus = "Completed";
+      let finalStatus = JobStatus.Completed;
       if (progress.totalItems === 0) {
-        finalStatus = "Failed";
+        finalStatus = JobStatus.Failed;
       } else if (progress.completionPercentage < 100) {
-        finalStatus = "Partial";
+        finalStatus = JobStatus.Partial;
       }
 
       // 9. Update final job status
-      await jobService.updateJobStatus(jobId, finalStatus as any);
+      await jobService.updateJobStatus(jobId, finalStatus);
 
       // 10. Stop scraping state manager
       scrapingStateManager.stopScraping();
@@ -280,6 +282,9 @@ class ScrapingWorker {
       });
       await progressManager.handleJobError(jobId, scrapingError);
       scrapingStateManager.stopScraping();
+
+      // Update job status to Failed
+      await jobService.updateJobStatus(jobId, JobStatus.Failed);
 
       // Finalize logging with failed status
       await finalizeJobLogging("failed");
@@ -333,7 +338,7 @@ class ScrapingWorker {
     console.log(
       `Worker: Resetting job ${jobId} status from ${originalStatus} to Pending...`
     );
-    await jobService.updateJobStatus(jobId, "Pending" as any);
+    await jobService.updateJobStatus(jobId, JobStatus.Pending);
 
     console.log(`Worker: Starting job ${jobId}...`);
     await jobService.startJob(jobId);
@@ -352,15 +357,16 @@ class ScrapingWorker {
     scrapingStateManager.startScraping(expediaId, jobId, startDate, endDate);
 
     try {
-      // 8. Run the main scraping function
-      await main(
-        expediaId,
+      // 8. Run the multi-platform scraping function for Expedia
+      await mainMultiPlatform({
+        platform: 'expedia',
+        propertyId: expediaId,
         startDate,
         endDate,
         jobId,
-        user_email,
-        user_password
-      );
+        user_email: user_email,
+        user_password: user_password
+      });
 
       // 9. Get final job statistics
       const progress = await jobService.getJobProgress(jobId);
@@ -408,6 +414,7 @@ class ScrapingWorker {
       await dualLogError(`Worker: Job ${jobId} rerun failed`, error, { jobId });
 
       // Update job status to Failed
+      await jobService.updateJobStatus(jobId, JobStatus.Failed);
       await progressManager.handleJobError(jobId, error);
 
       // Stop scraping state manager
@@ -483,42 +490,159 @@ class ScrapingWorker {
   }
 
   private async handleBookingRun(jobData: WorkerJobData): Promise<any> {
-    const { jobId, portfolioId, propertyId } = jobData;
+    const { jobId, portfolioId, propertyId, startDate, endDate, bookingId, user_email, user_password } = jobData;
     
-    // Update job status to Running for async tracking
+    if (!startDate || !endDate || !jobId) {
+      throw new Error("startDate, endDate, and jobId are required for booking-run jobs");
+    }
+
+    // 1. Validate job exists and can be run
+    const validation = await jobService.validateJob(jobId);
+
+    if (!validation.exists) {
+      throw new Error(`Job with ID ${jobId} not found`);
+    }
+
+    if (!validation.canRun) {
+      throw new Error(
+        `Job ${jobId} is not in a runnable state. Current status: ${validation.job?.job_status}`
+      );
+    }
+
+    // 2. Get booking_id and credentials from job's property if not provided
+    let finalBookingId = bookingId;
+    let finalUserEmail = user_email;
+    let finalUserPassword = user_password;
+
+    if (!finalBookingId || !finalUserEmail || !finalUserPassword) {
+      console.log(`Getting job data for booking job ${jobId}...`);
+      const jobData = await jobService.getBookingIdFromJob(jobId);
+
+      if (!jobData || !jobData.bookingId) {
+        throw new Error(
+          `Cannot retrieve valid booking_id for job ${jobId}. Property may not have booking_id assigned or booking_id is "0".`
+        );
+      }
+
+      if (!jobData.user_email || !jobData.user_password) {
+        throw new Error(
+          `Cannot retrieve valid user_email or user_password for job ${jobId}. Property may not have user_email or user_password assigned.`
+        );
+      }
+
+      finalBookingId = jobData.bookingId;
+      finalUserEmail = jobData.user_email;
+      finalUserPassword = jobData.user_password;
+    }
+
+    console.log(`Worker: Using booking_id: ${finalBookingId} for booking scraping`);
+
+    // 3. Update job status to Running
+    console.log(`Worker: Starting booking job ${jobId}...`);
     await jobService.startJob(jobId);
-    
-    // Initialize job logging for tracking
+
+    // 4. Initialize job logging
     initializeJobLogging(jobId);
     await dualLogInfo(`Worker: Starting booking scraping job ${jobId}`, {
       jobId,
       portfolioId,
       propertyId,
+      bookingId: finalBookingId,
+      startDate,
+      endDate,
     });
+
+    // 5. Start scraping state manager
+    scrapingStateManager.startScraping(
+      finalBookingId,
+      jobId,
+      startDate,
+      endDate
+    );
     
     try {
-      // TODO: Implement booking scraping 
+      // 6. Run the multi-platform scraping function for Booking.com
+      await mainMultiPlatform({
+        platform: 'booking',
+        propertyId: finalBookingId,
+        startDate,
+        endDate,
+        jobId,
+        user_email: finalUserEmail,
+        user_password: finalUserPassword
+      });
 
-      await jobService.updateJobStatus(jobId, JobStatus.Completed);
+      // 7. Get final job statistics
+      const progress = await jobService.getJobProgress(jobId);
+
+      // 8. Determine final status based on completion
+      let finalStatus = JobStatus.Completed;
+      if (progress.totalItems === 0) {
+        finalStatus = JobStatus.Failed;
+      } else if (progress.completionPercentage < 100) {
+        finalStatus = JobStatus.Partial;
+      }
+
+      // 9. Update final job status
+      await jobService.updateJobStatus(jobId, finalStatus);
+
+      // 10. Stop scraping state manager
+      scrapingStateManager.stopScraping();
+
+      // 11. Finalize logging
       await finalizeJobLogging("success");
+
+      // Get log file information if available
+      const logger = (global as any).getCurrentJobLogger?.();
+      const logInfo = logger
+        ? {
+            logFilePath: logger.getLogFilePath(),
+            logEntriesCount: logger.getLogEntriesCount(),
+            note: "Log file uploaded to S3 and deleted locally after job completion",
+          }
+        : null;
+
+      console.log(`Worker: Booking job ${jobId} completed successfully`);
       
       await dualLogInfo('Booking scraping completed successfully', {
         jobId,
         portfolioId,
         propertyId,
-        platform: 'booking'
+        platform: 'booking',
+        finalStatus,
+        progress
       });
       
       return {
         status: 200,
-        message: "Booking scraping job completed successfully",
+        message: `Booking scraping ${finalStatus.toLowerCase()} successfully`,
+        bookingId: finalBookingId,
         jobId: jobId,
         portfolioId: portfolioId,
         propertyId: propertyId,
-        trackingStatus: JobStatus.Completed
+        progress: progress,
+        finalStatus: finalStatus,
+        logInfo: logInfo,
+        trackingStatus: finalStatus
       };
       
     } catch (error) {
+      // Mark job as failed on scraping error
+      await dualLogError(`Worker: Booking job ${jobId} failed`, error, {
+        jobId,
+        portfolioId,
+        propertyId,
+        platform: 'booking'
+      });
+      await progressManager.handleJobError(jobId, error);
+      scrapingStateManager.stopScraping();
+
+      // Update job status to Failed
+      await jobService.updateJobStatus(jobId, JobStatus.Failed);
+
+      // Finalize logging with failed status
+      await finalizeJobLogging("failed");
+
       await jobService.setJobIdForRetryCheck(jobId);
 
       await dualLogError(
@@ -534,10 +658,6 @@ class ScrapingWorker {
           maxRetries: jobService.maxRetries,
         }
       );
-      
-      // Update job status to failed
-      await jobService.updateJobStatus(jobId, JobStatus.Failed);
-      await finalizeJobLogging("failed");
       
       throw error;
     }

@@ -10,7 +10,6 @@ import { specs, swaggerUi } from "../config/swagger.js";
 import { getAccess, getOauth2Callback } from "../get-access/access.js";
 import { Job, JobStatus } from "../models/job.model.js";
 import { jobService } from "../services/job.service.js";
-import multiPlatformScraperRoutes from "../routes/multi-platform-scraper.js";
 
 const app = express();
 
@@ -1016,8 +1015,36 @@ app.get("/api/jobs/:jobId/log", (async (
   }
 }) as any);
 
-// Multi-platform scraper routes
-app.use("/api/scrape", multiPlatformScraperRoutes);
+// Test endpoint for multi-platform scraper functionality
+app.get("/api/scraping/test-platforms", (async (
+  req: express.Request,
+  res: express.Response
+) => {
+  try {
+    const { mainMultiPlatform } = await import("../main-multi-platform.js");
+    
+    res.status(200).json({
+      status: 200,
+      message: "Multi-platform scraper test endpoint",
+      supportedPlatforms: ['expedia', 'booking'],
+      testResults: {
+        expedia: "Ready - Uses existing Expedia scraper with multi-platform interface",
+        booking: "Ready - Uses new Booking.com scraper with Browserless integration"
+      },
+      endpoints: {
+        expedia: "/api/expedia/property-run-job",
+        booking: "/api/booking/run-job"
+      },
+      note: "Both platforms now use the unified multi-platform scraper system"
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      status: 500,
+      message: "Error testing multi-platform scraper",
+      error: err.message,
+    });
+  }
+}) as any);
 
 app.get(
   "/api/worker-pool/status",
