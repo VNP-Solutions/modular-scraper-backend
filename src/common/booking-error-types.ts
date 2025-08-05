@@ -1,3 +1,6 @@
+export enum PlatformsType {
+  BOOKING = 'booking'
+}
 /**
  * Booking-specific error types for enhanced error logging
  * Used with the existing dualLogError system
@@ -18,7 +21,8 @@ export enum BookingErrorType {
   RERUN_FAILED = "rerun_failed",
   RERUN_INVALID_STATUS = "rerun_invalid_status",
   RERUN_NO_DATA = "rerun_no_data",
-  UNKNOWN = "unknown"
+  UNKNOWN = "unknown",
+  TWO_FA_ERROR = "two_fa_error"
 }
 
 /**
@@ -54,22 +58,23 @@ export function shouldRetryBookingError(errorType: BookingErrorType): boolean {
  */
 export function getBookingErrorDescription(errorType: BookingErrorType): string {
   const descriptions: Record<BookingErrorType, string> = {
-    [BookingErrorType.TIMEOUT]: "Operation timed out",
-    [BookingErrorType.BLOCKED]: "Access blocked by Booking.com",
-    [BookingErrorType.CAPTCHA]: "CAPTCHA challenge detected",
-    [BookingErrorType.DOM_NOT_FOUND]: "Required DOM element not found",
-    [BookingErrorType.NETWORK_ERROR]: "Network connectivity issue",
-    [BookingErrorType.AUTHENTICATION_ERROR]: "Authentication/credential issue",
-    [BookingErrorType.RATE_LIMITED]: "Rate limiting detected",
-    [BookingErrorType.PRICE_NOT_FOUND]: "Price information not available",
-    [BookingErrorType.AVAILABILITY_ERROR]: "Availability data issue",
-    [BookingErrorType.BOOKING_FORM_ERROR]: "Form interaction problem",
-    [BookingErrorType.LOGIN_FAILED]: "Login process failed",
-    [BookingErrorType.PROPERTY_NOT_FOUND]: "Property not found on Booking.com",
-    [BookingErrorType.RERUN_FAILED]: "Job rerun execution failed",
-    [BookingErrorType.RERUN_INVALID_STATUS]: "Invalid job status for rerun",
-    [BookingErrorType.RERUN_NO_DATA]: "No data available for rerun",
-    [BookingErrorType.UNKNOWN]: "Unknown error occurred"
+    [BookingErrorType.TIMEOUT]: `[${PlatformsType.BOOKING}] Operation timed out`,
+    [BookingErrorType.BLOCKED]: `[${PlatformsType.BOOKING}] Access blocked by Booking.com`,
+    [BookingErrorType.CAPTCHA]: `[${PlatformsType.BOOKING}] CAPTCHA challenge detected`,
+    [BookingErrorType.DOM_NOT_FOUND]: `[${PlatformsType.BOOKING}] Required DOM element not found`,
+    [BookingErrorType.NETWORK_ERROR]: `[${PlatformsType.BOOKING}] Network connectivity issue`,
+    [BookingErrorType.AUTHENTICATION_ERROR]: `[${PlatformsType.BOOKING}] Authentication/credential issue`,
+    [BookingErrorType.RATE_LIMITED]: `[${PlatformsType.BOOKING}] Rate limiting detected`,
+    [BookingErrorType.PRICE_NOT_FOUND]: `[${PlatformsType.BOOKING}] Price information not available`,
+    [BookingErrorType.AVAILABILITY_ERROR]: `[${PlatformsType.BOOKING}] Availability data issue`,
+    [BookingErrorType.BOOKING_FORM_ERROR]: `[${PlatformsType.BOOKING}] Form interaction problem`,
+    [BookingErrorType.LOGIN_FAILED]: `[${PlatformsType.BOOKING}] Login process failed`,
+    [BookingErrorType.PROPERTY_NOT_FOUND]: `[${PlatformsType.BOOKING}] Property search failed`,
+    [BookingErrorType.RERUN_FAILED]: `[${PlatformsType.BOOKING}] Job rerun execution failed`,
+    [BookingErrorType.RERUN_INVALID_STATUS]: `[${PlatformsType.BOOKING}] Invalid job status for rerun`,
+    [BookingErrorType.RERUN_NO_DATA]: `[${PlatformsType.BOOKING}] No data available for rerun`,
+    [BookingErrorType.UNKNOWN]: `[${PlatformsType.BOOKING}] Unknown error occurred`,
+    [BookingErrorType.TWO_FA_ERROR]: `[${PlatformsType.BOOKING}] 2FA handling failed`,
   };
   
   return descriptions[errorType];
