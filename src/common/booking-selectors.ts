@@ -65,7 +65,8 @@ export const BOOKING_SELECTORS = {
     reservationId: '[data-heading="Reservation info"] a',
     reservationChargeBefore: '[data-heading="Charge before"] span',
     reservationAmount: '[data-heading="Amount"]',
-    reservationCardholder: '[data-heading="Cardholder"]'
+    reservationCardholder: '[data-heading="Cardholder"]',
+    reservationName: 'span[data-test-id="reservation-overview-name"]'
   }
 };
 
@@ -86,7 +87,9 @@ export const TWO_FA_PATTERNS = [
 
 export const TWO_FA_TEXT_PATTERNS = [
   'Verification method',
+  'Verify your identity',
   'nw-signin-verification',
   'verification-pulse-link',
-  'sms-verification-link'
+  'sms-verification-link',
+  'Text message (SMS)'
 ];

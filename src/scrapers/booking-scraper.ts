@@ -93,7 +93,7 @@ export class BookingScraper extends BaseScraper {
 
       } catch (liveUrlError) {
         await this.logError("Failed to generate live URL:", liveUrlError);
-        console.log("Live URL generation failed - will use session URL instead");
+        await this.logInfo("Live URL generation failed - will use session URL instead");
         this.sessionUrl = `https://production-sfo.browserless.io?token=${this.browserlessToken}#/live/${session.id}`;
       }
 
@@ -328,19 +328,21 @@ export class BookingScraper extends BaseScraper {
   }
 
   async handle2FA(options?: TwoFactorAuthOptions): Promise<boolean> {
-    if (!this.page || !this.browser) return false;
+    const currentPage = options?.page || this.page;
+
+    if (!currentPage || !this.browser) return false;
 
     try {
-      const currentUrl = this.page.url();
+      const currentUrl = currentPage.url();
       
       // Check if we're on a verification-related page
       const needsVerification = TWO_FA_PATTERNS.some(pattern => currentUrl.includes(pattern));
 
       if (!needsVerification) {
         // Check page content for verification indicators
-        const pageContent = await this.page.content();
+        const pageContent = await currentPage.content();
         const hasVerificationContent = TWO_FA_TEXT_PATTERNS.some(text => pageContent.includes(text));
-        
+
         if (!hasVerificationContent) {
           await this.logInfo('No 2FA required');
           return true;
@@ -351,7 +353,7 @@ export class BookingScraper extends BaseScraper {
       await this.takeScreenshot('booking-2fa-page.png');
 
       try {
-        await handleBookingOtpVerification(this.browser, this.page);
+        await handleBookingOtpVerification(this.browser, currentPage);
         await this.logInfo('Automated OTP verification completed successfully');
         return true;
       } catch (otpError) {
@@ -373,15 +375,15 @@ export class BookingScraper extends BaseScraper {
         // Find OTP input field for manual entry
         for (const selector of BOOKING_SELECTORS.tfaSelectors) {
           try {
-            await this.page.waitForSelector(selector, { timeout: 10000 });
+            await currentPage.waitForSelector(selector, { timeout: 10000 });
             await this.logInfo(`Found 2FA field for manual entry: ${selector}`);
             
             const code = await this.prompt2FA(options?.timeout || 120000);
-            await this.page.type(selector, code, { delay: 100 });
-            await this.page.keyboard.press('Enter');
+            await currentPage.type(selector, code, { delay: 100 });
+            await currentPage.keyboard.press('Enter');
             await this.logInfo('Manual 2FA code submitted');
             
-            await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }).catch(() => {
+            await currentPage.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }).catch(() => {
               this.logInfo('Navigation timeout after manual 2FA');
             });
             
@@ -629,7 +631,7 @@ export class BookingScraper extends BaseScraper {
           }
         });
       });
-      
+
       // Click the reservation link
       const reservationLink = await this.page.$(`a[href*="res_id=${reservationId}"]`);
       if (!reservationLink) {
@@ -638,8 +640,30 @@ export class BookingScraper extends BaseScraper {
       await reservationLink.click();
 
       const newPage = await newPagePromise;
+      
+      // Check on captcha
+      let captchaHandled = await this.handleCaptcha({
+        type: 'browserless_ui',
+        sessionUrl: this.sessionUrl,
+        timeout: 180000,
+        page: newPage
+      });
+  
+      if (!captchaHandled) {
+        await this.logInfo('Captcha not solved in new tab');
+        return false;
+      }
 
-      const captchaHandled = await this.handleCaptcha({
+      // Check on 2fa
+      const twoFASuccess = await this.handle2FA({ page: newPage });
+
+      if (!twoFASuccess) {
+        await this.logInfo('2FA not solved in new tab');
+        return false;
+      }
+
+      // Check on captcha
+      captchaHandled = await this.handleCaptcha({
         type: 'browserless_ui',
         sessionUrl: this.sessionUrl,
         timeout: 180000,
@@ -651,7 +675,23 @@ export class BookingScraper extends BaseScraper {
         return false;
       }
       
-      await newPage.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }).catch(() => {});
+      try {
+        await newPage.waitForSelector(BOOKING_SELECTORS.reservations.reservationName, { timeout: 15000 });
+        this.logInfo('Reservation detail page loaded successfully.');
+      } catch (error) {
+        await dualLogError(
+          `[${new Date().toISOString()}] ${getBookingErrorDescription(BookingErrorType.RESERVATION_NOT_FOUND)}`,
+          {
+            errorType: BookingErrorType.RESERVATION_NOT_FOUND,
+            error: error,
+            phase: BookingScrapingPhase.NAVIGATION,
+            platform: 'booking',
+            action: 'click_reservation_detail',
+          }
+        );
+        await this.takeScreenshot(`reservation-detail-failure.png`);
+        throw new Error('Reservation detail page did not load as expected.');
+      }
       
       // TODO: Add your reservation detail processing logic
       await this.logInfo(`Processing reservation detail for ID: ${reservationId}`);
@@ -689,7 +729,7 @@ export class BookingScraper extends BaseScraper {
     const startTime = Date.now();
 
     try {
-      // Get pagination info directly
+      // Get pagination info
       await this.logInfo('Getting pagination information...');
       const paginationInfo = await this.getPaginationInfo();
       

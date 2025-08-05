@@ -15,6 +15,7 @@ export interface CaptchaHandlerOptions {
 export interface TwoFactorAuthOptions {
   timeout?: number;
   prompt?: (message: string) => Promise<string>;
+  page?: Page;
 }
 
 export interface ScrapingJobParams {
