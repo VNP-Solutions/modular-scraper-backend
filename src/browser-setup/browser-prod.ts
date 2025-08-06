@@ -6,7 +6,6 @@ import {
   dualLogInfo,
   dualLogWarn,
 } from "../common/log-helper.js";
-import { progressManager } from "../common/progress-manager.js";
 import { timeoutManager } from "../common/timeout-manager.js";
 import { JobService } from "../services/job.service.js";
 dotenv.config();
@@ -137,9 +136,9 @@ export async function browserSetupProduction(
       }
     }
 
-    // Set default timeouts based on job configuration
-    await page.setDefaultNavigationTimeout(loadingTimeout);
-    await page.setDefaultTimeout(selectorTimeout);
+    // Set timeouts to 0 for infinite waiting (when using DynamicWaiter)
+    await page.setDefaultNavigationTimeout(0); // No navigation timeout
+    await page.setDefaultTimeout(0); // No default timeout
 
     // Navigate to partner central with retry logic
     await dualLogInfo("Navigating to Expedia Partner Central...");
@@ -163,16 +162,17 @@ export async function browserSetupProduction(
             }
           );
         } else if (platform === "agoda") {
-          await page.goto("https://www.ycs.agoda.com/mldc/en-us/public/login", {
-            waitUntil: "domcontentloaded",
-            timeout: loadingTimeout,
+          // Navigate directly to the login page to avoid redirect timing issues
+          await page.goto("https://ycs.agoda.com/mldc/en-us/public/login", {
+            waitUntil: "networkidle2", // Wait for network to be idle to handle redirects
+            timeout: 0, // No timeout for Agoda navigation
           });
         }
         // Wait for page to stabilize
         await delay(3000);
 
         // Check if page loaded successfully by looking for a common element
-        await page.waitForSelector("body", { timeout: selectorTimeout });
+        await page.waitForSelector("body", { timeout: 0 }); // No timeout
 
         navigationSuccess = true;
         await dualLogInfo("Navigation successful!", { attempt });

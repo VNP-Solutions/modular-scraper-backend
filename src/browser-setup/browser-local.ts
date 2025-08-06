@@ -6,7 +6,6 @@ import {
   dualLogInfo,
   dualLogWarn,
 } from "../common/log-helper.js";
-import { progressManager } from "../common/progress-manager.js";
 import { timeoutManager } from "../common/timeout-manager.js";
 dotenv.config();
 
@@ -22,7 +21,7 @@ export async function browserSetupLocal(
   try {
     try {
       browser = await puppeteer.launch({
-        headless: true,
+        headless: false,
         defaultViewport: null,
         args: [
           "--start-maximized",
@@ -60,12 +59,12 @@ export async function browserSetupLocal(
     await page.setUserAgent(
       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
     );
-    // Set default timeouts based on job configuration
-    await page.setDefaultNavigationTimeout(loadingTimeout);
-    await page.setDefaultTimeout(selectorTimeout);
+    // Set timeouts to 0 for infinite waiting (when using DynamicWaiter)
+    await page.setDefaultNavigationTimeout(0); // No navigation timeout
+    await page.setDefaultTimeout(0); // No default timeout
 
     // Navigate to partner central with retry logic
-    await dualLogInfo("Navigating to Expedia Partner Central...");
+    // await dualLogInfo("Navigating to Expedia Partner Central...");
 
     const maxRetries = 3;
     let navigationSuccess = false;
@@ -86,16 +85,17 @@ export async function browserSetupLocal(
             }
           );
         } else if (platform === "agoda") {
-          await page.goto("https://www.ycs.agoda.com/mldc/en-us/public/login", {
+          await page.goto("https://ycs.agoda.com", {
             waitUntil: "domcontentloaded",
             timeout: loadingTimeout,
           });
+          await page.waitForNavigation({ waitUntil: "networkidle0" });
         }
         // Wait for page to stabilize
         await delay(3000);
 
         // Check if page loaded successfully by looking for a common element
-        await page.waitForSelector("body", { timeout: selectorTimeout });
+        await page.waitForSelector("body", { timeout: 0 }); // No timeout
 
         navigationSuccess = true;
         await dualLogInfo("Navigation successful!", { attempt });

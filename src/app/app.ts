@@ -11,6 +11,7 @@ import healthRoutes from "../routes/shared/health.routes.js";
 import expediarJobsRoutes from "../routes/expedia/jobs.routes.js";
 import expediarScrapingControlRoutes from "../routes/expedia/scraping-control.routes.js";
 import expediarScrapingRoutes from "../routes/expedia/scraping.routes.js";
+import agodaScrapingRoutes from "../routes/agoda/scraping.routes.js"
 
 const app = express();
 
@@ -55,6 +56,7 @@ app.use("/", authRoutes);
 app.use("/api/scraping", expediarScrapingControlRoutes);
 app.use("/api/jobs", expediarJobsRoutes);
 app.use("/api/expedia", expediarScrapingRoutes);
+app.use("/api/agoda", agodaScrapingRoutes);
 
 // Global error handle middleware
 app.use((err: any, req: any, res: any, next: any) => {

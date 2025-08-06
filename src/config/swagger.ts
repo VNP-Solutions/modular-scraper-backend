@@ -85,6 +85,129 @@ const options: swaggerJsdoc.Options = {
             },
           },
         },
+        AgodaPropertyJobRequest: {
+          type: "object",
+          properties: {
+            startDate: {
+              type: "string",
+              format: "date",
+              description: "Start date for the scraping period (YYYY-MM-DD)",
+              example: "2024-01-01",
+            },
+            endDate: {
+              type: "string",
+              format: "date",
+              description: "End date for the scraping period (YYYY-MM-DD)",
+              example: "2024-01-31",
+            },
+            jobId: {
+              type: "string",
+              description: "Unique identifier for the job to execute",
+              example: "507f1f77bcf86cd799439011",
+            },
+          },
+          required: ["startDate", "endDate", "jobId"],
+        },
+        AgodaPropertyJobResponse: {
+          type: "object",
+          properties: {
+            status: {
+              type: "integer",
+              description: "HTTP status code",
+              example: 200,
+            },
+            message: {
+              type: "string",
+              description: "Response message",
+              example: "Property scraping completed successfully",
+            },
+            agodaId: {
+              type: "string",
+              description: "Agoda property ID that was scraped",
+              example: "123456",
+            },
+            jobId: {
+              type: "string",
+              description: "Job identifier",
+              example: "507f1f77bcf86cd799439011",
+            },
+            progress: {
+              $ref: "#/components/schemas/JobProgress",
+            },
+            finalStatus: {
+              type: "string",
+              enum: ["Completed", "Partial", "Failed"],
+              description: "Final status of the job execution",
+            },
+            logInfo: {
+              type: "object",
+              nullable: true,
+              properties: {
+                logFilePath: {
+                  type: "string",
+                  description: "Path to the log file",
+                },
+                logEntriesCount: {
+                  type: "integer",
+                  description: "Number of log entries",
+                },
+                note: {
+                  type: "string",
+                  description: "Additional information about log handling",
+                },
+              },
+            },
+          },
+        },
+        JobProgress: {
+          type: "object",
+          properties: {
+            totalItems: {
+              type: "integer",
+              description: "Total number of items to process",
+              example: 150,
+            },
+            itemsWithCardInfo: {
+              type: "integer",
+              description: "Number of items with card information extracted",
+              example: 120,
+            },
+            itemsWithPaymentInfo: {
+              type: "integer",
+              description: "Number of items with payment information extracted",
+              example: 100,
+            },
+            completionPercentage: {
+              type: "integer",
+              description:
+                "Completion percentage based on payment info extraction",
+              example: 67,
+            },
+          },
+        },
+        JobValidation: {
+          type: "object",
+          properties: {
+            exists: {
+              type: "boolean",
+              description: "Whether the job exists",
+            },
+            canRun: {
+              type: "boolean",
+              description: "Whether the job can be executed",
+            },
+            job: {
+              type: "object",
+              nullable: true,
+              description: "Job object if exists",
+            },
+          },
+        },
+        JobStatus: {
+          type: "string",
+          enum: ["Pending", "Running", "Completed", "Partial", "Failed"],
+          description: "Current status of the job",
+        },
         ApiResponse: {
           type: "object",
           properties: {
@@ -154,6 +277,10 @@ const options: swaggerJsdoc.Options = {
       {
         name: "Job Monitoring",
         description: "Endpoints for monitoring job progress and results",
+      },
+      {
+        name: "Agoda Scraping",
+        description: "Agoda-specific property scraping endpoints",
       },
     ],
   },

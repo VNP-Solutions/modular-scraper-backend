@@ -130,6 +130,54 @@ export class JobService {
       return null;
     }
   }
+
+  /**
+   * Get expedia_id from job's property
+   */
+  async getAgodaIdFromJob(jobId: string): Promise<{
+    agodaId: string;
+  } | null> {
+    try {
+      const job = await this.getJobWithProperty(jobId);
+
+      if (!job) {
+        console.error(`Job not found: ${jobId}`);
+        return null;
+      }
+
+      if (!job.property_id) {
+        console.error(`Job ${jobId} has no property_id assigned`);
+        return null;
+      }
+
+      // Get property details
+      const property = await Property.findById(job.property_id);
+
+      if (!property) {
+        console.error(
+          `Property not found for job ${jobId}, property_id: ${job.property_id}`
+        );
+        return null;
+      }
+
+      if (!property.agoda_id || property.agoda_id === "0") {
+        console.error(
+          `Property ${property._id} has no valid agoda_id (current: ${property.agoda_id})`
+        );
+        return null;
+      }
+
+      console.log(
+        `✅ Found agoda_id: ${property.agoda_id} for job: ${jobId}`
+      );
+      return {
+        agodaId: property.agoda_id,
+      };
+    } catch (error) {
+      console.error(`Error getting agoda_id for job ${jobId}:`, error);
+      return null;
+    }
+  }
   /**
    * Create job (external jobs creation - read only for scraper)
    */
