@@ -915,37 +915,89 @@ export class BookingScraper extends BaseScraper {
 
   async scrapeData(params: ScrapingJobParams): Promise<ScrapingResult> {
     try {
-      await this.logInfo('Starting data scraping for Booking.com');
+      await this.logInfo('Starting complete Booking.com scraping process');
       
-      // TODO: Implement actual scraping logic based on requirements
-      // This is a placeholder implementation
+      // Step 1: Navigate to VCCS Management
+      await this.logInfo('Navigating to VCCS Management...');
+      const navigationSuccess = await this.navigateToMenuSection('finance', 'vccs_management', 'vccs_management');
+      
+      if (!navigationSuccess) {
+        throw new Error('Failed to navigate to VCCS Management page');
+      }
+      
+      await this.logInfo('Successfully reached VCCS Management page');
+      
+      // Step 2: Click "View all" button to access VCCS to charge
+      await this.logInfo('Clicking "View all" button...');
+      const viewAllSuccess = await this.clickViewAllVccsToCharge();
+      
+      if (!viewAllSuccess) {
+        throw new Error('Failed to click "View all" button or navigate to VCCS to charge page');
+      }
+      
+      await this.logInfo('Successfully navigated to VCCS to charge page');
+      
+      // Step 3: Traverse all reservations
+      await this.logInfo('Starting reservation traversal...');
+      
+      // Optional params
+      const traversalOptions = {
+        // maxPages: params.maxPages || 10,
+        // timeoutMinutes: params.timeoutMinutes || 30,
+        // stopOnLastPage: true
+      };
+      
+      await this.logInfo(`Starting reservation traversal with options:`, traversalOptions);
+      
+      const traversalResult = await this.traverseAllReservations(traversalOptions);
+      
+      await this.logInfo('Traversal Results:');
+      await this.logInfo(`Successfully processed: ${traversalResult.processed} reservations`);
+      await this.logInfo(`Errors encountered: ${traversalResult.errors}`);
+      
+      // Step 4: Take final screenshot
+      await this.takeScreenshot('booking-scraping-complete.png');
+      
+      // Prepare the result data
       const data = {
         platform: 'booking',
         timestamp: new Date().toISOString(),
         jobId: params.jobId,
         propertyId: params.propertyId,
-        // Add actual scraped data here
+        navigation: {
+          vccsManagement: navigationSuccess,
+          viewAllButton: viewAllSuccess
+        },
+        traversal: {
+          processed: traversalResult.processed,
+          errors: traversalResult.errors,
+          options: traversalOptions
+        }
       };
-      await this.takeScreenshot('booking-scraping-complete.png');
+      
+      await this.logInfo('Booking.com scraping completed successfully');
       
       return {
         success: true,
         data,
-        screenshots: ['booking-scraping-complete.png']
       };
+      
     } catch (error) {
-    
       await dualLogError(
-        `[${new Date().toISOString()}] ${getBookingErrorDescription(BookingErrorType.PRICE_NOT_FOUND)}`,
+        `[${new Date().toISOString()}] ${getBookingErrorDescription(BookingErrorType.UNKNOWN)}`,
         {
-          errorType: BookingErrorType.PRICE_NOT_FOUND,
+          errorType: BookingErrorType.UNKNOWN,
           error: error,
-          phase: BookingScrapingPhase.PRICE_EXTRACTION,
+          phase: BookingScrapingPhase.NAVIGATION,
           jobId: params.jobId,
           propertyId: params.propertyId,
-          platform: 'booking'
+          platform: 'booking',
+          action: 'scrape_data'
         }
       );
+      
+      await this.takeScreenshot(`booking-scraping-error-${Date.now()}.png`);
+      
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Scraping failed',

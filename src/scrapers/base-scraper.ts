@@ -24,6 +24,8 @@ export interface ScrapingJobParams {
   startDate?: string;
   endDate?: string;
   credentials?: LoginCredentials;
+  maxPages?: number;
+  timeoutMinutes?: number;
 }
 
 export interface ScrapingResult {
