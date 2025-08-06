@@ -116,12 +116,38 @@ app.listen(port, async () => {
 
 // * Handle uncaught exceptions
 process.on("uncaughtException", async (error) => {
-  console.error("Uncaught Exception:", error);
+  console.error("=== UNCAUGHT EXCEPTION DEBUG ===");
+  console.error("Error type:", typeof error);
+  console.error("Error constructor:", error.constructor.name);
+  console.error("Error message:", error.message || "No message available");
+  console.error("Error stack:", error.stack || "No stack available");
+  console.error("Raw error:", error);
+  console.error("Error keys:", Object.keys(error));
+  console.error("Error values:", Object.values(error));
+  
+  try {
+    console.error("Stringified error:", JSON.stringify(error, null, 2));
+  } catch (e) {
+    console.error("Failed to stringify error:", e);
+  }
+  
+  console.error("=== END DEBUG ===");
   await gracefulShutdown("uncaughtException");
 });
 
 // * Handle unhandled promise rejections
 process.on("unhandledRejection", async (reason, promise) => {
-  console.error("Unhandled Rejection at:", promise, "reason:", reason);
+  console.error("=== UNHANDLED REJECTION DEBUG ===");
+  console.error("Promise:", promise);
+  console.error("Reason type:", typeof reason);
+  console.error("Reason:", reason);
+  
+  if (reason && typeof reason === 'object') {
+    console.error("Reason constructor:", reason.constructor.name);
+    console.error("Reason message:", reason.message || "No message available");
+    console.error("Reason stack:", reason.stack || "No stack available");
+  }
+  
+  console.error("=== END DEBUG ===");
   await gracefulShutdown("unhandledRejection");
 });

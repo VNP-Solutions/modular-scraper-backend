@@ -575,35 +575,9 @@ async function handleOtpVerification(
     await waitForNavigation(page, loadingTimeout);
 
     console.log("Login successful!");
-  } catch (error) {
-    console.error("Error in handleOtpVerification:", error);
-    await closeBrowserOnError(browser);
-    const loadingTimeout = await timeoutManager.getLoadingTimeout(jobId);
-    try {
-      await page.waitForNavigation({
-        waitUntil: "networkidle0",
-        timeout: loadingTimeout,
-      });
-      console.log("Login successful!");
-    } catch (error: any) {
-      await dualLogError("Error waiting for navigation after OTP:", error);
-
-      // Send email notification for navigation error
-      if (jobId) {
-        try {
-          // TODO: Implement navigation error notification email
-        } catch (emailError) {
-          await dualLogError(
-            "Failed to send navigation error notification:",
-            emailError
-          );
-        }
-      }
-
-      throw error;
-    }
   } catch (error: any) {
     await dualLogError("Error in handleOtpVerification:", error);
+    await closeBrowserOnError(browser);
 
     // Send email notification for general OTP verification error
     if (jobId) {

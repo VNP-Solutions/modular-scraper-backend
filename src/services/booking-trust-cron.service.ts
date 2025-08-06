@@ -1,6 +1,7 @@
 import cron from "node-cron";
 import { bookingTrustScheduler } from "./booking-trust-scheduler.service.js";
 import { dualLogInfo, dualLogError } from "../common/log-helper.js";
+import { BookingErrorType, getBookingErrorDescription } from "../common/booking-error-types.js";
 
 export class BookingTrustCronService {
   private cronJob: cron.ScheduledTask | null = null;
@@ -77,10 +78,15 @@ export class BookingTrustCronService {
         });
       }
     } catch (error) {
-      await dualLogError("Error in scheduled booking trust verification", error, {
-        scheduledRun: true,
-        timestamp: new Date().toISOString(),
-      });
+      await dualLogError(
+        getBookingErrorDescription(BookingErrorType.UNKNOWN), 
+        error, 
+        {
+          errorType: BookingErrorType.UNKNOWN,
+          scheduledRun: true,
+          timestamp: new Date().toISOString(),
+        }
+      );
     }
   }
 

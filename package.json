@@ -5,8 +5,8 @@
   "main": "src/index.ts",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "dev": "nodemon --exec tsx src/index.ts",
-    "start": "tsx src/index.ts",
+    "dev": "nodemon",
+    "start": "node --loader ts-node/esm src/index.ts",
     "build": "tsc",
     "build:start": "npm run build && node dist/index.js"
   },
@@ -43,6 +43,7 @@
     "steel-sdk": "^0.5.0",
     "swagger-jsdoc": "^6.2.8",
     "swagger-ui-express": "^5.0.1",
+    "tsx": "^4.20.3",
     "xlsx": "^0.18.5",
     "yamljs": "^0.3.0"
   },
@@ -52,13 +53,12 @@
     "@types/fs-extra": "^11.0.4",
     "@types/mongoose": "^5.11.96",
     "@types/node": "^22.15.29",
-    "@types/nodemailer": "^6.4.14",
     "@types/node-cron": "^3.0.11",
+    "@types/nodemailer": "^6.4.14",
     "@types/swagger-jsdoc": "^6.0.4",
     "@types/swagger-ui-express": "^4.1.8",
     "@types/yamljs": "^0.2.34",
     "ts-node": "^10.9.2",
-    "tsx": "^4.7.0",
     "typescript": "^5.8.3"
   }
 }
