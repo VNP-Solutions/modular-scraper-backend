@@ -375,19 +375,17 @@ export class BookingScraper extends BaseScraper {
     if (!this.page) throw new Error('Page not initialized');
 
     try {
-      const currentUrl = this.page.url();
+      const hasLoginForm = await SelectorUtils.trySelectors(
+        this.page,
+        [...BOOKING_SELECTORS.email, ...BOOKING_SELECTORS.password],
+        async (selector: string) => {
+          const el = await this.page!.$(selector);
+          return !!el;
+        },
+        5000
+      );
       
-      // Check for login-related URL patterns
-      const needsLogin = currentUrl.includes('/login') || 
-                        currentUrl.includes('/signin') ||
-                        currentUrl.includes('/auth') ||
-                        currentUrl.includes('login.html') ||
-                        currentUrl.includes('signin.html');
-      
-      // Also check for login form elements on the page
-      const loginForm = await this.page.$('form[action*="login"], form[action*="signin"], input[name="email"], input[name="password"]');
-      
-      if (needsLogin || loginForm) {
+      if (hasLoginForm) {
         await this.logInfo('Login required detected via URL or form elements');
         return true;
       }
@@ -1138,9 +1136,6 @@ export class BookingScraper extends BaseScraper {
       
       // Optional params
       const traversalOptions = {
-        maxPages: params.maxPages || 10,
-        timeoutMinutes: params.timeoutMinutes || 30,
-        stopOnLastPage: true,
         jobId: params.jobId,
         propertyId: params.propertyId
       };
