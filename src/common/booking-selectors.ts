@@ -110,3 +110,13 @@ export const TWO_FA_TEXT_PATTERNS = [
   'sms-verification-link',
   'Text message (SMS)'
 ];
+
+export const BOOKING_LOGIN_SUCCESS_URLS = [
+  'admin.booking.com',
+  'account.business.booking.com',
+  'partner'
+];
+
+export const BOOKING_LOGIN_EXCLUDE_URLS = [
+  'sign-in'
+];

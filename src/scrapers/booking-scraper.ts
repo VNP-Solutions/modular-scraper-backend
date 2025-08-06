@@ -6,7 +6,7 @@ import { BaseScraper, LoginCredentials, CaptchaHandlerOptions, TwoFactorAuthOpti
 import { timeoutManager } from "../common/timeout-manager.js";
 import handleBookingOtpVerification from "../otp-verification/booking-otp-verification.js";
 import { SelectorUtils } from "../common/selector-utils.js";
-import { BOOKING_SELECTORS, CAPTCHA_PATTERNS, TWO_FA_PATTERNS, TWO_FA_TEXT_PATTERNS } from "../common/booking-selectors.js";
+import { BOOKING_LOGIN_EXCLUDE_URLS, BOOKING_LOGIN_SUCCESS_URLS, BOOKING_SELECTORS, CAPTCHA_PATTERNS, TWO_FA_PATTERNS, TWO_FA_TEXT_PATTERNS } from "../common/booking-selectors.js";
 import { 
   BookingErrorType, 
   BookingScrapingPhase, 
@@ -189,24 +189,19 @@ export class BookingScraper extends BaseScraper {
    */
   private isAlreadyLoggedIn(): boolean {
     if (!this.page) return false;
-    const currentUrl = this.page.url();
-    return (currentUrl.includes('admin.booking.com') || currentUrl.includes('account.business.booking.com')) && !currentUrl.includes('sign-in');
-  }
 
-  /**
-   * Check if login was successful
-   */
-  private isLoginSuccessful(): boolean {
-    if (!this.page) return false;
     const finalUrl = this.page.url();
-    return (finalUrl.includes('admin.booking.com') || finalUrl.includes('account.business.booking.com') || finalUrl.includes('partner')) && !finalUrl.includes('sign-in');
+
+    const isIncluded = BOOKING_LOGIN_SUCCESS_URLS.some(url => finalUrl.includes(url));
+    const isExcluded = BOOKING_LOGIN_EXCLUDE_URLS.some(url => finalUrl.includes(url));
+
+    return isIncluded && !isExcluded;
   }
 
   async login(credentials: LoginCredentials, propertyId?: string): Promise<void> {
     if (!this.page) throw new Error('Page not initialized');
 
     try {
-      // Check if already logged in
       if (this.isAlreadyLoggedIn()) {
         await this.logInfo('Already logged in');
         await this.handlePropertySearch(propertyId);
@@ -314,7 +309,7 @@ export class BookingScraper extends BaseScraper {
       await this.checkLoginErrors();
 
       // Handle successful login
-      if (this.isLoginSuccessful()) {
+      if (this.isAlreadyLoggedIn()) {
         await this.handleSuccessfulLogin(propertyId);
       } else {
         await this.logInfo('Login requires 2FA verification');
