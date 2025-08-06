@@ -129,14 +129,95 @@ export class BookingScraper extends BaseScraper {
     }
   }
 
-  async login(credentials: LoginCredentials): Promise<void> {
+  /**
+   * Handle property search after successful login or when already logged in
+   */
+  private async handlePropertySearch(propertyId?: string): Promise<void> {
+    if (!propertyId) {
+      await this.logInfo('No property ID provided, skipping property search');
+      return;
+    }
+
+    await this.logInfo('Checking for multi-property account and searching for property');
+    const isMultiProperty = await this.checkMultiPropertyAccount();
+    
+    if (isMultiProperty) {
+      await this.logInfo('Multi-property account detected, searching for property');
+      const searchSuccess = await this.searchProperty(propertyId);
+      if (searchSuccess) {
+        await this.logInfo('Property search and selection completed successfully');
+      } else {
+        await this.logError('Property search failed');
+      }
+    } else {
+      await this.logInfo('Single property account detected, no property search needed');
+    }
+  }
+
+  /**
+   * Handle the already logged in scenario
+   */
+  private async handleAlreadyLoggedIn(propertyId?: string): Promise<void> {
+    await this.logInfo('Already logged in');
+    await this.handlePropertySearch(propertyId);
+  }
+
+  /**
+   * Handle successful login completion
+   */
+  private async handleSuccessfulLogin(propertyId?: string): Promise<void> {
+    if (!this.page) throw new Error('Page not initialized');
+    
+    await this.logInfo('Login successful');
+    const cookies = await this.page.cookies();
+    fs.writeFileSync(this.cookiesFile, JSON.stringify(cookies, null, 2));
+    await this.logInfo(`Saved ${cookies.length} cookies for future sessions`);
+    await this.takeScreenshot('booking-admin-dashboard.png');
+    
+    await this.handlePropertySearch(propertyId);
+  }
+
+  /**
+   * Handle successful 2FA completion
+   */
+  private async handleSuccessful2FA(propertyId?: string): Promise<void> {
+    if (!this.page) throw new Error('Page not initialized');
+    
+    await this.logInfo('2FA completed successfully');
+    const cookies = await this.page.cookies();
+    fs.writeFileSync(this.cookiesFile, JSON.stringify(cookies, null, 2));
+    await this.logInfo(`Saved ${cookies.length} cookies after 2FA`);
+    await this.takeScreenshot('booking-admin-dashboard-after-2fa.png');
+    
+    await this.handlePropertySearch(propertyId);
+  }
+
+  /**
+   * Check if user is already logged in
+   */
+  private isAlreadyLoggedIn(): boolean {
+    if (!this.page) return false;
+    const currentUrl = this.page.url();
+    return (currentUrl.includes('admin.booking.com') || currentUrl.includes('account.business.booking.com')) && !currentUrl.includes('sign-in');
+  }
+
+  /**
+   * Check if login was successful
+   */
+  private isLoginSuccessful(): boolean {
+    if (!this.page) return false;
+    const finalUrl = this.page.url();
+    return (finalUrl.includes('admin.booking.com') || finalUrl.includes('account.business.booking.com') || finalUrl.includes('partner')) && !finalUrl.includes('sign-in');
+  }
+
+  async login(credentials: LoginCredentials, propertyId?: string): Promise<void> {
     if (!this.page) throw new Error('Page not initialized');
 
     try {
       // Check if already logged in
-      const currentUrl = this.page.url();
-      if ((currentUrl.includes('admin.booking.com') || currentUrl.includes('account.business.booking.com')) && !currentUrl.includes('sign-in')) {
+      if (this.isAlreadyLoggedIn()) {
         await this.logInfo('Already logged in');
+        await this.handlePropertySearch(propertyId);
         return;
       }
 
@@ -240,26 +321,16 @@ export class BookingScraper extends BaseScraper {
       // Check for login errors
       await this.checkLoginErrors();
 
-      // Save cookies on successful login
-      const finalUrl = this.page.url();
-      if ((finalUrl.includes('admin.booking.com') || finalUrl.includes('account.business.booking.com') || finalUrl.includes('partner')) && !finalUrl.includes('sign-in')) {
-        await this.logInfo('Login successful');
-        const cookies = await this.page.cookies();
-        fs.writeFileSync(this.cookiesFile, JSON.stringify(cookies, null, 2));
-        await this.logInfo(`Saved ${cookies.length} cookies for future sessions`);
-        await this.takeScreenshot('booking-admin-dashboard.png');
+      // Handle successful login
+      if (this.isLoginSuccessful()) {
+        await this.handleSuccessfulLogin(propertyId);
       } else {
-        await this.logInfo('Login requires 2FA verification', { currentUrl: finalUrl });
+        await this.logInfo('Login requires 2FA verification');
         
         // Try to handle 2FA automatically
         const twoFASuccess = await this.handle2FA();
         if (twoFASuccess) {
-          await this.logInfo('2FA completed successfully');
-          // Save cookies after successful 2FA
-          const cookies = await this.page.cookies();
-          fs.writeFileSync(this.cookiesFile, JSON.stringify(cookies, null, 2));
-          await this.logInfo(`Saved ${cookies.length} cookies after 2FA`);
-          await this.takeScreenshot('booking-admin-dashboard-after-2fa.png');
+          await this.handleSuccessful2FA(propertyId);
         } else {
           await dualLogError(
             `[${new Date().toISOString()}] ${getBookingErrorDescription(BookingErrorType.TWO_FA_ERROR)}`,
@@ -286,6 +357,115 @@ export class BookingScraper extends BaseScraper {
       );
       await this.takeScreenshot('booking-login-error.png');
       throw error;
+    }
+  }
+
+  /**
+   * Check if the logged-in account has multiple properties
+   * This method checks for the multi-property URL pattern
+   */
+  async checkMultiPropertyAccount(): Promise<boolean> {
+    if (!this.page) throw new Error('Page not initialized');
+
+    try {
+      await this.logInfo('Checking for multi-property account...');
+      
+      const currentUrl = this.page.url();
+      await this.logInfo(`Current URL after login: ${currentUrl}`);
+      
+      // Check if URL matches multi-property pattern
+      // Pattern: https://admin.booking.com/hotel/hoteladmin/groups/home/index.html?lang=xu&ses=c5a7e9bdf8f76b1ff770e0cee0fe1ee7
+      const multiPropertyPattern = /admin\.booking\.com\/hotel\/hoteladmin\/groups\/home\/index\.html/;
+      const isMultiPropertyUrl = multiPropertyPattern.test(currentUrl);
+      
+      if (isMultiPropertyUrl) {
+        await this.logInfo('Multi-property account detected');
+        await this.takeScreenshot('booking-multi-property-detected.png');
+        
+        // Extract session ID from URL
+        const sessionMatch = currentUrl.match(/ses=([a-f0-9]+)/);
+        const sessionId = sessionMatch ? sessionMatch[1] : null;
+        
+        if (sessionId) {
+          await this.logInfo(`Session ID extracted: ${sessionId}`);
+        }
+        
+        return true;
+      } else {
+        await this.logInfo('Single property account detected');
+        await this.takeScreenshot('booking-single-property-detected.png');
+        
+        return false;
+      }
+      
+    } catch (error) {
+      await this.logError('Error checking multi-property account:', error);
+      await this.takeScreenshot('booking-multi-property-check-error.png');
+      
+      // Return false as fallback to avoid breaking the scraping process
+      return false;
+    }
+  }
+
+  async searchProperty(propertyId: string): Promise<boolean> {
+    if (!this.page) throw new Error('Page not initialized');
+
+    try {
+      await this.logInfo(`Searching for property ID: ${propertyId}`);
+      
+      // Wait for the page to fully load using networkidle2
+      await this.page.waitForNavigation({ 
+        waitUntil: 'networkidle2', 
+        timeout: 30000 
+      })
+      
+      // Use SelectorUtils to find and interact with search input
+      const searchInputFound = await SelectorUtils.findAndType(
+        this.page,
+        BOOKING_SELECTORS.property.searchInput,
+        propertyId
+      );
+      
+      if (!searchInputFound) {
+        await this.logError('Property search input not found');
+        await this.takeScreenshot('booking-no-search-input.png');
+        return false;
+      }
+      
+      await this.logInfo('Property ID entered in search field');
+      
+      // Wait for search results to load
+      await this.page.waitForNavigation({ 
+        waitUntil: 'networkidle2', 
+        timeout: 15000 
+      }).catch(() => {
+        // If no navigation, wait a bit for search results to appear
+        this.delay(2000);
+      });
+      
+      // Try multiple approaches to find and click the property
+      let propertyClicked = false;
+      
+      const propertySelectors = BOOKING_SELECTORS.property.item(propertyId);
+      propertyClicked = await SelectorUtils.findAndClick(this.page, propertySelectors);
+      
+      if (!propertyClicked) {
+        // TO DO - add logs
+        await this.logInfo('Property not found with predefined selectors, trying alternative approaches...');
+      }
+      
+      await this.logInfo('Property clicked successfully');
+      
+      // Wait for navigation after property selection
+      await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 })
+      
+      // Verify property is selected by checking URL or page content
+      
+      return true
+    } catch (error) {
+      await this.logError('Error searching and selecting property:', error);
+      await this.takeScreenshot('booking-property-search-error.png');
+      return false;
     }
   }
 
@@ -411,30 +591,6 @@ export class BookingScraper extends BaseScraper {
           errorType: BookingErrorType.TWO_FA_ERROR,
           error: error,
           phase: BookingScrapingPhase.LOGIN,
-          platform: 'booking'
-        }
-      );
-      return false;
-    }
-  }
-
-  async searchProperty(propertyId: string): Promise<boolean> {
-    if (!this.page) throw new Error('Page not initialized');
-
-    try {
-      await this.logInfo('Searching for property', { propertyId });
-      // TODO: Implement property search logic for Booking.com
-      // This would depend on the specific admin panel structure
-      await this.logInfo('Property search not yet implemented for Booking.com');
-      return true;
-    } catch (error) {
-      await dualLogError(
-        `[${new Date().toISOString()}] ${getBookingErrorDescription(BookingErrorType.PROPERTY_NOT_FOUND)}`,
-        {
-          errorType: BookingErrorType.PROPERTY_NOT_FOUND,
-          error: error,
-          phase: BookingScrapingPhase.PROPERTY_SEARCH,
-          propertyId,
           platform: 'booking'
         }
       );
@@ -902,12 +1058,32 @@ export class BookingScraper extends BaseScraper {
     if (!this.page) throw new Error('Page not initialized');
     try {
       await this.logInfo(`Navigating to ${subSection} page`);
+      
+      // Wait for the page to be fully loaded before attempting navigation
+      await this.page.waitForNavigation({ 
+        waitUntil: 'networkidle2', 
+        timeout: 30000 
+      })
+      
+      // Additional wait to ensure page is stable
+      await this.delay(2000);
+      
       const mainMenuClicked = await this.expandMainMenu(mainSection);
-      if (!mainMenuClicked) throw new Error(`${mainSection} menu button not found`);
+      if (!mainMenuClicked) {
+        await this.logError(`${mainSection} menu button not found`);
+        await this.takeScreenshot(`booking-${mainSection}-menu-not-found.png`);
+        throw new Error(`${mainSection} menu button not found`);
+      }
+      
       await this.logInfo(`${mainSection} menu expanded`);
       const subMenuClicked = await this.clickSubMenu(subSection);
 
-      if (!subMenuClicked) throw new Error(`${subSection} link not found by any selector or text`);
+      if (!subMenuClicked) {
+        await this.logError(`${subSection} link not found by any selector or text`);
+        await this.takeScreenshot(`booking-${subSection}-link-not-found.png`);
+        throw new Error(`${subSection} link not found by any selector or text`);
+      }
+      
       await this.logInfo(`Clicked on ${subSection} link`);
       await this.waitForNavigationAndVerify(expectedUrl);
       await this.logInfo(`Successfully navigated to ${subSection} page`);
@@ -935,7 +1111,6 @@ export class BookingScraper extends BaseScraper {
       await this.logInfo('Starting complete Booking.com scraping process');
       
       // Step 1: Navigate to VCCS Management
-      await this.logInfo('Navigating to VCCS Management...');
       const navigationSuccess = await this.navigateToMenuSection('finance', 'vccs_management', 'vccs_management');
       
       if (!navigationSuccess) {

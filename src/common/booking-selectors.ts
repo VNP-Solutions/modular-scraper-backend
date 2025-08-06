@@ -67,6 +67,23 @@ export const BOOKING_SELECTORS = {
     reservationAmount: '[data-heading="Amount"]',
     reservationCardholder: '[data-heading="Cardholder"]',
     reservationName: 'span[data-test-id="reservation-overview-name"]'
+  },
+  property: {
+    searchInput: [
+      'input[name="hotel_id"]',
+      'input[placeholder*="property"]',
+      'input[placeholder*="hotel"]',
+      '.property-search input',
+      '.hotel-search input',
+      'input[type="text"]',
+      'input[data-test-id="property-search"]',
+      'input[data-test-id="hotel-search"]'
+    ],
+    item: (propertyId: string) => [
+      `a[href*="hotel_id=${propertyId}"][target="_blank"]`,
+      `a[href*="hotel_id=${propertyId}&"]`,
+      `a[href*="hotel_id=${propertyId}"]:contains("${propertyId}")`,
+    ],
   }
 };
 
