@@ -91,7 +91,9 @@ app.get("/test-captcha-email", async (req, res) => {
       stage: 'Login - CAPTCHA Challenge',
     };
 
-    const recipients = ['admin@vnpsolutions.com', 'developer@vnpsolutions.com'];
+    const recipients = process.env.CAPTCHA_RECIPIENTS 
+      ? process.env.CAPTCHA_RECIPIENTS.split(',').map(email => email.trim())
+      : ['admin@vnpsolutions.com', 'developer@vnpsolutions.com'];
     
     await emailNotifier.sendErrorEmail(recipients, testData);
     

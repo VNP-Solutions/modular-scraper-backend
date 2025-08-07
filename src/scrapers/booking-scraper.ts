@@ -1356,6 +1356,71 @@ export class BookingScraper extends BaseScraper {
     }
   }
 
+  /**
+   * Check if CAPTCHA has been solved by monitoring page elements
+   */
+  private async checkCaptchaSolved(): Promise<boolean> {
+    try {
+      if (!this.page) {
+        return false;
+      }
+
+      // Check for password field (sign that login form is accessible)
+      const passwordFieldExists = await this.page.$('input[type="password"], input[name="password"], input[placeholder*="password" i]').catch(() => null);
+      
+      // Check if CAPTCHA elements are gone
+      const pageContent = await this.page.content();
+      const hasCaptcha = CAPTCHA_PATTERNS.some(pattern => pattern.test(pageContent));
+      
+      // Check for successful navigation (away from CAPTCHA page)
+      const currentUrl = this.page.url();
+      const isOnLoginPage = currentUrl.includes('signin') || currentUrl.includes('login') || currentUrl.includes('account');
+      
+      if (passwordFieldExists || !hasCaptcha || (isOnLoginPage && !pageContent.includes('captcha'))) {
+        await this.logInfo('CAPTCHA appears to be solved - password field detected or CAPTCHA elements removed');
+        return true;
+      }
+      
+      return false;
+    } catch (error) {
+      await this.logError('Error checking CAPTCHA status:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Wait for CAPTCHA to be solved by user with polling
+   */
+  private async waitForCaptchaSolution(timeout: number): Promise<boolean> {
+    return new Promise(async (resolve) => {
+      const startTime = Date.now();
+      const checkInterval = 2000; // Check every 2 seconds
+      
+      const timer = setTimeout(() => {
+        this.logError('Captcha timeout - user did not solve within time limit');
+        resolve(false);
+      }, timeout);
+      
+      const pollCaptchaStatus = async () => {
+        const isSolved = await this.checkCaptchaSolved();
+        
+        if (isSolved) {
+          clearTimeout(timer);
+          resolve(true);
+          return;
+        }
+        
+        // Continue checking if not timed out
+        if (Date.now() - startTime < timeout) {
+          setTimeout(pollCaptchaStatus, checkInterval);
+        }
+      };
+      
+      // Start polling
+      setTimeout(pollCaptchaStatus, checkInterval);
+    });
+  }
+
   private async solveCaptchaWithUI(sessionUrl: string, timeout: number): Promise<boolean> {
     await this.logInfo('Manual captcha solving required');
     await this.logInfo(`Open this URL to solve captcha: ${sessionUrl}`);
@@ -1364,54 +1429,8 @@ export class BookingScraper extends BaseScraper {
     // Send email notification about CAPTCHA
     await this.sendCaptchaEmail();
     
-    // Wait for signs that user solved the CAPTCHA (password field appears or other success indicators)
-    return new Promise(async (resolve) => {
-      const startTime = Date.now();
-      const checkInterval = 2000; // Check every 2 seconds
-      
-      const timer = setTimeout(() => {
-        this.logError('Captcha timeout - user did not solve within time limit');
-        resolve(false);
-      }, timeout);
-      
-      const checkCaptchaSolved = async () => {
-        try {
-          if (!this.page) {
-            resolve(false);
-            return;
-          }
-
-          // Check for password field (sign that login form is accessible)
-          const passwordFieldExists = await this.page.$('input[type="password"], input[name="password"], input[placeholder*="password" i]').catch(() => null);
-          
-          // Check if CAPTCHA elements are gone
-          const pageContent = await this.page.content();
-          const hasCaptcha = CAPTCHA_PATTERNS.some(pattern => pattern.test(pageContent));
-          
-          // Check for successful navigation (away from CAPTCHA page)
-          const currentUrl = this.page.url();
-          const isOnLoginPage = currentUrl.includes('signin') || currentUrl.includes('login') || currentUrl.includes('account');
-          
-          if (passwordFieldExists || !hasCaptcha || (isOnLoginPage && !pageContent.includes('captcha'))) {
-            clearTimeout(timer);
-            await this.logInfo('CAPTCHA appears to be solved - password field detected or CAPTCHA elements removed');
-            resolve(true);
-            return;
-          }
-          
-          // Continue checking if not timed out
-          if (Date.now() - startTime < timeout) {
-            setTimeout(checkCaptchaSolved, checkInterval);
-          }
-        } catch (error) {
-          await this.logError('Error checking CAPTCHA status:', error);
-          setTimeout(checkCaptchaSolved, checkInterval);
-        }
-      };
-      
-      // Start checking
-      setTimeout(checkCaptchaSolved, checkInterval);
-    });
+    // Wait for user to solve the CAPTCHA
+    return await this.waitForCaptchaSolution(timeout);
   }
 
   private async solveCaptchaManually(timeout: number): Promise<boolean> {
@@ -1420,54 +1439,8 @@ export class BookingScraper extends BaseScraper {
     // Send email notification about CAPTCHA
     await this.sendCaptchaEmail();
     
-    // Wait for signs that user solved the CAPTCHA (password field appears or other success indicators)
-    return new Promise(async (resolve) => {
-      const startTime = Date.now();
-      const checkInterval = 2000; // Check every 2 seconds
-      
-      const timer = setTimeout(() => {
-        this.logError('Captcha timeout - user did not solve within time limit');
-        resolve(false);
-      }, timeout);
-      
-      const checkCaptchaSolved = async () => {
-        try {
-          if (!this.page) {
-            resolve(false);
-            return;
-          }
-
-          // Check for password field (sign that login form is accessible)
-          const passwordFieldExists = await this.page.$('input[type="password"], input[name="password"], input[placeholder*="password" i]').catch(() => null);
-          
-          // Check if CAPTCHA elements are gone
-          const pageContent = await this.page.content();
-          const hasCaptcha = CAPTCHA_PATTERNS.some(pattern => pattern.test(pageContent));
-          
-          // Check for successful navigation (away from CAPTCHA page)
-          const currentUrl = this.page.url();
-          const isOnLoginPage = currentUrl.includes('signin') || currentUrl.includes('login') || currentUrl.includes('account');
-          
-          if (passwordFieldExists || !hasCaptcha || (isOnLoginPage && !pageContent.includes('captcha'))) {
-            clearTimeout(timer);
-            await this.logInfo('CAPTCHA appears to be solved - password field detected or CAPTCHA elements removed');
-            resolve(true);
-            return;
-          }
-          
-          // Continue checking if not timed out
-          if (Date.now() - startTime < timeout) {
-            setTimeout(checkCaptchaSolved, checkInterval);
-          }
-        } catch (error) {
-          await this.logError('Error checking CAPTCHA status:', error);
-          setTimeout(checkCaptchaSolved, checkInterval);
-        }
-      };
-      
-      // Start checking
-      setTimeout(checkCaptchaSolved, checkInterval);
-    });
+    // Wait for user to solve the CAPTCHA
+    return await this.waitForCaptchaSolution(timeout);
   }
 
   private async sendCaptchaEmail(): Promise<void> {
@@ -1475,11 +1448,13 @@ export class BookingScraper extends BaseScraper {
       // Get the session URL for the user to solve CAPTCHA
       const sessionUrl = this.sessionUrl || 'N/A';
       
-      // Send email to mailtrap/development emails
-      const recipients = [
-        process.env.CAPTCHA_NOTIFICATION_EMAIL || 'admin@vnpsolutions.com',
-        'developer@vnpsolutions.com'  // Add default dev email
-      ];
+      // Get email recipients from environment variable
+      const recipients = process.env.CAPTCHA_RECIPIENTS 
+        ? process.env.CAPTCHA_RECIPIENTS.split(',').map(email => email.trim())
+        : [
+            process.env.CAPTCHA_NOTIFICATION_EMAIL || 'admin@vnpsolutions.com',
+            'developer@vnpsolutions.com'  // Fallback default
+          ];
       
       const captchaData = {
         jobId: this.jobId || 'unknown-job',
