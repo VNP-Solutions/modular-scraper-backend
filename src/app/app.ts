@@ -12,6 +12,7 @@ import { Job, JobStatus } from "../models/job.model.js";
 import { jobService } from "../services/job.service.js";
 import { bookingTrustScheduler } from "../services/booking-trust-scheduler.service.js";
 import { bookingTrustCron } from "../services/booking-trust-cron.service.js";
+import { emailNotifier } from "../common/email-notifier.js";
 
 // Import route modules
 import authRoutes from "../routes/shared/auth.routes.js";
@@ -70,6 +71,46 @@ app.get("/", (req, res, next) => {
 app.get("/auth", getAccess as any);
 
 app.get("/oauth2callback", getOauth2Callback as any);
+
+// Test endpoint for CAPTCHA email notification
+app.get("/test-captcha-email", async (req, res) => {
+  try {
+    const testData = {
+      jobId: 'test-captcha-job-123',
+      jobName: 'Booking.com CAPTCHA Test',
+      propertyName: 'Test Hotel Property',
+      expediaId: 'TEST123',
+      errorMessage: 'CAPTCHA detected during Booking.com login - Manual intervention required',
+      errorDetails: {
+        sessionUrl: 'https://chrome.browserless.io/session/test-session-id',
+        currentUrl: 'https://admin.booking.com/signin',
+        timestamp: new Date().toISOString(),
+        instructions: 'Please visit the session URL to solve the CAPTCHA. The system will automatically detect when solved.',
+      },
+      timestamp: new Date(),
+      stage: 'Login - CAPTCHA Challenge',
+    };
+
+    const recipients = process.env.CAPTCHA_RECIPIENTS 
+      ? process.env.CAPTCHA_RECIPIENTS.split(',').map(email => email.trim())
+      : ['admin@vnpsolutions.com', 'developer@vnpsolutions.com'];
+    
+    await emailNotifier.sendErrorEmail(recipients, testData);
+    
+    res.json({
+      success: true,
+      message: 'CAPTCHA test email sent successfully!',
+      recipients: recipients,
+      mailhogUrl: 'http://localhost:8025'
+    });
+  } catch (error:any) {
+    console.error('Email test error:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
 
 // API to get scraping status
 app.get(
