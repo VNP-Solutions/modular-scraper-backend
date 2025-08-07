@@ -199,7 +199,6 @@ export class BookingScraper extends BaseScraper {
   }
 
   async login(credentials?: LoginCredentials, propertyId?: string, skipAlreadyLogged?: boolean): Promise<void> {
-    console.log('=============', this.page)
     if (!this.page) throw new Error('Page not initialized');
 
     // Use provided credentials or fall back to class property
@@ -430,7 +429,14 @@ export class BookingScraper extends BaseScraper {
       const propertyClicked = await SelectorUtils.findAndClick(this.page, propertySelectors);
       
       if (!propertyClicked) {
-        // TO DO - add logs
+        await dualLogError(
+          `[${new Date().toISOString()}] ${getBookingErrorDescription(BookingErrorType.PROPERTY_NOT_FOUND)}`,
+          {
+            errorType: BookingErrorType.PROPERTY_NOT_FOUND,
+            phase: BookingScrapingPhase.NAVIGATION,
+            platform: 'booking'
+          }
+        );
         await this.logInfo('Property not found with predefined selectors, trying alternative approaches...');
       }
       
@@ -473,7 +479,7 @@ export class BookingScraper extends BaseScraper {
             return false; // Indicate login is needed
           } else {
             await this.logInfo('Property selection verification inconclusive but no login needed');
-            return true; // Assume success if we can't verify and no login needed
+            return true;
           }
         }
         
@@ -888,8 +894,8 @@ export class BookingScraper extends BaseScraper {
       // Close the new tab and switch back
       await newPage.close();
       await this.logInfo(`Closed reservation detail tab`);
-      console.log("la finaaaal ", this.page.url())
       return true;
+
     } catch (error) {
       await dualLogError(
         `[${new Date().toISOString()}] ${getBookingErrorDescription(BookingErrorType.DOM_NOT_FOUND)}`,
@@ -1550,45 +1556,6 @@ export class BookingScraper extends BaseScraper {
     return BookingErrorType.LOGIN_FAILED;
   }
 
-  // async extractReservationDetails(reservationId: string): Promise<{
-  //   basicData: any;
-  //   // paymentData: any;
-  //   cardData: any;
-  // } | null> {
-  //   if (!this.page) throw new Error('Page not initialized');
-
-  //   try {
-  //     // TO DO - work in progress
-  //     await this.logInfo(`Extracting reservation details for ID: ${reservationId}`);
-
-  //     // Extract basic reservation data from current detail page
-  //     const basicData = await this.extractBasicReservationData();
-  //     if (!basicData) {
-  //       await this.logError('Failed to extract basic reservation data');
-  //       return null;
-  //     }
-
-  //     await this.logInfo('Basic reservation data extracted successfully');
-
-  //     // Go back to the previous page
-  //     await this.logInfo('Going back to VCCS Management list');
-  //     await this.page.goBack();
-      
-  //     // Wait for the page to load
-  //     await this.page.waitForNavigation({ 
-  //       waitUntil: 'networkidle2', 
-  //       timeout: 30000 
-  //     });
-
-  //     return basicData;
-
-  //   } catch (error) {
-  //     await this.logError('Error extracting reservation details:', error);
-  //     await this.takeScreenshot('booking-reservation-details-error.png');
-  //     return null;
-  //   }
-  // }
-
   private async clickCardDetailsFromRow(reservationId: string): Promise<boolean> {
     if (!this.page) throw new Error('Page not initialized');
 
@@ -1869,7 +1836,6 @@ export class BookingScraper extends BaseScraper {
 
       if (!basicData) {
         await this.logError('Failed to extract basic reservation data');
-        // return null;
       }
 
       
@@ -1903,11 +1869,9 @@ export class BookingScraper extends BaseScraper {
       const cardDetailsClick = this.clickCardDetailsFromRow(reservationId)
       if (!cardDetailsClick) {
         await this.logError(`Failed to extract data for reservation ${reservationId}`);
-        // return false;
       }
 
       const newPage = await newPagePromise;
-      const originalPage = this.page; // keep original page 
       this.page = newPage; // switch page 
       
       // Check and handle login on the new page
@@ -1917,7 +1881,6 @@ export class BookingScraper extends BaseScraper {
         await this.login(this.credentials, undefined, true);
       }
 
-      console.log('dupa loginn', this.page.url())
       const cardData = await this.extractCardDetailsFromPage(this.page)
       
       // Close page
