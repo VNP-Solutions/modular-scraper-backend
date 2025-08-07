@@ -1572,66 +1572,59 @@ export class BookingScraper extends BaseScraper {
   }
 
   private async extractBasicReservationData(): Promise<any> {
+    if (!this.page) throw new Error('Page not initialized');
+  
     try {
-      const basicData = await this.page!.evaluate(() => {
-        // Extract guest name
-        const guestNameElement = document.querySelector('[data-test-id="reservation-overview-name"]');
-        const guestName = guestNameElement?.textContent?.trim() || 'Unknown Guest';
-
-        // Extract check-in and check-out dates
-        const checkInElement = document.querySelector('.res-content__info--emphasized');
-        const checkOutElement = document.querySelectorAll('.res-content__info--emphasized')[1];
-        
-        const checkInDate = checkInElement?.textContent?.trim() || '';
-        const checkOutDate = checkOutElement?.textContent?.trim() || '';
-
-        // Extract booking number
-        const bookingNumberElement = document.querySelector('.res-content__info');
-        const bookingNumber = bookingNumberElement?.textContent?.trim() || '';
-
-        // Extract total price
-        const totalPriceElement = document.querySelector('.res-content__info--emphasized');
-        const totalPrice = totalPriceElement?.textContent?.trim() || '';
-
-        // Extract room type
-        const roomTypeElement = document.querySelector('.res-room-title__name');
-        const roomType = roomTypeElement?.textContent?.trim() || 'Unknown Room Type';
-
-        // Extract received date
-        const receivedElement = document.querySelector('.res-content__info');
-        const receivedDate = receivedElement?.textContent?.trim() || '';
-
-        // Extract commissionable amount
-        const commissionElement = document.querySelector('.res-content__info');
-        const commissionAmount = commissionElement?.textContent?.trim() || '';
-
-        return {
-          guestName,
-          checkInDate,
-          checkOutDate,
-          bookingNumber,
-          totalPrice,
-          roomType,
-          receivedDate,
-          commissionAmount
+      const basicData = await this.page.evaluate(() => {
+        const result: Record<string, string> = {
+          guestName: '',
+          checkInDate: '',
+          checkOutDate: '',
+          bookingAmount: '',
+          reservationId: '',
+          bookedDate: '',
+          commissionAmount: '',
+          roomType: ''
         };
+  
+        const labelMap: Record<string, keyof typeof result> = {
+          'Guest name:': 'guestName',
+          'Check-in': 'checkInDate',
+          'Check-out': 'checkOutDate',
+          'Total price': 'bookingAmount',
+          'Booking number:': 'reservationId',
+          'Received': 'bookedDate',
+          'Commissionable amount:': 'commissionAmount'
+        };
+  
+        // Extract all label elements
+        const labels = document.querySelectorAll('.res-content__label');
+        labels.forEach((labelEl) => {
+          const labelText = labelEl.textContent?.trim();
+          const mappedKey = labelMap[labelText as keyof typeof labelMap];
+          if (mappedKey) {
+            const valueEl = labelEl.nextElementSibling;
+            const value = valueEl?.textContent?.trim() || '';
+            result[mappedKey] = value;
+          }
+        });
+  
+        // Room type and guest name might be outside label structure
+        const guestEl = document.querySelector('[data-test-id="reservation-overview-name"]');
+        if (guestEl) result.guestName = guestEl.textContent?.trim() || result.guestName;
+  
+        const roomTypeEl = document.querySelector('.res-room-title__name');
+        if (roomTypeEl) result.roomType = roomTypeEl.textContent?.trim() || result.roomType;
+  
+        return result;
       });
-
+  
       await this.logInfo('Extracted basic reservation data', basicData);
       return basicData;
-
+  
     } catch (error) {
       await this.logError('Failed to extract basic reservation data', error);
-      return {
-        guestName: 'Unknown Guest',
-        checkInDate: '',
-        checkOutDate: '',
-        bookingNumber: '',
-        totalPrice: '',
-        roomType: 'Unknown Room Type',
-        receivedDate: '',
-        commissionAmount: ''
-      };
+      return null;
     }
   }
 
