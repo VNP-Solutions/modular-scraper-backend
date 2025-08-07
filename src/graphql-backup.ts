@@ -16,9 +16,11 @@ import { scrapingStateManager } from "./common/scraping-state.js";
 import { timeManager } from "./common/time-manager.js";
 import { getNextDateFromCompleted } from "./date-split/helper.js";
 import login from "./login/login.js";
+import { CardInfo, PaymentInfo } from "./models/job-item.model.js";
 import handleOtpVerification from "./otp-verification/otp-verification.js";
 import { propertySearchAndClickReservation } from "./property-search/property-search.js";
 import { jobQueueUrlService } from "./services/job-queue-url.service.js";
+import { CreateJobItemData, jobService } from "./services/job.service.js";
 
 dotenv.config();
 
@@ -424,6 +426,33 @@ async function makeGraphQLRequest(
           JSON.stringify(reservationItems[0], null, 2)
         );
 
+        // Get property_id from job for database storage
+        let propertyIdForDb: string | null = null;
+        if (jobId) {
+          try {
+            const job = await jobService.getJobById(jobId);
+            if (job && job.property_id) {
+              propertyIdForDb = job.property_id.toString();
+              await dualLogInfo(
+                `Using property_id: ${propertyIdForDb} for database storage`,
+                { propertyIdForDb, jobId }
+              );
+            } else {
+              await dualLogError(
+                `Could not get property_id from job ${jobId}, will skip database storage`,
+                null,
+                { jobId }
+              );
+            }
+          } catch (error: any) {
+            await dualLogError(
+              `Error getting property_id from job ${jobId}:`,
+              error,
+              { jobId }
+            );
+          }
+        }
+
         // Process each reservation
         for (let index = 0; index < reservationItems.length; index++) {
           const item = reservationItems[index];
@@ -477,6 +506,10 @@ async function makeGraphQLRequest(
             }`
           );
 
+          // Initialize card data and payment data variables
+          let cardData: CardInfo | null = null;
+          let paymentData: PaymentInfo | null = null;
+
           // If EVC card details exist, try to fetch the actual card data
           if (
             paymentInfo.evcCardDetailsExist &&
@@ -486,14 +519,40 @@ async function makeGraphQLRequest(
               console.log(
                 `💳 Fetching EVC card data for reservation ${index + 1}...`
               );
-              const cardData = await fetchEVCCardData(
+              const evcCardData = await fetchEVCCardData(
                 expediaId || "",
                 paymentInfo.expediaVirtualCardResourceId,
                 item.reservationItemId,
                 checkIn,
                 cookieHeader
               );
-              console.log(`✅ EVC Card Data:`, cardData);
+              console.log(`✅ EVC Card Data:`, evcCardData);
+
+              // Map EVC card data to CardInfo format
+              if (evcCardData && evcCardData.cardNumber) {
+                // Map GraphQL reason_for_charge values to desired format
+                const mapReasonForCharge = (graphqlReason: string): string => {
+                  switch (graphqlReason?.toLowerCase()) {
+                    case "deactivatedduetofullcharge":
+                      return "Charge is full";
+                    case "partiallycharged":
+                      return "Partially charged";
+                    case "readytocharge":
+                      return "Ready to charge";
+                    default:
+                      return graphqlReason || "";
+                  }
+                };
+
+                cardData = {
+                  card_number: evcCardData.cardNumber || "",
+                  expiry_date: evcCardData.expiryDate || "",
+                  cvv: evcCardData.cvv || "",
+                  reason_for_charge: mapReasonForCharge(
+                    evcCardData.reasonForCharge
+                  ),
+                };
+              }
             } catch (cardError: any) {
               console.error(
                 `❌ Failed to fetch EVC card data for reservation ${
@@ -503,10 +562,18 @@ async function makeGraphQLRequest(
               );
             }
           }
-        }
 
-        // TODO: Save reservation data to database
-        // You can integrate with your existing job processing logic here
+          // Save reservation data to database (only if we have valid database info)
+          if (jobId && propertyIdForDb) {
+            await saveGraphQLReservationToDatabase(
+              jobId,
+              propertyIdForDb,
+              item,
+              cardData,
+              paymentData
+            );
+          }
+        }
       }
     } else if (responseData.errors) {
       console.error("❌ GraphQL Errors:", responseData.errors);
@@ -543,6 +610,143 @@ async function makeGraphQLRequest(
       endDate,
     });
     throw error;
+  }
+}
+
+/**
+ * Helper function to save GraphQL reservation data to database
+ */
+async function saveGraphQLReservationToDatabase(
+  jobId: string,
+  propertyId: string,
+  reservationItem: any,
+  cardData: CardInfo | null,
+  paymentData: PaymentInfo | null
+): Promise<void> {
+  try {
+    // Validate jobId before processing
+    if (!jobId || typeof jobId !== "string") {
+      throw new Error(
+        `Invalid jobId: ${jobId}. JobId must be a non-empty string.`
+      );
+    }
+
+    if (!propertyId || typeof propertyId !== "string") {
+      throw new Error(
+        `Invalid propertyId: ${propertyId}. PropertyId must be a non-empty string.`
+      );
+    }
+
+    // Check if jobId looks like a valid ObjectId (24 character hex string)
+    if (!/^[0-9a-fA-F]{24}$/.test(jobId)) {
+      throw new Error(
+        `Invalid jobId format: ${jobId}. JobId must be a 24 character hexadecimal string (MongoDB ObjectId).`
+      );
+    }
+
+    // propertyId should also be a valid ObjectId since it comes from the job's property_id
+    if (!/^[0-9a-fA-F]{24}$/.test(propertyId)) {
+      throw new Error(
+        `Invalid propertyId format: ${propertyId}. PropertyId must be a 24 character hexadecimal string (MongoDB ObjectId).`
+      );
+    }
+
+    // Parse dates from GraphQL response
+    const parseDate = (dateStr: string): Date => {
+      if (!dateStr) return new Date();
+
+      // GraphQL dates are typically in ISO format or YYYY-MM-DD
+      if (dateStr.includes("T")) {
+        // ISO format: 2025-01-15T00:00:00Z
+        return new Date(dateStr);
+      } else if (dateStr.match(/^\d{4}-\d{2}-\d{2}$/)) {
+        // YYYY-MM-DD format
+        return new Date(dateStr);
+      } else {
+        // Try to parse as-is
+        const parsed = new Date(dateStr);
+        return isNaN(parsed.getTime()) ? new Date() : parsed;
+      }
+    };
+
+    // Parse booking amount from GraphQL response
+    const parseAmount = (amount: any): number => {
+      if (!amount || typeof amount !== "object") return 0;
+      const value = amount.value || amount.amount || 0;
+      return typeof value === "number" ? value : parseFloat(value) || 0;
+    };
+
+    // Extract data from GraphQL reservation item
+    const guestName = reservationItem.customer?.guestName || "Unknown Guest";
+    const reservationId = reservationItem.reservationItemId || "";
+    const confirmationCode =
+      reservationItem.confirmationInfo?.productConfirmationCode || "";
+    const checkInDate = reservationItem.reservationInfo?.startDate || "";
+    const checkOutDate = reservationItem.reservationInfo?.endDate || "";
+    const roomType =
+      reservationItem.reservationInfo?.product?.unitName || "Unknown";
+    const bookingAmount = parseAmount(
+      reservationItem.totalAmounts?.totalReservationAmount
+    );
+    const bookedDate =
+      reservationItem.reservationInfo?.createDateTime ||
+      new Date().toISOString();
+    const reservationStatus =
+      reservationItem.reservationInfo?.reservationAttributes?.bookingStatus ||
+      "Unknown";
+
+    // Create additional text with business model and other relevant info
+    const businessModel =
+      reservationItem.reservationInfo?.reservationAttributes?.businessModel ||
+      "";
+    const additionalText = businessModel
+      ? `Business Model: ${businessModel}`
+      : undefined;
+
+    const jobItemData: CreateJobItemData = {
+      job_id: jobId,
+      property_id: propertyId,
+      guest_name: guestName,
+      reservation_id: reservationId,
+      confirmation_number: confirmationCode,
+      check_in_date: parseDate(checkInDate),
+      check_out_date: parseDate(checkOutDate),
+      room_type: roomType,
+      booking_amount: bookingAmount,
+      booked_date: parseDate(bookedDate),
+      has_card_info: !!cardData,
+      card_info: cardData || undefined,
+      has_payment_info: !!paymentData,
+      payment_info: paymentData || undefined,
+      reservation_status: reservationStatus,
+      additional_text: additionalText,
+    };
+
+    const savedItem = await jobService.createJobItem(jobItemData);
+    await dualLogInfo(
+      `✅ Saved GraphQL reservation ${reservationId} to database`,
+      { jobId }
+    );
+    return;
+  } catch (dbError: any) {
+    await dualLogError(
+      `❌ Failed to save GraphQL reservation ${
+        reservationItem?.reservationItemId || "unknown"
+      } to database:`,
+      dbError.message,
+      { jobId }
+    );
+
+    // Log additional context for debugging
+    await dualLogError(
+      `Debug info - jobId: ${jobId}, propertyId: ${propertyId}`,
+      null,
+      { jobId }
+    );
+
+    // Don't rethrow the error to prevent stopping the entire scraping process
+    // Just log it and continue with the next reservation
+    return;
   }
 }
 
@@ -1231,8 +1435,7 @@ async function runScrapingWithRestart(
                 } (${singleDate}) completed successfully!`
               );
 
-              // TODO: Store data to spreadsheet here
-              console.log("📊 TODO: Store reservation data to spreadsheet");
+              // ✅ Data stored to database via GraphQL processing above
 
               dateCompleted = true; // Mark this date as completed
               break; // Exit the retry attempts for this date
@@ -1321,6 +1524,26 @@ async function runScrapingWithRestart(
       console.error(
         `❌ Failed to complete date ${singleDate} after ${maxAttempts} attempts, skipping to next date`
       );
+    }
+
+    // Add random delay between 1-10 seconds before processing next date (to avoid detection)
+    if (i < datesToProcess.length - 1) {
+      // Don't delay after the last date
+      const randomDelay = Math.floor(Math.random() * 10) + 1; // Random number between 1-10
+      console.log(
+        `⏱️ Waiting ${randomDelay} seconds before processing next date...`
+      );
+      await dualLogInfo(
+        `Adding ${randomDelay}s delay between dates to avoid detection`,
+        {
+          jobId,
+          currentDate: singleDate,
+          nextDate: datesToProcess[i + 1],
+          delaySeconds: randomDelay,
+        }
+      );
+      await delay(randomDelay * 1000); // Convert to milliseconds
+      console.log(`✅ Delay complete, proceeding to next date...`);
     }
   } // End of date processing for loop
 
