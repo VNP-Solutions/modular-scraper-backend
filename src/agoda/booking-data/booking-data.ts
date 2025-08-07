@@ -8,6 +8,34 @@ import { progressManager } from "../../common/progress-manager.js";
 import { scrapingStateManager } from "../../common/scraping-state.js";
 import { timeoutManager } from "../../common/timeout-manager.js";
 
+/**
+ * Converts date from YYYY-MM-DD format to DD-MM-YYYY format
+ * @param dateString - Date in YYYY-MM-DD format (e.g., "2024-01-31")
+ * @returns Date in DD-MM-YYYY format (e.g., "31-01-2024")
+ */
+function convertDateFormat(dateString: string): string {
+  // Handle both YYYY-MM-DD and MM/DD/YYYY formats for backward compatibility
+  let year: string, month: string, day: string;
+
+  if (dateString.includes("/")) {
+    // MM/DD/YYYY format
+    const parts = dateString.split("/");
+    month = parts[0].padStart(2, "0");
+    day = parts[1].padStart(2, "0");
+    year = parts[2];
+  } else if (dateString.includes("-")) {
+    // YYYY-MM-DD format
+    const parts = dateString.split("-");
+    year = parts[0];
+    month = parts[1].padStart(2, "0");
+    day = parts[2].padStart(2, "0");
+  } else {
+    throw new Error(`Unsupported date format: ${dateString}`);
+  }
+
+  return `${day}-${month}-${year}`;
+}
+
 export async function getAgodaBookingData(
   browser: Browser,
   page: Page,
@@ -39,45 +67,62 @@ export async function getAgodaBookingData(
       );
     }
 
-    // Construct the booking URL with agoda_id and date range
-    const bookingUrl = `https://ycs.agoda.com/mldc/en-us/app/reporting/booking/${agodaId}?startDate=${startDate}&endDate=${endDate}`;
+    // Convert dates to DD-MM-YYYY format required by Agoda API
+    const formattedStartDate = convertDateFormat(startDate);
+    const formattedEndDate = convertDateFormat(endDate);
+
+    // Log original and converted dates in blue color text
+    console.log(
+      "\x1b[34m%s\x1b[0m",
+      `Original dates - startDate: ${startDate}, endDate: ${endDate}`
+    );
+    console.log(
+      "\x1b[34m%s\x1b[0m",
+      `Converted dates - startDate: ${formattedStartDate}, endDate: ${formattedEndDate}`
+    );
+
+    // Construct the booking URL with agoda_id and date range using converted dates
+    const bookingUrl = `https://ycs.agoda.com/mldc/en-us/app/reporting/booking/${agodaId}?startDate=${formattedStartDate}&endDate=${formattedEndDate}`;
     await dualLogInfo(`Navigating to booking data URL: ${bookingUrl}`);
 
     // Navigate to the booking data page
-    await page.goto(bookingUrl, {
+    const newPage = await browser.newPage();
+    await newPage.goto(bookingUrl, {
       waitUntil: "networkidle2",
       timeout: loadingTimeout,
     });
 
+    await newPage.waitForSelector("body", { timeout: loadingTimeout });
+
     await dualLogInfo("Successfully navigated to booking data page");
 
     // Update progress
-    if (jobId) {
-      await progressManager.updateJobProgress(
-        jobId,
-        undefined,
-        30,
-        "agoda_booking_data_retrieval",
-        undefined
-      );
-    }
+    // if (jobId) {
+    //   await progressManager.updateJobProgress(
+    //     jobId,
+    //     undefined,
+    //     30,
+    //     "agoda_booking_data_retrieval",
+    //     undefined
+    //   );
+    // }
 
     // Wait for the page to load completely
-    await delay(3000);
+    await delay(loadingTimeout);
 
     // Check pause state before proceeding
-    await scrapingStateManager.waitWhilePaused();
-    if (!scrapingStateManager.isRunning()) {
-      await dualLogError("Scraping was stopped during booking data retrieval");
-      throw new Error("Scraping was stopped during booking data retrieval");
-    }
+    // await scrapingStateManager.waitWhilePaused();
+    // if (!scrapingStateManager.isRunning()) {
+    //   await dualLogError("Scraping was stopped during booking data retrieval");
+    //   throw new Error("Scraping was stopped during booking data retrieval");
+    // }
 
     // Wait for the download button container to be visible
     await dualLogInfo("Looking for CSV download button...");
 
     try {
       // Wait for the download button using the specific selector from the HTML structure
-      await page.waitForSelector(
+      await newPage.waitForSelector(
         'button[data-element-name="ycs-booking-list-download"]',
         {
           visible: true,
@@ -92,15 +137,15 @@ export async function getAgodaBookingData(
     }
 
     // Update progress
-    if (jobId) {
-      await progressManager.updateJobProgress(
-        jobId,
-        undefined,
-        50,
-        "agoda_booking_data_retrieval",
-        undefined
-      );
-    }
+    // if (jobId) {
+    //   await progressManager.updateJobProgress(
+    //     jobId,
+    //     undefined,
+    //     50,
+    //     "agoda_booking_data_retrieval",
+    //     undefined
+    //   );
+    // }
 
     // Set up download path
     const downloadPath = path.resolve(process.cwd(), "downloads");
@@ -118,7 +163,10 @@ export async function getAgodaBookingData(
 
     // Click the download button
     try {
-      await page.click('button[data-element-name="ycs-booking-list-download"]');
+      await newPage.click(
+        'button[data-element-name="ycs-booking-list-download"]'
+      );
+      console.log("👆 Clicked the download CSV button");
       await dualLogInfo("CSV download button clicked successfully");
     } catch (error: any) {
       await dualLogError("Error clicking CSV download button:", error);
@@ -126,26 +174,26 @@ export async function getAgodaBookingData(
     }
 
     // Update progress
-    if (jobId) {
-      await progressManager.updateJobProgress(
-        jobId,
-        undefined,
-        70,
-        "agoda_booking_data_retrieval",
-        undefined
-      );
-    }
+    // if (jobId) {
+    //   await progressManager.updateJobProgress(
+    //     jobId,
+    //     undefined,
+    //     70,
+    //     "agoda_booking_data_retrieval",
+    //     undefined
+    //   );
+    // }
 
     // Wait for download to complete
     await dualLogInfo("Waiting for CSV download to complete...");
     await delay(5000);
 
     // Check pause state during download
-    await scrapingStateManager.waitWhilePaused();
-    if (!scrapingStateManager.isRunning()) {
-      await dualLogError("Scraping was stopped during CSV download");
-      throw new Error("Scraping was stopped during CSV download");
-    }
+    // await scrapingStateManager.waitWhilePaused();
+    // if (!scrapingStateManager.isRunning()) {
+    //   await dualLogError("Scraping was stopped during CSV download");
+    //   throw new Error("Scraping was stopped during CSV download");
+    // }
 
     // Find the downloaded CSV file
     let csvFilePath: string | null = null;
@@ -172,15 +220,15 @@ export async function getAgodaBookingData(
     }
 
     // Update progress
-    if (jobId) {
-      await progressManager.updateJobProgress(
-        jobId,
-        undefined,
-        90,
-        "agoda_booking_data_retrieval",
-        undefined
-      );
-    }
+    // if (jobId) {
+    //   await progressManager.updateJobProgress(
+    //     jobId,
+    //     undefined,
+    //     90,
+    //     "agoda_booking_data_retrieval",
+    //     undefined
+    //   );
+    // }
 
     // Read and parse the CSV file
     await dualLogInfo("Reading and parsing CSV file...");
@@ -236,17 +284,18 @@ export async function getAgodaBookingData(
       );
     }
 
-    // Clean up the downloaded file
-    try {
-      fs.unlinkSync(csvFilePath);
-      await dualLogInfo("Downloaded CSV file cleaned up");
-    } catch (cleanupError) {
-      await dualLogError("Error cleaning up CSV file:", cleanupError);
-    }
+    // // Clean up the downloaded file
+    // try {
+    //   fs.unlinkSync(csvFilePath);
+    //   await dualLogInfo("Downloaded CSV file cleaned up");
+    // } catch (cleanupError) {
+    //   await dualLogError("Error cleaning up CSV file:", cleanupError);
+    // }
 
     await dualLogInfo(
       `Successfully retrieved and processed ${formattedRecords.length} booking records`
     );
+
     return formattedRecords;
   } catch (error: any) {
     await dualLogError(`Error retrieving Agoda booking data:`, error);
