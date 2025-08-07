@@ -9,10 +9,10 @@ export interface CardInfo {
 }
 
 export interface PaymentInfo {
-  total_guest_payment: number;
-  cancellation_fee: number;
-  total_payout: number;
-  amount_to_charge_or_refund: number; // Reverted back to number type
+  total_guest_payment?: number;
+  cancellation_fee?: number;
+  total_payout?: number;
+  amount_to_charge_or_refund: number; // Required field for calculations
 }
 
 // Interface for the JobItem document

@@ -1,12 +1,224 @@
 import { Browser, Page } from "puppeteer";
 import fs from "fs";
 import path from "path";
-import csv from "csv-parser";
+import Papa from "papaparse";
 import { delay } from "../../common/delay.js";
 import { dualLogError, dualLogInfo } from "../../common/log-helper.js";
 import { progressManager } from "../../common/progress-manager.js";
 import { scrapingStateManager } from "../../common/scraping-state.js";
 import { timeoutManager } from "../../common/timeout-manager.js";
+import { JobService } from "../../services/job.service.js";
+import { IJobItem, PaymentInfo } from "../../models/job-item.model.js";
+import { Types } from "mongoose";
+
+// Initialize job service
+const jobService = new JobService();
+
+// Interface for CSV record mapping
+interface CsvRecord {
+  BookingIDExternal_reference_ID: string;
+  Status: string;
+  StayDateFrom: string;
+  StayDateTo: string;
+  BookedDate: string;
+  Customer_Name: string;
+  RoomType: string;
+  CancellationPolicyDescription?: string;
+  [key: string]: any; // For other CSV fields
+}
+
+// Import the CreateJobItemData from job service to ensure type compatibility
+import { CreateJobItemData } from "../../services/job.service.js";
+
+/**
+ * Parses date from various formats to JavaScript Date object
+ * Handles both YYYY-MM-DD and MM/DD/YYYY formats
+ */
+function parseCsvDate(dateString: string): Date {
+  if (!dateString) return new Date();
+
+  let year: string, month: string, day: string;
+
+  if (dateString.includes("/")) {
+    // MM/DD/YYYY format
+    const parts = dateString.split("/");
+    month = parts[0];
+    day = parts[1];
+    year = parts[2];
+  } else if (dateString.includes("-")) {
+    // YYYY-MM-DD format
+    const parts = dateString.split("-");
+    year = parts[0];
+    month = parts[1];
+    day = parts[2];
+  } else {
+    throw new Error(`Unsupported date format: ${dateString}`);
+  }
+
+  const parsed = new Date(
+    `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`
+  );
+  return isNaN(parsed.getTime()) ? new Date() : parsed;
+}
+
+/**
+ * Calculates the amount to charge or refund using the specified formula
+ * Formula: (StayDateTo - StayDateFrom) * 19.35 * Math.random() + 5.23
+ */
+function calculateAmountToChargeOrRefund(
+  checkInDate: Date,
+  checkOutDate: Date
+): number {
+  const timeDifferenceInMs = checkOutDate.getTime() - checkInDate.getTime();
+  const numberOfNights = Math.max(
+    1,
+    Math.ceil(timeDifferenceInMs / (1000 * 60 * 60 * 24))
+  );
+
+  const amount = numberOfNights * 19.35 * Math.random() + 5.23;
+  return Math.round(amount * 100) / 100; // Round to 2 decimal places
+}
+
+/**
+ * Maps CSV record to JobItem creation data
+ */
+function mapCsvToJobItem(
+  csvRecord: CsvRecord,
+  jobId: string,
+  propertyId: string
+): CreateJobItemData {
+  // Validate required fields
+  if (
+    !csvRecord.BookingIDExternal_reference_ID ||
+    csvRecord.BookingIDExternal_reference_ID.trim() === ""
+  ) {
+    throw new Error(
+      "BookingIDExternal_reference_ID is required but missing or empty"
+    );
+  }
+
+  const checkInDate = parseCsvDate(csvRecord.StayDateFrom);
+  const checkOutDate = parseCsvDate(csvRecord.StayDateTo);
+  const bookedDate = parseCsvDate(csvRecord.BookedDate);
+  const amountToChargeOrRefund = calculateAmountToChargeOrRefund(
+    checkInDate,
+    checkOutDate
+  );
+
+  const paymentInfo: PaymentInfo = {
+    // Only include amount_to_charge_or_refund as it's the only required field
+    // Other fields are optional and will be undefined if not provided from CSV
+    amount_to_charge_or_refund: amountToChargeOrRefund,
+  };
+
+  return {
+    job_id: jobId,
+    property_id: propertyId,
+    guest_name: csvRecord.Customer_Name || "Unknown Guest",
+    reservation_id: csvRecord.BookingIDExternal_reference_ID.trim(), // Use the validated, trimmed booking ID
+    confirmation_number: "", // Not available in CSV, set to empty string
+    check_in_date: checkInDate,
+    check_out_date: checkOutDate,
+    room_type: csvRecord.RoomType || "Unknown Room Type",
+    booking_amount: 0, // Not available in CSV, set to 0
+    booked_date: bookedDate,
+    has_card_info: false, // No card info from CSV
+    card_info: undefined,
+    has_payment_info: true, // We're creating payment info
+    payment_info: paymentInfo,
+    reservation_status: csvRecord.Status || "Unknown",
+    additional_text: csvRecord.CancellationPolicyDescription || undefined,
+  };
+}
+
+/**
+ * Saves mapped CSV records to database as JobItems
+ */
+async function saveCsvRecordsToDatabase(
+  csvRecords: CsvRecord[],
+  jobId: string,
+  propertyId: string
+): Promise<{ saved: number; errors: number }> {
+  let savedCount = 0;
+  let errorCount = 0;
+
+  await dualLogInfo(
+    `Starting to save ${csvRecords.length} CSV records to database`
+  );
+
+  for (let i = 0; i < csvRecords.length; i++) {
+    const csvRecord = csvRecords[i];
+
+    try {
+      // Additional validation for the record
+      if (
+        !csvRecord.BookingIDExternal_reference_ID ||
+        csvRecord.BookingIDExternal_reference_ID.trim() === ""
+      ) {
+        await dualLogError(
+          `❌ Skipping record ${i + 1}/${
+            csvRecords.length
+          }: Missing or empty BookingIDExternal_reference_ID`,
+          "Invalid CSV record",
+          { jobId }
+        );
+        errorCount++;
+        continue;
+      }
+
+      const jobItemData = mapCsvToJobItem(csvRecord, jobId, propertyId);
+      const savedItem = await jobService.createJobItem(jobItemData);
+
+      if (savedItem) {
+        savedCount++;
+        await dualLogInfo(
+          `✅ Saved record ${i + 1}/${csvRecords.length}: ${
+            csvRecord.BookingIDExternal_reference_ID
+          }`,
+          { jobId }
+        );
+      } else {
+        errorCount++;
+        await dualLogError(
+          `❌ Failed to save record ${i + 1}/${csvRecords.length}: ${
+            csvRecord.BookingIDExternal_reference_ID
+          }`,
+          "JobService returned null",
+          { jobId }
+        );
+      }
+    } catch (error: any) {
+      errorCount++;
+      await dualLogError(
+        `❌ Error saving record ${i + 1}/${csvRecords.length}: ${
+          csvRecord.BookingIDExternal_reference_ID || "undefined"
+        }`,
+        error.message,
+        { jobId }
+      );
+    }
+
+    // Update progress periodically
+    if (jobId && (i + 1) % 10 === 0) {
+      const progressPercentage =
+        Math.round(((i + 1) / csvRecords.length) * 30) + 70; // 70-100% range
+      await progressManager.updateJobProgress(
+        jobId,
+        undefined,
+        progressPercentage,
+        `saving_csv_records_${i + 1}_of_${csvRecords.length}`,
+        undefined
+      );
+    }
+  }
+
+  await dualLogInfo(
+    `Database save completed: ${savedCount} saved, ${errorCount} errors`,
+    { jobId, savedCount, errorCount }
+  );
+
+  return { saved: savedCount, errors: errorCount };
+}
 
 /**
  * Converts date from YYYY-MM-DD format to DD-MM-YYYY format
@@ -242,21 +454,38 @@ export async function getAgodaBookingData(
     // Read and parse the CSV file
     await dualLogInfo("Reading and parsing CSV file...");
 
-    // Read the CSV file and convert to JSON array
-    const formattedRecords: any[] = await new Promise((resolve, reject) => {
-      const results: any[] = [];
-      fs.createReadStream(csvFilePath)
-        .pipe(csv())
-        .on("data", (data) => results.push(data))
-        .on("end", () => {
-          // Filter out empty records
-          const filteredResults = results.filter((record) =>
-            Object.values(record).some((value) => value !== "")
-          );
-          resolve(filteredResults);
-        })
-        .on("error", (error) => reject(error));
+    // Read the CSV file content as text first
+    const csvContent = fs.readFileSync(csvFilePath, "utf8");
+
+    // Parse CSV with PapaParse which handles multi-line fields properly
+    const parseResult = Papa.parse(csvContent, {
+      header: true,
+      skipEmptyLines: true,
+      transform: (value) => value.trim(), // Trim whitespace from values
+      transformHeader: (header) => header.trim(), // Trim whitespace from headers
     });
+
+    if (parseResult.errors.length > 0) {
+      await dualLogError("CSV parsing errors:", parseResult.errors);
+    }
+
+    // Filter out records that don't have a valid BookingIDExternal_reference_ID
+    const formattedRecords = (parseResult.data as any[]).filter(
+      (record: any) => {
+        const hasValidBookingId =
+          record.BookingIDExternal_reference_ID &&
+          record.BookingIDExternal_reference_ID.trim() !== "";
+
+        if (!hasValidBookingId) {
+          console.log(
+            "Skipping invalid record:",
+            JSON.stringify(record, null, 2)
+          );
+        }
+
+        return hasValidBookingId;
+      }
+    );
 
     await dualLogInfo(
       `Successfully parsed CSV file with ${formattedRecords.length} records`
@@ -269,14 +498,14 @@ export async function getAgodaBookingData(
     console.log(`💾 File size: ${fileSizeKB} KB`);
 
     if (formattedRecords.length > 0) {
-      const headers = Object.keys(formattedRecords[0]);
+      const headers = Object.keys(formattedRecords[0] as Record<string, any>);
       console.log(`📄 Headers count: ${headers.length}`);
       console.log("📋 CSV Columns:", headers);
       console.log("📝 First few records:");
       console.log(JSON.stringify(formattedRecords.slice(0, 3), null, 2));
 
       // Log sample of different types of data
-      const sampleRecord = formattedRecords[0];
+      const sampleRecord = formattedRecords[0] as Record<string, any>;
       console.log("🔍 Sample record structure:");
       Object.entries(sampleRecord).forEach(([key, value]) => {
         console.log(`  ${key}: ${typeof value} = "${value}"`);
@@ -308,6 +537,57 @@ export async function getAgodaBookingData(
     await dualLogInfo(
       `Successfully retrieved and processed ${formattedRecords.length} booking records`
     );
+
+    // Save CSV records to database if we have jobId
+    if (jobId && formattedRecords.length > 0) {
+      try {
+        // Get property_id from job for database storage
+        const job = await jobService.getJobById(jobId);
+        if (job && job.property_id) {
+          const propertyIdForDb = job.property_id.toString();
+          await dualLogInfo(
+            `Starting database save with property_id: ${propertyIdForDb}`,
+            { jobId, propertyIdForDb }
+          );
+
+          const saveResult = await saveCsvRecordsToDatabase(
+            formattedRecords as CsvRecord[],
+            jobId,
+            propertyIdForDb
+          );
+
+          await dualLogInfo(
+            `Database save completed: ${saveResult.saved} saved, ${saveResult.errors} errors`,
+            { jobId, saveResult }
+          );
+
+          // Update final progress
+          await progressManager.updateJobProgress(
+            jobId,
+            undefined,
+            100,
+            `agoda_booking_data_saved_${saveResult.saved}_records`,
+            undefined
+          );
+        } else {
+          await dualLogError(
+            `Could not get property_id from job ${jobId}, skipping database save`,
+            { jobId }
+          );
+        }
+      } catch (dbSaveError: any) {
+        await dualLogError(
+          `Error during database save for job ${jobId}:`,
+          dbSaveError.message,
+          { jobId }
+        );
+        // Don't throw error, just log it - we still want to return the CSV data
+      }
+    } else if (jobId) {
+      await dualLogInfo(`No records to save to database for job ${jobId}`, {
+        jobId,
+      });
+    }
 
     // Clean up CDP session and close the page
     try {
