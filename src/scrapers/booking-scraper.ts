@@ -1542,7 +1542,7 @@ export class BookingScraper extends BaseScraper {
 
   async extractReservationDetails(reservationId: string): Promise<{
     basicData: any;
-    paymentData: any;
+    // paymentData: any;
     cardData: any;
   } | null> {
     if (!this.page) throw new Error('Page not initialized');
@@ -1554,14 +1554,14 @@ export class BookingScraper extends BaseScraper {
       const basicData = await this.extractBasicReservationData();
       
       // Extract payment information
-      const paymentData = await this.extractPaymentData();
+      // const paymentData = await this.extractPaymentData();
       
       // Extract credit card details (requires additional navigation)
       const cardData = await this.extractCreditCardDetails(reservationId);
 
       return {
         basicData,
-        paymentData,
+        // paymentData,
         cardData
       };
 
@@ -1584,7 +1584,8 @@ export class BookingScraper extends BaseScraper {
           reservationId: '',
           bookedDate: '',
           commissionAmount: '',
-          roomType: ''
+          roomType: '',
+          reservationStatus: ''
         };
   
         const labelMap: Record<string, keyof typeof result> = {
@@ -1615,7 +1616,10 @@ export class BookingScraper extends BaseScraper {
   
         const roomTypeEl = document.querySelector('.res-room-title__name');
         if (roomTypeEl) result.roomType = roomTypeEl.textContent?.trim() || result.roomType;
-  
+        
+        const statusEl = document.querySelector('.res-view-cc__badge span span');
+        if (statusEl) result.reservationStatus = statusEl.textContent?.trim() || '';
+
         return result;
       });
   
@@ -1794,7 +1798,7 @@ export class BookingScraper extends BaseScraper {
     jobId: string,
     propertyId: string,
     basicData: any,
-    paymentData: any,
+    // paymentData: any,
     cardData: any
   ): Promise<any> {
     try {
@@ -1841,10 +1845,10 @@ export class BookingScraper extends BaseScraper {
         booking_amount: parseAmount(basicData.totalPrice),
         booked_date: parseDate(basicData.receivedDate),
         has_card_info: !!cardData,
-        has_payment_info: !!paymentData,
-        payment_info: paymentData || undefined,
+        // has_payment_info: !!paymentData,
+        // payment_info: paymentData || undefined,
         card_info: cardData || undefined,
-        reservation_status: 'Booking.com Collect',
+        reservation_status: basicData.reservationStatus,
         additional_text: basicData.commissionAmount || undefined
       };
 
@@ -1873,11 +1877,11 @@ export class BookingScraper extends BaseScraper {
         return false;
       }
 
-      const { basicData, paymentData, cardData } = extractionResult;
+      const { basicData, /*paymentData,*/ cardData } = extractionResult;
 
       // Save to database if jobId and propertyId are provided
       if (jobId && propertyId) {
-        await this.saveReservationToDatabase(jobId, propertyId, basicData, paymentData, cardData);
+        await this.saveReservationToDatabase(jobId, propertyId, basicData, /*paymentData,*/ cardData);
       }
 
       await this.logInfo(`Successfully processed reservation ${reservationId}`);
