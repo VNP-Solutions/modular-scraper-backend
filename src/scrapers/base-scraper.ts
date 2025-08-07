@@ -49,7 +49,7 @@ export abstract class BaseScraper {
 
   // Abstract methods that each platform must implement
   abstract setupBrowser(jobId?: string): Promise<{ browser: Browser; page: Page }>;
-  abstract login(credentials: LoginCredentials): Promise<void>;
+  abstract login(credentials: LoginCredentials, propertyId?: string): Promise<void>;
   abstract handleCaptcha(options?: CaptchaHandlerOptions): Promise<boolean>;
   abstract handle2FA(options?: TwoFactorAuthOptions): Promise<boolean>;
   abstract searchProperty(propertyId: string): Promise<boolean>;
@@ -92,7 +92,7 @@ export abstract class BaseScraper {
       // Step 2: Login if credentials provided
       if (params.credentials) {
         await this.logInfo('Performing login');
-        await this.login(params.credentials);
+        await this.login(params.credentials, params.propertyId);
         
         // Handle captcha if needed
         const captchaHandled = await this.handleCaptcha();
@@ -107,13 +107,7 @@ export abstract class BaseScraper {
         }
       }
 
-      // Step 3: Search for property if provided
-      if (params.propertyId) {
-        await this.logInfo('Searching for property', { propertyId: params.propertyId });
-        await this.searchProperty(params.propertyId);
-      }
-
-      // Step 4: Scrape data
+      // Step 3: Scrape data
       await this.logInfo('Starting data scraping');
       const result = await this.scrapeData(params);
 

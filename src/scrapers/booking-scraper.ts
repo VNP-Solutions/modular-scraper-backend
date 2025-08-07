@@ -6,7 +6,7 @@ import { BaseScraper, LoginCredentials, CaptchaHandlerOptions, TwoFactorAuthOpti
 import { timeoutManager } from "../common/timeout-manager.js";
 import handleBookingOtpVerification from "../otp-verification/booking-otp-verification.js";
 import { SelectorUtils } from "../common/selector-utils.js";
-import { BOOKING_SELECTORS, CAPTCHA_PATTERNS, TWO_FA_PATTERNS, TWO_FA_TEXT_PATTERNS } from "../common/booking-selectors.js";
+import { BOOKING_LOGIN_EXCLUDE_URLS, BOOKING_LOGIN_SUCCESS_URLS, BOOKING_SELECTORS, CAPTCHA_PATTERNS, TWO_FA_PATTERNS, TWO_FA_TEXT_PATTERNS } from "../common/booking-selectors.js";
 import { 
   BookingErrorType, 
   BookingScrapingPhase, 
@@ -129,14 +129,82 @@ export class BookingScraper extends BaseScraper {
     }
   }
 
-  async login(credentials: LoginCredentials): Promise<void> {
+  /**
+   * Handle property search after successful login or when already logged in
+   */
+  private async handlePropertySearch(propertyId?: string): Promise<void> {
+    if (!propertyId) {
+      await this.logInfo('No property ID provided, skipping property search');
+      return;
+    }
+
+    await this.logInfo('Checking for multi-property account and searching for property');
+    const isMultiProperty = await this.checkMultiPropertyAccount();
+    
+    if (isMultiProperty) {
+      await this.logInfo('Multi-property account detected, searching for property');
+      const searchSuccess = await this.searchProperty(propertyId);
+      if (searchSuccess) {
+        await this.logInfo('Property search and selection completed successfully');
+      } else {
+        await this.logError('Property search failed');
+      }
+    } else {
+      await this.logInfo('Single property account detected, no property search needed');
+    }
+  }
+
+  /**
+   * Handle successful login completion
+   */
+  private async handleSuccessfulLogin(propertyId?: string): Promise<void> {
+    if (!this.page) throw new Error('Page not initialized');
+    
+    await this.logInfo('Login successful');
+    const cookies = await this.page.cookies();
+    fs.writeFileSync(this.cookiesFile, JSON.stringify(cookies, null, 2));
+    await this.logInfo(`Saved ${cookies.length} cookies for future sessions`);
+    await this.takeScreenshot('booking-admin-dashboard.png');
+    
+    await this.handlePropertySearch(propertyId);
+  }
+
+  /**
+   * Handle successful 2FA completion
+   */
+  private async handleSuccessful2FA(propertyId?: string): Promise<void> {
+    if (!this.page) throw new Error('Page not initialized');
+    
+    await this.logInfo('2FA completed successfully');
+    const cookies = await this.page.cookies();
+    fs.writeFileSync(this.cookiesFile, JSON.stringify(cookies, null, 2));
+    await this.logInfo(`Saved ${cookies.length} cookies after 2FA`);
+    await this.takeScreenshot('booking-admin-dashboard-after-2fa.png');
+    
+    await this.handlePropertySearch(propertyId);
+  }
+
+  /**
+   * Check if user is already logged in
+   */
+  private isAlreadyLoggedIn(): boolean {
+    if (!this.page) return false;
+
+    const finalUrl = this.page.url();
+
+    const isIncluded = BOOKING_LOGIN_SUCCESS_URLS.some(url => finalUrl.includes(url));
+    const isExcluded = BOOKING_LOGIN_EXCLUDE_URLS.some(url => finalUrl.includes(url));
+
+    return isIncluded && !isExcluded;
+  }
+
+  async login(credentials: LoginCredentials, propertyId?: string): Promise<void> {
     if (!this.page) throw new Error('Page not initialized');
 
     try {
-      // Check if already logged in
-      const currentUrl = this.page.url();
-      if ((currentUrl.includes('admin.booking.com') || currentUrl.includes('account.business.booking.com')) && !currentUrl.includes('sign-in')) {
+      if (this.isAlreadyLoggedIn()) {
         await this.logInfo('Already logged in');
+        await this.handlePropertySearch(propertyId);
         return;
       }
 
@@ -240,26 +308,16 @@ export class BookingScraper extends BaseScraper {
       // Check for login errors
       await this.checkLoginErrors();
 
-      // Save cookies on successful login
-      const finalUrl = this.page.url();
-      if ((finalUrl.includes('admin.booking.com') || finalUrl.includes('account.business.booking.com') || finalUrl.includes('partner')) && !finalUrl.includes('sign-in')) {
-        await this.logInfo('Login successful');
-        const cookies = await this.page.cookies();
-        fs.writeFileSync(this.cookiesFile, JSON.stringify(cookies, null, 2));
-        await this.logInfo(`Saved ${cookies.length} cookies for future sessions`);
-        await this.takeScreenshot('booking-admin-dashboard.png');
+      // Handle successful login
+      if (this.isAlreadyLoggedIn()) {
+        await this.handleSuccessfulLogin(propertyId);
       } else {
-        await this.logInfo('Login requires 2FA verification', { currentUrl: finalUrl });
+        await this.logInfo('Login requires 2FA verification');
         
         // Try to handle 2FA automatically
         const twoFASuccess = await this.handle2FA();
         if (twoFASuccess) {
-          await this.logInfo('2FA completed successfully');
-          // Save cookies after successful 2FA
-          const cookies = await this.page.cookies();
-          fs.writeFileSync(this.cookiesFile, JSON.stringify(cookies, null, 2));
-          await this.logInfo(`Saved ${cookies.length} cookies after 2FA`);
-          await this.takeScreenshot('booking-admin-dashboard-after-2fa.png');
+          await this.handleSuccessful2FA(propertyId);
         } else {
           await dualLogError(
             `[${new Date().toISOString()}] ${getBookingErrorDescription(BookingErrorType.TWO_FA_ERROR)}`,
@@ -286,6 +344,140 @@ export class BookingScraper extends BaseScraper {
       );
       await this.takeScreenshot('booking-login-error.png');
       throw error;
+    }
+  }
+
+  /**
+   * Check if the logged-in account has multiple properties
+   * This method checks for the multi-property URL pattern
+   */
+  async checkMultiPropertyAccount(): Promise<boolean> {
+    if (!this.page) throw new Error('Page not initialized');
+
+    try {
+      const currentUrl = this.page.url();
+      await this.logInfo(`Checking multi-property account. Current URL: ${currentUrl}`);
+      
+      // Check if URL contains multi-property indicators
+      const isMultiProperty = currentUrl.includes('/groups/home/') || 
+                             currentUrl.includes('hoteladmin/groups/') ||
+                             currentUrl.includes('multi-property');
+      
+      await this.logInfo(`Multi-property account detected: ${isMultiProperty}`);
+      return isMultiProperty;
+    } catch (error) {
+      await this.logError('Error checking multi-property account:', error);
+      return false;
+    }
+  }
+
+  private async checkIfLoginNeeded(): Promise<boolean> {
+    if (!this.page) throw new Error('Page not initialized');
+
+    try {
+      const hasLoginForm = await SelectorUtils.trySelectors(
+        this.page,
+        [...BOOKING_SELECTORS.email, ...BOOKING_SELECTORS.password],
+        async (selector: string) => {
+          const el = await this.page!.$(selector);
+          return !!el;
+        },
+        5000
+      );
+      
+      if (hasLoginForm) {
+        await this.logInfo('Login required detected via URL or form elements');
+        return true;
+      }
+      
+      await this.logInfo('No login required detected');
+      return false;
+    } catch (error) {
+      await this.logError('Error checking if login is needed:', error);
+      return false;
+    }
+  }
+
+  async searchProperty(propertyId: string): Promise<boolean> {
+    if (!this.page) throw new Error('Page not initialized');
+
+    try {
+      await this.logInfo(`Searching for property ID: ${propertyId}`);
+      
+      const searchInputFound = await SelectorUtils.findAndType(
+        this.page,
+        BOOKING_SELECTORS.property.searchInput,
+        propertyId
+      );
+      
+      if (!searchInputFound) {
+        await this.logError('Property search input not found');
+        await this.takeScreenshot('booking-no-search-input.png');
+        return false;
+      }
+      
+      await this.logInfo('Property ID entered in search field');
+      
+      const propertySelectors = BOOKING_SELECTORS.property.item(propertyId);
+      const propertyClicked = await SelectorUtils.findAndClick(this.page, propertySelectors);
+      
+      if (!propertyClicked) {
+        // TO DO - add logs
+        await this.logInfo('Property not found with predefined selectors, trying alternative approaches...');
+      }
+      
+      await this.logInfo('Property clicked successfully');
+      
+      // Listen for new page creation for property selection
+      const newPagePromise = new Promise<Page>((resolve) => {
+        this.browser!.once('targetcreated', async (target) => {
+          if (target.type() === 'page') {
+            const newPage = await target.page();
+            await newPage!.bringToFront();
+            resolve(newPage!);
+          }
+        });
+      });
+
+      // Wait for the new page to be created
+      const newPage = await newPagePromise;
+      
+      // Switch to the new page and keep it
+      this.page = newPage;
+      
+      try {
+        // Verify property is selected by checking URL
+        const currentUrl = this.page.url();
+        await this.logInfo(`New page URL: ${currentUrl}`);
+        
+        if (currentUrl.includes(`hotel_id=${propertyId}`)) {
+          await this.logInfo('Property selection verified via URL');
+          await this.takeScreenshot('booking-property-selected.png');
+          return true;
+        } else {
+          await this.logInfo('Property selection verification failed, checking if login is needed');
+          await this.takeScreenshot('booking-property-selection-verification.png');
+          
+          // Check if we need to login again
+          const needsLogin = await this.checkIfLoginNeeded();
+          if (needsLogin) {
+            await this.logInfo('Login required, attempting to login again');
+            return false; // Indicate login is needed
+          } else {
+            await this.logInfo('Property selection verification inconclusive but no login needed');
+            return true; // Assume success if we can't verify and no login needed
+          }
+        }
+        
+      } catch (error) {
+        await this.logError('Error in property verification:', error);
+        return false;
+      }
+      
+    } catch (error) {
+      await this.logError('Error searching and selecting property:', error);
+      await this.takeScreenshot('booking-property-search-error.png');
+      return false;
     }
   }
 
@@ -411,30 +603,6 @@ export class BookingScraper extends BaseScraper {
           errorType: BookingErrorType.TWO_FA_ERROR,
           error: error,
           phase: BookingScrapingPhase.LOGIN,
-          platform: 'booking'
-        }
-      );
-      return false;
-    }
-  }
-
-  async searchProperty(propertyId: string): Promise<boolean> {
-    if (!this.page) throw new Error('Page not initialized');
-
-    try {
-      await this.logInfo('Searching for property', { propertyId });
-      // TODO: Implement property search logic for Booking.com
-      // This would depend on the specific admin panel structure
-      await this.logInfo('Property search not yet implemented for Booking.com');
-      return true;
-    } catch (error) {
-      await dualLogError(
-        `[${new Date().toISOString()}] ${getBookingErrorDescription(BookingErrorType.PROPERTY_NOT_FOUND)}`,
-        {
-          errorType: BookingErrorType.PROPERTY_NOT_FOUND,
-          error: error,
-          phase: BookingScrapingPhase.PROPERTY_SEARCH,
-          propertyId,
           platform: 'booking'
         }
       );
@@ -615,7 +783,7 @@ export class BookingScraper extends BaseScraper {
     }
   }
 
-  async clickReservationDetail(reservationId: string): Promise<boolean> {
+  async clickReservationDetail(reservationId: string, jobId?: string, propertyId?: string): Promise<boolean> {
     if (!this.page) throw new Error('Page not initialized');
 
     try {
@@ -693,8 +861,19 @@ export class BookingScraper extends BaseScraper {
         throw new Error('Reservation detail page did not load as expected.');
       }
       
-      // TODO: Add your reservation detail processing logic
-      await this.logInfo(`Processing reservation detail for ID: ${reservationId}`);
+      // Process reservation details in the new tab
+      const originalPage = this.page;
+      this.page = newPage;
+      
+      try {
+        const success = await this.processReservationDetail(reservationId);
+        if (!success) {
+          await this.logInfo(`Failed to process reservation detail for ${reservationId}`);
+        }
+      } finally {
+        // Restore original page
+        this.page = originalPage;
+      }
       
       // Close the new tab and switch back
       await newPage.close();
@@ -721,6 +900,8 @@ export class BookingScraper extends BaseScraper {
     maxPages?: number;
     timeoutMinutes?: number;
     stopOnLastPage?: boolean;
+    jobId?: string;
+    propertyId?: string;
   } = {}): Promise<{ processed: number; errors: number }> {
     if (!this.page) throw new Error('Page not initialized');
 
@@ -746,7 +927,11 @@ export class BookingScraper extends BaseScraper {
           break;
         }
 
-        const pageResult = await this.processPage(currentPage, totalPages, options);
+        const pageResult = await this.processPage(currentPage, totalPages, {
+          stopOnLastPage: options.stopOnLastPage,
+          jobId: options.jobId,
+          propertyId: options.propertyId
+        });
         processedCount += pageResult.processed;
         errorCount += pageResult.errors;
 
@@ -784,7 +969,11 @@ export class BookingScraper extends BaseScraper {
 
 
 
-  private async processPage(currentPage: number, totalPages: number, options: { stopOnLastPage?: boolean }): Promise<{ processed: number; errors: number }> {
+  private async processPage(currentPage: number, totalPages: number, options: { 
+    stopOnLastPage?: boolean;
+    jobId?: string;
+    propertyId?: string;
+  }): Promise<{ processed: number; errors: number }> {
     await this.logInfo(`Processing page ${currentPage}/${totalPages}`);
 
     // Get and process reservations
@@ -798,23 +987,19 @@ export class BookingScraper extends BaseScraper {
       }
     }
 
-    return await this.processReservations(reservationIds);
+    return await this.processReservations(reservationIds, options.jobId, options.propertyId);
   }
 
-  private async processReservations(reservationIds: string[]): Promise<{ processed: number; errors: number }> {
+  private async processReservations(reservationIds: string[], jobId?: string, propertyId?: string): Promise<{ processed: number; errors: number }> {
     let processedCount = 0;
     let errorCount = 0;
 
     for (const reservationId of reservationIds) {
       try {
-        const success = await this.clickReservationDetail(reservationId);
+        const success = await this.clickReservationDetail(reservationId, jobId, propertyId);
         if (success) {
           processedCount++;
           await this.logInfo(`Successfully processed reservation ${reservationId} (${processedCount} total)`);
-          
-          // TODO: Add reservation detail processing logic here
-          // await this.processReservationDetail(reservationId);
-          
         } else {
           errorCount++;
           await this.logInfo(`Failed to process reservation ${reservationId}`);
@@ -886,11 +1071,21 @@ export class BookingScraper extends BaseScraper {
     try {
       await this.logInfo(`Navigating to ${subSection} page`);
       const mainMenuClicked = await this.expandMainMenu(mainSection);
-      if (!mainMenuClicked) throw new Error(`${mainSection} menu button not found`);
+      if (!mainMenuClicked) {
+        await this.logError(`${mainSection} menu button not found`);
+        await this.takeScreenshot(`booking-${mainSection}-menu-not-found.png`);
+        throw new Error(`${mainSection} menu button not found`);
+      }
+      
       await this.logInfo(`${mainSection} menu expanded`);
       const subMenuClicked = await this.clickSubMenu(subSection);
 
-      if (!subMenuClicked) throw new Error(`${subSection} link not found by any selector or text`);
+      if (!subMenuClicked) {
+        await this.logError(`${subSection} link not found by any selector or text`);
+        await this.takeScreenshot(`booking-${subSection}-link-not-found.png`);
+        throw new Error(`${subSection} link not found by any selector or text`);
+      }
+      
       await this.logInfo(`Clicked on ${subSection} link`);
       await this.waitForNavigationAndVerify(expectedUrl);
       await this.logInfo(`Successfully navigated to ${subSection} page`);
@@ -915,10 +1110,9 @@ export class BookingScraper extends BaseScraper {
 
   async scrapeData(params: ScrapingJobParams): Promise<ScrapingResult> {
     try {
-      await this.logInfo('Starting complete Booking.com scraping process');
+      await this.logInfo('Starting complete Booking.com scraping process', this.page?.url());
       
       // Step 1: Navigate to VCCS Management
-      await this.logInfo('Navigating to VCCS Management...');
       const navigationSuccess = await this.navigateToMenuSection('finance', 'vccs_management', 'vccs_management');
       
       if (!navigationSuccess) {
@@ -942,9 +1136,8 @@ export class BookingScraper extends BaseScraper {
       
       // Optional params
       const traversalOptions = {
-        // maxPages: params.maxPages || 10,
-        // timeoutMinutes: params.timeoutMinutes || 30,
-        // stopOnLastPage: true
+        jobId: params.jobId,
+        propertyId: params.propertyId
       };
       
       await this.logInfo(`Starting reservation traversal with options:`, traversalOptions);
@@ -1345,5 +1538,308 @@ export class BookingScraper extends BaseScraper {
     
     // Default to login failed for other cases
     return BookingErrorType.LOGIN_FAILED;
+  }
+
+  async extractReservationDetails(reservationId: string): Promise<{
+    basicData: any;
+    // paymentData: any;
+    cardData: any;
+  } | null> {
+    if (!this.page) throw new Error('Page not initialized');
+
+    try {
+      // TO DO - work in progress
+      await this.logInfo(`Extracting reservation details for ID: ${reservationId}`);
+
+      // Extract basic reservation data from current detail page
+      const basicData = await this.extractBasicReservationData();
+      if (!basicData) {
+        await this.logError('Failed to extract basic reservation data');
+        return null;
+      }
+
+      await this.logInfo('Basic reservation data extracted successfully');
+
+      // Go back to the previous page
+      await this.logInfo('Going back to VCCS Management list');
+      await this.page.goBack();
+      
+      // Wait for the page to load
+      await this.page.waitForNavigation({ 
+        waitUntil: 'networkidle2', 
+        timeout: 30000 
+      });
+
+      // Find the specific reservation row and click "View card details"
+      await this.logInfo(`Looking for reservation row with ID: ${reservationId}`);
+      
+      const cardDetailsClicked = await this.clickCardDetailsFromRow(reservationId);
+      if (!cardDetailsClicked) {
+        await this.logError('Failed to click "View card details" from reservation row');
+        await this.takeScreenshot('booking-card-details-click-failed.png');
+        return {
+          basicData,
+          cardData: null
+        };
+      }
+
+      // Extract card details from the new page
+      const cardData = await this.extractCardDetailsFromPage(this.page);
+
+      return {
+        basicData,
+        cardData
+      };
+
+    } catch (error) {
+      await this.logError('Error extracting reservation details:', error);
+      await this.takeScreenshot('booking-reservation-details-error.png');
+      return null;
+    }
+  }
+
+  private async clickCardDetailsFromRow(reservationId: string): Promise<boolean> {
+    if (!this.page) throw new Error('Page not initialized');
+
+    try {
+      await this.logInfo(`Looking for "View card details" link for reservation ${reservationId}`);
+
+      // Find the reservation row that contains the specific reservation ID
+      const cardDetailsClicked = await this.page.evaluate((resId) => {
+        // Find all reservation rows
+        const rows = Array.from(document.querySelectorAll('tr.bui-table__row'));
+        
+        for (const row of rows) {
+          // Look for the reservation ID link in this row
+          const reservationLink = row.querySelector(`a[href*="res_id=${resId}"]`);
+          
+          if (reservationLink) {
+            // Found the row with this reservation ID, now look for "View card details" link
+            const cardDetailsLink = row.querySelector('a.pay-hub__view_cc_link');
+            
+            if (cardDetailsLink) {
+              // Click the "View card details" link
+              (cardDetailsLink as HTMLElement).click();
+              return true;
+            }
+          }
+        }
+        
+        return false;
+      }, reservationId);
+
+      if (cardDetailsClicked) {
+        await this.logInfo('Successfully clicked "View card details" link');
+        
+        // Wait for the new page to load
+        await this.page.waitForNavigation({ 
+          waitUntil: 'networkidle2', 
+          timeout: 30000 
+        });
+        
+        return true;
+      } else {
+        await this.logError(`Could not find "View card details" link for reservation ${reservationId}`);
+        await this.takeScreenshot('booking-card-details-link-not-found.png');
+        return false;
+      }
+
+    } catch (error) {
+      await this.logError('Error clicking card details from row:', error);
+      return false;
+    }
+  }
+
+  private async extractCardDetailsFromPage(page: Page): Promise<any> {
+    try {
+      const cardData = await page.evaluate(() => {
+        // Extract credit card information
+        const cardNumberElement = document.querySelector('.credit-card-number');
+        const cardNumber = cardNumberElement?.textContent?.trim() || '';
+
+        const expiryElement = document.querySelector('.credit-card-expiry');
+        const expiry = expiryElement?.textContent?.trim() || '';
+
+        const cvvElement = document.querySelector('.credit-card-cvv');
+        const cvv = cvvElement?.textContent?.trim() || '';
+
+        const cardholderElement = document.querySelector('.credit-card-holder');
+        const cardholder = cardholderElement?.textContent?.trim() || '';
+
+        return {
+          cardNumber,
+          expiry,
+          cvv,
+          cardholder
+        };
+      });
+
+      await this.logInfo('Extracted card details', cardData);
+      return cardData;
+
+    } catch (error) {
+      await this.logError('Failed to extract card details', error);
+      return null;
+    }
+  }
+
+  private async extractBasicReservationData(): Promise<any> {
+    if (!this.page) throw new Error('Page not initialized');
+
+    try {
+      const basicData = await this.page.evaluate(() => {
+        const result: Record<string, string> = {
+          guestName: '',
+          checkInDate: '',
+          checkOutDate: '',
+          bookingAmount: '',
+          reservationId: '',
+          bookedDate: '',
+          commissionAmount: '',
+          roomType: '',
+          reservationStatus: ''
+        };
+
+        const labelMap: Record<string, keyof typeof result> = {
+          'Guest name:': 'guestName',
+          'Check-in': 'checkInDate',
+          'Check-out': 'checkOutDate',
+          'Total price': 'bookingAmount',
+          'Booking number:': 'reservationId',
+          'Received': 'bookedDate',
+          'Commissionable amount:': 'commissionAmount'
+        };
+
+        // Extract all label elements
+        const labels = document.querySelectorAll('.res-content__label');
+        labels.forEach((labelEl) => {
+          const labelText = labelEl.textContent?.trim();
+          const mappedKey = labelMap[labelText as keyof typeof labelMap];
+          if (mappedKey) {
+            const valueEl = labelEl.nextElementSibling;
+            const value = valueEl?.textContent?.trim() || '';
+            result[mappedKey] = value;
+          }
+        });
+
+        // Room type and guest name might be outside label structure
+        const guestEl = document.querySelector('[data-test-id="reservation-overview-name"]');
+        if (guestEl) result.guestName = guestEl.textContent?.trim() || result.guestName;
+
+        const roomTypeEl = document.querySelector('.res-room-title__name');
+        if (roomTypeEl) result.roomType = roomTypeEl.textContent?.trim() || result.roomType;
+        
+        const statusEl = document.querySelector('.res-view-cc__badge span span');
+        if (statusEl) result.reservationStatus = statusEl.textContent?.trim() || '';
+
+        return result;
+      });
+
+      await this.logInfo('Extracted basic reservation data', basicData);
+      return basicData;
+
+    } catch (error) {
+      await this.logError('Failed to extract basic reservation data', error);
+      return null;
+    }
+  }
+
+  async saveReservationToDatabase(
+    jobId: string,
+    propertyId: string,
+    basicData: any,
+    // paymentData: any,
+    cardData: any
+  ): Promise<any> {
+    try {
+      // Validate inputs
+      if (!jobId || !propertyId) {
+        throw new Error('JobId and PropertyId are required');
+      }
+
+      // Parse dates
+      const parseDate = (dateStr: string): Date => {
+        if (!dateStr) return new Date();
+        
+        // Handle different date formats
+        if (dateStr.includes('/')) {
+          // Format: MM/DD/YYYY
+          return new Date(dateStr);
+        } else if (dateStr.includes('-')) {
+          // Format: YYYY-MM-DD
+          return new Date(dateStr);
+        } else {
+          // Try to parse as-is
+          const parsed = new Date(dateStr);
+          return isNaN(parsed.getTime()) ? new Date() : parsed;
+        }
+      };
+
+      // Parse amount
+      const parseAmount = (amountStr: string): number => {
+        if (!amountStr) return 0;
+        const cleaned = amountStr.replace(/[^\d.-]/g, '');
+        const amount = parseFloat(cleaned);
+        return isNaN(amount) ? 0 : -Math.abs(amount); // Negative for charges
+      };
+
+      const jobItemData = {
+        job_id: jobId,
+        property_id: propertyId,
+        guest_name: basicData.guestName || 'Unknown Guest',
+        reservation_id: basicData.bookingNumber || '',
+        confirmation_number: basicData.bookingNumber || '', // Use booking number as confirmation
+        check_in_date: parseDate(basicData.checkInDate),
+        check_out_date: parseDate(basicData.checkOutDate),
+        room_type: basicData.roomType || 'Unknown',
+        booking_amount: parseAmount(basicData.totalPrice),
+        booked_date: parseDate(basicData.receivedDate),
+        has_card_info: !!cardData,
+        // has_payment_info: !!paymentData,
+        // payment_info: paymentData || undefined,
+        card_info: cardData || undefined,
+        reservation_status: basicData.reservationStatus,
+        additional_text: basicData.commissionAmount || undefined
+      };
+
+      // Import jobService dynamically to avoid circular dependencies
+      const { jobService } = await import('../services/job.service.js');
+      const savedItem = await jobService.createJobItem(jobItemData);
+      
+      await this.logInfo(`Saved reservation ${basicData.bookingNumber} to database`);
+      return savedItem;
+
+    } catch (error) {
+      await this.logError(`Failed to save reservation to database:`, error);
+      return null;
+    }
+  }
+
+  async processReservationDetail(reservationId: string, jobId?: string, propertyId?: string): Promise<boolean> {
+    try {
+      await this.logInfo(`Processing reservation detail: ${reservationId}`);
+
+      // Extract all reservation data
+      const extractionResult = await this.extractReservationDetails(reservationId);
+      
+      if (!extractionResult) {
+        await this.logError(`Failed to extract data for reservation ${reservationId}`);
+        return false;
+      }
+
+      const { basicData, /*paymentData,*/ cardData } = extractionResult;
+
+      // Save to database if jobId and propertyId are provided
+      if (jobId && propertyId) {
+        await this.saveReservationToDatabase(jobId, propertyId, basicData, /*paymentData,*/ cardData);
+      }
+
+      await this.logInfo(`Successfully processed reservation ${reservationId}`);
+      return true;
+
+    } catch (error) {
+      await this.logError(`Error processing reservation ${reservationId}:`, error);
+      return false;
+    }
   }
 }

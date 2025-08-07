@@ -67,6 +67,23 @@ export const BOOKING_SELECTORS = {
     reservationAmount: '[data-heading="Amount"]',
     reservationCardholder: '[data-heading="Cardholder"]',
     reservationName: 'span[data-test-id="reservation-overview-name"]'
+  },
+  property: {
+    searchInput: [
+      'input[name="hotel_id"]',
+      'input[placeholder*="property"]',
+      'input[placeholder*="hotel"]',
+      '.property-search input',
+      '.hotel-search input',
+      'input[type="text"]',
+      'input[data-test-id="property-search"]',
+      'input[data-test-id="hotel-search"]'
+    ],
+    item: (propertyId: string) => [
+      `a[href*="hotel_id=${propertyId}"][target="_blank"]`,
+      `a[href*="hotel_id=${propertyId}&"]`,
+      `a[href*="hotel_id=${propertyId}"]:contains("${propertyId}")`,
+    ],
   }
 };
 
@@ -92,4 +109,14 @@ export const TWO_FA_TEXT_PATTERNS = [
   'verification-pulse-link',
   'sms-verification-link',
   'Text message (SMS)'
+];
+
+export const BOOKING_LOGIN_SUCCESS_URLS = [
+  'admin.booking.com',
+  'account.business.booking.com',
+  'partner'
+];
+
+export const BOOKING_LOGIN_EXCLUDE_URLS = [
+  'sign-in'
 ];
