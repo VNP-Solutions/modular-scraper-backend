@@ -159,7 +159,7 @@ export class BookingScraper extends BaseScraper {
    */
   private async handleSuccessfulLogin(propertyId?: string): Promise<void> {
     if (!this.page) throw new Error('Page not initialized');
-    
+
     await this.logInfo('Login successful');
     const cookies = await this.page.cookies();
     fs.writeFileSync(this.cookiesFile, JSON.stringify(cookies, null, 2));
@@ -198,27 +198,34 @@ export class BookingScraper extends BaseScraper {
     return isIncluded && !isExcluded;
   }
 
-  async login(credentials: LoginCredentials, propertyId?: string): Promise<void> {
+  async login(credentials?: LoginCredentials, propertyId?: string, skipAlreadyLogged?: boolean): Promise<void> {
+    console.log('=============', this.page)
     if (!this.page) throw new Error('Page not initialized');
 
+    // Use provided credentials or fall back to class property
+    const loginCredentials = credentials || this.credentials;
+    if (!loginCredentials) {
+      throw new Error('No credentials provided for login. Please provide credentials or set them on the scraper instance.');
+    }
+    
     try {
-      if (this.isAlreadyLoggedIn()) {
+      if (this.isAlreadyLoggedIn() && !skipAlreadyLogged) {
         await this.logInfo('Already logged in');
         await this.handlePropertySearch(propertyId);
         return;
       }
-
+      
       await this.logInfo('Starting login process');
-
+      
       await this.handleCaptcha({
         type: 'browserless_ui',
         sessionUrl: this.sessionUrl,
         timeout: 180000
       });
-
+      
       await this.logInfo('Entering email address');
       
-      const emailEntered = await this.enterEmail(credentials.email);
+      const emailEntered = await this.enterEmail(loginCredentials.email);
       if (!emailEntered) {
         await this.takeScreenshot('booking-no-email-field.png');
         throw new Error('Email field not found');
@@ -226,27 +233,27 @@ export class BookingScraper extends BaseScraper {
 
       await this.logInfo('Clicking Continue with email');
       const continueClicked = await this.clickContinueButton();
-
+      
       if (!continueClicked) {
         throw new Error('Continue Button not found');
       }
-
+      
       await this.takeScreenshot('booking-after-email.png');
       await this.delay(5000);
-
+      
       // Check for captcha after email submission
       await this.handleCaptcha({
         type: 'browserless_ui',
         sessionUrl: this.sessionUrl,
         timeout: 180000
       });
-
+      
       await this.logInfo('Looking for password field');
-   
+      
       let passwordField = null;
       let attempts = 0;
       const maxAttempts = 6;
-
+      
       while (!passwordField && attempts < maxAttempts) {
         for (const selector of BOOKING_SELECTORS.password) {
           try {
@@ -265,49 +272,49 @@ export class BookingScraper extends BaseScraper {
             continue
           }
         }
-
+        
         if (!passwordField) {
           attempts++;
           await this.logInfo(`Attempt ${attempts}/${maxAttempts} - waiting for password field`);
           await this.delay(5000);
         }
       }
-
+      
       if (!passwordField) {
         await this.takeScreenshot('booking-no-password-field.png');
         throw new Error('Password field not found after multiple attempts');
       }
 
       // Enter password using the new function
-      const passwordEntered = await this.enterPassword(credentials.password);
+      const passwordEntered = await this.enterPassword(loginCredentials.password);
       if (!passwordEntered) {
         await this.takeScreenshot('booking-password-entry-failed.png');
         throw new Error('Failed to enter password');
       }
-
+      
       await this.logInfo('Submitting login');
-
+      
       const loginClicked = await this.clickLoginButton();
       if (!loginClicked) {
         throw new Error('Login Button not found');
       }
-
+      
       // Check for captcha after login submission
       await this.handleCaptcha({
         type: 'browserless_ui',
         sessionUrl: this.sessionUrl,
         timeout: 180000
       });      
-
+      
       await this.takeScreenshot('booking-after-password.png');
-
+      
       // Wait for navigation
       await this.logInfo('Waiting for login response');
       await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
-
+      
       // Check for login errors
       await this.checkLoginErrors();
-
+      
       // Handle successful login
       if (this.isAlreadyLoggedIn()) {
         await this.handleSuccessfulLogin(propertyId);
@@ -331,7 +338,7 @@ export class BookingScraper extends BaseScraper {
           throw new Error('2FA verification failed');
         }
       }
-
+      
     } catch (error) {
       await dualLogError(
         `[${new Date().toISOString()}] ${getBookingErrorDescription(BookingErrorType.LOGIN_FAILED)}`,
@@ -371,15 +378,16 @@ export class BookingScraper extends BaseScraper {
     }
   }
 
-  private async checkIfLoginNeeded(): Promise<boolean> {
-    if (!this.page) throw new Error('Page not initialized');
+  private async checkIfLoginNeeded(page?: Page): Promise<boolean> {
+    const currentPage = page || this.page
+    if (!currentPage) throw new Error('Page not initialized');
 
     try {
       const hasLoginForm = await SelectorUtils.trySelectors(
-        this.page,
+        currentPage,
         [...BOOKING_SELECTORS.email, ...BOOKING_SELECTORS.password],
         async (selector: string) => {
-          const el = await this.page!.$(selector);
+          const el = await currentPage!.$(selector);
           return !!el;
         },
         5000
@@ -612,7 +620,6 @@ export class BookingScraper extends BaseScraper {
 
   async clickViewAllVccsToCharge(): Promise<boolean> {
     return await SelectorUtils.findAndClick(this.page!, [BOOKING_SELECTORS.vccs.vccsToChargeLink]);
-
   }
 
   async getPaginationInfo(): Promise<{ currentPage: number; totalPages: number } | null> {
@@ -801,11 +808,14 @@ export class BookingScraper extends BaseScraper {
       });
 
       // Click the reservation link
-      const reservationLink = await this.page.$(`a[href*="res_id=${reservationId}"]`);
-      if (!reservationLink) {
-        throw new Error(`Reservation link with ID ${reservationId} not found`);
-      }
-      await reservationLink.click();
+      // const reservationLink = await this.page.$(`a[href*="res_id=${reservationId}"]`);
+      // if (!reservationLink) {
+      //   throw new Error(`Reservation link with ID ${reservationId} not found`);
+      // }
+      // await reservationLink.click();
+      await SelectorUtils.findAndClick(this.page, [
+        `a[href*="res_id=${reservationId}"]`,
+      ]);
 
       const newPage = await newPagePromise;
       
@@ -866,7 +876,7 @@ export class BookingScraper extends BaseScraper {
       this.page = newPage;
       
       try {
-        const success = await this.processReservationDetail(reservationId);
+        const success = await this.processReservationDetail(reservationId, jobId, propertyId);
         if (!success) {
           await this.logInfo(`Failed to process reservation detail for ${reservationId}`);
         }
@@ -878,7 +888,7 @@ export class BookingScraper extends BaseScraper {
       // Close the new tab and switch back
       await newPage.close();
       await this.logInfo(`Closed reservation detail tab`);
-      
+      console.log("la finaaaal ", this.page.url())
       return true;
     } catch (error) {
       await dualLogError(
@@ -1540,63 +1550,44 @@ export class BookingScraper extends BaseScraper {
     return BookingErrorType.LOGIN_FAILED;
   }
 
-  async extractReservationDetails(reservationId: string): Promise<{
-    basicData: any;
-    // paymentData: any;
-    cardData: any;
-  } | null> {
-    if (!this.page) throw new Error('Page not initialized');
+  // async extractReservationDetails(reservationId: string): Promise<{
+  //   basicData: any;
+  //   // paymentData: any;
+  //   cardData: any;
+  // } | null> {
+  //   if (!this.page) throw new Error('Page not initialized');
 
-    try {
-      // TO DO - work in progress
-      await this.logInfo(`Extracting reservation details for ID: ${reservationId}`);
+  //   try {
+  //     // TO DO - work in progress
+  //     await this.logInfo(`Extracting reservation details for ID: ${reservationId}`);
 
-      // Extract basic reservation data from current detail page
-      const basicData = await this.extractBasicReservationData();
-      if (!basicData) {
-        await this.logError('Failed to extract basic reservation data');
-        return null;
-      }
+  //     // Extract basic reservation data from current detail page
+  //     const basicData = await this.extractBasicReservationData();
+  //     if (!basicData) {
+  //       await this.logError('Failed to extract basic reservation data');
+  //       return null;
+  //     }
 
-      await this.logInfo('Basic reservation data extracted successfully');
+  //     await this.logInfo('Basic reservation data extracted successfully');
 
-      // Go back to the previous page
-      await this.logInfo('Going back to VCCS Management list');
-      await this.page.goBack();
+  //     // Go back to the previous page
+  //     await this.logInfo('Going back to VCCS Management list');
+  //     await this.page.goBack();
       
-      // Wait for the page to load
-      await this.page.waitForNavigation({ 
-        waitUntil: 'networkidle2', 
-        timeout: 30000 
-      });
+  //     // Wait for the page to load
+  //     await this.page.waitForNavigation({ 
+  //       waitUntil: 'networkidle2', 
+  //       timeout: 30000 
+  //     });
 
-      // Find the specific reservation row and click "View card details"
-      await this.logInfo(`Looking for reservation row with ID: ${reservationId}`);
-      
-      const cardDetailsClicked = await this.clickCardDetailsFromRow(reservationId);
-      if (!cardDetailsClicked) {
-        await this.logError('Failed to click "View card details" from reservation row');
-        await this.takeScreenshot('booking-card-details-click-failed.png');
-        return {
-          basicData,
-          cardData: null
-        };
-      }
+  //     return basicData;
 
-      // Extract card details from the new page
-      const cardData = await this.extractCardDetailsFromPage(this.page);
-
-      return {
-        basicData,
-        cardData
-      };
-
-    } catch (error) {
-      await this.logError('Error extracting reservation details:', error);
-      await this.takeScreenshot('booking-reservation-details-error.png');
-      return null;
-    }
-  }
+  //   } catch (error) {
+  //     await this.logError('Error extracting reservation details:', error);
+  //     await this.takeScreenshot('booking-reservation-details-error.png');
+  //     return null;
+  //   }
+  // }
 
   private async clickCardDetailsFromRow(reservationId: string): Promise<boolean> {
     if (!this.page) throw new Error('Page not initialized');
@@ -1632,10 +1623,10 @@ export class BookingScraper extends BaseScraper {
         await this.logInfo('Successfully clicked "View card details" link');
         
         // Wait for the new page to load
-        await this.page.waitForNavigation({ 
-          waitUntil: 'networkidle2', 
-          timeout: 30000 
-        });
+        // await this.page.waitForNavigation({ 
+        //   waitUntil: 'networkidle2', 
+        //   timeout: 30000 
+        // });
         
         return true;
       } else {
@@ -1650,33 +1641,83 @@ export class BookingScraper extends BaseScraper {
     }
   }
 
-  private async extractCardDetailsFromPage(page: Page): Promise<any> {
+  // private async extractCardDetailsFromPage(page: Page): Promise<any> {
+  //   try {
+  //     const cardData = await page.evaluate(() => {
+  //       // Extract credit card information
+  //       const cardNumberElement = document.querySelector('.credit-card-number');
+  //       const cardNumber = cardNumberElement?.textContent?.trim() || '';
+
+  //       const expiryElement = document.querySelector('.credit-card-expiry');
+  //       const expiry = expiryElement?.textContent?.trim() || '';
+
+  //       const cvvElement = document.querySelector('.credit-card-cvv');
+  //       const cvv = cvvElement?.textContent?.trim() || '';
+
+  //       const cardholderElement = document.querySelector('.credit-card-holder');
+  //       const cardholder = cardholderElement?.textContent?.trim() || '';
+
+  //       return {
+  //         cardNumber,
+  //         expiry,
+  //         cvv,
+  //         cardholder
+  //       };
+  //     });
+
+  //     await this.logInfo('Extracted card details', cardData);
+  //     return cardData;
+
+  //   } catch (error) {
+  //     await this.logError('Failed to extract card details', error);
+  //     return null;
+  //   }
+  // }
+  private async extractCardDetailsFromPage(page: Page): Promise<{
+    cardNumber: string;
+    expiry: string;
+    cvv: string;
+    cardholder: string;
+  } | null> {
     try {
       const cardData = await page.evaluate(() => {
-        // Extract credit card information
-        const cardNumberElement = document.querySelector('.credit-card-number');
-        const cardNumber = cardNumberElement?.textContent?.trim() || '';
-
-        const expiryElement = document.querySelector('.credit-card-expiry');
-        const expiry = expiryElement?.textContent?.trim() || '';
-
-        const cvvElement = document.querySelector('.credit-card-cvv');
-        const cvv = cvvElement?.textContent?.trim() || '';
-
-        const cardholderElement = document.querySelector('.credit-card-holder');
-        const cardholder = cardholderElement?.textContent?.trim() || '';
-
-        return {
-          cardNumber,
-          expiry,
-          cvv,
-          cardholder
+        const result: {
+          cardNumber: string;
+          expiry: string;
+          cvv: string;
+          cardholder: string;
+        } = {
+          cardNumber: '',
+          expiry: '',
+          cvv: '',
+          cardholder: ''
         };
+  
+        const labelMap: Record<string, keyof typeof result> = {
+          'Card number:': 'cardNumber',
+          'Expiration Date:': 'expiry',
+          'CVC Code:': 'cvv',
+          "Card holder's name:": 'cardholder'
+        };
+  
+        const rows = document.querySelectorAll('table tr');
+        rows.forEach((row) => {
+          const cells = row.querySelectorAll('td');
+          if (cells.length === 2) {
+            const label = cells[0].textContent?.trim() || '';
+            const value = cells[1].textContent?.trim() || '';
+            const key = labelMap[label];
+            if (key) {
+              result[key] = value;
+            }
+          }
+        });
+  
+        return result;
       });
-
+  
       await this.logInfo('Extracted card details', cardData);
       return cardData;
-
     } catch (error) {
       await this.logError('Failed to extract card details', error);
       return null;
@@ -1692,10 +1733,10 @@ export class BookingScraper extends BaseScraper {
           guestName: '',
           checkInDate: '',
           checkOutDate: '',
-          bookingAmount: '',
+          totalAmount: '',
           reservationId: '',
           bookedDate: '',
-          commissionAmount: '',
+          totalPayout: '',
           roomType: '',
           reservationStatus: ''
         };
@@ -1704,10 +1745,10 @@ export class BookingScraper extends BaseScraper {
           'Guest name:': 'guestName',
           'Check-in': 'checkInDate',
           'Check-out': 'checkOutDate',
-          'Total price': 'bookingAmount',
+          'Total price': 'totalAmount',
           'Booking number:': 'reservationId',
           'Received': 'bookedDate',
-          'Commissionable amount:': 'commissionAmount'
+          'Commissionable amount:': 'totalPayout'
         };
 
         // Extract all label elements
@@ -1792,14 +1833,16 @@ export class BookingScraper extends BaseScraper {
         check_in_date: parseDate(basicData.checkInDate),
         check_out_date: parseDate(basicData.checkOutDate),
         room_type: basicData.roomType || 'Unknown',
-        booking_amount: parseAmount(basicData.totalPrice),
+        booking_amount: parseAmount(basicData.totalAmount),
         booked_date: parseDate(basicData.receivedDate),
         has_card_info: !!cardData,
-        // has_payment_info: !!paymentData,
-        // payment_info: paymentData || undefined,
+        has_payment_info: !!basicData.totalPayout,
+        payment_info: { 
+          total_guest_payment: parseAmount(basicData.totalAmount),
+          total_payout: parseAmount(basicData.totalPayout)
+        },
         card_info: cardData || undefined,
         reservation_status: basicData.reservationStatus,
-        additional_text: basicData.commissionAmount || undefined
       };
 
       // Import jobService dynamically to avoid circular dependencies
@@ -1819,20 +1862,71 @@ export class BookingScraper extends BaseScraper {
     try {
       await this.logInfo(`Processing reservation detail: ${reservationId}`);
 
-      // Extract all reservation data
-      const extractionResult = await this.extractReservationDetails(reservationId);
-      
-      if (!extractionResult) {
-        await this.logError(`Failed to extract data for reservation ${reservationId}`);
-        return false;
+      // Extract reservation basic data
+      // const extractionResult = await this.extractReservationDetails(reservationId);
+      if (!this.page) throw new Error('Page not initialized');
+      const basicData = await this.extractBasicReservationData();
+
+      if (!basicData) {
+        await this.logError('Failed to extract basic reservation data');
+        // return null;
       }
 
-      const { basicData, /*paymentData,*/ cardData } = extractionResult;
+      
+      await this.logInfo('Basic reservation data extracted successfully');
 
+      // Go back to the previous page
+      await this.logInfo('Going back to VCCS Management list');
+      // await this.page.goBack(); // throws captcha & 2fa
+      
+      // I do this workaround in order to avoid captcha and 2fa
+      await this.navigateToMenuSection('finance', 'vccs_management', 'vccs_management');
+      await this.clickViewAllVccsToCharge();
+
+      // Wait for the page to load
+      await this.page.waitForNavigation({ 
+        waitUntil: 'networkidle2', 
+        timeout: 30000 
+      });
+      
+      // Listen for new page creation for reservation view
+      const newPagePromise = new Promise<Page>((resolve) => {
+        this.browser!.once('targetcreated', async (target) => {
+          if (target.type() === 'page') {
+            const newPage = await target.page();
+            await newPage!.bringToFront();
+            resolve(newPage!);
+          }
+        });
+      });
+
+      const cardDetailsClick = this.clickCardDetailsFromRow(reservationId)
+      if (!cardDetailsClick) {
+        await this.logError(`Failed to extract data for reservation ${reservationId}`);
+        // return false;
+      }
+
+      const newPage = await newPagePromise;
+      const originalPage = this.page; // keep original page 
+      this.page = newPage; // switch page 
+      
+      // Check and handle login on the new page
+      const needsLogin = await this.checkIfLoginNeeded(newPage);
+      if (needsLogin) {
+        // skip already logged in check
+        await this.login(this.credentials, undefined, true);
+      }
+
+      console.log('dupa loginn', this.page.url())
+      const cardData = await this.extractCardDetailsFromPage(this.page)
+      // const { basicData, /*paymentData,*/ cardData } = extractionResult;
+      console.log('ce am pana acum: ', basicData, cardData)
       // Save to database if jobId and propertyId are provided
       if (jobId && propertyId) {
         await this.saveReservationToDatabase(jobId, propertyId, basicData, /*paymentData,*/ cardData);
       }
+      
+      await this.page.goBack();
 
       await this.logInfo(`Successfully processed reservation ${reservationId}`);
       return true;

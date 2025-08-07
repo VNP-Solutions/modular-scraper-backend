@@ -41,6 +41,7 @@ export abstract class BaseScraper {
   protected platform: string;
   protected baseUrl: string;
   protected jobId?: string;
+  protected credentials?: LoginCredentials;
 
   constructor(platform: string, baseUrl: string) {
     this.platform = platform;
@@ -91,6 +92,7 @@ export abstract class BaseScraper {
 
       // Step 2: Login if credentials provided
       if (params.credentials) {
+        this.credentials = params.credentials;
         await this.logInfo('Performing login');
         await this.login(params.credentials, params.propertyId);
         

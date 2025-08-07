@@ -37,7 +37,17 @@ export class SelectorUtils {
   static async findAndClick(page: Page, selectors: string[]): Promise<boolean> {
     return this.trySelectors(page, selectors, async (selector) => {
       try {
-        await page.click(selector);
+        await page.waitForSelector(selector, { visible: true, timeout: 5000 });
+        const element = await page.$(selector);
+        if (!element) return false;
+  
+        const box = await element.boundingBox();
+        if (!box) return false;
+  
+        // Simulate human interaction
+        await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+        await new Promise(resolve => setTimeout(resolve, 100));
+        await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
         return true;
       } catch (error) {
         return false;
