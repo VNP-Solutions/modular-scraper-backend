@@ -144,8 +144,8 @@ process.on("unhandledRejection", async (reason, promise) => {
   
   if (reason && typeof reason === 'object') {
     console.error("Reason constructor:", reason.constructor.name);
-    console.error("Reason message:", reason.message || "No message available");
-    console.error("Reason stack:", reason.stack || "No stack available");
+    console.error("Reason message:", (reason as any).message || "No message available");
+    console.error("Reason stack:", (reason as any).stack || "No stack available");
   }
   
   console.error("=== END DEBUG ===");

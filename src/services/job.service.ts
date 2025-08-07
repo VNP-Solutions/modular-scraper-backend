@@ -141,6 +141,8 @@ export class JobService {
    * Get expedia_id from job's property
    */
   async getExpediaIdFromJob(jobId: string): Promise<{
+      user_email: string;
+      user_password: string;
     expediaId: string;
   } | null> {
     try {
@@ -178,6 +180,8 @@ export class JobService {
       );
       return {
         expediaId: property.expedia_id,
+        user_email: property.user_email || '',
+        user_password: property.user_password || '',
       };
     } catch (error) {
       console.error(`Error getting expedia_id for job ${jobId}:`, error);
