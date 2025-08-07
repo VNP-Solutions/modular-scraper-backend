@@ -107,21 +107,7 @@ export abstract class BaseScraper {
         }
       }
 
-      // // Check for multi-property account after successful login
-      // const isMultiProperty = await this.checkMultiPropertyAccount();
-        
-      // // If multi-property account and propertyId is provided, search for the property
-      // if (isMultiProperty && propertyId) {
-      //   await this.searchAndSelectProperty(propertyId);
-      // }
-
-      // // Step 3: Search for property if provided
-      // if (params.propertyId) {
-      //   await this.logInfo('Searching for property', { propertyId: params.propertyId });
-      //   await this.searchProperty(params.propertyId);
-      // }
-
-      // Step 4: Scrape data
+      // Step 3: Scrape data
       await this.logInfo('Starting data scraping');
       const result = await this.scrapeData(params);
 
