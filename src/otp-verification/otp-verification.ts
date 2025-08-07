@@ -43,7 +43,9 @@ async function handleOtpVerification(
 
       // Send email notification for verification page error
       if (jobId) {
-        try {        } catch (emailError) {
+        try {
+          // TODO: Implement navigation error notification email
+        } catch (emailError) {
           await dualLogError(
             "Failed to send verification page error notification:",
             emailError
@@ -90,7 +92,9 @@ async function handleOtpVerification(
 
           // Send email notification for verification code error
           if (jobId) {
-            try {            } catch (emailError) {
+            try {
+              // TODO: Implement error notification email
+            } catch (emailError) {
               await dualLogError(
                 "Failed to send verification code error notification:",
                 emailError
@@ -115,7 +119,9 @@ async function handleOtpVerification(
 
           // Send email notification for verify button error
           if (jobId) {
-            try {            } catch (emailError) {
+            try {
+              // TODO: Implement error notification email
+            } catch (emailError) {
               await dualLogError(
                 "Failed to send verify button error notification:",
                 emailError
@@ -137,7 +143,9 @@ async function handleOtpVerification(
 
           // Send email notification for disabled button error
           if (jobId) {
-            try {            } catch (emailError) {
+            try {
+              // TODO: Implement error notification email
+            } catch (emailError) {
               await dualLogError(
                 "Failed to send disabled button error notification:",
                 emailError
@@ -156,7 +164,9 @@ async function handleOtpVerification(
 
         // Send email notification for primary verification error
         if (jobId) {
-          try {          } catch (emailError) {
+          try {
+            // TODO: Implement error notification email
+          } catch (emailError) {
             await dualLogError(
               "Failed to send primary verification error notification:",
               emailError
@@ -186,7 +196,9 @@ async function handleOtpVerification(
 
           // Send email notification for no fallback options
           if (jobId) {
-            try {            } catch (emailError) {
+            try {
+              // TODO: Implement error notification email
+            } catch (emailError) {
               await dualLogError(
                 "Failed to send fallback options error notification:",
                 emailError
@@ -543,7 +555,9 @@ async function handleOtpVerification(
 
         // Send email notification for fallback verification error
         if (jobId) {
-          try {          } catch (emailError) {
+          try {
+            // TODO: Implement error notification email
+          } catch (emailError) {
             await dualLogError(
               "Failed to send fallback verification error notification:",
               emailError
@@ -561,37 +575,15 @@ async function handleOtpVerification(
     await waitForNavigation(page, loadingTimeout);
 
     console.log("Login successful!");
-  } catch (error) {
-    console.error("Error in handleOtpVerification:", error);
-    await closeBrowserOnError(browser);
-    const loadingTimeout = await timeoutManager.getLoadingTimeout(jobId);
-    try {
-      await page.waitForNavigation({
-        waitUntil: "networkidle0",
-        timeout: loadingTimeout,
-      });
-      console.log("Login successful!");
-    } catch (error: any) {
-      await dualLogError("Error waiting for navigation after OTP:", error);
-
-      // Send email notification for navigation error
-      if (jobId) {
-        try {        } catch (emailError) {
-          await dualLogError(
-            "Failed to send navigation error notification:",
-            emailError
-          );
-        }
-      }
-
-      throw error;
-    }
   } catch (error: any) {
     await dualLogError("Error in handleOtpVerification:", error);
+    await closeBrowserOnError(browser);
 
     // Send email notification for general OTP verification error
     if (jobId) {
-      try {      } catch (emailError) {
+      try {
+        // TODO: Implement error notification email
+      } catch (emailError) {
         await dualLogError(
           "Failed to send general OTP error notification:",
           emailError

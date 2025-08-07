@@ -5,6 +5,7 @@ import app from "./app/app.js";
 import loadToken from "./common/load-token.js";
 import { workerPool } from "./common/worker-pool.js";
 import { jobQueueUrlService } from "./services/job-queue-url.service.js";
+import { bookingTrustCron } from "./services/booking-trust-cron.service.js";
 dotenv.config();
 
 const port: number = parseInt(process.env.PORT || "3000");
@@ -59,6 +60,10 @@ const gracefulShutdown = async (signal: string): Promise<void> => {
   console.log(`Received ${signal}. Starting graceful shutdown...`);
 
   try {
+    // Stop booking trust cron scheduler
+    console.log("Stopping booking trust scheduler...");
+    bookingTrustCron.stop();
+
     // Shutdown worker pool first
     console.log("Shutting down worker pool...");
     await workerPool.shutdown();
@@ -84,6 +89,10 @@ app.listen(port, async () => {
   try {
     await connectDB();
 
+    // Start booking trust scheduler after database connection
+    console.log("Starting booking trust verification scheduler...");
+    bookingTrustCron.start();
+
     // Initialize job queue URLs after database connection
     await initializeJobQueueUrls();
 
@@ -97,6 +106,7 @@ app.listen(port, async () => {
         workerPool.getStatus().totalWorkers
       } workers`
     );
+    console.log("Booking trust verification scheduler started - running every hour");
   } catch (err) {
     console.log("Server cannot be connected because of the error:");
     console.log(err);
@@ -106,12 +116,38 @@ app.listen(port, async () => {
 
 // * Handle uncaught exceptions
 process.on("uncaughtException", async (error) => {
-  console.error("Uncaught Exception:", error);
+  console.error("=== UNCAUGHT EXCEPTION DEBUG ===");
+  console.error("Error type:", typeof error);
+  console.error("Error constructor:", error.constructor.name);
+  console.error("Error message:", error.message || "No message available");
+  console.error("Error stack:", error.stack || "No stack available");
+  console.error("Raw error:", error);
+  console.error("Error keys:", Object.keys(error));
+  console.error("Error values:", Object.values(error));
+  
+  try {
+    console.error("Stringified error:", JSON.stringify(error, null, 2));
+  } catch (e) {
+    console.error("Failed to stringify error:", e);
+  }
+  
+  console.error("=== END DEBUG ===");
   await gracefulShutdown("uncaughtException");
 });
 
 // * Handle unhandled promise rejections
 process.on("unhandledRejection", async (reason, promise) => {
-  console.error("Unhandled Rejection at:", promise, "reason:", reason);
+  console.error("=== UNHANDLED REJECTION DEBUG ===");
+  console.error("Promise:", promise);
+  console.error("Reason type:", typeof reason);
+  console.error("Reason:", reason);
+  
+  if (reason && typeof reason === 'object') {
+    console.error("Reason constructor:", reason.constructor.name);
+    console.error("Reason message:", reason.message || "No message available");
+    console.error("Reason stack:", reason.stack || "No stack available");
+  }
+  
+  console.error("=== END DEBUG ===");
   await gracefulShutdown("unhandledRejection");
 });

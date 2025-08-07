@@ -10,6 +10,8 @@ import { specs, swaggerUi } from "../config/swagger.js";
 import { getAccess, getOauth2Callback } from "../get-access/access.js";
 import { Job, JobStatus } from "../models/job.model.js";
 import { jobService } from "../services/job.service.js";
+import { bookingTrustScheduler } from "../services/booking-trust-scheduler.service.js";
+import { bookingTrustCron } from "../services/booking-trust-cron.service.js";
 
 // Import route modules
 import authRoutes from "../routes/shared/auth.routes.js";
@@ -541,13 +543,13 @@ app.post("/api/booking/run-job", (async (
   res: express.Response
 ) => {
   try {
-    const { jobId, portfolioId, propertyId, startDate, endDate } = req.body;
+    const { jobId, startDate, endDate } = req.body;
 
     // Validate required parameters
-    if (!jobId || !portfolioId || !startDate || !endDate) {
+    if (!jobId || !startDate || !endDate) {
       return res.status(400).json({
         status: 400,
-        message: "jobId, portfolioId, startDate and endDate are required in request body",
+        message: "jobId, startDate and endDate are required in request body",
       });
     }
 
@@ -569,8 +571,8 @@ app.post("/api/booking/run-job", (async (
       });
     }
 
-    // 2. Get booking_id and credentials from job's property
-    console.log(`Getting booking_id for booking job ${jobId}...`);
+    // 2. Get booking_id, credentials, and job details from job's property
+    console.log(`Getting booking_id and job details for booking job ${jobId}...`);
     const jobData = await jobService.getBookingIdFromJob(jobId);
 
     if (!jobData || !jobData.bookingId) {
@@ -587,7 +589,14 @@ app.post("/api/booking/run-job", (async (
       });
     }
 
-    const { bookingId, user_email, user_password } = jobData;
+    if (!jobData.portfolioId || !jobData.propertyId) {
+      return res.status(400).json({
+        status: 400,
+        message: `Cannot retrieve valid portfolioId or propertyId for job ${jobId}. Job may be missing required references.`,
+      });
+    }
+
+    const { bookingId, user_email, user_password, portfolioId, propertyId } = jobData;
 
     console.log(`Using booking_id: ${bookingId} for booking scraping`);
 
@@ -786,7 +795,14 @@ app.post("/api/booking/rerun-failed-job", (async (
       });
     }
 
-    const { bookingId, user_email, user_password } = jobData;
+    if (!jobData.portfolioId || !jobData.propertyId) {
+      return res.status(400).json({
+        status: 400,
+        message: `Cannot retrieve valid portfolioId or propertyId for job ${jobId}. Job may be missing required references.`,
+      });
+    }
+
+    const { bookingId, user_email, user_password, portfolioId, propertyId } = jobData;
 
     console.log(
       `Rerunning failed booking job ${jobId} (attempt ${updatedJob.retries_attempted}/${updatedJob.max_retries}) with booking_id: ${bookingId}`
@@ -796,6 +812,8 @@ app.post("/api/booking/rerun-failed-job", (async (
     const workerJobData: WorkerJobData = {
       jobType: JobType.BookingRerunFailed,
       jobId,
+      portfolioId,
+      propertyId,
       startDate,
       endDate,
       bookingId,
@@ -1071,6 +1089,169 @@ app.get(
     }
   }
 );
+
+// Booking Trust Scheduler Endpoints
+
+// API to run booking trust scheduler manually
+app.post("/api/booking/trust-scheduler/run", (async (
+  req: express.Request,
+  res: express.Response
+) => {
+  try {
+    const stats = await bookingTrustScheduler.runTrustScheduler();
+    
+    res.status(200).json({
+      status: 200,
+      message: "Booking trust scheduler completed successfully",
+      stats,
+    });
+  } catch (err: any) {
+    console.error("Error in /api/booking/trust-scheduler/run:", err);
+    res.status(500).json({
+      status: 500,
+      message: "Error running booking trust scheduler",
+      error: err.message,
+    });
+  }
+}) as any);
+
+// API to get booking trust scheduler status
+app.get("/api/booking/trust-scheduler/status", (
+  req: express.Request,
+  res: express.Response
+) => {
+  try {
+    const status = bookingTrustScheduler.getSchedulerStatus();
+    
+    res.status(200).json({
+      status: 200,
+      message: "Trust scheduler status retrieved successfully",
+      data: status,
+    });
+  } catch (err: any) {
+    console.error("Error in /api/booking/trust-scheduler/status:", err);
+    res.status(500).json({
+      status: 500,
+      message: "Error retrieving trust scheduler status",
+      error: err.message,
+    });
+  }
+});
+
+// API to manually verify a specific property's trust status
+app.post("/api/booking/trust-scheduler/verify/:propertyId", (async (
+  req: express.Request,
+  res: express.Response
+) => {
+  try {
+    const { propertyId } = req.params;
+    
+    if (!propertyId) {
+      return res.status(400).json({
+        status: 400,
+        message: "Property ID is required",
+      });
+    }
+    
+    const result = await bookingTrustScheduler.verifySpecificProperty(propertyId);
+    
+    res.status(200).json({
+      status: 200,
+      message: "Property trust verification completed",
+      result,
+    });
+  } catch (err: any) {
+    console.error(`Error in /api/booking/trust-scheduler/verify/${req.params.propertyId}:`, err);
+    res.status(500).json({
+      status: 500,
+      message: "Error verifying property trust status",
+      error: err.message,
+    });
+  }
+}) as any);
+
+// API to get properties eligible for trust verification
+app.get("/api/booking/trust-scheduler/eligible-properties", (async (
+  req: express.Request,
+  res: express.Response
+) => {
+  try {
+    const properties = await bookingTrustScheduler.getPropertiesForTrustVerification();
+    
+    res.status(200).json({
+      status: 200,
+      message: "Eligible properties retrieved successfully",
+      data: {
+        totalProperties: properties.length,
+        properties: properties.map(p => ({
+          id: p._id,
+          property_name: p.property_name,
+          booking_id: p.booking_id,
+          booking_trusted_status: p.booking_trusted_status,
+          booking_last_login: p.booking_last_login,
+        })),
+      },
+    });
+  } catch (err: any) {
+    console.error("Error in /api/booking/trust-scheduler/eligible-properties:", err);
+    res.status(500).json({
+      status: 500,
+      message: "Error retrieving eligible properties",
+      error: err.message,
+    });
+  }
+}) as any);
+
+// Booking Trust Cron Management Endpoints
+
+// API to get booking trust cron status
+app.get("/api/booking/trust-scheduler/cron/status", (
+  req: express.Request,
+  res: express.Response
+) => {
+  try {
+    const cronStatus = bookingTrustCron.getStatus();
+    const schedulerStatus = bookingTrustScheduler.getSchedulerStatus();
+    
+    res.status(200).json({
+      status: 200,
+      message: "Trust scheduler cron status retrieved successfully",
+      data: {
+        cron: cronStatus,
+        scheduler: schedulerStatus,
+      },
+    });
+  } catch (err: any) {
+    console.error("Error in /api/booking/trust-scheduler/cron/status:", err);
+    res.status(500).json({
+      status: 500,
+      message: "Error retrieving cron service status",
+      error: err.message,
+    });
+  }
+});
+
+// API to manually trigger cron verification (for testing)
+app.post("/api/booking/trust-scheduler/cron/trigger", (async (
+  req: express.Request,
+  res: express.Response
+) => {
+  try {
+    await bookingTrustCron.runManual();
+    
+    res.status(200).json({
+      status: 200,
+      message: "Manual booking trust verification triggered successfully",
+    });
+  } catch (err: any) {
+    console.error("Error in /api/booking/trust-scheduler/cron/trigger:", err);
+    res.status(500).json({
+      status: 500,
+      message: "Error triggering manual verification",
+      error: err.message,
+    });
+  }
+}) as any);
 
 // * Global error handle middleware
 app.use((err: any, req: any, res: any, next: any) => {
