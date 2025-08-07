@@ -6,6 +6,7 @@ import { BaseScraper, LoginCredentials, CaptchaHandlerOptions, TwoFactorAuthOpti
 import { timeoutManager } from "../common/timeout-manager.js";
 import handleBookingOtpVerification from "../otp-verification/booking-otp-verification.js";
 import { SelectorUtils } from "../common/selector-utils.js";
+import { BOOKING_SELECTORS, CAPTCHA_PATTERNS, TWO_FA_PATTERNS, TWO_FA_TEXT_PATTERNS } from "../common/booking-selectors.js";
 import { 
   BookingErrorType, 
   BookingScrapingPhase, 
@@ -18,57 +19,6 @@ export class BookingScraper extends BaseScraper {
   private cookiesFile = 'booking-admin-cookies.json';
   private browserlessToken: string;
   private sessionUrl?: string;
-
-  // Keep selectors in booking-scraper as exportable const
-  public static readonly SELECTORS = {
-    email: [
-      'input[name="username"]',
-      'input[name="loginname"]',
-      '#username',
-      'input[type="email"]',
-      'input[placeholder*="email"]'
-    ],
-    password: [
-      'input[type="password"]',
-      '#password',
-      'input[name="password"]',
-      'input[name="passwd"]',
-      'input[placeholder*="password"]'
-    ],
-    loginButton: [
-      'button[type="submit"]',
-      'input[type="submit"]',
-    ],
-    continueButton: [
-      'button[type="submit"]',
-      'button:contains("Next")',
-      'button:contains("Continue")',
-      'input[type="submit"]'
-    ],
-    tfaSelectors: [
-      'input[autocomplete="one-time-code"]',
-      'input[type="text"][maxlength="6"]',
-      'input[name="pin"]',
-      'input[name="code"]',
-      'input[placeholder*="code"]'
-    ],
-    errorMessages: [
-      '.error-block',
-      '.error-message',
-      '.alert-error',
-      '.error',
-      '.login-error'
-    ],
-    navigation: {
-      financeMenu: 'li[data-nav-tag="finance"] button[data-tid="item-link"]',
-      vccsManagementLink: 'li[data-nav-tag="vccs_management"] a[data-tid="item-link"]',
-      financeMenuContainer: 'li[data-nav-tag="finance"]',
-      vccsManagementContainer: 'li[data-nav-tag="vccs_management"]'
-    },
-    vccs: {
-      vccsToChargeLink: 'a[href*="route=vccs_to_charge"]'
-    }
-  } as const;
 
   constructor() {
     super('booking', 'https://admin.booking.com');
@@ -143,7 +93,7 @@ export class BookingScraper extends BaseScraper {
 
       } catch (liveUrlError) {
         await this.logError("Failed to generate live URL:", liveUrlError);
-        console.log("Live URL generation failed - will use session URL instead");
+        await this.logInfo("Live URL generation failed - will use session URL instead");
         this.sessionUrl = `https://production-sfo.browserless.io?token=${this.browserlessToken}#/live/${session.id}`;
       }
 
@@ -230,7 +180,7 @@ export class BookingScraper extends BaseScraper {
       const maxAttempts = 6;
 
       while (!passwordField && attempts < maxAttempts) {
-        for (const selector of BookingScraper.SELECTORS.password) {
+        for (const selector of BOOKING_SELECTORS.password) {
           try {
             passwordField = await this.page.$(selector);
             if (passwordField) {
@@ -340,13 +290,13 @@ export class BookingScraper extends BaseScraper {
   }
 
   async handleCaptcha(options?: CaptchaHandlerOptions): Promise<boolean> {
-    if (!this.page) return false;
+    const currentPage = options?.page || this.page;
+
+    if (!currentPage) return false;
 
     try {
-      const pageContent = await this.page.content();
-      const hasCaptcha = pageContent.includes("Let's make sure you're human") || 
-                        pageContent.includes("Choose all the clocks") ||
-                        (pageContent.includes("Confirm") && pageContent.includes("clocks"));
+      const pageContent = await currentPage.content();
+      const hasCaptcha = CAPTCHA_PATTERNS.some(pattern => pattern.test(pageContent));
 
       if (!hasCaptcha) {
         await this.logInfo('No captcha detected');
@@ -378,26 +328,21 @@ export class BookingScraper extends BaseScraper {
   }
 
   async handle2FA(options?: TwoFactorAuthOptions): Promise<boolean> {
-    if (!this.page || !this.browser) return false;
+    const currentPage = options?.page || this.page;
+
+    if (!currentPage || !this.browser) return false;
 
     try {
-      const currentUrl = this.page.url();
+      const currentUrl = currentPage.url();
       
       // Check if we're on a verification-related page
-      const needsVerification = currentUrl.includes('2fa') || 
-                               currentUrl.includes('verify') || 
-                               currentUrl.includes('authentication') ||
-                               currentUrl.includes('sign-in/verification') ||
-                               currentUrl.includes('select-phone');
+      const needsVerification = TWO_FA_PATTERNS.some(pattern => currentUrl.includes(pattern));
 
       if (!needsVerification) {
         // Check page content for verification indicators
-        const pageContent = await this.page.content();
-        const hasVerificationContent = pageContent.includes('Verification method') ||
-                                     pageContent.includes('nw-signin-verification') ||
-                                     pageContent.includes('verification-pulse-link') ||
-                                     pageContent.includes('sms-verification-link');
-        
+        const pageContent = await currentPage.content();
+        const hasVerificationContent = TWO_FA_TEXT_PATTERNS.some(text => pageContent.includes(text));
+
         if (!hasVerificationContent) {
           await this.logInfo('No 2FA required');
           return true;
@@ -408,7 +353,7 @@ export class BookingScraper extends BaseScraper {
       await this.takeScreenshot('booking-2fa-page.png');
 
       try {
-        await handleBookingOtpVerification(this.browser, this.page);
+        await handleBookingOtpVerification(this.browser, currentPage);
         await this.logInfo('Automated OTP verification completed successfully');
         return true;
       } catch (otpError) {
@@ -428,17 +373,17 @@ export class BookingScraper extends BaseScraper {
         }
 
         // Find OTP input field for manual entry
-        for (const selector of BookingScraper.SELECTORS.tfaSelectors) {
+        for (const selector of BOOKING_SELECTORS.tfaSelectors) {
           try {
-            await this.page.waitForSelector(selector, { timeout: 10000 });
+            await currentPage.waitForSelector(selector, { timeout: 10000 });
             await this.logInfo(`Found 2FA field for manual entry: ${selector}`);
             
             const code = await this.prompt2FA(options?.timeout || 120000);
-            await this.page.type(selector, code, { delay: 100 });
-            await this.page.keyboard.press('Enter');
+            await currentPage.type(selector, code, { delay: 100 });
+            await currentPage.keyboard.press('Enter');
             await this.logInfo('Manual 2FA code submitted');
             
-            await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }).catch(() => {
+            await currentPage.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }).catch(() => {
               this.logInfo('Navigation timeout after manual 2FA');
             });
             
@@ -498,57 +443,459 @@ export class BookingScraper extends BaseScraper {
   }
 
   async clickViewAllVccsToCharge(): Promise<boolean> {
-    return await SelectorUtils.findAndClick(this.page!, [BookingScraper.SELECTORS.vccs.vccsToChargeLink]);
+    return await SelectorUtils.findAndClick(this.page!, [BOOKING_SELECTORS.vccs.vccsToChargeLink]);
+
+  }
+
+  async getPaginationInfo(): Promise<{ currentPage: number; totalPages: number } | null> {
+    if (!this.page) throw new Error('Page not initialized');
+
+    try {
+      const currentPageElement = await this.page.$(BOOKING_SELECTORS.pagination.currentPageIndicator);
+      const totalPagesElement = await this.page.$(BOOKING_SELECTORS.pagination.totalPagesIndicator);
+
+      if (currentPageElement && totalPagesElement) {
+        const currentPage = await currentPageElement.evaluate(el => parseInt(el.textContent?.trim() || '1'));
+        const totalPages = await totalPagesElement.evaluate(el => parseInt(el.textContent?.trim() || '1'));
+        
+        await this.logInfo(`Pagination info: Current page ${currentPage} of ${totalPages}`);
+        return { currentPage, totalPages };
+      }
+      
+      return null;
+    } catch (error) {
+      await this.logInfo(`No pagination found or error reading pagination info: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      return null;
+    }
+  }
+
+  async goToNextPage(): Promise<boolean> {
+    return await SelectorUtils.findAndClick(this.page!, [BOOKING_SELECTORS.pagination.nextPageButton]);
+  }
+
+  async goToPreviousPage(): Promise<boolean> {
+    return await SelectorUtils.findAndClick(this.page!, [BOOKING_SELECTORS.pagination.previousPageButton]);
+  }
+
+  async goToPage(pageNumber: number): Promise<boolean> {
+    if (!this.page) throw new Error('Page not initialized');
+
+    try {
+      await this.logInfo(`Attempting to navigate to page ${pageNumber}`);
+      
+      // Try to find and click the specific page number
+      const pageSelector = `${BOOKING_SELECTORS.pagination.pageNumbers}[data-page="${pageNumber}"]`;
+      const pageElement = await this.page.$(pageSelector);
+      
+      if (pageElement) {
+        await pageElement.click();
+        await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 10000 });
+        await this.logInfo(`Successfully navigated to page ${pageNumber}`);
+        return true;
+      }
+      
+      await this.logInfo(`Page ${pageNumber} not found, using next/previous navigation`);
+      return false;
+    } catch (error) {
+      await this.logInfo(`Error navigating to page ${pageNumber}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      return false;
+    }
+  }
+
+  async getReservationRows(): Promise<string[]> {
+    if (!this.page) throw new Error('Page not initialized');
+
+    try {
+      await this.logInfo('Getting reservation rows from current page...');
+      
+      // Wait for the table to load
+      await this.page.waitForSelector(BOOKING_SELECTORS.reservations.reservationRow, { timeout: 10000 });
+      
+      // Get all reservation IDs from the current page
+      const reservationIds = await this.page.evaluate((selectors) => {
+        const rows = document.querySelectorAll(selectors.reservationRow);
+        const ids: string[] = [];
+        
+        rows.forEach((row) => {
+          const idElement = row.querySelector(selectors.reservationId);
+          if (idElement) {
+            const href = idElement.getAttribute('href');
+            if (href) {
+              // Extract reservation ID from href
+              const match = href.match(/res_id=(\d+)/);
+              if (match) {
+                ids.push(match[1]);
+              }
+            }
+          }
+        });
+        
+        return ids;
+      }, BOOKING_SELECTORS.reservations);
+
+      await this.logInfo(`Found ${reservationIds.length} reservations on current page`);
+      return reservationIds;
+
+    } catch (error) {
+      await dualLogError(
+        `[${new Date().toISOString()}] ${getBookingErrorDescription(BookingErrorType.DOM_NOT_FOUND)}`,
+        {
+          errorType: BookingErrorType.DOM_NOT_FOUND,
+          error: error,
+          phase: BookingScrapingPhase.NAVIGATION,
+          platform: 'booking',
+          action: 'get_reservation_rows',
+          selector: BOOKING_SELECTORS.reservations.reservationRow
+        }
+      );
+      return [];
+    }
+  }
+
+  async getReservationData(): Promise<Array<{
+    id: string;
+    chargeBefore: string;
+    amount: string;
+    cardholder: string;
+  }>> {
+    if (!this.page) throw new Error('Page not initialized');
+
+    try {
+      await this.logInfo('Extracting reservation data from current page...');
+      
+      const reservationData = await this.page.evaluate(() => {
+        const rows = document.querySelectorAll(BOOKING_SELECTORS.reservations.reservationRow);
+        const data: Array<{
+          id: string;
+          chargeBefore: string;
+          amount: string;
+          cardholder: string;
+        }> = [];
+        
+        rows.forEach((row) => {
+          const idElement = row.querySelector(BOOKING_SELECTORS.reservations.reservationId);
+          const chargeBeforeElement = row.querySelector(BOOKING_SELECTORS.reservations.reservationChargeBefore);
+          const amountElement = row.querySelector(BOOKING_SELECTORS.reservations.reservationAmount);
+          const cardholderElement = row.querySelector(BOOKING_SELECTORS.reservations.reservationCardholder);
+          
+          if (idElement) {
+            const href = idElement.getAttribute('href');
+            if (href) {
+              const match = href.match(/res_id=(\d+)/);
+              if (match) {
+                data.push({
+                  id: match[1],
+                  chargeBefore: chargeBeforeElement?.textContent?.trim() || '',
+                  amount: amountElement?.textContent?.trim() || '',
+                  cardholder: cardholderElement?.textContent?.trim() || ''
+                });
+              }
+            }
+          }
+        });
+        
+        return data;
+      });
+
+      await this.logInfo(`Extracted data for ${reservationData.length} reservations`);
+      return reservationData;
+
+    } catch (error) {
+      await dualLogError(
+        `[${new Date().toISOString()}] ${getBookingErrorDescription(BookingErrorType.DOM_NOT_FOUND)}`,
+        {
+          errorType: BookingErrorType.DOM_NOT_FOUND,
+          error: error,
+          phase: BookingScrapingPhase.NAVIGATION,
+          platform: 'booking',
+          action: 'get_reservation_data'
+        }
+      );
+      return [];
+    }
+  }
+
+  async clickReservationDetail(reservationId: string): Promise<boolean> {
+    if (!this.page) throw new Error('Page not initialized');
+
+    try {
+      await this.logInfo(`Attempting to open reservation detail for ID: ${reservationId}`);
+
+      // Listen for new page creation for reservation view
+      const newPagePromise = new Promise<Page>((resolve) => {
+        this.browser!.once('targetcreated', async (target) => {
+          if (target.type() === 'page') {
+            const newPage = await target.page();
+            await newPage!.bringToFront();
+            resolve(newPage!);
+          }
+        });
+      });
+
+      // Click the reservation link
+      const reservationLink = await this.page.$(`a[href*="res_id=${reservationId}"]`);
+      if (!reservationLink) {
+        throw new Error(`Reservation link with ID ${reservationId} not found`);
+      }
+      await reservationLink.click();
+
+      const newPage = await newPagePromise;
+      
+      // Check on captcha
+      let captchaHandled = await this.handleCaptcha({
+        type: 'browserless_ui',
+        sessionUrl: this.sessionUrl,
+        timeout: 180000,
+        page: newPage
+      });
+  
+      if (!captchaHandled) {
+        await this.logInfo('Captcha not solved in new tab');
+        return false;
+      }
+
+      // Check on 2fa
+      const twoFASuccess = await this.handle2FA({ page: newPage });
+
+      if (!twoFASuccess) {
+        await this.logInfo('2FA not solved in new tab');
+        return false;
+      }
+
+      // Check on captcha
+      captchaHandled = await this.handleCaptcha({
+        type: 'browserless_ui',
+        sessionUrl: this.sessionUrl,
+        timeout: 180000,
+        page: newPage
+      });
+  
+      if (!captchaHandled) {
+        await this.logInfo('Captcha not solved in new tab');
+        return false;
+      }
+      
+      try {
+        await newPage.waitForSelector(BOOKING_SELECTORS.reservations.reservationName, { timeout: 15000 });
+        this.logInfo('Reservation detail page loaded successfully.');
+      } catch (error) {
+        await dualLogError(
+          `[${new Date().toISOString()}] ${getBookingErrorDescription(BookingErrorType.RESERVATION_NOT_FOUND)}`,
+          {
+            errorType: BookingErrorType.RESERVATION_NOT_FOUND,
+            error: error,
+            phase: BookingScrapingPhase.NAVIGATION,
+            platform: 'booking',
+            action: 'click_reservation_detail',
+          }
+        );
+        await this.takeScreenshot(`reservation-detail-failure.png`);
+        throw new Error('Reservation detail page did not load as expected.');
+      }
+      
+      // TODO: Add your reservation detail processing logic
+      await this.logInfo(`Processing reservation detail for ID: ${reservationId}`);
+      
+      // Close the new tab and switch back
+      await newPage.close();
+      await this.logInfo(`Closed reservation detail tab`);
+      
+      return true;
+    } catch (error) {
+      await dualLogError(
+        `[${new Date().toISOString()}] ${getBookingErrorDescription(BookingErrorType.DOM_NOT_FOUND)}`,
+        {
+          errorType: BookingErrorType.DOM_NOT_FOUND,
+          error: error,
+          phase: BookingScrapingPhase.NAVIGATION,
+          platform: 'booking',
+          reservationId: reservationId,
+          action: 'click_reservation_detail'
+        }
+      );
+      return false;
+    }
+  }
+
+  async traverseAllReservations(options: {
+    maxPages?: number;
+    timeoutMinutes?: number;
+    stopOnLastPage?: boolean;
+  } = {}): Promise<{ processed: number; errors: number }> {
+    if (!this.page) throw new Error('Page not initialized');
+
+    let processedCount = 0;
+    let errorCount = 0;
+    const startTime = Date.now();
+
+    try {
+      // Get pagination info
+      await this.logInfo('Getting pagination information...');
+      const paginationInfo = await this.getPaginationInfo();
+      
+      const totalPages = paginationInfo ? paginationInfo.totalPages : 1;
+      const maxPagesToProcess = options.maxPages ? Math.min(options.maxPages, totalPages) : totalPages;
+      
+      await this.logInfo(`Starting reservation traversal: ${totalPages} total pages available, processing up to ${maxPagesToProcess} pages`);
+
+      // Process each page
+      for (let currentPage = 1; currentPage <= maxPagesToProcess; currentPage++) {
+        // Check timeout
+        if (this.isTimeoutReached(startTime, options.timeoutMinutes)) {
+          await this.logInfo(`Timeout reached (${options.timeoutMinutes || 60} minutes), stopping traversal`);
+          break;
+        }
+
+        const pageResult = await this.processPage(currentPage, totalPages, options);
+        processedCount += pageResult.processed;
+        errorCount += pageResult.errors;
+
+        // Navigate to next page (except for the last page)
+        if (currentPage < maxPagesToProcess) {
+          const navigationSuccess = await this.navigateToNextPage();
+          if (!navigationSuccess) {
+            await this.logInfo('No next page available, stopping traversal');
+            break;
+          }
+        }
+      }
+
+      await this.logInfo(`Reservation traversal completed. Processed: ${processedCount}, Errors: ${errorCount}`);
+      return { processed: processedCount, errors: errorCount };
+
+    } catch (error) {
+      await dualLogError(
+        `[${new Date().toISOString()}] ${getBookingErrorDescription(BookingErrorType.UNKNOWN)}`,
+        {
+          errorType: BookingErrorType.UNKNOWN,
+          error: error,
+          phase: BookingScrapingPhase.NAVIGATION,
+          platform: 'booking',
+          action: 'traverse_all_reservations',
+          processedCount,
+          errorCount
+        }
+      );
+      return { processed: processedCount, errors: errorCount };
+    }
+  }
+
+
+
+
+
+  private async processPage(currentPage: number, totalPages: number, options: { stopOnLastPage?: boolean }): Promise<{ processed: number; errors: number }> {
+    await this.logInfo(`Processing page ${currentPage}/${totalPages}`);
+
+    // Get and process reservations
+    const reservationIds = await this.getReservationRows();
+    
+    if (reservationIds.length === 0) {
+      await this.logInfo('No reservations found on current page');
+      if (options.stopOnLastPage) {
+        await this.logInfo('Stopping traversal due to empty page');
+        return { processed: 0, errors: 0 };
+      }
+    }
+
+    return await this.processReservations(reservationIds);
+  }
+
+  private async processReservations(reservationIds: string[]): Promise<{ processed: number; errors: number }> {
+    let processedCount = 0;
+    let errorCount = 0;
+
+    for (const reservationId of reservationIds) {
+      try {
+        const success = await this.clickReservationDetail(reservationId);
+        if (success) {
+          processedCount++;
+          await this.logInfo(`Successfully processed reservation ${reservationId} (${processedCount} total)`);
+          
+          // TODO: Add reservation detail processing logic here
+          // await this.processReservationDetail(reservationId);
+          
+        } else {
+          errorCount++;
+          await this.logInfo(`Failed to process reservation ${reservationId}`);
+        }
+      } catch (error) {
+        errorCount++;
+        await this.logInfo(`Error processing reservation ${reservationId}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      }
+    }
+
+    return { processed: processedCount, errors: errorCount };
+  }
+
+  private isTimeoutReached(startTime: number, timeoutMinutes?: number): boolean {
+    const timeoutMs = (timeoutMinutes || 60) * 60 * 1000;
+    return Date.now() - startTime > timeoutMs;
+  }
+
+  private async navigateToNextPage(): Promise<boolean> {
+    const nextPageSuccess = await this.goToNextPage();
+    if (nextPageSuccess) {
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+    return nextPageSuccess;
+  }
+
+  private async expandMainMenu(mainSection: string): Promise<boolean> {
+    const mainMenuSelectors = BOOKING_SELECTORS.navigation.mainMenu(mainSection);
+    return SelectorUtils.findAndClick(this.page!, mainMenuSelectors);
+  }
+
+  private async clickSubMenu(subSection: string): Promise<boolean> {
+    // Submenu time to render
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    const subMenuSelectors = BOOKING_SELECTORS.navigation.subMenu(subSection);
+    const clicked = await SelectorUtils.findAndClick(this.page!, subMenuSelectors);
+
+    if (!clicked) {
+      // Fallback: try to find by visible text
+      const textFound = await this.page!.evaluate((text) => {
+        const links = Array.from(document.querySelectorAll('a[data-tid="item-link"]'));
+        for (const link of links) {
+          if (link.textContent && link.textContent.toLowerCase().includes(text.toLowerCase())) {
+            (link as HTMLElement).click();
+            return true;
+          }
+        }
+        return false;
+      }, subSection.replace(/_/g, ' '));
+      return !!textFound;
+    }
+    return true;
+  }
+
+  private async waitForNavigationAndVerify(expectedUrl: string): Promise<void> {
+    if (!this.page) throw new Error('Page not initialized');
+    await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }).catch(() => {
+      this.logInfo('Navigation timeout after vccs management page');
+    });
+    
+    const currentUrl = this.page!.url();
+    if (!currentUrl.includes(expectedUrl)) {
+      throw new Error(`Navigation failed - expected ${expectedUrl}, got: ${currentUrl}`);
+    }
   }
 
   async navigateToMenuSection(mainSection: string, subSection: string, expectedUrl: string): Promise<boolean> {
     if (!this.page) throw new Error('Page not initialized');
-
     try {
       await this.logInfo(`Navigating to ${subSection} page`);
-      
-      // Wait for the main section menu to be available
-      const mainMenuSelector = `li[data-nav-tag="${mainSection}"]`;
-      await this.page.waitForSelector(mainMenuSelector, { timeout: 30000 });
-      await this.logInfo(`${mainSection} navigation menu found`);
-
-      // Click on the main section menu item to expand it
-      const mainMenuButton = await this.page.$(`${mainMenuSelector} button[data-tid="item-link"]`);
-      if (!mainMenuButton) {
-        throw new Error(`${mainSection} menu button not found`);
-      }
-      
-      await mainMenuButton.click();
+      const mainMenuClicked = await this.expandMainMenu(mainSection);
+      if (!mainMenuClicked) throw new Error(`${mainSection} menu button not found`);
       await this.logInfo(`${mainSection} menu expanded`);
-      
-      // Wait for the submenu to appear
-      const subMenuSelector = `li[data-nav-tag="${subSection}"]`;
-      await this.page.waitForSelector(subMenuSelector, { timeout: 10000 });
-      await this.logInfo(`${subSection} menu item found`);
+      const subMenuClicked = await this.clickSubMenu(subSection);
 
-      // Click on the sub-section link
-      const subSectionLink = await this.page.$(`${subMenuSelector} a[data-tid="item-link"]`);
-      if (!subSectionLink) {
-        throw new Error(`${subSection} link not found`);
-      }
-
-      await subSectionLink.click();
+      if (!subMenuClicked) throw new Error(`${subSection} link not found by any selector or text`);
       await this.logInfo(`Clicked on ${subSection} link`);
-
-      // Wait for navigation to complete
-      await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 });
-      
-      // Verify we're on the correct page
-      const currentUrl = this.page.url();
-      if (!currentUrl.includes(expectedUrl)) {
-        throw new Error(`Navigation failed - expected ${expectedUrl}, got: ${currentUrl}`);
-      }
-
+      await this.waitForNavigationAndVerify(expectedUrl);
       await this.logInfo(`Successfully navigated to ${subSection} page`);
       await this.takeScreenshot(`booking-${subSection}-page.png`);
-      
       return true;
-
     } catch (error) {
       await dualLogError(
         `[${new Date().toISOString()}] ${getBookingErrorDescription(BookingErrorType.DOM_NOT_FOUND)}`,
@@ -568,37 +915,89 @@ export class BookingScraper extends BaseScraper {
 
   async scrapeData(params: ScrapingJobParams): Promise<ScrapingResult> {
     try {
-      await this.logInfo('Starting data scraping for Booking.com');
+      await this.logInfo('Starting complete Booking.com scraping process');
       
-      // TODO: Implement actual scraping logic based on requirements
-      // This is a placeholder implementation
+      // Step 1: Navigate to VCCS Management
+      await this.logInfo('Navigating to VCCS Management...');
+      const navigationSuccess = await this.navigateToMenuSection('finance', 'vccs_management', 'vccs_management');
+      
+      if (!navigationSuccess) {
+        throw new Error('Failed to navigate to VCCS Management page');
+      }
+      
+      await this.logInfo('Successfully reached VCCS Management page');
+      
+      // Step 2: Click "View all" button to access VCCS to charge
+      await this.logInfo('Clicking "View all" button...');
+      const viewAllSuccess = await this.clickViewAllVccsToCharge();
+      
+      if (!viewAllSuccess) {
+        throw new Error('Failed to click "View all" button or navigate to VCCS to charge page');
+      }
+      
+      await this.logInfo('Successfully navigated to VCCS to charge page');
+      
+      // Step 3: Traverse all reservations
+      await this.logInfo('Starting reservation traversal...');
+      
+      // Optional params
+      const traversalOptions = {
+        // maxPages: params.maxPages || 10,
+        // timeoutMinutes: params.timeoutMinutes || 30,
+        // stopOnLastPage: true
+      };
+      
+      await this.logInfo(`Starting reservation traversal with options:`, traversalOptions);
+      
+      const traversalResult = await this.traverseAllReservations(traversalOptions);
+      
+      await this.logInfo('Traversal Results:');
+      await this.logInfo(`Successfully processed: ${traversalResult.processed} reservations`);
+      await this.logInfo(`Errors encountered: ${traversalResult.errors}`);
+      
+      // Step 4: Take final screenshot
+      await this.takeScreenshot('booking-scraping-complete.png');
+      
+      // Prepare the result data
       const data = {
         platform: 'booking',
         timestamp: new Date().toISOString(),
         jobId: params.jobId,
         propertyId: params.propertyId,
-        // Add actual scraped data here
+        navigation: {
+          vccsManagement: navigationSuccess,
+          viewAllButton: viewAllSuccess
+        },
+        traversal: {
+          processed: traversalResult.processed,
+          errors: traversalResult.errors,
+          options: traversalOptions
+        }
       };
-      await this.takeScreenshot('booking-scraping-complete.png');
+      
+      await this.logInfo('Booking.com scraping completed successfully');
       
       return {
         success: true,
         data,
-        screenshots: ['booking-scraping-complete.png']
       };
+      
     } catch (error) {
-    
       await dualLogError(
-        `[${new Date().toISOString()}] ${getBookingErrorDescription(BookingErrorType.PRICE_NOT_FOUND)}`,
+        `[${new Date().toISOString()}] ${getBookingErrorDescription(BookingErrorType.UNKNOWN)}`,
         {
-          errorType: BookingErrorType.PRICE_NOT_FOUND,
+          errorType: BookingErrorType.UNKNOWN,
           error: error,
-          phase: BookingScrapingPhase.PRICE_EXTRACTION,
+          phase: BookingScrapingPhase.NAVIGATION,
           jobId: params.jobId,
           propertyId: params.propertyId,
-          platform: 'booking'
+          platform: 'booking',
+          action: 'scrape_data'
         }
       );
+      
+      await this.takeScreenshot(`booking-scraping-error-${Date.now()}.png`);
+      
       return {
         success: false,
         error: error instanceof Error ? error.message : 'Scraping failed',
@@ -638,7 +1037,11 @@ export class BookingScraper extends BaseScraper {
         args: [
           "--no-sandbox",
           "--disable-dev-shm-usage",
-          "--disable-background-timer-throttling"
+          "--disable-background-timer-throttling",
+          "--disable-backgrounding-occluded-windows",
+          "--disable-renderer-backgrounding",
+          "--enable-javascript",
+          "--disable-web-security"
         ],
       };
   
@@ -826,19 +1229,19 @@ export class BookingScraper extends BaseScraper {
   }
 
   private async enterEmail(email: string): Promise<boolean> {
-    return await SelectorUtils.findAndType(this.page!, [...BookingScraper.SELECTORS.email], email);
+    return await SelectorUtils.findAndType(this.page!, [...BOOKING_SELECTORS.email], email);
   }
 
   private async enterPassword(password: string): Promise<boolean> {
-    return await SelectorUtils.findAndType(this.page!, [...BookingScraper.SELECTORS.password], password);
+    return await SelectorUtils.findAndType(this.page!, [...BOOKING_SELECTORS.password], password);
   }
 
   private async clickLoginButton(): Promise<boolean> {
-    return await SelectorUtils.findAndClick(this.page!, [...BookingScraper.SELECTORS.loginButton]);
+    return await SelectorUtils.findAndClick(this.page!, [...BOOKING_SELECTORS.loginButton]);
   }
 
   private async clickContinueButton(): Promise<boolean> {
-    return await SelectorUtils.findAndClick(this.page!, [...BookingScraper.SELECTORS.continueButton]);
+    return await SelectorUtils.findAndClick(this.page!, [...BOOKING_SELECTORS.continueButton]);
   }
 
   private async checkLoginErrors(): Promise<void> {
@@ -849,7 +1252,7 @@ export class BookingScraper extends BaseScraper {
       // Check for error messages
       const hasError = await SelectorUtils.trySelectors(
         this.page!,
-        [...BookingScraper.SELECTORS.errorMessages],
+        [...BOOKING_SELECTORS.errorMessages],
         async (selector: string) => {
           const element = await this.page!.$(selector);
           if (element) {

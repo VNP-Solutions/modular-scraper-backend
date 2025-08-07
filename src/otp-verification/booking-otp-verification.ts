@@ -11,6 +11,7 @@ import {
   waitForNavigation,
   closeBrowserOnError
 } from "./otp-common-utils.js";
+import { TWO_FA_TEXT_PATTERNS } from "../common/booking-selectors.js";
 
 dotenv.config();
 
@@ -30,10 +31,10 @@ async function handleBookingOtpVerification(
     await dualLogInfo("Looking for Booking.com verification method selection page...");
 
     // Check if we're on the verification method selection page
-    const isVerificationPage = await page.evaluate(() => {
-      return document.querySelector('.nw-step-header')?.textContent?.includes('Verification method') ||
-             document.querySelector('.nw-signin-verification') !== null;
-    });
+    const isVerificationPage = await page.evaluate((patterns) => {
+      const bodyText = document.body.innerText.toLowerCase();
+      return patterns.some(p => bodyText.includes(p.toLowerCase()));
+    }, TWO_FA_TEXT_PATTERNS);
 
     if (!isVerificationPage) {
       await dualLogInfo("Not on verification method selection page, checking for direct OTP input...");
@@ -106,11 +107,11 @@ async function handleBookingOtpVerification(
     let otpInputSelector = null;
     const otpSelectors = [
       // Original selectors
+      'input[autocomplete="one-time-code"]',
       'input[type="text"][maxlength="6"]',
       'input[name="pin"]',
       'input[name="code"]',
       'input[placeholder*="code" i]',
-      'input[autocomplete="one-time-code"]',
       'input[inputmode="numeric"]',
       // Additional comprehensive selectors
       'input[type="text"][maxlength="5"]',
@@ -297,7 +298,14 @@ async function selectCorrectPhoneNumber(page: Page /* , jobId?: string */): Prom
     await delay(3000);
     
     // Check if we're on the phone selection page and find the correct phone
-    const phoneSelected = await page.evaluate((targetLastThree) => {
+    const phoneSelected = await page.evaluate((targetLastThree, ourContact) => {
+      // Define the validation function inside the browser context
+      function validatePhoneLastThreeDigits(phoneText: string, targetContact: string): boolean {
+        const targetLastThree = targetContact.slice(-3);
+        const phoneLastThree = phoneText.replace(/\D/g, '').slice(-3);
+        return phoneLastThree === targetLastThree;
+      }
+      
       try {
         // First, look for select dropdown with phone options
         const phoneSelect = document.querySelector('select[name="selected_phone"]') as HTMLSelectElement;
@@ -305,7 +313,7 @@ async function selectCorrectPhoneNumber(page: Page /* , jobId?: string */): Prom
           const options = Array.from(phoneSelect.options);
           for (const option of options) {
             const phoneText = option.textContent?.trim() || '';
-            if (phoneText.includes('*') && validatePhoneLastThreeDigits(phoneText, process.env.OUR_CONTACT || "01828704004")) {
+            if (phoneText.includes('*') && validatePhoneLastThreeDigits(phoneText, ourContact)) {
               phoneSelect.value = option.value;
               phoneSelect.dispatchEvent(new Event('change', { bubbles: true }));
               return { success: true, phoneNumber: phoneText, method: 'dropdown' };
@@ -319,7 +327,7 @@ async function selectCorrectPhoneNumber(page: Page /* , jobId?: string */): Prom
         for (const element of phoneElements) {
           const phoneText = element.textContent?.trim() || '';
           if (phoneText.includes('*') || phoneText.includes('••')) {
-            if (validatePhoneLastThreeDigits(phoneText, process.env.OUR_CONTACT || "01828704004")) {
+            if (validatePhoneLastThreeDigits(phoneText, ourContact)) {
               // Look for associated click element (button, link, etc.)
               const clickableParent = element.closest('button, a, [role="button"], .clickable') as HTMLElement;
               if (clickableParent) {
@@ -338,7 +346,7 @@ async function selectCorrectPhoneNumber(page: Page /* , jobId?: string */): Prom
         const clickableElements = document.querySelectorAll('button, a, [role="button"], .clickable');
         for (const element of clickableElements) {
           const text = element.textContent?.trim() || '';
-          if ((text.includes('*') || text.includes('••')) && validatePhoneLastThreeDigits(text, process.env.OUR_CONTACT || "01828704004")) {
+          if ((text.includes('*') || text.includes('••')) && validatePhoneLastThreeDigits(text, ourContact)) {
             (element as HTMLElement).click();
             return { success: true, phoneNumber: text, method: 'click_fallback' };
           }
@@ -348,7 +356,7 @@ async function selectCorrectPhoneNumber(page: Page /* , jobId?: string */): Prom
       } catch (error) {
         return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
       }
-    }, ourLastThree);
+    }, ourLastThree, ourContact);
     
     if (phoneSelected.success) {
       await dualLogInfo(`Selected phone number: ${phoneSelected.phoneNumber} using method: ${phoneSelected.method}`);

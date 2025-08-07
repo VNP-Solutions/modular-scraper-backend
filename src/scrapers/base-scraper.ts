@@ -9,11 +9,13 @@ export interface CaptchaHandlerOptions {
   type: 'manual' | 'automatic' | 'browserless_ui';
   timeout?: number;
   sessionUrl?: string;
+  page?: Page;
 }
 
 export interface TwoFactorAuthOptions {
   timeout?: number;
   prompt?: (message: string) => Promise<string>;
+  page?: Page;
 }
 
 export interface ScrapingJobParams {
@@ -22,6 +24,8 @@ export interface ScrapingJobParams {
   startDate?: string;
   endDate?: string;
   credentials?: LoginCredentials;
+  maxPages?: number;
+  timeoutMinutes?: number;
 }
 
 export interface ScrapingResult {
