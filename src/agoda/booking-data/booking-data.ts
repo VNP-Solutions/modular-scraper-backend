@@ -1,7 +1,7 @@
 import { Browser, Page } from "puppeteer";
 import fs from "fs";
 import path from "path";
-import * as XLSX from "xlsx";
+import csv from "csv-parser";
 import { delay } from "../../common/delay.js";
 import { dualLogError, dualLogInfo } from "../../common/log-helper.js";
 import { progressManager } from "../../common/progress-manager.js";
@@ -242,30 +242,21 @@ export async function getAgodaBookingData(
     // Read and parse the CSV file
     await dualLogInfo("Reading and parsing CSV file...");
 
-    // Read the file as a workbook using XLSX
-    const workbook = XLSX.readFile(csvFilePath);
-    const sheetName = workbook.SheetNames[0];
-    const worksheet = workbook.Sheets[sheetName];
-
-    // Convert to JSON with header row as keys
-    const records = XLSX.utils.sheet_to_json(worksheet, {
-      header: 1,
-      defval: "",
+    // Read the CSV file and convert to JSON array
+    const formattedRecords: any[] = await new Promise((resolve, reject) => {
+      const results: any[] = [];
+      fs.createReadStream(csvFilePath)
+        .pipe(csv())
+        .on("data", (data) => results.push(data))
+        .on("end", () => {
+          // Filter out empty records
+          const filteredResults = results.filter((record) =>
+            Object.values(record).some((value) => value !== "")
+          );
+          resolve(filteredResults);
+        })
+        .on("error", (error) => reject(error));
     });
-
-    // Convert array of arrays to array of objects with proper headers
-    const headers = records[0] as string[];
-    const dataRows = records.slice(1) as any[][];
-
-    const formattedRecords = dataRows
-      .map((row) => {
-        const obj: any = {};
-        headers.forEach((header, index) => {
-          obj[header] = row[index] || "";
-        });
-        return obj;
-      })
-      .filter((record) => Object.values(record).some((value) => value !== ""));
 
     await dualLogInfo(
       `Successfully parsed CSV file with ${formattedRecords.length} records`
@@ -276,10 +267,11 @@ export async function getAgodaBookingData(
     console.log(`📊 Total records: ${formattedRecords.length}`);
     console.log(`📁 CSV file path: ${csvFilePath}`);
     console.log(`💾 File size: ${fileSizeKB} KB`);
-    console.log(`📄 Raw headers count: ${headers.length}`);
 
     if (formattedRecords.length > 0) {
-      console.log("📋 CSV Columns:", Object.keys(formattedRecords[0]));
+      const headers = Object.keys(formattedRecords[0]);
+      console.log(`📄 Headers count: ${headers.length}`);
+      console.log("📋 CSV Columns:", headers);
       console.log("📝 First few records:");
       console.log(JSON.stringify(formattedRecords.slice(0, 3), null, 2));
 
