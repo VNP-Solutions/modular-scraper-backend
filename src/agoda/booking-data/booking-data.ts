@@ -44,6 +44,9 @@ export async function getAgodaBookingData(
   endDate: string,
   jobId?: string
 ): Promise<any[]> {
+  let newPage: Page | undefined;
+  let client: any;
+
   try {
     // Check if scraping is paused before starting
     await scrapingStateManager.waitWhilePaused();
@@ -153,8 +156,9 @@ export async function getAgodaBookingData(
       fs.mkdirSync(downloadPath, { recursive: true });
     }
 
-    // Configure download behavior
-    await (page as any)._client.send("Page.setDownloadBehavior", {
+    // Configure download behavior using CDP session
+    client = await newPage.createCDPSession();
+    await client.send("Page.setDownloadBehavior", {
       behavior: "allow",
       downloadPath: downloadPath,
     });
@@ -219,6 +223,11 @@ export async function getAgodaBookingData(
       throw new Error("CSV file not found after download");
     }
 
+    // Get file size for logging
+    const fileStats = fs.statSync(csvFilePath);
+    const fileSizeKB = Math.round(fileStats.size / 1024);
+    await dualLogInfo(`CSV file size: ${fileSizeKB} KB`);
+
     // Update progress
     // if (jobId) {
     //   await progressManager.updateJobProgress(
@@ -264,12 +273,24 @@ export async function getAgodaBookingData(
 
     // Console log the data for debugging
     console.log("=== AGODA BOOKING DATA ===");
-    console.log(`Total records: ${formattedRecords.length}`);
-    console.log("First few records:");
-    console.log(JSON.stringify(formattedRecords.slice(0, 3), null, 2));
+    console.log(`📊 Total records: ${formattedRecords.length}`);
+    console.log(`📁 CSV file path: ${csvFilePath}`);
+    console.log(`💾 File size: ${fileSizeKB} KB`);
+    console.log(`📄 Raw headers count: ${headers.length}`);
 
     if (formattedRecords.length > 0) {
-      console.log("CSV Columns:", Object.keys(formattedRecords[0]));
+      console.log("📋 CSV Columns:", Object.keys(formattedRecords[0]));
+      console.log("📝 First few records:");
+      console.log(JSON.stringify(formattedRecords.slice(0, 3), null, 2));
+
+      // Log sample of different types of data
+      const sampleRecord = formattedRecords[0];
+      console.log("🔍 Sample record structure:");
+      Object.entries(sampleRecord).forEach(([key, value]) => {
+        console.log(`  ${key}: ${typeof value} = "${value}"`);
+      });
+    } else {
+      console.log("⚠️ No records found in CSV file");
     }
     console.log("=== END AGODA BOOKING DATA ===");
 
@@ -296,9 +317,30 @@ export async function getAgodaBookingData(
       `Successfully retrieved and processed ${formattedRecords.length} booking records`
     );
 
+    // Clean up CDP session and close the page
+    try {
+      await client.detach();
+      await newPage.close();
+    } catch (cleanupError) {
+      await dualLogError("Error during cleanup:", cleanupError);
+    }
+
     return formattedRecords;
   } catch (error: any) {
     await dualLogError(`Error retrieving Agoda booking data:`, error);
+
+    // Clean up resources in error case
+    try {
+      if (client) {
+        await client.detach();
+      }
+      if (newPage) {
+        await delay(10000);
+        await newPage.close();
+      }
+    } catch (cleanupError) {
+      await dualLogError("Error during error cleanup:", cleanupError);
+    }
 
     // Update progress with error
     if (jobId) {

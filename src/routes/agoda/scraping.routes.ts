@@ -136,7 +136,7 @@ const router = express.Router();
  *                 summary: Missing Agoda credentials
  *                 value:
  *                   status: 400
- *                   message: "Cannot retrieve valid expediaUsername or expediaPassword for job 507f1f77bcf86cd799439011. Property may not have expediaUsername or expediaPassword assigned."
+ *                   message: "Cannot retrieve valid agodaUsername or agodaPassword for job 507f1f77bcf86cd799439011. Property may not have agodaUsername or agodaPassword assigned."
  *       404:
  *         description: Job not found
  *         content:
@@ -268,7 +268,7 @@ router.post("/property-run-job", (async (
       });
     }
 
-    // 2. Get expedia_id from job's property
+    // 2. Get agoda_id from job's property
     console.log(`Getting agoda_id for job ${jobId}...`);
     const propertyData = await jobService.getAgodaIdFromJob(jobId);
     const propertyCredentials =
@@ -287,7 +287,7 @@ router.post("/property-run-job", (async (
     ) {
       return res.status(400).json({
         status: 400,
-        message: `Cannot retrieve valid expediaUsername or expediaPassword for job ${jobId}. Property may not have expediaUsername or expediaPassword assigned.`,
+        message: `Cannot retrieve valid agodaUsername or agodaPassword for job ${jobId}. Property may not have agodaUsername or agodaPassword assigned.`,
       });
     }
 
@@ -322,7 +322,7 @@ router.post("/property-run-job", (async (
     scrapingStateManager.startScraping(agodaId, jobId, startDate, endDate);
 
     try {
-      // 7. Run the main scraping function with expedia_id
+      // 7. Run the main scraping function with agoda_id
       await agoda(
         agodaId,
         startDate,
@@ -392,7 +392,7 @@ router.post("/property-run-job", (async (
       throw scrapingError;
     }
   } catch (err: any) {
-    console.error("Error in /api/expedia/property-run-job:", err);
+    console.error("Error in /api/agoda/property-run-job:", err);
 
     // Send email notification for API error// Ensure job is marked as failed and state manager is stopped
     try {
