@@ -77,16 +77,14 @@ The system automatically sends error notifications to email addresses specified 
 // Example job with email notifications
 const job = {
   // ... other job fields
-  watcher_emails: [
-    "manager@company.com",
-    "developer@company.com"
-  ]
+  watcher_emails: ["manager@company.com", "developer@company.com"],
 };
 ```
 
 ### Email Error Coverage
 
 Email notifications are sent for:
+
 - Login/authentication failures
 - Browser crashes and timeouts
 - Data extraction errors
@@ -296,11 +294,226 @@ npm run build:start
 ### Testing Email Notifications
 
 ```javascript
-import { emailNotifier } from './src/common/email-notifier.js';
+import { emailNotifier } from "./src/common/email-notifier.js";
 
 // Test email configuration
-await emailNotifier.sendTestEmail('test@example.com');
+await emailNotifier.sendTestEmail("test@example.com");
 ```
+
+## API Documentation
+
+The application provides RESTful APIs for external integration and monitoring.
+
+### Email Notification API
+
+Send error notifications to configured watcher emails for specific jobs. This API allows other developers to integrate email notifications into their workflows.
+
+#### **Base URL**
+
+```
+http://localhost:3000/api/notifications
+```
+
+#### **Endpoints**
+
+##### 1. Send Error Notification
+
+**POST** `/email/error`
+
+Send an error notification email for a specific job to configured watcher emails.
+
+**Request Body:**
+
+```json
+{
+  "jobId": "string (required)",
+  "errorMessage": "string (required)",
+  "errorDetails": "object (optional)",
+  "additionalData": {
+    "stage": "string (optional)",
+    "progressPercentage": "number (optional)",
+    "lastProcessedDate": "string (optional)"
+  }
+}
+```
+
+**Example Requests:**
+
+_Basic Error Notification:_
+
+```bash
+curl -X POST http://localhost:3000/api/notifications/email/error \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jobId": "job_12345",
+    "errorMessage": "Database connection failed"
+  }'
+```
+
+_Detailed Error with Context:_
+
+```bash
+curl -X POST http://localhost:3000/api/notifications/email/error \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jobId": "job_12345",
+    "errorMessage": "Scraping process failed during data extraction",
+    "errorDetails": {
+      "stack": "Error: Timeout waiting for element...",
+      "code": "TIMEOUT_ERROR"
+    },
+    "additionalData": {
+      "stage": "data_scraping",
+      "progressPercentage": 65.5,
+      "lastProcessedDate": "2025-01-02"
+    }
+  }'
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "message": "Email notification sent successfully",
+  "jobId": "job_12345",
+  "timestamp": "2025-01-03T10:30:00.000Z"
+}
+```
+
+**Status Codes:**
+
+- `200`: Email sent successfully
+- `400`: Missing required fields (jobId or errorMessage)
+- `404`: Job not found with the provided ID
+- `500`: Internal server error
+
+##### 2. Test Email Configuration
+
+**GET** `/email/test`
+
+Test if the email notification system is properly configured.
+
+**Example Request:**
+
+```bash
+curl -X GET http://localhost:3000/api/notifications/email/test
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "message": "Email notification system is ready",
+  "configured": true
+}
+```
+
+#### **JavaScript/TypeScript Integration**
+
+```javascript
+// Example integration in Node.js/TypeScript
+async function sendErrorNotification(jobId, error, stage = null) {
+  try {
+    const response = await fetch(
+      "http://localhost:3000/api/notifications/email/error",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          jobId: jobId,
+          errorMessage: error.message,
+          errorDetails: {
+            stack: error.stack,
+            name: error.name,
+          },
+          additionalData: {
+            stage: stage,
+            timestamp: new Date().toISOString(),
+          },
+        }),
+      }
+    );
+
+    const result = await response.json();
+    console.log("Email notification sent:", result);
+  } catch (err) {
+    console.error("Failed to send email notification:", err);
+  }
+}
+
+// Usage
+try {
+  // Your application logic here
+  await someRiskyOperation();
+} catch (error) {
+  await sendErrorNotification("my_job_123", error, "data_processing");
+}
+```
+
+#### **Python Integration**
+
+```python
+import requests
+import json
+
+def send_error_notification(job_id, error_message, stage=None, progress=None):
+    """Send error notification via API"""
+    url = "http://localhost:3000/api/notifications/email/error"
+
+    payload = {
+        "jobId": job_id,
+        "errorMessage": error_message
+    }
+
+    if stage or progress:
+        payload["additionalData"] = {}
+        if stage:
+            payload["additionalData"]["stage"] = stage
+        if progress:
+            payload["additionalData"]["progressPercentage"] = progress
+
+    try:
+        response = requests.post(
+            url,
+            headers={"Content-Type": "application/json"},
+            data=json.dumps(payload)
+        )
+
+        if response.status_code == 200:
+            print(f"Email notification sent successfully: {response.json()}")
+        else:
+            print(f"Failed to send notification: {response.status_code} - {response.text}")
+
+    except Exception as e:
+        print(f"Error sending notification: {e}")
+
+# Usage
+try:
+    # Your application logic here
+    perform_data_processing()
+except Exception as e:
+    send_error_notification("python_job_456", str(e), "data_processing", 75.5)
+```
+
+### API Documentation (Swagger)
+
+Complete API documentation with interactive testing is available at:
+
+```
+http://localhost:3000/api-docs
+```
+
+The Swagger UI provides:
+
+- Interactive API testing
+- Complete parameter descriptions
+- Request/response examples
+- Error scenario documentation
+- Schema definitions
 
 ## Contributing
 

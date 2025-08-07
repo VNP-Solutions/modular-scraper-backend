@@ -5,6 +5,7 @@ import { specs, swaggerUi } from "../config/swagger.js";
 
 // Import route modules
 import authRoutes from "../routes/shared/auth.routes.js";
+import emailRoutes from "../routes/shared/email.routes.js";
 import healthRoutes from "../routes/shared/health.routes.js";
 
 // Expedia-specific routes
@@ -50,6 +51,9 @@ app.use((req, res, next) => {
 // Health and authentication routes (no prefix)
 app.use("/", healthRoutes);
 app.use("/", authRoutes);
+
+// Email notification routes
+app.use("/api/notifications", emailRoutes);
 
 // API routes (keeping original endpoints)
 app.use("/api/scraping", expediarScrapingControlRoutes);
