@@ -111,7 +111,7 @@ export async function getAgodaBookingData(
     // }
 
     // Wait for the page to load completely
-    await delay(loadingTimeout);
+    await delay(5000);
 
     // Check pause state before proceeding
     // await scrapingStateManager.waitWhilePaused();

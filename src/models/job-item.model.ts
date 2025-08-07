@@ -30,6 +30,7 @@ export interface IJobItem extends Document {
   booked_date: Date;
   has_card_info: boolean;
   card_info?: CardInfo;
+  case_open?: boolean;
   has_payment_info: boolean;
   payment_info?: PaymentInfo;
   reservation_status: string;
@@ -65,15 +66,15 @@ const PaymentInfoSchema = new Schema<PaymentInfo>(
   {
     total_guest_payment: {
       type: Number,
-      required: true,
+      required: false,
     },
     cancellation_fee: {
       type: Number,
-      required: true,
+      required: false,
     },
     total_payout: {
       type: Number,
-      required: true,
+      required: false,
     },
     amount_to_charge_or_refund: {
       type: Number,
@@ -102,11 +103,11 @@ const JobItemSchema = new Schema<IJobItem>(
     },
     reservation_id: {
       type: String,
-      required: true,
+      required: false,
     },
     confirmation_number: {
       type: String,
-      required: true,
+      required: false,
     },
     check_in_date: {
       type: Date,
@@ -122,7 +123,7 @@ const JobItemSchema = new Schema<IJobItem>(
     },
     booking_amount: {
       type: Number,
-      required: true,
+      required: false,
     },
     booked_date: {
       type: Date,
@@ -131,16 +132,21 @@ const JobItemSchema = new Schema<IJobItem>(
     has_card_info: {
       type: Boolean,
       default: false,
-      required: true,
+      required: false,
     },
     card_info: {
       type: CardInfoSchema,
       required: false,
     },
+    case_open: {
+      type: Boolean,
+      default: false,
+      required: false,
+    },
     has_payment_info: {
       type: Boolean,
       default: false,
-      required: true,
+      required: false,
     },
     payment_info: {
       type: PaymentInfoSchema,

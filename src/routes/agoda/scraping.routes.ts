@@ -59,15 +59,16 @@ const router = express.Router();
  *             standard_job:
  *               summary: Standard monthly scraping job
  *               value:
- *                 startDate: "2024-01-01"
- *                 endDate: "2024-01-31"
- *                 jobId: "507f1f77bcf86cd799439011"
+ *
+ *                 startDate: "01/01/2025"
+ *                 endDate: "01/31/2025"
+ *                 jobId: "6892f4bf9df8bc296bdcdff0"
  *             custom_range:
  *               summary: Custom date range
  *               value:
- *                 startDate: "2024-03-15"
- *                 endDate: "2024-04-15"
- *                 jobId: "507f1f77bcf86cd799439012"
+ *                 startDate: "01/01/2025"
+ *                 endDate: "01/31/2025"
+ *                 jobId: "6892f4bf9df8bc296bdcdff0"
  *     responses:
  *       200:
  *         description: Job completed successfully
