@@ -1548,32 +1548,144 @@ export class BookingScraper extends BaseScraper {
     if (!this.page) throw new Error('Page not initialized');
 
     try {
-      await this.logInfo(`Extracting details for reservation ${reservationId}`);
+      // TO DO - work in progress
+      await this.logInfo(`Extracting reservation details for ID: ${reservationId}`);
 
-      // Extract basic reservation data from the current page
+      // Extract basic reservation data from current detail page
       const basicData = await this.extractBasicReservationData();
+      if (!basicData) {
+        await this.logError('Failed to extract basic reservation data');
+        return null;
+      }
+
+      await this.logInfo('Basic reservation data extracted successfully');
+
+      // Go back to the previous page
+      await this.logInfo('Going back to VCCS Management list');
+      await this.page.goBack();
       
-      // Extract payment information
-      // const paymentData = await this.extractPaymentData();
+      // Wait for the page to load
+      await this.page.waitForNavigation({ 
+        waitUntil: 'networkidle2', 
+        timeout: 30000 
+      });
+
+      // Find the specific reservation row and click "View card details"
+      await this.logInfo(`Looking for reservation row with ID: ${reservationId}`);
       
-      // Extract credit card details (requires additional navigation)
-      const cardData = await this.extractCreditCardDetails(reservationId);
+      const cardDetailsClicked = await this.clickCardDetailsFromRow(reservationId);
+      if (!cardDetailsClicked) {
+        await this.logError('Failed to click "View card details" from reservation row');
+        await this.takeScreenshot('booking-card-details-click-failed.png');
+        return {
+          basicData,
+          cardData: null
+        };
+      }
+
+      // Extract card details from the new page
+      const cardData = await this.extractCardDetailsFromPage(this.page);
 
       return {
         basicData,
-        // paymentData,
         cardData
       };
 
     } catch (error) {
-      await this.logError(`Failed to extract reservation details for ${reservationId}`, error);
+      await this.logError('Error extracting reservation details:', error);
+      await this.takeScreenshot('booking-reservation-details-error.png');
+      return null;
+    }
+  }
+
+  private async clickCardDetailsFromRow(reservationId: string): Promise<boolean> {
+    if (!this.page) throw new Error('Page not initialized');
+
+    try {
+      await this.logInfo(`Looking for "View card details" link for reservation ${reservationId}`);
+
+      // Find the reservation row that contains the specific reservation ID
+      const cardDetailsClicked = await this.page.evaluate((resId) => {
+        // Find all reservation rows
+        const rows = Array.from(document.querySelectorAll('tr.bui-table__row'));
+        
+        for (const row of rows) {
+          // Look for the reservation ID link in this row
+          const reservationLink = row.querySelector(`a[href*="res_id=${resId}"]`);
+          
+          if (reservationLink) {
+            // Found the row with this reservation ID, now look for "View card details" link
+            const cardDetailsLink = row.querySelector('a.pay-hub__view_cc_link');
+            
+            if (cardDetailsLink) {
+              // Click the "View card details" link
+              (cardDetailsLink as HTMLElement).click();
+              return true;
+            }
+          }
+        }
+        
+        return false;
+      }, reservationId);
+
+      if (cardDetailsClicked) {
+        await this.logInfo('Successfully clicked "View card details" link');
+        
+        // Wait for the new page to load
+        await this.page.waitForNavigation({ 
+          waitUntil: 'networkidle2', 
+          timeout: 30000 
+        });
+        
+        return true;
+      } else {
+        await this.logError(`Could not find "View card details" link for reservation ${reservationId}`);
+        await this.takeScreenshot('booking-card-details-link-not-found.png');
+        return false;
+      }
+
+    } catch (error) {
+      await this.logError('Error clicking card details from row:', error);
+      return false;
+    }
+  }
+
+  private async extractCardDetailsFromPage(page: Page): Promise<any> {
+    try {
+      const cardData = await page.evaluate(() => {
+        // Extract credit card information
+        const cardNumberElement = document.querySelector('.credit-card-number');
+        const cardNumber = cardNumberElement?.textContent?.trim() || '';
+
+        const expiryElement = document.querySelector('.credit-card-expiry');
+        const expiry = expiryElement?.textContent?.trim() || '';
+
+        const cvvElement = document.querySelector('.credit-card-cvv');
+        const cvv = cvvElement?.textContent?.trim() || '';
+
+        const cardholderElement = document.querySelector('.credit-card-holder');
+        const cardholder = cardholderElement?.textContent?.trim() || '';
+
+        return {
+          cardNumber,
+          expiry,
+          cvv,
+          cardholder
+        };
+      });
+
+      await this.logInfo('Extracted card details', cardData);
+      return cardData;
+
+    } catch (error) {
+      await this.logError('Failed to extract card details', error);
       return null;
     }
   }
 
   private async extractBasicReservationData(): Promise<any> {
     if (!this.page) throw new Error('Page not initialized');
-  
+
     try {
       const basicData = await this.page.evaluate(() => {
         const result: Record<string, string> = {
@@ -1587,7 +1699,7 @@ export class BookingScraper extends BaseScraper {
           roomType: '',
           reservationStatus: ''
         };
-  
+
         const labelMap: Record<string, keyof typeof result> = {
           'Guest name:': 'guestName',
           'Check-in': 'checkInDate',
@@ -1597,7 +1709,7 @@ export class BookingScraper extends BaseScraper {
           'Received': 'bookedDate',
           'Commissionable amount:': 'commissionAmount'
         };
-  
+
         // Extract all label elements
         const labels = document.querySelectorAll('.res-content__label');
         labels.forEach((labelEl) => {
@@ -1609,11 +1721,11 @@ export class BookingScraper extends BaseScraper {
             result[mappedKey] = value;
           }
         });
-  
+
         // Room type and guest name might be outside label structure
         const guestEl = document.querySelector('[data-test-id="reservation-overview-name"]');
         if (guestEl) result.guestName = guestEl.textContent?.trim() || result.guestName;
-  
+
         const roomTypeEl = document.querySelector('.res-room-title__name');
         if (roomTypeEl) result.roomType = roomTypeEl.textContent?.trim() || result.roomType;
         
@@ -1622,174 +1734,12 @@ export class BookingScraper extends BaseScraper {
 
         return result;
       });
-  
+
       await this.logInfo('Extracted basic reservation data', basicData);
       return basicData;
-  
+
     } catch (error) {
       await this.logError('Failed to extract basic reservation data', error);
-      return null;
-    }
-  }
-
-  private async extractPaymentData(): Promise<any> {
-    try {
-      const paymentData = await this.page!.evaluate(() => {
-        // Extract payment status
-        const paymentStatusElement = document.querySelector('.res-content__info');
-        const paymentStatus = paymentStatusElement?.textContent?.trim() || '';
-
-        // Extract virtual card balance
-        const balanceElement = document.querySelector('.bui-price-display__value');
-        const virtualCardBalance = balanceElement?.textContent?.trim() || '';
-
-        // Extract commission
-        const commissionElement = document.querySelector('.res-content__info');
-        const commission = commissionElement?.textContent?.trim() || '';
-
-        return {
-          paymentStatus,
-          virtualCardBalance,
-          commission,
-          total_guest_payment: 0,
-          cancellation_fee: 0,
-          total_payout: 0,
-          amount_to_charge_or_refund: 0
-        };
-      });
-
-      await this.logInfo('Extracted payment data', paymentData);
-      return paymentData;
-
-    } catch (error) {
-      await this.logError('Failed to extract payment data', error);
-      return {
-        paymentStatus: '',
-        virtualCardBalance: '',
-        commission: '',
-        total_guest_payment: 0,
-        cancellation_fee: 0,
-        total_payout: 0,
-        amount_to_charge_or_refund: 0
-      };
-    }
-  }
-
-  private async extractCreditCardDetails(reservationId: string): Promise<any> {
-    try {
-      await this.logInfo(`Extracting credit card details for reservation ${reservationId}`);
-
-      // Click "View credit card details" button
-      const viewCardButton = await this.page!.$('button.bui-button--primary');
-      if (!viewCardButton) {
-        await this.logInfo('View credit card details button not found');
-        return null;
-      }
-
-      await viewCardButton.click();
-      await new Promise(resolve => setTimeout(resolve, 2000));
-
-      // Wait for popup/modal to appear
-      const popupSelector = '.bui-modal__content';
-      await this.page!.waitForSelector(popupSelector, { timeout: 10000 });
-
-      // Click "Sign in to view credit card details" link
-      const signInLink = await this.page!.$('a[href*="oauth2/authorize"]');
-      if (!signInLink) {
-        await this.logInfo('Sign in link not found in popup');
-        return null;
-      }
-
-      // Get the href attribute to open in new tab
-      const signInUrl = await signInLink.evaluate(el => el.getAttribute('href'));
-      
-      // Open new tab for credit card details
-      const newPage = await this.browser!.newPage();
-      await newPage.goto(signInUrl!);
-      
-      // Handle login in new tab if needed
-      await this.handleLoginInNewTab(newPage);
-      
-      // Extract credit card details
-      const cardData = await this.extractCardDetailsFromPage(newPage);
-      
-      // Close the new tab
-      await newPage.close();
-
-      return cardData;
-
-    } catch (error) {
-      await this.logError('Failed to extract credit card details', error);
-      return null;
-    }
-  }
-
-  private async handleLoginInNewTab(page: Page): Promise<void> {
-    try {
-      // Check if we need to login
-      const loginForm = await page.$('form[action*="authenticate.html"]');
-      if (loginForm) {
-        await this.logInfo('Login required in credit card details page');
-        
-        // Enter credentials
-        await page.type('input[name="username"]', process.env.BOOKING_EMAIL || '');
-        await page.type('input[name="password"]', process.env.BOOKING_PASSWORD || '');
-        
-        // Submit form
-        await page.click('button[type="submit"]');
-        await page.waitForNavigation({ waitUntil: 'networkidle2' });
-      }
-    } catch (error) {
-      await this.logError('Failed to handle login in new tab', error);
-    }
-  }
-
-  private async extractCardDetailsFromPage(page: Page): Promise<any> {
-    try {
-      const cardData = await page.evaluate(() => {
-        // Extract card details from the table
-        const rows = document.querySelectorAll('table tbody tr');
-        const cardInfo: any = {};
-
-        for (const row of rows) {
-          const cells = row.querySelectorAll('td');
-          if (cells.length >= 2) {
-            const label = cells[0]?.textContent?.trim();
-            const value = cells[1]?.textContent?.trim();
-
-            if (label && value) {
-              switch (label.toLowerCase()) {
-                case 'available balance:':
-                  cardInfo.available_balance = value;
-                  break;
-                case 'card type:':
-                  cardInfo.card_type = value;
-                  break;
-                case 'card number:':
-                  cardInfo.card_number = value;
-                  break;
-                case 'card holder\'s name:':
-                  cardInfo.card_holder = value;
-                  break;
-                case 'expiration date:':
-                  cardInfo.expiration_date = value;
-                  break;
-                case 'cvc code:':
-                  cardInfo.cvc_code = value;
-                  break;
-              }
-            }
-          }
-        }
-
-        return cardInfo;
-      });
-
-      await this.logInfo('Extracted card details', cardData);
-      return cardData;
-
-    } catch (error) {
-      await this.logError('Failed to extract card details from page', error);
       return null;
     }
   }
