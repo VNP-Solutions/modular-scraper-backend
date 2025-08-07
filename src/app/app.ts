@@ -13,7 +13,7 @@ import { progressManager } from "../common/progress-manager.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import { specs, swaggerUi } from "../config/swagger.js";
 import { getAccess, getOauth2Callback } from "../get-access/access.js";
-import graphqlScraping from "../graphql.js";
+import graphqlScraping from "../graphql-backup.js";
 import main from "../main.js";
 import { JobStatus } from "../models/job.model.js";
 import reservation from "../reservation/reservation.js";

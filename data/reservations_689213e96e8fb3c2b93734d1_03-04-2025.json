@@ -1,0 +1,1259 @@
+{
+  "date": "03/04/2025",
+  "jobId": "689213e96e8fb3c2b93734d1",
+  "extractedAt": "2025-08-06T14:26:53.031Z",
+  "totalReservations": 4,
+  "reservations": [
+    {
+      "sequenceNumber": 1,
+      "reservationItemId": "389383498",
+      "guestName": "maddison webb",
+      "confirmationCode": "EXP-X-389383498",
+      "checkInDate": "2025-03-02",
+      "checkOutDate": "2025-03-04",
+      "businessModel": "Merchant",
+      "bookingStatus": "N/A",
+      "totalAmount": 327.8,
+      "currency": "GBP",
+      "propertyId": 61478232,
+      "country": "GBR",
+      "email": "N/A",
+      "phoneNumber": "+44 7539 149235",
+      "evcCardExists": true,
+      "evcCardResourceId": "ern:pay:evc:us-west-2::c67ac9f0-c841-11ef-adf4-695d06d50ccd",
+      "creditCardViewable": false,
+      "cardViewCountLeft": 3,
+      "evcCardNumber": "5299820899704209",
+      "evcCardCvv": "247",
+      "evcCardholderName": "Expedia VirtualCard",
+      "evcActivationDate": "2025-03-02",
+      "evcExpirationDate": "2028-01",
+      "evcAvailableBalance": 0,
+      "evcCurrency": "EUR",
+      "evcChargeStatus": "deactivatedDueToFullCharge",
+      "evcBookingAmount": 336.59,
+      "evcBillingAddress": "1111 Expedia Group Way W, Seattle, WA, 98119, USA",
+      "evcError": null,
+      "rawReservationData": {
+        "reservationItemId": "389383498",
+        "reservationInfo": {
+          "reservationTpid": 3,
+          "propertyId": 61478232,
+          "startDate": "2025-03-02",
+          "endDate": "2025-03-04",
+          "createDateTime": "2025-01-05T04:57:00-08:00",
+          "brandDisplayName": "Expedia",
+          "newReservationItemId": null,
+          "country": "GBR",
+          "reservationAttributes": {
+            "businessModel": "Merchant",
+            "bookingStatus": null,
+            "fraudCancelled": false,
+            "fraudReleased": null,
+            "stayStatus": "postStay",
+            "eligibleForECNoShowAndCancel": false,
+            "strongCustomerAuthentication": false,
+            "invoiced": false,
+            "eligibleForCancelPolicyException": false,
+            "supplierOperatingModel": "MERCHANT"
+          },
+          "specialRequestDetails": null,
+          "accessibilityRequestDetails": null,
+          "product": {
+            "productTypeId": 4,
+            "unitName": "1 Bedroom Suite",
+            "bedTypeName": "1 Queen Bed",
+            "propertyVipStatus": false
+          },
+          "customerArrivalTime": null,
+          "readyToReconcile": false,
+          "epsBooking": false
+        },
+        "customer": {
+          "id": 176598567,
+          "guestName": "maddison webb",
+          "phoneNumber": "+44 7539 149235",
+          "email": "",
+          "emailAlias": "",
+          "country": null,
+          "travelPurpose": null
+        },
+        "loyaltyInfo": {
+          "loyaltyStatus": "NONE",
+          "vipAmenities": null
+        },
+        "confirmationInfo": {
+          "productConfirmationCode": "EXP-X-389383498"
+        },
+        "conversationsInfo": {
+          "conversationsSupported": true,
+          "id": "027e1975-84a4-4b9f-9b3f-bf3c3f8dc910",
+          "unreadMessageCount": 0,
+          "conversationStatus": "active",
+          "cpcePartnerId": "80f78fe0-c362-493d-92d9-877a2922f2ce"
+        },
+        "totalAmounts": {
+          "totalAmountForPartners": {
+            "value": 336.59,
+            "currencyCode": "EUR"
+          },
+          "totalCommissionAmount": {
+            "value": 71.58,
+            "currencyCode": "EUR"
+          },
+          "totalReservationAmount": {
+            "value": 327.8,
+            "currencyCode": "GBP"
+          },
+          "propertyBookingTotal": {
+            "value": 336.59,
+            "currencyCode": "EUR"
+          },
+          "totalReservationAmountInPartnerCurrency": {
+            "value": 408.17,
+            "currencyCode": "EUR"
+          }
+        },
+        "reservationActions": {
+          "requestToCancel": {
+            "reason": "ineligible",
+            "actionSupported": false,
+            "actionUnsupportedBehavior": {
+              "hide": false,
+              "disable": true
+            }
+          },
+          "changeStayDates": {
+            "reason": "supplierInitiatedChangeTooltipBookingIneligible",
+            "actionSupported": false
+          },
+          "requestRelocation": {
+            "reason": "bookingDoesNotQualify",
+            "actionSupported": false
+          },
+          "actionAttributes": {
+            "highFence": true
+          },
+          "reconciliationActions": {
+            "markAsNoShow": {
+              "reason": "badBusinessModel",
+              "actionSupported": false,
+              "actionUnsupportedBehavior": {
+                "hide": true,
+                "disable": false,
+                "openVa": false
+              },
+              "virtualAgentParameters": null
+            },
+            "undoMarkNoShow": {
+              "reason": "badBusinessModel",
+              "actionSupported": false,
+              "actionUnsupportedBehavior": {
+                "hide": true,
+                "disable": false
+              }
+            },
+            "changeCancellationFee": {
+              "reason": "badProcessingState",
+              "actionSupported": false,
+              "actionUnsupportedBehavior": {
+                "hide": true,
+                "disable": false
+              }
+            },
+            "resetCancellationFee": {
+              "reason": "badBusinessModel",
+              "actionSupported": false,
+              "actionUnsupportedBehavior": {
+                "hide": true,
+                "disable": false
+              }
+            },
+            "markAsCancellation": {
+              "reason": "badBusinessModel",
+              "actionSupported": false,
+              "actionUnsupportedBehavior": {
+                "hide": false,
+                "disable": true
+              }
+            },
+            "undoMarkAsCancellation": {
+              "reason": "badBusinessModel",
+              "actionSupported": false,
+              "actionUnsupportedBehavior": {
+                "hide": true,
+                "disable": false
+              }
+            },
+            "changeReservationAmountsOrDates": {
+              "reason": "badBusinessModel",
+              "actionSupported": false,
+              "actionUnsupportedBehavior": {
+                "hide": false,
+                "disable": true
+              }
+            },
+            "resetReservationAmountsOrDates": {
+              "reason": "badBusinessModel",
+              "actionSupported": false,
+              "actionUnsupportedBehavior": {
+                "hide": true,
+                "disable": false
+              }
+            }
+          }
+        },
+        "reconciliationInfo": null,
+        "depositInfo": null,
+        "paymentInfo": {
+          "evcCardDetailsExist": true,
+          "expediaVirtualCardResourceId": "ern:pay:evc:us-west-2::c67ac9f0-c841-11ef-adf4-695d06d50ccd",
+          "creditCardDetails": {
+            "viewable": false,
+            "viewCountLimit": 3,
+            "viewCountLeft": 3,
+            "viewCount": 0,
+            "hideCvvFromDisplay": true,
+            "valid": null,
+            "prevalidateCardOptIn": null,
+            "cardValidationViewable": false,
+            "inViewingWindow": false,
+            "viewableWindow": "UNVIEWABLE_POST_STAY",
+            "viewableOnDate": null,
+            "viewableUntilDate": null,
+            "validationInfo": null
+          }
+        },
+        "billingInfo": null,
+        "cancellationInfo": {
+          "cancelDateTime": null,
+          "cancellationPolicy": {
+            "priceCurrencyCode": "GBP",
+            "costCurrencyCode": "EUR",
+            "policyType": "BasePolicy",
+            "cancellationPenalties": [
+              {
+                "penaltyCost": 0,
+                "penaltyPrice": 0,
+                "penaltyPerStayFee": "FullCostOfStay",
+                "penaltyTime": "more",
+                "penaltyInterval": "day",
+                "penaltyStartHour": 999,
+                "penaltyEndHour": -1
+              },
+              {
+                "penaltyCost": 0,
+                "penaltyPrice": 0,
+                "penaltyPerStayFee": "FullCostOfStay",
+                "penaltyTime": "less",
+                "penaltyInterval": "day",
+                "penaltyStartHour": 0,
+                "penaltyEndHour": 999
+              }
+            ],
+            "nonrefundableDatesList": [
+              [
+                "2025-03-02",
+                "2025-03-03"
+              ]
+            ]
+          }
+        },
+        "compensationDetails": {
+          "reservationWaiverType": null,
+          "reservationFeeAmounts": null
+        },
+        "creditCardRecaptureDetails": null,
+        "reservationEligibility": null,
+        "searchWaiverRequest": null,
+        "evcCardData": {
+          "cardInformation": {
+            "cardId": "ern:pay:evc:us-west-2::c67ac9f0-c841-11ef-adf4-695d06d50ccd",
+            "cardNumber": "5299820899704209",
+            "cvv": "247",
+            "cardholderName": "Expedia VirtualCard",
+            "billingAddress": {
+              "address_line1": "1111 Expedia Group Way W",
+              "address_line2": "",
+              "city_name": "Seattle",
+              "state_province": "WA",
+              "postal_code": "98119",
+              "country_code": "USA"
+            },
+            "activationDate": "2025-03-02",
+            "expirationDate": "2028-01",
+            "availableBalance": {
+              "amount": 0,
+              "currency": "EUR"
+            },
+            "chargeStatus": {
+              "chargeStatus": "deactivatedDueToFullCharge",
+              "cardActiveDate": "2025-03-02T00:00:00Z"
+            },
+            "amountToRefund": {
+              "amount": 0,
+              "currency": ""
+            },
+            "taxId": null
+          },
+          "bookingInformation": {
+            "bookingItemId": "389383498",
+            "bookingAmount": {
+              "amount": 336.59,
+              "currency": "EUR"
+            },
+            "hotelId": 61478232,
+            "fraudCancelled": false,
+            "fraudReleased": null
+          },
+          "cardActivity": {
+            "totalSettlementAmount": {
+              "amount": 336.59,
+              "currency": "EUR"
+            },
+            "authorizations": [
+              {
+                "dateTime": "2025-03-02 10:31:42.000",
+                "amount": {
+                  "amount": 336.59,
+                  "currency": "EUR"
+                },
+                "status": "Approved",
+                "declineCode": null
+              }
+            ],
+            "settlements": []
+          },
+          "errorDetails": null,
+          "isBlackListed": false,
+          "newBookingItemId": null,
+          "isContractExpired": false
+        }
+      }
+    },
+    {
+      "sequenceNumber": 2,
+      "reservationItemId": "281625793",
+      "guestName": "Alice Moore",
+      "confirmationCode": "EXP-X-281625793",
+      "checkInDate": "2025-03-03",
+      "checkOutDate": "2025-03-04",
+      "businessModel": "Merchant",
+      "bookingStatus": "N/A",
+      "totalAmount": 108.98,
+      "currency": "GBP",
+      "propertyId": 61478232,
+      "country": "GBR",
+      "email": "N/A",
+      "phoneNumber": "+44 7805 766324",
+      "evcCardExists": true,
+      "evcCardResourceId": "ern:pay:evc:us-west-2::36b9a9cf-434b-11ef-af7b-f58a81c3a158",
+      "creditCardViewable": false,
+      "cardViewCountLeft": 3,
+      "evcCardNumber": "5551100117444281",
+      "evcCardCvv": "029",
+      "evcCardholderName": "Expedia VirtualCard",
+      "evcActivationDate": "2025-03-03",
+      "evcExpirationDate": "2029-06",
+      "evcAvailableBalance": 0,
+      "evcCurrency": "EUR",
+      "evcChargeStatus": "deactivatedDueToFullCharge",
+      "evcBookingAmount": 106.92,
+      "evcBillingAddress": "1111 Expedia Group Way W, Seattle, WA, 98119, USA",
+      "evcError": null,
+      "rawReservationData": {
+        "reservationItemId": "281625793",
+        "reservationInfo": {
+          "reservationTpid": 3,
+          "propertyId": 61478232,
+          "startDate": "2025-03-03",
+          "endDate": "2025-03-04",
+          "createDateTime": "2024-07-18T09:19:00-07:00",
+          "brandDisplayName": "Expedia",
+          "newReservationItemId": null,
+          "country": "GBR",
+          "reservationAttributes": {
+            "businessModel": "Merchant",
+            "bookingStatus": null,
+            "fraudCancelled": false,
+            "fraudReleased": null,
+            "stayStatus": "postStay",
+            "eligibleForECNoShowAndCancel": false,
+            "strongCustomerAuthentication": false,
+            "invoiced": false,
+            "eligibleForCancelPolicyException": false,
+            "supplierOperatingModel": "MERCHANT"
+          },
+          "specialRequestDetails": null,
+          "accessibilityRequestDetails": null,
+          "product": {
+            "productTypeId": 1,
+            "unitName": "City Studio",
+            "bedTypeName": null,
+            "propertyVipStatus": false
+          },
+          "customerArrivalTime": null,
+          "readyToReconcile": false,
+          "epsBooking": false
+        },
+        "customer": {
+          "id": 73735635,
+          "guestName": "Alice Moore",
+          "phoneNumber": "+44 7805 766324",
+          "email": "",
+          "emailAlias": "",
+          "country": null,
+          "travelPurpose": null
+        },
+        "loyaltyInfo": {
+          "loyaltyStatus": "NONE",
+          "vipAmenities": null
+        },
+        "confirmationInfo": {
+          "productConfirmationCode": "EXP-X-281625793"
+        },
+        "conversationsInfo": {
+          "conversationsSupported": true,
+          "id": "451aa455-b194-415f-be57-e466b2d8d99f",
+          "unreadMessageCount": 0,
+          "conversationStatus": "active",
+          "cpcePartnerId": "80f78fe0-c362-493d-92d9-877a2922f2ce"
+        },
+        "totalAmounts": {
+          "totalAmountForPartners": {
+            "value": 106.92,
+            "currencyCode": "EUR"
+          },
+          "totalCommissionAmount": {
+            "value": 22.68,
+            "currencyCode": "EUR"
+          },
+          "totalReservationAmount": {
+            "value": 108.98,
+            "currencyCode": "GBP"
+          },
+          "propertyBookingTotal": {
+            "value": 106.91,
+            "currencyCode": "EUR"
+          },
+          "totalReservationAmountInPartnerCurrency": {
+            "value": 129.59,
+            "currencyCode": "EUR"
+          }
+        },
+        "reservationActions": {
+          "requestToCancel": {
+            "reason": "alreadyCancelled",
+            "actionSupported": false,
+            "actionUnsupportedBehavior": {
+              "hide": false,
+              "disable": true
+            }
+          },
+          "changeStayDates": {
+            "reason": "supplierInitiatedChangeTooltipBookingIneligible",
+            "actionSupported": false
+          },
+          "requestRelocation": {
+            "reason": "bookingDoesNotQualify",
+            "actionSupported": false
+          },
+          "actionAttributes": {
+            "highFence": true
+          },
+          "reconciliationActions": {
+            "markAsNoShow": {
+              "reason": "badBusinessModel",
+              "actionSupported": false,
+              "actionUnsupportedBehavior": {
+                "hide": true,
+                "disable": false,
+                "openVa": false
+              },
+              "virtualAgentParameters": null
+            },
+            "undoMarkNoShow": {
+              "reason": "badBusinessModel",
+              "actionSupported": false,
+              "actionUnsupportedBehavior": {
+                "hide": true,
+                "disable": false
+              }
+            },
+            "changeCancellationFee": {
+              "reason": "badProcessingState",
+              "actionSupported": false,
+              "actionUnsupportedBehavior": {
+                "hide": true,
+                "disable": false
+              }
+            },
+            "resetCancellationFee": {
+              "reason": "badBusinessModel",
+              "actionSupported": false,
+              "actionUnsupportedBehavior": {
+                "hide": true,
+                "disable": false
+              }
+            },
+            "markAsCancellation": {
+              "reason": "badBusinessModel",
+              "actionSupported": false,
+              "actionUnsupportedBehavior": {
+                "hide": false,
+                "disable": true
+              }
+            },
+            "undoMarkAsCancellation": {
+              "reason": "badBusinessModel",
+              "actionSupported": false,
+              "actionUnsupportedBehavior": {
+                "hide": true,
+                "disable": false
+              }
+            },
+            "changeReservationAmountsOrDates": {
+              "reason": "badBusinessModel",
+              "actionSupported": false,
+              "actionUnsupportedBehavior": {
+                "hide": false,
+                "disable": true
+              }
+            },
+            "resetReservationAmountsOrDates": {
+              "reason": "badBusinessModel",
+              "actionSupported": false,
+              "actionUnsupportedBehavior": {
+                "hide": true,
+                "disable": false
+              }
+            }
+          }
+        },
+        "reconciliationInfo": null,
+        "depositInfo": null,
+        "paymentInfo": {
+          "evcCardDetailsExist": true,
+          "expediaVirtualCardResourceId": "ern:pay:evc:us-west-2::36b9a9cf-434b-11ef-af7b-f58a81c3a158",
+          "creditCardDetails": {
+            "viewable": false,
+            "viewCountLimit": 3,
+            "viewCountLeft": 3,
+            "viewCount": 0,
+            "hideCvvFromDisplay": true,
+            "valid": null,
+            "prevalidateCardOptIn": null,
+            "cardValidationViewable": false,
+            "inViewingWindow": false,
+            "viewableWindow": "UNVIEWABLE_POST_STAY",
+            "viewableOnDate": null,
+            "viewableUntilDate": null,
+            "validationInfo": null
+          }
+        },
+        "billingInfo": null,
+        "cancellationInfo": {
+          "cancelDateTime": null,
+          "cancellationPolicy": {
+            "priceCurrencyCode": "GBP",
+            "costCurrencyCode": "EUR",
+            "policyType": "BasePolicy",
+            "cancellationPenalties": [
+              {
+                "penaltyCost": 0,
+                "penaltyPrice": 0,
+                "penaltyPerStayFee": "FullCostOfStay",
+                "penaltyTime": "more",
+                "penaltyInterval": "hour",
+                "penaltyStartHour": 0,
+                "penaltyEndHour": -1
+              }
+            ],
+            "nonrefundableDatesList": [
+              [
+                "2025-03-03"
+              ]
+            ]
+          }
+        },
+        "compensationDetails": {
+          "reservationWaiverType": null,
+          "reservationFeeAmounts": null
+        },
+        "creditCardRecaptureDetails": null,
+        "reservationEligibility": null,
+        "searchWaiverRequest": null,
+        "evcCardData": {
+          "cardInformation": {
+            "cardId": "ern:pay:evc:us-west-2::36b9a9cf-434b-11ef-af7b-f58a81c3a158",
+            "cardNumber": "5551100117444281",
+            "cvv": "029",
+            "cardholderName": "Expedia VirtualCard",
+            "billingAddress": {
+              "address_line1": "1111 Expedia Group Way W",
+              "address_line2": "",
+              "city_name": "Seattle",
+              "state_province": "WA",
+              "postal_code": "98119",
+              "country_code": "USA"
+            },
+            "activationDate": "2025-03-03",
+            "expirationDate": "2029-06",
+            "availableBalance": {
+              "amount": 0,
+              "currency": "EUR"
+            },
+            "chargeStatus": {
+              "chargeStatus": "deactivatedDueToFullCharge",
+              "cardActiveDate": "2025-03-03T00:00:00Z"
+            },
+            "amountToRefund": {
+              "amount": 0,
+              "currency": ""
+            },
+            "taxId": null
+          },
+          "bookingInformation": {
+            "bookingItemId": "281625793",
+            "bookingAmount": {
+              "amount": 106.92,
+              "currency": "EUR"
+            },
+            "hotelId": 61478232,
+            "fraudCancelled": false,
+            "fraudReleased": null
+          },
+          "cardActivity": {
+            "totalSettlementAmount": {
+              "amount": 106.92,
+              "currency": "EUR"
+            },
+            "authorizations": [
+              {
+                "dateTime": "2025-03-03 10:37:43.000",
+                "amount": {
+                  "amount": 106.92,
+                  "currency": "EUR"
+                },
+                "status": "Approved",
+                "declineCode": null
+              }
+            ],
+            "settlements": []
+          },
+          "errorDetails": null,
+          "isBlackListed": false,
+          "newBookingItemId": null,
+          "isContractExpired": false
+        }
+      }
+    },
+    {
+      "sequenceNumber": 3,
+      "reservationItemId": "303761755",
+      "guestName": "Aileen Galvin",
+      "confirmationCode": "EXP-X-303761755",
+      "checkInDate": "2025-03-03",
+      "checkOutDate": "2025-03-04",
+      "businessModel": "Merchant",
+      "bookingStatus": "cancelled",
+      "totalAmount": 0,
+      "currency": "EUR",
+      "propertyId": 61478232,
+      "country": "N/A",
+      "email": "N/A",
+      "phoneNumber": "0-00353879892463",
+      "evcCardExists": true,
+      "evcCardResourceId": "ern:pay:evc:us-west-2::0d234027-5649-11ef-b3cc-4b1c8caab658",
+      "creditCardViewable": false,
+      "cardViewCountLeft": 3,
+      "evcCardNumber": "N/A",
+      "evcCardCvv": "N/A",
+      "evcCardholderName": "N/A",
+      "evcActivationDate": "N/A",
+      "evcExpirationDate": "N/A",
+      "evcAvailableBalance": 0,
+      "evcCurrency": "N/A",
+      "evcChargeStatus": "N/A",
+      "evcBookingAmount": 0,
+      "evcBillingAddress": "N/A",
+      "evcError": null,
+      "rawReservationData": {
+        "reservationItemId": "303761755",
+        "reservationInfo": {
+          "reservationTpid": 3180,
+          "propertyId": 61478232,
+          "startDate": "2025-03-03",
+          "endDate": "2025-03-04",
+          "createDateTime": "2024-08-19T11:40:00-07:00",
+          "brandDisplayName": "Hotels",
+          "newReservationItemId": null,
+          "country": "",
+          "reservationAttributes": {
+            "businessModel": "Merchant",
+            "bookingStatus": "cancelled",
+            "fraudCancelled": false,
+            "fraudReleased": null,
+            "stayStatus": "cancelled",
+            "eligibleForECNoShowAndCancel": false,
+            "strongCustomerAuthentication": false,
+            "invoiced": false,
+            "eligibleForCancelPolicyException": false,
+            "supplierOperatingModel": "MERCHANT"
+          },
+          "specialRequestDetails": null,
+          "accessibilityRequestDetails": null,
+          "product": {
+            "productTypeId": 1,
+            "unitName": "1 Bedroom Suite - Twin Accessible",
+            "bedTypeName": "2 Twin Beds",
+            "propertyVipStatus": false
+          },
+          "customerArrivalTime": null,
+          "readyToReconcile": false,
+          "epsBooking": false
+        },
+        "customer": {
+          "id": 668640324,
+          "guestName": "Aileen Galvin",
+          "phoneNumber": "0-00353879892463",
+          "email": "",
+          "emailAlias": "",
+          "country": null,
+          "travelPurpose": null
+        },
+        "loyaltyInfo": {
+          "loyaltyStatus": "NONE",
+          "vipAmenities": null
+        },
+        "confirmationInfo": {
+          "productConfirmationCode": "EXP-X-303761755"
+        },
+        "conversationsInfo": {
+          "conversationsSupported": true,
+          "id": "e82bf7c1-79b1-4385-b619-16aded96c13b",
+          "unreadMessageCount": 0,
+          "conversationStatus": "active",
+          "cpcePartnerId": "0bfde47f-a8f5-44af-90ee-652b583dd90c"
+        },
+        "totalAmounts": {
+          "totalAmountForPartners": {
+            "value": 0,
+            "currencyCode": "EUR"
+          },
+          "totalCommissionAmount": {
+            "value": 0,
+            "currencyCode": "EUR"
+          },
+          "totalReservationAmount": {
+            "value": 0,
+            "currencyCode": "EUR"
+          },
+          "propertyBookingTotal": {
+            "value": 0,
+            "currencyCode": "EUR"
+          },
+          "totalReservationAmountInPartnerCurrency": {
+            "value": 0,
+            "currencyCode": "EUR"
+          }
+        },
+        "reservationActions": {
+          "requestToCancel": {
+            "reason": null,
+            "actionSupported": false,
+            "actionUnsupportedBehavior": {
+              "hide": false,
+              "disable": true
+            }
+          },
+          "changeStayDates": {
+            "reason": null,
+            "actionSupported": false
+          },
+          "requestRelocation": {
+            "reason": "bookingDoesNotQualify",
+            "actionSupported": false
+          },
+          "actionAttributes": {
+            "highFence": true
+          },
+          "reconciliationActions": {
+            "markAsNoShow": {
+              "reason": "badBusinessModel",
+              "actionSupported": false,
+              "actionUnsupportedBehavior": {
+                "hide": true,
+                "disable": false,
+                "openVa": false
+              },
+              "virtualAgentParameters": null
+            },
+            "undoMarkNoShow": {
+              "reason": "badBusinessModel",
+              "actionSupported": false,
+              "actionUnsupportedBehavior": {
+                "hide": true,
+                "disable": false
+              }
+            },
+            "changeCancellationFee": {
+              "reason": "badBusinessModel",
+              "actionSupported": false,
+              "actionUnsupportedBehavior": {
+                "hide": false,
+                "disable": true
+              }
+            },
+            "resetCancellationFee": {
+              "reason": "badBusinessModel",
+              "actionSupported": false,
+              "actionUnsupportedBehavior": {
+                "hide": true,
+                "disable": false
+              }
+            },
+            "markAsCancellation": {
+              "reason": "badBusinessModel",
+              "actionSupported": false,
+              "actionUnsupportedBehavior": {
+                "hide": false,
+                "disable": true
+              }
+            },
+            "undoMarkAsCancellation": {
+              "reason": "badBusinessModel",
+              "actionSupported": false,
+              "actionUnsupportedBehavior": {
+                "hide": true,
+                "disable": false
+              }
+            },
+            "changeReservationAmountsOrDates": {
+              "reason": "badBusinessModel",
+              "actionSupported": false,
+              "actionUnsupportedBehavior": {
+                "hide": false,
+                "disable": true
+              }
+            },
+            "resetReservationAmountsOrDates": {
+              "reason": "badBusinessModel",
+              "actionSupported": false,
+              "actionUnsupportedBehavior": {
+                "hide": true,
+                "disable": false
+              }
+            }
+          }
+        },
+        "reconciliationInfo": null,
+        "depositInfo": null,
+        "paymentInfo": {
+          "evcCardDetailsExist": true,
+          "expediaVirtualCardResourceId": "ern:pay:evc:us-west-2::0d234027-5649-11ef-b3cc-4b1c8caab658",
+          "creditCardDetails": {
+            "viewable": false,
+            "viewCountLimit": 3,
+            "viewCountLeft": 3,
+            "viewCount": 0,
+            "hideCvvFromDisplay": true,
+            "valid": null,
+            "prevalidateCardOptIn": null,
+            "cardValidationViewable": false,
+            "inViewingWindow": false,
+            "viewableWindow": "UNVIEWABLE_CANCELLED",
+            "viewableOnDate": null,
+            "viewableUntilDate": null,
+            "validationInfo": null
+          }
+        },
+        "billingInfo": null,
+        "cancellationInfo": {
+          "cancelDateTime": "2024-09-21T05:00:00-07:00",
+          "cancellationPolicy": {
+            "priceCurrencyCode": "EUR",
+            "costCurrencyCode": "EUR",
+            "policyType": "BasePolicy",
+            "cancellationPenalties": [
+              {
+                "penaltyCost": 0,
+                "penaltyPrice": 0,
+                "penaltyPerStayFee": "None",
+                "penaltyTime": "more",
+                "penaltyInterval": "day",
+                "penaltyStartHour": 48,
+                "penaltyEndHour": -1
+              },
+              {
+                "penaltyCost": 0,
+                "penaltyPrice": 0,
+                "penaltyPerStayFee": "FullCostOfStay",
+                "penaltyTime": "less",
+                "penaltyInterval": "day",
+                "penaltyStartHour": 0,
+                "penaltyEndHour": 48
+              }
+            ],
+            "nonrefundableDatesList": null
+          }
+        },
+        "compensationDetails": {
+          "reservationWaiverType": null,
+          "reservationFeeAmounts": null
+        },
+        "creditCardRecaptureDetails": null,
+        "reservationEligibility": null,
+        "searchWaiverRequest": null,
+        "evcCardData": {
+          "cardInformation": null,
+          "bookingInformation": null,
+          "cardActivity": null,
+          "errorDetails": {
+            "errorCode": 2326,
+            "errorMessage": "Reservation status has changed to cancelled"
+          },
+          "isBlackListed": false,
+          "newBookingItemId": null,
+          "isContractExpired": false
+        }
+      }
+    },
+    {
+      "sequenceNumber": 4,
+      "reservationItemId": "368488771",
+      "guestName": "Nadja Isoaho",
+      "confirmationCode": "EXP-X-368488771",
+      "checkInDate": "2025-02-24",
+      "checkOutDate": "2025-03-04",
+      "businessModel": "Merchant",
+      "bookingStatus": "N/A",
+      "totalAmount": 768.61,
+      "currency": "EUR",
+      "propertyId": 61478232,
+      "country": "N/A",
+      "email": "N/A",
+      "phoneNumber": "0-358453237055",
+      "evcCardExists": true,
+      "evcCardResourceId": "ern:pay:evc:us-west-2::d44a3fc7-ac33-11ef-afb8-3b08e46538a9",
+      "creditCardViewable": false,
+      "cardViewCountLeft": 3,
+      "evcCardNumber": "5299824407271537",
+      "evcCardCvv": "465",
+      "evcCardholderName": "Expedia VirtualCard",
+      "evcActivationDate": "2025-02-24",
+      "evcExpirationDate": "2027-11",
+      "evcAvailableBalance": 0,
+      "evcCurrency": "EUR",
+      "evcChargeStatus": "deactivatedDueToFullCharge",
+      "evcBookingAmount": 634.1,
+      "evcBillingAddress": "1111 Expedia Group Way W, Seattle, WA, 98119, USA",
+      "evcError": null,
+      "rawReservationData": {
+        "reservationItemId": "368488771",
+        "reservationInfo": {
+          "reservationTpid": 3180,
+          "propertyId": 61478232,
+          "startDate": "2025-02-24",
+          "endDate": "2025-03-04",
+          "createDateTime": "2024-11-28T14:12:00-08:00",
+          "brandDisplayName": "Hotels",
+          "newReservationItemId": null,
+          "country": "",
+          "reservationAttributes": {
+            "businessModel": "Merchant",
+            "bookingStatus": null,
+            "fraudCancelled": false,
+            "fraudReleased": null,
+            "stayStatus": "postStay",
+            "eligibleForECNoShowAndCancel": false,
+            "strongCustomerAuthentication": false,
+            "invoiced": false,
+            "eligibleForCancelPolicyException": false,
+            "supplierOperatingModel": "MERCHANT"
+          },
+          "specialRequestDetails": null,
+          "accessibilityRequestDetails": null,
+          "product": {
+            "productTypeId": 1,
+            "unitName": "1 Bedroom Suite - Twin Accessible",
+            "bedTypeName": "2 yhden hengen sänkyä",
+            "propertyVipStatus": false
+          },
+          "customerArrivalTime": null,
+          "readyToReconcile": false,
+          "epsBooking": false
+        },
+        "customer": {
+          "id": 681959568,
+          "guestName": "Nadja Isoaho",
+          "phoneNumber": "0-358453237055",
+          "email": "",
+          "emailAlias": "",
+          "country": null,
+          "travelPurpose": null
+        },
+        "loyaltyInfo": {
+          "loyaltyStatus": "NONE",
+          "vipAmenities": null
+        },
+        "confirmationInfo": {
+          "productConfirmationCode": "EXP-X-368488771"
+        },
+        "conversationsInfo": {
+          "conversationsSupported": true,
+          "id": "013e4b32-4211-4c2c-9e0e-30936ad3bb94",
+          "unreadMessageCount": 0,
+          "conversationStatus": "active",
+          "cpcePartnerId": "0bfde47f-a8f5-44af-90ee-652b583dd90c"
+        },
+        "totalAmounts": {
+          "totalAmountForPartners": {
+            "value": 634.1,
+            "currencyCode": "EUR"
+          },
+          "totalCommissionAmount": {
+            "value": 134.51,
+            "currencyCode": "EUR"
+          },
+          "totalReservationAmount": {
+            "value": 768.61,
+            "currencyCode": "EUR"
+          },
+          "propertyBookingTotal": {
+            "value": 634.1,
+            "currencyCode": "EUR"
+          },
+          "totalReservationAmountInPartnerCurrency": {
+            "value": 768.61,
+            "currencyCode": "EUR"
+          }
+        },
+        "reservationActions": {
+          "requestToCancel": {
+            "reason": "alreadyCancelled",
+            "actionSupported": false,
+            "actionUnsupportedBehavior": {
+              "hide": false,
+              "disable": true
+            }
+          },
+          "changeStayDates": {
+            "reason": "supplierInitiatedChangeTooltipBookingIneligible",
+            "actionSupported": false
+          },
+          "requestRelocation": {
+            "reason": "bookingDoesNotQualify",
+            "actionSupported": false
+          },
+          "actionAttributes": {
+            "highFence": true
+          },
+          "reconciliationActions": {
+            "markAsNoShow": {
+              "reason": "badBusinessModel",
+              "actionSupported": false,
+              "actionUnsupportedBehavior": {
+                "hide": true,
+                "disable": false,
+                "openVa": false
+              },
+              "virtualAgentParameters": null
+            },
+            "undoMarkNoShow": {
+              "reason": "badBusinessModel",
+              "actionSupported": false,
+              "actionUnsupportedBehavior": {
+                "hide": true,
+                "disable": false
+              }
+            },
+            "changeCancellationFee": {
+              "reason": "badProcessingState",
+              "actionSupported": false,
+              "actionUnsupportedBehavior": {
+                "hide": true,
+                "disable": false
+              }
+            },
+            "resetCancellationFee": {
+              "reason": "badBusinessModel",
+              "actionSupported": false,
+              "actionUnsupportedBehavior": {
+                "hide": true,
+                "disable": false
+              }
+            },
+            "markAsCancellation": {
+              "reason": "badBusinessModel",
+              "actionSupported": false,
+              "actionUnsupportedBehavior": {
+                "hide": false,
+                "disable": true
+              }
+            },
+            "undoMarkAsCancellation": {
+              "reason": "badBusinessModel",
+              "actionSupported": false,
+              "actionUnsupportedBehavior": {
+                "hide": true,
+                "disable": false
+              }
+            },
+            "changeReservationAmountsOrDates": {
+              "reason": "badBusinessModel",
+              "actionSupported": false,
+              "actionUnsupportedBehavior": {
+                "hide": false,
+                "disable": true
+              }
+            },
+            "resetReservationAmountsOrDates": {
+              "reason": "badBusinessModel",
+              "actionSupported": false,
+              "actionUnsupportedBehavior": {
+                "hide": true,
+                "disable": false
+              }
+            }
+          }
+        },
+        "reconciliationInfo": null,
+        "depositInfo": null,
+        "paymentInfo": {
+          "evcCardDetailsExist": true,
+          "expediaVirtualCardResourceId": "ern:pay:evc:us-west-2::d44a3fc7-ac33-11ef-afb8-3b08e46538a9",
+          "creditCardDetails": {
+            "viewable": false,
+            "viewCountLimit": 3,
+            "viewCountLeft": 3,
+            "viewCount": 0,
+            "hideCvvFromDisplay": true,
+            "valid": null,
+            "prevalidateCardOptIn": null,
+            "cardValidationViewable": false,
+            "inViewingWindow": false,
+            "viewableWindow": "UNVIEWABLE_POST_STAY",
+            "viewableOnDate": null,
+            "viewableUntilDate": null,
+            "validationInfo": null
+          }
+        },
+        "billingInfo": null,
+        "cancellationInfo": {
+          "cancelDateTime": null,
+          "cancellationPolicy": {
+            "priceCurrencyCode": "EUR",
+            "costCurrencyCode": "EUR",
+            "policyType": "BasePolicy",
+            "cancellationPenalties": [
+              {
+                "penaltyCost": 0,
+                "penaltyPrice": 0,
+                "penaltyPerStayFee": "FullCostOfStay",
+                "penaltyTime": "more",
+                "penaltyInterval": "hour",
+                "penaltyStartHour": 0,
+                "penaltyEndHour": -1
+              }
+            ],
+            "nonrefundableDatesList": [
+              [
+                "2025-02-24",
+                "2025-03-03"
+              ]
+            ]
+          }
+        },
+        "compensationDetails": {
+          "reservationWaiverType": null,
+          "reservationFeeAmounts": null
+        },
+        "creditCardRecaptureDetails": null,
+        "reservationEligibility": null,
+        "searchWaiverRequest": null,
+        "evcCardData": {
+          "cardInformation": {
+            "cardId": "ern:pay:evc:us-west-2::d44a3fc7-ac33-11ef-afb8-3b08e46538a9",
+            "cardNumber": "5299824407271537",
+            "cvv": "465",
+            "cardholderName": "Expedia VirtualCard",
+            "billingAddress": {
+              "address_line1": "1111 Expedia Group Way W",
+              "address_line2": "",
+              "city_name": "Seattle",
+              "state_province": "WA",
+              "postal_code": "98119",
+              "country_code": "USA"
+            },
+            "activationDate": "2025-02-24",
+            "expirationDate": "2027-11",
+            "availableBalance": {
+              "amount": 0,
+              "currency": "EUR"
+            },
+            "chargeStatus": {
+              "chargeStatus": "deactivatedDueToFullCharge",
+              "cardActiveDate": "2025-02-24T00:00:00Z"
+            },
+            "amountToRefund": {
+              "amount": 0,
+              "currency": ""
+            },
+            "taxId": null
+          },
+          "bookingInformation": {
+            "bookingItemId": "368488771",
+            "bookingAmount": {
+              "amount": 634.1,
+              "currency": "EUR"
+            },
+            "hotelId": 61478232,
+            "fraudCancelled": false,
+            "fraudReleased": null
+          },
+          "cardActivity": {
+            "totalSettlementAmount": {
+              "amount": 634.1,
+              "currency": "EUR"
+            },
+            "authorizations": [
+              {
+                "dateTime": "2025-02-25 06:14:11.000",
+                "amount": {
+                  "amount": 634.1,
+                  "currency": "EUR"
+                },
+                "status": "Declined",
+                "declineCode": "EVC_AMEX_WEX_ERROR03"
+              },
+              {
+                "dateTime": "2025-02-24 10:36:38.000",
+                "amount": {
+                  "amount": 634.1,
+                  "currency": "EUR"
+                },
+                "status": "Declined",
+                "declineCode": "EVC_AMEX_WEX_ERROR03"
+              },
+              {
+                "dateTime": "2025-02-24 10:28:14.000",
+                "amount": {
+                  "amount": 634.1,
+                  "currency": "EUR"
+                },
+                "status": "Approved",
+                "declineCode": null
+              }
+            ],
+            "settlements": []
+          },
+          "errorDetails": null,
+          "isBlackListed": false,
+          "newBookingItemId": null,
+          "isContractExpired": false
+        }
+      }
+    }
+  ]
+}
