@@ -1787,14 +1787,12 @@ export class BookingScraper extends BaseScraper {
 
   async saveReservationToDatabase(
     jobId: string,
-    propertyId: string,
     basicData: any,
-    // paymentData: any,
     cardData: any
   ): Promise<any> {
     try {
       // Validate inputs
-      if (!jobId || !propertyId) {
+      if (!this.jobId || !this.propertyIdForDb) {
         throw new Error('JobId and PropertyId are required');
       }
 
@@ -1826,7 +1824,7 @@ export class BookingScraper extends BaseScraper {
 
       const jobItemData = {
         job_id: jobId,
-        property_id: propertyId,
+        property_id: this.propertyIdForDb,
         guest_name: basicData.guestName || 'Unknown Guest',
         reservation_id: basicData.bookingNumber || '',
         confirmation_number: basicData.bookingNumber || '', // Use booking number as confirmation
@@ -1844,6 +1842,8 @@ export class BookingScraper extends BaseScraper {
         card_info: cardData || undefined,
         reservation_status: basicData.reservationStatus,
       };
+
+      this.logInfo(`JobData to be saved: `, jobItemData);
 
       // Import jobService dynamically to avoid circular dependencies
       const { jobService } = await import('../services/job.service.js');
@@ -1919,14 +1919,14 @@ export class BookingScraper extends BaseScraper {
 
       console.log('dupa loginn', this.page.url())
       const cardData = await this.extractCardDetailsFromPage(this.page)
-      // const { basicData, /*paymentData,*/ cardData } = extractionResult;
-      console.log('ce am pana acum: ', basicData, cardData)
+      
+      // Close page
+      await SelectorUtils.findAndClick(this.page, BOOKING_SELECTORS.reservations.closeCardDetails);
+      
       // Save to database if jobId and propertyId are provided
       if (jobId && propertyId) {
-        await this.saveReservationToDatabase(jobId, propertyId, basicData, /*paymentData,*/ cardData);
+        await this.saveReservationToDatabase(jobId, basicData, cardData);
       }
-      
-      await this.page.goBack();
 
       await this.logInfo(`Successfully processed reservation ${reservationId}`);
       return true;

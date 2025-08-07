@@ -66,7 +66,8 @@ export const BOOKING_SELECTORS = {
     reservationChargeBefore: '[data-heading="Charge before"] span',
     reservationAmount: '[data-heading="Amount"]',
     reservationCardholder: '[data-heading="Cardholder"]',
-    reservationName: 'span[data-test-id="reservation-overview-name"]'
+    reservationName: 'span[data-test-id="reservation-overview-name"]',
+    closeCardDetails: ['#close_button', '//button[text()="Close"]']
   },
   property: {
     searchInput: [
