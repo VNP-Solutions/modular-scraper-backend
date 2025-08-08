@@ -79,27 +79,6 @@ export class BookingScraper extends BaseScraper {
       await page.setDefaultNavigationTimeout(loadingTimeout);
       await page.setDefaultTimeout(selectorTimeout);
 
-      // Start recording and generate live URL for captcha solving
-      const cdp = await page.createCDPSession();
-      await (cdp as any).send("Browserless.startRecording");
-      await this.logInfo("Recording started successfully");
-
-      await this.delay(2000);
-
-      try {
-        const { liveURL } = (await (cdp as any).send("Browserless.liveURL", {
-          timeout: 600_000,
-        })) as { liveURL: string };
-        
-        this.sessionUrl = liveURL;
-        await this.logInfo("Live URL generated for captcha solving:", { liveURL });
-
-      } catch (liveUrlError) {
-        await this.logError("Failed to generate live URL:", liveUrlError);
-        await this.logInfo("Live URL generation failed - will use session URL instead");
-        this.sessionUrl = `https://production-sfo.browserless.io?token=${this.browserlessToken}#/live/${session.id}`;
-      }
-
       // Load saved cookies if they exist
       if (fs.existsSync(this.cookiesFile)) {
         const cookies = JSON.parse(fs.readFileSync(this.cookiesFile, 'utf8'));
@@ -216,7 +195,6 @@ export class BookingScraper extends BaseScraper {
       await this.handleCaptcha({
         type: 'browserless_ui',
         sessionUrl: this.sessionUrl,
-        timeout: 180000
       });
 
       await this.logInfo('Entering email address');
@@ -241,7 +219,6 @@ export class BookingScraper extends BaseScraper {
       await this.handleCaptcha({
         type: 'browserless_ui',
         sessionUrl: this.sessionUrl,
-        timeout: 180000
       });
 
       await this.logInfo('Looking for password field');
@@ -299,7 +276,6 @@ export class BookingScraper extends BaseScraper {
       await this.handleCaptcha({
         type: 'browserless_ui',
         sessionUrl: this.sessionUrl,
-        timeout: 180000
       });      
 
       await this.takeScreenshot('booking-after-password.png');
@@ -501,12 +477,35 @@ export class BookingScraper extends BaseScraper {
       await this.logInfo('Captcha detected');
       await this.takeScreenshot('booking-captcha.png');
 
+      // Start recording and generate live URL for captcha solving
+      const cdp = await currentPage.createCDPSession();
+      await (cdp as any).send("Browserless.startRecording");
+      await this.logInfo("Recording started successfully");
+
+      await this.delay(2000);
+
+      try {
+        /* TO DO - check with their documentation/support why this can't be increased. 
+          I receive "Couldn't establish a secure connection to the server." when
+          trying to increase timeout.
+        */
+        const { liveURL } = (await (cdp as any).send("Browserless.liveURL", {
+          timeout: 600_000, 
+        })) as { liveURL: string };
+        
+        this.sessionUrl = liveURL;
+        await this.logInfo("Live URL generated for captcha solving:", { liveURL });
+
+      } catch (liveUrlError) {
+        await this.logError("Failed to generate live URL:", liveUrlError);
+      }
+
       if (options?.type === 'automatic') {
         return await this.solveCaptchaAutomatically();
-      } else if (options?.type === 'browserless_ui' && options.sessionUrl) {
-        return await this.solveCaptchaWithUI(options.sessionUrl, options.timeout || 180000);
+      } else if (options?.type === 'browserless_ui') {
+        return await this.solveCaptchaWithUI(this.sessionUrl || options.sessionUrl!, options.timeout || 86400000);
       } else {
-        return await this.solveCaptchaManually(options?.timeout || 180000);
+        return await this.solveCaptchaManually(options?.timeout || 86400000);
       }
     } catch (error) {
       await dualLogError(
@@ -816,7 +815,6 @@ export class BookingScraper extends BaseScraper {
       let captchaHandled = await this.handleCaptcha({
         type: 'browserless_ui',
         sessionUrl: this.sessionUrl,
-        timeout: 180000,
         page: newPage
       });
   
@@ -837,7 +835,6 @@ export class BookingScraper extends BaseScraper {
       captchaHandled = await this.handleCaptcha({
         type: 'browserless_ui',
         sessionUrl: this.sessionUrl,
-        timeout: 180000,
         page: newPage
       });
   
@@ -1232,7 +1229,7 @@ export class BookingScraper extends BaseScraper {
       await this.logInfo('Creating Browserless session with UI access');
 
       const sessionConfig = {
-        ttl: 180000, // 3 minutes
+        ttl: 86400000, // 24h
         stealth: true,
         headless: false,
         args: [
