@@ -21,6 +21,7 @@ export interface TwoFactorAuthOptions {
 export interface ScrapingJobParams {
   jobId?: string;
   propertyId?: string;
+  propertyIdForDb?: string;
   startDate?: string;
   endDate?: string;
   credentials?: LoginCredentials;
@@ -41,6 +42,8 @@ export abstract class BaseScraper {
   protected platform: string;
   protected baseUrl: string;
   protected jobId?: string;
+  protected propertyIdForDb?: string;
+  protected credentials?: LoginCredentials;
 
   constructor(platform: string, baseUrl: string) {
     this.platform = platform;
@@ -82,6 +85,8 @@ export abstract class BaseScraper {
   async executeScraping(params: ScrapingJobParams): Promise<ScrapingResult> {
     try {
       this.jobId = params.jobId;
+      this.propertyIdForDb = params.propertyIdForDb;
+      
       await this.logInfo('Starting scraping process', { platform: this.platform, jobId: params.jobId });
 
       // Step 1: Setup browser
@@ -91,6 +96,7 @@ export abstract class BaseScraper {
 
       // Step 2: Login if credentials provided
       if (params.credentials) {
+        this.credentials = params.credentials;
         await this.logInfo('Performing login');
         await this.login(params.credentials, params.propertyId);
         
