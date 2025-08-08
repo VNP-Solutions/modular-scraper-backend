@@ -49,7 +49,9 @@ export const BOOKING_SELECTORS = {
     ],
   },
   vccs: {
-    vccsToChargeLink: 'a[href*="route=vccs_to_charge"]'
+    vccsToChargeLink: 'a[href*="route=vccs_to_charge"]',
+    table: 'pay-hub__table',
+    viewCardDetailsLink: 'a.pay-hub__view_cc_link',
   },
   pagination: {
     nextPageButton: 'a[aria-label="Next page"]',

@@ -2,6 +2,8 @@ import { Property, IProperty, BookingTrustedStatus } from "../models/property.mo
 import { BookingScraper } from "../scrapers/booking-scraper.js";
 import { dualLogInfo, dualLogError } from "../common/log-helper.js";
 import { initializeJobLogging, finalizeJobLogging } from "../common/log-helper.js";
+import { BOOKING_SELECTORS } from "../common/booking-selectors.js";
+import { BookingErrorType, BookingScrapingPhase } from "../common/booking-error-types.js";
 
 interface TrustVerificationResult {
   propertyId: string;
@@ -10,7 +12,7 @@ interface TrustVerificationResult {
   newStatus: BookingTrustedStatus;
   success: boolean;
   error?: string;
-  hasCardInfo?: boolean;
+  hasCardDetailsLinks?: boolean;
 }
 
 interface TrustSchedulerStats {
@@ -131,10 +133,53 @@ export class BookingTrustSchedulerService {
           password: property.user_password!,
         });
 
-        // For now, we'll assume trust verification is successful if login succeeds
-        // In a real implementation, you would navigate to payment settings to verify card info
-        const hasCardInfo = true; // Placeholder - implement actual card verification logic
-        const newStatus = hasCardInfo ? BookingTrustedStatus.Trusted : BookingTrustedStatus.NotTrusted;
+        // Navigate to VCCS management page to verify card details access
+        await dualLogInfo(`Navigating to VCCS management for property ${propertyId}`);
+        
+        let hasCardDetailsLinks = false;
+        let newStatus = BookingTrustedStatus.NotTrusted;
+        
+        try {
+          await bookingScraper.navigateToMenuSection('finance', 'vccs_management', 'vccs_management');
+          
+          // Wait for the page to load and check for card details links
+          const page = await bookingScraper.getPage();
+          if (page) {
+            // Wait for the table to load
+            await page.waitForSelector(BOOKING_SELECTORS.vccs.table, { timeout: 10000 });
+            
+            // Check if there are any "View card details" links available and clickable (have href)
+            hasCardDetailsLinks = await page.evaluate(() => {
+              const cardDetailLinks = document.querySelectorAll(BOOKING_SELECTORS.vccs.viewCardDetailsLink);
+              let clickableLinks = 0;
+              
+              cardDetailLinks.forEach(link => {
+                const href = link.getAttribute('href');
+                if (href && href.trim() !== '') {
+                  clickableLinks++;
+                }
+              });
+              
+              return clickableLinks > 0;
+            });
+            
+            await dualLogInfo(`Card details verification for property ${propertyId}`, {
+              hasCardDetailsLinks,
+            });
+          }
+          
+          newStatus = hasCardDetailsLinks ? BookingTrustedStatus.Trusted : BookingTrustedStatus.NotTrusted;
+          
+        } catch (navigationError) {
+          await dualLogError(
+            `Trust verification failed - navigation to VCCS management failed for property ${propertyId}`,
+            navigationError,
+            { propertyId, bookingId, previousStatus }
+          );
+          
+          // If navigation fails, property not trusted
+          newStatus = BookingTrustedStatus.NotTrusted;
+        }
 
         // Update property trust status
         await this.updatePropertyTrustStatus(propertyId, newStatus, new Date());
@@ -144,7 +189,7 @@ export class BookingTrustSchedulerService {
           bookingId,
           previousStatus,
           newStatus,
-          hasCardInfo,
+          hasCardDetailsLinks,
           statusChanged: previousStatus !== newStatus,
         });
 
@@ -156,7 +201,7 @@ export class BookingTrustSchedulerService {
           previousStatus,
           newStatus,
           success: true,
-          hasCardInfo,
+          hasCardDetailsLinks,
         };
       } catch (loginError) {
         await dualLogError(
@@ -290,8 +335,14 @@ export class BookingTrustSchedulerService {
           await new Promise((resolve) => setTimeout(resolve, 2000));
         } catch (error) {
           await dualLogError(
-            `Error processing property ${property._id} in trust scheduler`,
-            error
+            `[${new Date().toISOString()}] Error processing property ${property._id} in trust scheduler`,
+            {
+              errorType: BookingErrorType.UNKNOWN,
+              error: error,
+              phase: BookingScrapingPhase.BUILDING_TRUST,
+              platform: 'booking',
+              action: 'run_trust_scheduler'
+            }
           );
           this.stats.failedVerifications++;
         }
@@ -306,7 +357,16 @@ export class BookingTrustSchedulerService {
 
       return this.stats;
     } catch (error) {
-      await dualLogError("Error in trust verification scheduler", error);
+      await dualLogError(
+        `[${new Date().toISOString()}] Error in trust verification scheduler`,
+        {
+          errorType: BookingErrorType.UNKNOWN,
+          error: error,
+          phase: BookingScrapingPhase.BUILDING_TRUST,
+          platform: 'booking',
+          action: 'run_trust_scheduler'
+        }
+      );
       throw error;
     } finally {
       this.isRunning = false;

@@ -1222,6 +1222,11 @@ export class BookingScraper extends BaseScraper {
     }
   }
 
+  // Public method to access the page for trust verification
+  public async getPage(): Promise<Page | null> {
+    return this.page;
+  }
+
   private async createBrowserlessSession(): Promise<any> {
     try {
       await this.logInfo('Creating Browserless session with UI access');
