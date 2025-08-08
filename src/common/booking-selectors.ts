@@ -67,7 +67,11 @@ export const BOOKING_SELECTORS = {
     reservationAmount: '[data-heading="Amount"]',
     reservationCardholder: '[data-heading="Cardholder"]',
     reservationName: 'span[data-test-id="reservation-overview-name"]',
-    closeCardDetails: ['#close_button', '//button[text()="Close"]']
+    closeCardDetails: ['#close_button', '//button[text()="Close"]'],
+    item: (reservationId: string) => [
+      `a[href*="res_id=${reservationId}"]`,
+      `a[href*="res_id=${reservationId}"]:contains("${reservationId}")`
+    ],
   },
   property: {
     searchInput: [

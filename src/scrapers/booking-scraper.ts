@@ -201,7 +201,6 @@ export class BookingScraper extends BaseScraper {
   async login(credentials?: LoginCredentials, propertyId?: string, skipAlreadyLogged?: boolean): Promise<void> {
     if (!this.page) throw new Error('Page not initialized');
 
-    // Use provided credentials or fall back to class property
     const loginCredentials = credentials || this.credentials;
     if (!loginCredentials) {
       throw new Error('No credentials provided for login. Please provide credentials or set them on the scraper instance.');
@@ -213,17 +212,17 @@ export class BookingScraper extends BaseScraper {
         await this.handlePropertySearch(propertyId);
         return;
       }
-      
+
       await this.logInfo('Starting login process');
-      
+
       await this.handleCaptcha({
         type: 'browserless_ui',
         sessionUrl: this.sessionUrl,
         timeout: 180000
       });
-      
+
       await this.logInfo('Entering email address');
-      
+
       const emailEntered = await this.enterEmail(loginCredentials.email);
       if (!emailEntered) {
         await this.takeScreenshot('booking-no-email-field.png');
@@ -232,27 +231,27 @@ export class BookingScraper extends BaseScraper {
 
       await this.logInfo('Clicking Continue with email');
       const continueClicked = await this.clickContinueButton();
-      
+
       if (!continueClicked) {
         throw new Error('Continue Button not found');
       }
-      
+
       await this.takeScreenshot('booking-after-email.png');
       await this.delay(5000);
-      
+
       // Check for captcha after email submission
       await this.handleCaptcha({
         type: 'browserless_ui',
         sessionUrl: this.sessionUrl,
         timeout: 180000
       });
-      
+
       await this.logInfo('Looking for password field');
-      
+
       let passwordField = null;
       let attempts = 0;
       const maxAttempts = 6;
-      
+
       while (!passwordField && attempts < maxAttempts) {
         for (const selector of BOOKING_SELECTORS.password) {
           try {
@@ -271,7 +270,7 @@ export class BookingScraper extends BaseScraper {
             continue
           }
         }
-        
+
         if (!passwordField) {
           attempts++;
           await this.logInfo(`Attempt ${attempts}/${maxAttempts} - waiting for password field`);
@@ -814,9 +813,7 @@ export class BookingScraper extends BaseScraper {
       });
 
       // Click the reservation link
-      await SelectorUtils.findAndClick(this.page, [
-        `a[href*="res_id=${reservationId}"]`,
-      ]);
+      await SelectorUtils.findAndClick(this.page, BOOKING_SELECTORS.reservations.item(reservationId));
 
       const newPage = await newPagePromise;
       
@@ -832,6 +829,8 @@ export class BookingScraper extends BaseScraper {
         await this.logInfo('Captcha not solved in new tab');
         return false;
       }
+
+      await this.delay(2000);
 
       // Check on 2fa
       const twoFASuccess = await this.handle2FA({ page: newPage });
@@ -1716,8 +1715,8 @@ export class BookingScraper extends BaseScraper {
   ): Promise<any> {
     try {
       // Validate inputs
-      if (!this.jobId || !this.propertyIdForDb) {
-        throw new Error('JobId and PropertyId are required');
+      if (jobId || !this.propertyIdForDb) {
+        throw new Error('JobId and propertyIdForDb are required');
       }
 
       // Parse dates
@@ -1811,7 +1810,7 @@ export class BookingScraper extends BaseScraper {
         timeout: 30000 
       });
       
-      // Listen for new page creation for reservation view
+      // Listen for new page creation for card details view
       const newPagePromise = new Promise<Page>((resolve) => {
         this.browser!.once('targetcreated', async (target) => {
           if (target.type() === 'page') {
