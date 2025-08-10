@@ -1,27 +1,3 @@
-/**
- * Agoda Need Help Support Chat Automation
- *
- * This module provides functionality to automate the complete "Need Help" support process on Agoda.
- *
- * Key Features:
- * - Automated support chat navigation
- * - Form filling with predefined message
- * - CSV file attachment upload
- * - Phone number input
- * - Complete support request submission
- *
- * Usage:
- * ```typescript
- * import { automateNeedHelpProcess } from './need-help.js';
- *
- * await automateNeedHelpProcess(page, {
- *   csvFilePath: '/path/to/file.csv',
- *   phoneNumber: '6478600408',
- *   jobId: 'optional-job-id'
- * });
- * ```
- */
-
 import fs from "fs";
 import path from "path";
 import { Page } from "puppeteer";
@@ -87,7 +63,13 @@ async function findCsvFileInImport(): Promise<string | null> {
  */
 async function loadMessageContent(messageFilePath?: string): Promise<string> {
   try {
-    const defaultMessagePath = path.join(__dirname, "message.txt");
+    const defaultMessagePath = path.join(
+      process.cwd(),
+      "src",
+      "agoda",
+      "need-help",
+      "message.txt"
+    );
     const filePath = messageFilePath || defaultMessagePath;
 
     if (fs.existsSync(filePath)) {
@@ -107,9 +89,30 @@ We would greatly appreciate your assistance in providing the remaining amounts.
 Best regards,
 Revenue Control Team`;
     }
-  } catch (error) {
-    await dualLogError("Error loading message content:", error);
-    return "Support request message"; // Minimal fallback
+  } catch (error: any) {
+    await dualLogError(
+      "Error loading message content:",
+      error.message || error
+    );
+    await dualLogInfo(
+      `Attempted to load message from: ${
+        messageFilePath ||
+        path.join(process.cwd(), "src", "agoda", "need-help", "message.txt")
+      }`
+    );
+    // Return fallback message
+    return `Dear Agoda Team,
+
+Thank you in advance for your continued support and cooperation.
+
+We are currently reviewing the Agoda transactions for the attached property. In accordance with the new guidelines provided by Agoda, we have followed all the required steps. During this process, we identified certain reservations where the full booking amount has not yet been collected.
+
+We have attempted to charge the remaining amounts as per our Accounts Receivable report; however, the VCCs are being declined. We kindly request that you reissue the VCCs for the outstanding amounts reflected in our report so we can reconcile these balances accordingly.
+
+We would greatly appreciate your assistance in providing the remaining amounts.
+
+Best regards,
+Revenue Control Team`;
   }
 }
 
@@ -229,6 +232,277 @@ export async function automateNeedHelpProcess(
         continue;
       }
     }
+
+    // Step 5: Wait for form to load and select "Other" from issue type dropdown
+    await delay(5000);
+    await dualLogInfo("Looking for issue type dropdown...", { jobId });
+
+    try {
+      // Click on the dropdown to open it
+      const dropdownSelectors = [
+        'button[data-element-name="dropdown"]',
+        'button[aria-haspopup="listbox"]',
+      ];
+
+      let dropdownClicked = false;
+      for (const selector of dropdownSelectors) {
+        try {
+          await page.waitForSelector(selector, {
+            visible: true,
+            timeout: 10000,
+          });
+          await page.click(selector);
+          await dualLogInfo(`✅ Clicked dropdown with selector: ${selector}`, {
+            jobId,
+          });
+          dropdownClicked = true;
+          break;
+        } catch (error) {
+          continue;
+        }
+      }
+
+      if (dropdownClicked) {
+        await delay(2000); // Wait for dropdown options to appear
+
+        // First check if "Other" is already selected
+        const isOtherAlreadySelected = await page.evaluate(() => {
+          // Look for radio button with "Other" text that is checked
+          const radios = document.querySelectorAll('input[type="radio"]');
+          for (const radio of radios) {
+            const label = radio.closest("label") || radio.closest("li");
+            if (
+              label &&
+              label.textContent?.includes("Other") &&
+              (radio as HTMLInputElement).checked
+            ) {
+              return true;
+            }
+          }
+          return false;
+        });
+
+        if (isOtherAlreadySelected) {
+          await dualLogInfo("✅ 'Other' option is already selected", { jobId });
+        } else {
+          await dualLogInfo("Selecting 'Other' option...", { jobId });
+
+          // Select "Other" option with robust selectors
+          const otherSelectors = [
+            "li:last-child label", // "Other" is the last item in the list
+            'span:has-text("Other")',
+            'label:has-text("Other")',
+            'li:has(span:has-text("Other")) label',
+            'div:has(span:has-text("Other"))',
+            '[role="option"]:has(span:has-text("Other"))',
+          ];
+
+          let otherSelected = false;
+          for (const selector of otherSelectors) {
+            try {
+              await page.waitForSelector(selector, {
+                visible: true,
+                timeout: 5000,
+              });
+              await page.click(selector);
+              await dualLogInfo(
+                `✅ Selected 'Other' option with selector: ${selector}`,
+                { jobId }
+              );
+              otherSelected = true;
+              break;
+            } catch (error) {
+              continue;
+            }
+          }
+
+          if (!otherSelected) {
+            // Final fallback: try to select the last radio option
+            await dualLogInfo(
+              "Trying fallback: selecting last radio option...",
+              { jobId }
+            );
+            try {
+              await page.evaluate(() => {
+                const radios = document.querySelectorAll('input[type="radio"]');
+                const lastRadio = radios[radios.length - 1] as HTMLInputElement;
+                if (lastRadio) {
+                  lastRadio.click();
+                  return true;
+                }
+                return false;
+              });
+              await dualLogInfo(
+                "✅ Selected last radio option (should be 'Other')",
+                { jobId }
+              );
+            } catch (error: any) {
+              await dualLogError(
+                "Failed to select 'Other' option with any method",
+                error.message,
+                { jobId }
+              );
+            }
+          }
+        }
+
+        // Click outside to close dropdown
+        await page.click("body");
+        await delay(1000);
+      }
+    } catch (error: any) {
+      await dualLogError("Error handling issue type dropdown:", error.message, {
+        jobId,
+      });
+    }
+
+    // Step 6: Fill issue details with message content
+    await dualLogInfo("Filling issue details...", { jobId });
+    try {
+      let messageContent = customMessage;
+      if (!messageContent) {
+        messageContent = await loadMessageContent(messageFilePath);
+      }
+
+      const issueDetailsSelectors = [
+        'textarea[data-testid="issueDetails-field"]',
+        'textarea[name="issueDetails"]',
+      ];
+
+      for (const selector of issueDetailsSelectors) {
+        try {
+          await page.waitForSelector(selector, {
+            visible: true,
+            timeout: 10000,
+          });
+          await page.focus(selector);
+          await page.evaluate((sel) => {
+            const textarea = document.querySelector(sel) as HTMLTextAreaElement;
+            if (textarea) textarea.value = "";
+          }, selector);
+          await page.type(selector, messageContent);
+          await dualLogInfo(
+            `✅ Filled issue details with selector: ${selector}`,
+            { jobId }
+          );
+          break;
+        } catch (error) {
+          continue;
+        }
+      }
+    } catch (error: any) {
+      await dualLogError("Error filling issue details:", error.message, {
+        jobId,
+      });
+    }
+
+    // Step 7: Upload CSV file from import folder
+    if (!skipFileUpload) {
+      await dualLogInfo("Uploading CSV file attachment...", { jobId });
+      try {
+        const csvFilePathToUpload =
+          csvFilePath || (await findCsvFileInImport());
+        if (csvFilePathToUpload) {
+          const fileInputSelectors = [
+            'input[data-testid="attachments-field"]',
+            'input[type="file"]',
+            'input[multiple][accept*="image"]',
+          ];
+
+          for (const selector of fileInputSelectors) {
+            try {
+              await page.waitForSelector(selector, { timeout: 10000 });
+              const fileInput = (await page.$(selector)) as any;
+              if (fileInput) {
+                await fileInput.uploadFile(csvFilePathToUpload);
+                await dualLogInfo(
+                  `✅ Uploaded CSV file: ${csvFilePathToUpload} with selector: ${selector}`,
+                  { jobId }
+                );
+                await delay(3000); // Wait for upload to process
+                break;
+              }
+            } catch (error) {
+              continue;
+            }
+          }
+        } else {
+          await dualLogError("No CSV file found to upload", { jobId });
+        }
+      } catch (error: any) {
+        await dualLogError("Error uploading CSV file:", error.message, {
+          jobId,
+        });
+      }
+    }
+
+    // Step 8: Fill phone number
+    await dualLogInfo("Filling phone number...", { jobId });
+    try {
+      const phoneSelectors = [
+        'input[data-testid="phone-field"]',
+        'input[name="phone"]',
+      ];
+
+      for (const selector of phoneSelectors) {
+        try {
+          await page.waitForSelector(selector, {
+            visible: true,
+            timeout: 10000,
+          });
+          await page.focus(selector);
+          await page.evaluate((sel) => {
+            const input = document.querySelector(sel) as HTMLInputElement;
+            if (input) input.value = "";
+          }, selector);
+          await page.type(selector, phoneNumber);
+          await dualLogInfo(
+            `✅ Filled phone number with selector: ${selector}`,
+            { jobId }
+          );
+          break;
+        } catch (error) {
+          continue;
+        }
+      }
+    } catch (error: any) {
+      await dualLogError("Error filling phone number:", error.message, {
+        jobId,
+      });
+    }
+
+    // Step 9: Click final submit button
+    // await dualLogInfo("Clicking final submit button...", { jobId });
+    // try {
+    //   const finalSubmitSelectors = [
+    //     'button[data-testid="submit-button"]',
+    //     'button[type="submit"]',
+    //     'button:has-text("Submit")',
+    //   ];
+
+    //   for (const selector of finalSubmitSelectors) {
+    //     try {
+    //       await page.waitForSelector(selector, {
+    //         visible: true,
+    //         timeout: 10000,
+    //       });
+    //       await page.click(selector);
+    //       await dualLogInfo(
+    //         `✅ Clicked final submit button with selector: ${selector}`,
+    //         { jobId }
+    //       );
+    //       break;
+    //     } catch (error) {
+    //       continue;
+    //     }
+    //   }
+    // } catch (error: any) {
+    //   await dualLogError("Error clicking final submit button:", error.message, {
+    //     jobId,
+    //   });
+    // }
+
+    await delay(2000); // Give time for form submission to process
 
     await dualLogInfo(
       "✅ Need Help automation process completed successfully",
