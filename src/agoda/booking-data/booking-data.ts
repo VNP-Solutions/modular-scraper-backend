@@ -9,6 +9,7 @@ import { scrapingStateManager } from "../../common/scraping-state.js";
 import { timeoutManager } from "../../common/timeout-manager.js";
 import { PaymentInfo } from "../../models/job-item.model.js";
 import { JobService } from "../../services/job.service.js";
+import { automateNeedHelpWithCleanup } from "../need-help/need-help.js";
 
 // Initialize job service
 const jobService = new JobService();
@@ -1480,23 +1481,31 @@ export async function getAgodaBookingData(
               // Interact with support chat after successful CSV export
               try {
                 await dualLogInfo(
-                  `Starting support chat interaction after CSV export`,
+                  `Starting Need Help automation with cleanup after CSV export`,
                   { jobId, propertyIdForDb }
                 );
 
-                await interactWithSupportChat(newPage, jobId);
-
-                await dualLogInfo(`Support chat interaction completed`, {
+                await automateNeedHelpWithCleanup(newPage, {
                   jobId,
-                  propertyIdForDb,
+                  cleanupAfter: true,
+                  agodaId: agodaId,
+                  propertyName: job.property_name,
                 });
+
+                await dualLogInfo(
+                  `Need Help automation with cleanup completed`,
+                  {
+                    jobId,
+                    propertyIdForDb,
+                  }
+                );
               } catch (chatError: any) {
                 await dualLogError(
-                  `Error during support chat interaction (continuing with job completion):`,
+                  `Error during Need Help automation (continuing with job completion):`,
                   chatError.message,
                   { jobId, propertyIdForDb }
                 );
-                // Don't throw error - chat interaction failure shouldn't fail the main job
+                // Don't throw error - automation failure shouldn't fail the main job
               }
             } catch (csvExportError: any) {
               await dualLogError(
