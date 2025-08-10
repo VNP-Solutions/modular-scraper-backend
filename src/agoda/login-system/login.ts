@@ -2,6 +2,7 @@ import { Browser, Page } from "puppeteer";
 import { dualLogError, dualLogInfo } from "../../common/log-helper.js";
 import { timeoutManager } from "../../common/timeout-manager.js";
 import { getAgodaSignInLink } from "./email-link-helper.js";
+import { getAgodaOtpCode } from "./email-otp-helper.js";
 
 async function agodaLogin(
   browser: Browser,
@@ -117,82 +118,51 @@ async function agodaLogin(
       await continueButton.click();
       await dualLogInfo("Continue button clicked successfully!");
 
-      // Wait for "check your email" message
-      await dualLogInfo("Looking for 'check your email' message...");
-      await frame.waitForSelector('div[data-cy="check-your-email"]', {
-        timeout: loadingTimeout,
-      });
+      // Wait for either "check your email" message or OTP form
+      await dualLogInfo("Waiting for next page (email link or OTP form)...");
 
-      await dualLogInfo("Check your email message appeared!");
+      // Use Promise.race to wait for either outcome
+      const nextPageResult = await Promise.race([
+        // Option 1: Check your email message (for direct link)
+        frame
+          .waitForSelector('div[data-cy="check-your-email"]', {
+            timeout: loadingTimeout,
+          })
+          .then(() => "email-link"),
+
+        // Option 2: OTP form appears
+        frame
+          .waitForSelector('div[data-cy="unified-auth-otp-form"]', {
+            timeout: loadingTimeout,
+          })
+          .then(() => "otp-form"),
+
+        // Option 3: OTP heading appears
+        frame
+          .waitForSelector('h2:has-text("Sign in with OTP")', {
+            timeout: loadingTimeout,
+          })
+          .then(() => "otp-form"),
+      ]);
+
+      await dualLogInfo(`Next page result: ${nextPageResult}`);
+
+      // Handle different login flows based on next page result
+      if (nextPageResult === "email-link") {
+        await dualLogInfo("✅ Direct email link flow detected");
+        await handleDirectLinkFlow(page);
+      } else if (nextPageResult === "otp-form") {
+        await dualLogInfo("✅ OTP form flow detected");
+        await handleOtpFlow(frame, loadingTimeout, selectorTimeout);
+      } else {
+        throw new Error(`Unknown next page result: ${nextPageResult}`);
+      }
+
+      await dualLogInfo("Agoda login process completed successfully!");
     } catch (pageError) {
       await dualLogError("Error during page interaction:", pageError);
       shouldCloseBrowser = true;
       throw pageError;
-    }
-
-    // Email processing and navigation
-    try {
-      // Wait 40 seconds for email to arrive in inbox
-      await dualLogInfo("Waiting 30 seconds for email delivery...");
-      await new Promise((resolve) => setTimeout(resolve, 30000));
-
-      await dualLogInfo("Now fetching sign-in link from email...");
-
-      // Try multiple attempts to find the sign-in link
-      let signInResult: any = null;
-      const maxRetries = 3;
-
-      for (let attempt = 1; attempt <= maxRetries; attempt++) {
-        await dualLogInfo(
-          `Attempt ${attempt}/${maxRetries} to fetch sign-in link...`
-        );
-
-        // Fetch the sign-in link from email (check 5 recent emails)
-        signInResult = await getAgodaSignInLink(5);
-
-        if (signInResult.signInLink) {
-          await dualLogInfo(`Sign-in link found on attempt ${attempt}`);
-          break;
-        }
-
-        if (attempt < maxRetries) {
-          await dualLogInfo(
-            `Attempt ${attempt} failed, waiting 10 seconds before retry...`
-          );
-          await new Promise((resolve) => setTimeout(resolve, 10000));
-        }
-      }
-
-      if (!signInResult || !signInResult.emailFound) {
-        throw new Error("Failed to access email for sign-in link");
-      }
-
-      if (!signInResult.signInLink) {
-        throw new Error(
-          "Sign-in link not found in recent emails after all attempts. Please check if you received the Agoda sign-in email."
-        );
-      }
-
-      await dualLogInfo(`Sign-in link found: ${signInResult.signInLink}`);
-      if (signInResult.emailSubject) {
-        await dualLogInfo(`Email subject: ${signInResult.emailSubject}`);
-      }
-
-      // Navigate to the sign-in link
-      await dualLogInfo("Navigating to sign-in link...");
-      await page.goto(signInResult.signInLink, {
-        waitUntil: "networkidle2",
-        timeout: 50000,
-      });
-
-      await dualLogInfo("Agoda login process completed successfully!");
-    } catch (emailError) {
-      await dualLogError(
-        "Error during email processing or navigation:",
-        emailError
-      );
-      shouldCloseBrowser = true;
-      throw emailError;
     }
   } catch (error) {
     await dualLogError("Critical error during Agoda login process:", error);
@@ -224,6 +194,187 @@ async function agodaLogin(
       await dualLogError("Error in final browser cleanup:", finalCleanupError);
     }
   }
+}
+
+/**
+ * Handle direct email link flow (existing functionality)
+ */
+async function handleDirectLinkFlow(page: Page): Promise<void> {
+  // Wait 30 seconds for email to arrive in inbox
+  await dualLogInfo("Waiting 30 seconds for email delivery...");
+  await new Promise((resolve) => setTimeout(resolve, 30000));
+
+  await dualLogInfo("Now fetching sign-in link from email...");
+
+  // Try multiple attempts to find the sign-in link
+  let signInResult: any = null;
+  const maxRetries = 3;
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    await dualLogInfo(
+      `Attempt ${attempt}/${maxRetries} to fetch sign-in link...`
+    );
+
+    // Fetch the sign-in link from email (check 5 recent emails)
+    signInResult = await getAgodaSignInLink(5);
+
+    if (signInResult.signInLink) {
+      await dualLogInfo(`Sign-in link found on attempt ${attempt}`);
+      break;
+    }
+
+    if (attempt < maxRetries) {
+      await dualLogInfo(
+        `Attempt ${attempt} failed, waiting 10 seconds before retry...`
+      );
+      await new Promise((resolve) => setTimeout(resolve, 10000));
+    }
+  }
+
+  if (!signInResult || !signInResult.emailFound) {
+    throw new Error("Failed to access email for sign-in link");
+  }
+
+  if (!signInResult.signInLink) {
+    throw new Error(
+      "Sign-in link not found in recent emails after all attempts. Please check if you received the Agoda sign-in email."
+    );
+  }
+
+  await dualLogInfo(`Sign-in link found: ${signInResult.signInLink}`);
+  if (signInResult.emailSubject) {
+    await dualLogInfo(`Email subject: ${signInResult.emailSubject}`);
+  }
+
+  // Navigate to the sign-in link
+  await dualLogInfo("Navigating to sign-in link...");
+  await page.goto(signInResult.signInLink, {
+    waitUntil: "networkidle2",
+    timeout: 50000,
+  });
+}
+
+/**
+ * Handle OTP form flow (new functionality)
+ */
+async function handleOtpFlow(
+  frame: any,
+  loadingTimeout: number,
+  selectorTimeout: number
+): Promise<void> {
+  await dualLogInfo("🔐 Processing OTP form...");
+
+  // Wait for OTP input fields to be visible
+  await dualLogInfo("Waiting for OTP input fields...");
+  await frame.waitForSelector('input[data-cy="otp-box-0"]', {
+    timeout: selectorTimeout,
+  });
+
+  // Wait 30 seconds for OTP email to arrive
+  await dualLogInfo("Waiting 30 seconds for OTP email delivery...");
+  await new Promise((resolve) => setTimeout(resolve, 30000));
+
+  await dualLogInfo("Now fetching OTP code from email...");
+
+  // Try multiple attempts to find the OTP code
+  let otpResult: any = null;
+  const maxRetries = 3;
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    await dualLogInfo(`Attempt ${attempt}/${maxRetries} to fetch OTP code...`);
+
+    // Fetch the OTP code from email (check 5 recent emails)
+    otpResult = await getAgodaOtpCode(5);
+
+    if (otpResult.otpCode) {
+      await dualLogInfo(
+        `OTP code found on attempt ${attempt}: ${otpResult.otpCode}`
+      );
+      break;
+    }
+
+    if (attempt < maxRetries) {
+      await dualLogInfo(
+        `Attempt ${attempt} failed, waiting 10 seconds before retry...`
+      );
+      await new Promise((resolve) => setTimeout(resolve, 10000));
+    }
+  }
+
+  if (!otpResult || !otpResult.emailFound) {
+    throw new Error("Failed to access email for OTP code");
+  }
+
+  if (!otpResult.otpCode) {
+    throw new Error(
+      "OTP code not found in recent emails after all attempts. Please check if you received the Agoda OTP email."
+    );
+  }
+
+  // Fill OTP code into the input fields
+  await dualLogInfo(`Filling OTP code: ${otpResult.otpCode}`);
+
+  // Split the 6-digit code into individual digits
+  const otpDigits = otpResult.otpCode.split("");
+
+  if (otpDigits.length !== 6) {
+    throw new Error(
+      `Invalid OTP code length: ${otpDigits.length}. Expected 6 digits.`
+    );
+  }
+
+  // Fill each OTP input field
+  for (let i = 0; i < 6; i++) {
+    const inputSelector = `input[data-cy="otp-box-${i}"]`;
+    await dualLogInfo(`Filling OTP box ${i} with digit: ${otpDigits[i]}`);
+
+    // Wait for the input field
+    await frame.waitForSelector(inputSelector, { timeout: selectorTimeout });
+
+    // Focus and clear the field
+    await frame.focus(inputSelector);
+    await frame.evaluate((selector: string) => {
+      const input = document.querySelector(selector) as HTMLInputElement;
+      if (input) {
+        input.value = "";
+        input.focus();
+      }
+    }, inputSelector);
+
+    // Type the digit
+    await frame.type(inputSelector, otpDigits[i], { delay: 150 });
+  }
+
+  await dualLogInfo("All OTP digits filled successfully");
+
+  // Wait for continue button to become enabled
+  await dualLogInfo("Waiting for OTP continue button to be enabled...");
+  await frame.waitForFunction(
+    () => {
+      const button = document.querySelector(
+        'button[data-cy="unified-auth-otp-continue-button"]'
+      ) as HTMLButtonElement;
+      return button && !button.disabled;
+    },
+    { timeout: selectorTimeout }
+  );
+
+  // Click the continue button
+  const otpContinueButton = await frame.waitForSelector(
+    'button[data-cy="unified-auth-otp-continue-button"]',
+    { timeout: selectorTimeout }
+  );
+
+  if (!otpContinueButton) {
+    throw new Error("OTP continue button not found");
+  }
+
+  await otpContinueButton.click();
+  await dualLogInfo("OTP continue button clicked successfully!");
+
+  // Wait for successful login (page should redirect)
+  await dualLogInfo("Waiting for login completion...");
+  await new Promise((resolve) => setTimeout(resolve, 5000));
 }
 
 export default agodaLogin;

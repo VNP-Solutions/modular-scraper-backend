@@ -1,0 +1,2 @@
+# This file ensures the import directory is tracked in version control
+# CSV export files will be generated in this directory after booking data is saved to the database
