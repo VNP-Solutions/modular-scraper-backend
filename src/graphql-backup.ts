@@ -506,9 +506,9 @@ async function makeGraphQLRequest(
             }`
           );
 
-          // Initialize card data and payment data variables
+          // Initialize card data and EVC data variables
           let cardData: CardInfo | null = null;
-          let paymentData: PaymentInfo | null = null;
+          let evcCardData: any = null;
 
           // If EVC card details exist, try to fetch the actual card data
           if (
@@ -519,7 +519,7 @@ async function makeGraphQLRequest(
               console.log(
                 `💳 Fetching EVC card data for reservation ${index + 1}...`
               );
-              const evcCardData = await fetchEVCCardData(
+              evcCardData = await fetchEVCCardData(
                 expediaId || "",
                 paymentInfo.expediaVirtualCardResourceId,
                 item.reservationItemId,
@@ -659,7 +659,7 @@ async function makeGraphQLRequest(
               propertyIdForDb,
               item,
               cardData,
-              paymentData
+              evcCardData
             );
           }
         }
@@ -735,7 +735,7 @@ async function saveGraphQLReservationToDatabase(
   propertyId: string,
   reservationItem: any,
   cardData: CardInfo | null,
-  paymentData: PaymentInfo | null
+  evcCardData: any | null
 ): Promise<void> {
   try {
     // Validate jobId before processing
@@ -790,7 +790,7 @@ async function saveGraphQLReservationToDatabase(
       return typeof value === "number" ? value : parseFloat(value) || 0;
     };
 
-    // Extract data from GraphQL reservation item
+    // Extract data from GraphQL reservation item - Updated field mappings
     const guestName = reservationItem.customer?.guestName || "Unknown Guest";
     const reservationId = reservationItem.reservationItemId || "";
     const confirmationCode =
@@ -805,9 +805,31 @@ async function saveGraphQLReservationToDatabase(
     const bookedDate =
       reservationItem.reservationInfo?.createDateTime ||
       new Date().toISOString();
-    const reservationStatus =
-      reservationItem.reservationInfo?.reservationAttributes?.bookingStatus ||
-      "Unknown";
+
+    // Set reservation status to "Expedia Collect" as specified
+    const reservationStatus = "Expedia Collect";
+
+    // Create payment data from GraphQL response and EVC data
+    let paymentData: PaymentInfo | null = null;
+    if (reservationItem.totalAmounts) {
+      // Extract amount to charge/refund from EVC card data if available
+      let amountToChargeOrRefund = 0;
+      if (evcCardData?.cardInformation?.availableBalance?.amount) {
+        amountToChargeOrRefund =
+          evcCardData.cardInformation.availableBalance.amount;
+      }
+
+      paymentData = {
+        total_guest_payment: parseAmount(
+          reservationItem.totalAmounts.totalReservationAmount
+        ),
+        cancellation_fee: 0, // Not available in current response structure
+        total_payout: parseAmount(
+          reservationItem.totalAmounts.propertyBookingTotal
+        ),
+        amount_to_charge_or_refund: amountToChargeOrRefund,
+      };
+    }
 
     // Create additional text with business model and other relevant info
     const businessModel =
