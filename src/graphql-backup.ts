@@ -18,7 +18,6 @@ import { getNextDateFromCompleted } from "./date-split/helper.js";
 import login from "./login/login.js";
 import { CardInfo, PaymentInfo } from "./models/job-item.model.js";
 import handleOtpVerification from "./otp-verification/otp-verification.js";
-import { propertySearchAndClickReservation } from "./property-search/property-search.js";
 import { jobQueueUrlService } from "./services/job-queue-url.service.js";
 import { CreateJobItemData, jobService } from "./services/job.service.js";
 
@@ -75,11 +74,11 @@ async function makeGraphQLRequest(
             startDate: "${formattedStartDate}", 
             endDate: "${formattedEndDate}", 
             dateType: "checkOut", 
-            evc: true, 
+            evc: false, 
             expediaCollect: true, 
-            timezoneOffset: "-05:00", 
+            timezoneOffset: "-04:00", 
             firstName: null, 
-            hotelCollect: false, 
+            hotelCollect: true, 
             isSpecialRequest: false, 
             isVIPBooking: false, 
             lastName: null, 
@@ -381,6 +380,7 @@ async function makeGraphQLRequest(
         method: "POST",
         headers: {
           ...BROWSER_CONFIG.GRAPHQL_HEADERS,
+          "client-name": "pc-reservations-web",
           "user-agent": BROWSER_CONFIG.USER_AGENT,
           cookie: cookieHeader,
         },
@@ -528,9 +528,82 @@ async function makeGraphQLRequest(
               );
               console.log(`✅ EVC Card Data:`, evcCardData);
 
-              // Map EVC card data to CardInfo format
-              if (evcCardData && evcCardData.cardNumber) {
-                // Map GraphQL reason_for_charge values to desired format
+              // Map EVC card data to CardInfo format - Handle actual API response structure
+              if (evcCardData && evcCardData.cardInformation) {
+                const cardInfo = evcCardData.cardInformation;
+
+                // Map EVC charge status values to desired format
+                const mapReasonForCharge = (chargeStatus: string): string => {
+                  switch (chargeStatus?.toLowerCase()) {
+                    case "deactivatedduetofullcharge":
+                      return "Charge is full";
+                    case "partiallycharged":
+                      return "Partially charged";
+                    case "readytocharge":
+                      return "Ready to charge";
+                    default:
+                      return chargeStatus || "";
+                  }
+                };
+
+                // Extract data from the actual API response structure
+                const cardNumber = cardInfo.cardNumber || "";
+                const expirationDate =
+                  cardInfo.expirationDate || cardInfo.expiryDate || "";
+                const cvv = cardInfo.cvv || "";
+                const chargeStatus =
+                  cardInfo.chargeStatus?.chargeStatus ||
+                  cardInfo.reasonForCharge ||
+                  "";
+
+                console.log(`🔍 Raw EVC card info:`, {
+                  cardNumber: cardNumber
+                    ? `${cardNumber.substring(0, 6)}****${cardNumber.substring(
+                        cardNumber.length - 4
+                      )}`
+                    : "None",
+                  expirationDate,
+                  cvv: cvv ? "***" : "None",
+                  chargeStatus,
+                });
+
+                if (cardNumber && cvv) {
+                  cardData = {
+                    card_number: cardNumber,
+                    expiry_date: expirationDate,
+                    cvv: cvv,
+                    reason_for_charge: mapReasonForCharge(chargeStatus),
+                  };
+
+                  console.log(`✅ Mapped EVC card data:`, {
+                    card_number: `${cardData.card_number.substring(
+                      0,
+                      6
+                    )}****${cardData.card_number.substring(
+                      cardData.card_number.length - 4
+                    )}`,
+                    expiry_date: cardData.expiry_date,
+                    cvv: "***",
+                    reason_for_charge: cardData.reason_for_charge,
+                  });
+                } else {
+                  console.warn(
+                    `⚠️ Missing essential card data (cardNumber: ${!!cardNumber}, cvv: ${!!cvv}) for reservation ${
+                      index + 1
+                    }`
+                  );
+                }
+              } else if (
+                evcCardData &&
+                (evcCardData.cardNumber || evcCardData.card_number)
+              ) {
+                // Fallback for old/different response format
+                console.log(
+                  `🔄 Using fallback card data mapping for reservation ${
+                    index + 1
+                  }`
+                );
+
                 const mapReasonForCharge = (graphqlReason: string): string => {
                   switch (graphqlReason?.toLowerCase()) {
                     case "deactivatedduetofullcharge":
@@ -545,13 +618,29 @@ async function makeGraphQLRequest(
                 };
 
                 cardData = {
-                  card_number: evcCardData.cardNumber || "",
-                  expiry_date: evcCardData.expiryDate || "",
-                  cvv: evcCardData.cvv || "",
+                  card_number:
+                    evcCardData.cardNumber || evcCardData.card_number || "",
+                  expiry_date:
+                    evcCardData.expiryDate || evcCardData.expiry_date || "",
+                  cvv: evcCardData.cvv || evcCardData.securityCode || "",
                   reason_for_charge: mapReasonForCharge(
-                    evcCardData.reasonForCharge
+                    evcCardData.reasonForCharge ||
+                      evcCardData.reason_for_charge ||
+                      ""
                   ),
                 };
+
+                console.log(`✅ Mapped EVC card data (fallback):`, cardData);
+              } else {
+                console.warn(
+                  `⚠️ No valid card data in EVC response for reservation ${
+                    index + 1
+                  }`
+                );
+                console.log(
+                  `🔍 EVC Response structure:`,
+                  Object.keys(evcCardData || {})
+                );
               }
             } catch (cardError: any) {
               console.error(
@@ -593,6 +682,31 @@ async function makeGraphQLRequest(
           );
         }
       });
+
+      // Check if this is a downstream service error (temporary issue)
+      const isDownstreamError = responseData.errors.some(
+        (error: any) =>
+          error.extensions?.code === "DOWNSTREAM_SERVICE_ERROR" ||
+          error.message?.includes("Downstream service error") ||
+          error.extensions?.classification === "DATA_SOURCE_ERROR"
+      );
+
+      if (isDownstreamError) {
+        console.warn(
+          "⚠️ Detected downstream service error - this may be temporary"
+        );
+        await dualLogError(
+          "Downstream service error detected - Expedia's API may be experiencing issues",
+          `This is likely a temporary issue with Expedia's reservation search API. Error: ${responseData.errors[0]?.message}`,
+          {
+            jobId,
+            expediaId,
+            startDate,
+            endDate,
+            errorType: "DOWNSTREAM_SERVICE_ERROR",
+          }
+        );
+      }
 
       throw new Error(
         `GraphQL query errors: ${JSON.stringify(responseData.errors)}`
@@ -765,10 +879,25 @@ async function fetchEVCCardData(
       cardResourceId
     )}`;
 
+    // Generate a unique origin-request-id for each request
+    const generateRequestId = (): string => {
+      return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(
+        /[xy]/g,
+        function (c) {
+          const r = (Math.random() * 16) | 0;
+          const v = c === "x" ? r : (r & 0x3) | 0x8;
+          return v.toString(16);
+        }
+      );
+    };
+
     const requestBody = {
       bookingItemId: bookingItemId.toString(),
       checkInDate: checkInDate,
     };
+
+    console.log(`🔗 EVC API URL: ${url}`);
+    console.log(`📋 EVC Request Body:`, requestBody);
 
     const response = await fetch(url, {
       method: "POST",
@@ -779,7 +908,7 @@ async function fetchEVCCardData(
         dnt: "1",
         origin: "https://apps.expediapartnercentral.com",
         priority: "u=1, i",
-        referer: "https://apps.expediapartnercentral.com/",
+        referer: `https://apps.expediapartnercentral.com/lodging/bookings?htid=${propertyId}&bookingItemId=${bookingItemId}`,
         "sec-ch-ua":
           '"Not)A;Brand";v="8", "Chromium";v="138", "Google Chrome";v="138"',
         "sec-ch-ua-mobile": "?0",
@@ -789,7 +918,7 @@ async function fetchEVCCardData(
         "sec-fetch-site": "same-origin",
         "user-agent":
           "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
-        "origin-request-id": "7abd502b-052e-4fa6-8b9f-d46345363f36",
+        "origin-request-id": generateRequestId(), // Dynamic request ID
         cookie: cookieHeader,
       },
       body: JSON.stringify(requestBody),
@@ -797,12 +926,39 @@ async function fetchEVCCardData(
 
     if (!response.ok) {
       const errorText = await response.text();
+      console.error(
+        `❌ EVC API Error: ${response.status} ${response.statusText}`
+      );
+      console.error(`❌ EVC API Response:`, errorText);
       throw new Error(
         `EVC API failed with status ${response.status}: ${errorText}`
       );
     }
 
     const cardData = await response.json();
+    console.log(`✅ EVC API Response:`, cardData);
+
+    // Check if response contains actual card data - handle new API response structure
+    const hasCardData =
+      cardData &&
+      // New API structure
+      ((cardData.cardInformation && cardData.cardInformation.cardNumber) ||
+        // Old API structure (fallback)
+        cardData.cardNumber ||
+        cardData.card_number);
+
+    if (!hasCardData) {
+      console.warn(
+        `⚠️ EVC API returned response but no card data found:`,
+        cardData
+      );
+      console.log(
+        `🔍 Available keys in response:`,
+        Object.keys(cardData || {})
+      );
+      return null;
+    }
+
     return cardData;
   } catch (error: any) {
     console.error("❌ Error fetching EVC card data:", error);
@@ -1012,542 +1168,291 @@ async function runScrapingWithRestart(
   );
   console.log(`📅 Dates: ${datesToProcess.join(", ")}`);
 
-  // Process each date individually
-  for (let i = 0; i < datesToProcess.length; i++) {
-    const singleDate = datesToProcess[i];
-    console.log(
-      `\n🗓️ Processing day ${i + 1}/${datesToProcess.length}: ${singleDate}`
-    );
+  // Setup browser ONCE for all dates (moved outside the date loop)
+  let globalBrowser = null;
+  let globalPage = null;
+  let cookieHeader = "";
 
-    // Reset attempt counter for each new date
-    attemptCount = 0;
-    let browser = null;
-    let dateCompleted = false;
+  try {
+    // Browser setup happens ONCE for all dates
+    await dualLogInfo("Setting up browser for all dates...");
+    let setupResult = null;
+    if (environment === "production") {
+      setupResult = await browserSetupProduction(jobId);
+    } else {
+      setupResult = await browserSetupLocal(jobId);
+    }
+    globalBrowser = setupResult.browser;
+    globalPage = setupResult.page;
 
-    // Retry logic for each individual date
-    while (!dateCompleted && attemptCount < maxAttempts) {
-      attemptCount++;
+    await dualLogInfo("Browser setup complete. Page is ready at login screen.");
+
+    // Perform login ONCE for all dates
+    const email = expediaUsername;
+    const password = decryptPassword(expediaPassword);
+
+    if (email && password) {
+      await dualLogInfo(
+        "Login credentials found, performing automatic login..."
+      );
 
       try {
-        await dualLogInfo(
-          `Starting scraping attempt ${attemptCount} for date ${singleDate}`,
-          {
-            currentDate: singleDate,
-            dayProgress: `${i + 1}/${datesToProcess.length}`,
-            jobId,
-            timeSession: timeManager.getSessionInfo(),
-          }
-        );
-
-        // Step 1: Setup browser and navigate to login page
-        await dualLogInfo("Setting up browser...");
-        let setupResult = null;
-        if (environment === "production") {
-          setupResult = await browserSetupProduction(jobId);
-        } else {
-          setupResult = await browserSetupLocal(jobId);
-        }
-        browser = setupResult.browser;
-        const page = setupResult.page;
-
-        await dualLogInfo(
-          "Browser setup complete. Page is ready at login screen."
-        );
-
-        // Check if scraping is paused and wait if needed
         await scrapingStateManager.waitWhilePaused();
         if (!scrapingStateManager.isRunning()) {
           await dualLogInfo("Scraping was stopped, exiting...");
-          await browser.close();
-          if (jobId) {
-            await finalizeJobLogging("failed");
-          }
+          if (globalBrowser) await globalBrowser.close();
+          if (jobId) await finalizeJobLogging("failed");
           return;
         }
 
-        // Step 2: Check if login credentials are provided
-        const email = expediaUsername;
-        const password = decryptPassword(expediaPassword);
+        await login(globalBrowser, globalPage, email, password, jobId);
+        await dualLogInfo(
+          "Login completed successfully! User is now logged in."
+        );
+        await delay(5000); // Short delay after login
 
-        if (email && password) {
-          await dualLogInfo(
-            "Login credentials found, performing automatic login..."
-          );
-
-          try {
-            // Check pause state before login
-            await scrapingStateManager.waitWhilePaused();
-            if (!scrapingStateManager.isRunning()) {
-              await dualLogInfo("Scraping was stopped, exiting...");
-              await browser.close();
-              if (jobId) {
-                await finalizeJobLogging("failed");
-              }
-              return;
-            }
-
-            await login(browser, page, email, password, jobId);
-            await dualLogInfo(
-              "Login completed successfully! User is now logged in."
-            );
-
-            // Add your post-login automation here
-            await dualLogInfo("Ready for scraping operations...");
-            await delay(10000);
-          } catch (loginError) {
-            await dualLogError("Login failed:", loginError);
-            // Close browser when done with this attempt
-            if (browser) {
-              await browser.close();
-              browser = null;
-            }
-            await dualLogInfo("Browser closed successfully.");
-            throw loginError;
+        // Handle OTP verification ONCE after login
+        try {
+          await scrapingStateManager.waitWhilePaused();
+          if (!scrapingStateManager.isRunning()) {
+            await dualLogInfo("Scraping was stopped, exiting...");
+            if (globalBrowser) await globalBrowser.close();
+            if (jobId) await finalizeJobLogging("failed");
+            return;
           }
 
+          await handleOtpVerification(globalBrowser, globalPage, jobId);
+          await dualLogInfo("OTP verification completed successfully!");
+        } catch (otpError: any) {
+          await dualLogError("OTP verification failed:", otpError);
+          // Don't fail the entire process for OTP - it might not be required
+          await dualLogInfo(
+            "Continuing without OTP verification (it might not be required)"
+          );
+        }
+
+        // Extract session cookies ONCE (after OTP verification)
+        const cookies = await globalPage.cookies();
+        cookieHeader = cookies
+          .map((cookie) => `${cookie.name}=${cookie.value}`)
+          .join("; ");
+
+        await dualLogInfo("Session cookies extracted for GraphQL API");
+      } catch (loginError) {
+        await dualLogError("Login failed:", loginError);
+        if (globalBrowser) await globalBrowser.close();
+        throw loginError;
+      }
+    } else {
+      await dualLogInfo("No login credentials provided.");
+    }
+
+    // Process each date individually with the same browser session
+    for (let i = 0; i < datesToProcess.length; i++) {
+      const singleDate = datesToProcess[i];
+      console.log(
+        `\n🗓️ Processing day ${i + 1}/${datesToProcess.length}: ${singleDate}`
+      );
+
+      // Reset attempt counter for each new date
+      attemptCount = 0;
+      let dateCompleted = false;
+
+      // Retry logic for each individual date
+      while (!dateCompleted && attemptCount < maxAttempts) {
+        attemptCount++;
+
+        try {
+          await dualLogInfo(
+            `Starting scraping attempt ${attemptCount} for date ${singleDate}`,
+            {
+              currentDate: singleDate,
+              dayProgress: `${i + 1}/${datesToProcess.length}`,
+              jobId,
+              timeSession: timeManager.getSessionInfo(),
+            }
+          );
+
+          // Use the existing browser session (no new browser setup needed)
+          await dualLogInfo("Using existing browser session...");
+
+          // Check if browser is still alive
+          if (!globalBrowser || globalBrowser.isConnected() === false) {
+            throw new Error("Browser session lost, need to restart");
+          }
+
+          let browser = globalBrowser;
+          let page = globalPage;
+
+          await dualLogInfo(
+            "Browser setup complete. Page is ready at login screen."
+          );
+
+          // Check if scraping is paused and wait if needed
+          await scrapingStateManager.waitWhilePaused();
+          if (!scrapingStateManager.isRunning()) {
+            await dualLogInfo("Scraping was stopped, exiting...");
+            if (jobId) {
+              await finalizeJobLogging("failed");
+            }
+            return;
+          }
+
+          // GraphQL API call with retry logic
           try {
-            // Check pause state before OTP verification
-            await scrapingStateManager.waitWhilePaused();
-            if (!scrapingStateManager.isRunning()) {
-              await dualLogInfo("Scraping was stopped, exiting...");
-              await browser.close();
-              if (jobId) {
-                await finalizeJobLogging("failed");
+            // Add retry logic for GraphQL API calls
+            let graphqlRetries = 0;
+            const maxGraphqlRetries = 3;
+            let graphqlSuccess = false;
+
+            while (!graphqlSuccess && graphqlRetries < maxGraphqlRetries) {
+              try {
+                await makeGraphQLRequest(
+                  cookieHeader,
+                  expediaId,
+                  singleDate, // Use the current single date
+                  singleDate, // Same start and end date for single day
+                  jobId
+                );
+                graphqlSuccess = true;
+              } catch (graphqlRetryError: any) {
+                graphqlRetries++;
+
+                // Check if it's a downstream service error (worth retrying)
+                const isRetryableError =
+                  graphqlRetryError.message?.includes(
+                    "DOWNSTREAM_SERVICE_ERROR"
+                  ) ||
+                  graphqlRetryError.message?.includes(
+                    "Downstream service error"
+                  );
+
+                if (isRetryableError && graphqlRetries < maxGraphqlRetries) {
+                  const retryDelay = Math.min(
+                    1000 * Math.pow(2, graphqlRetries),
+                    10000
+                  ); // Exponential backoff, max 10s
+                  console.warn(
+                    `⚠️ GraphQL retry ${graphqlRetries}/${maxGraphqlRetries} in ${retryDelay}ms...`
+                  );
+                  await dualLogInfo(
+                    `GraphQL API retry ${graphqlRetries}/${maxGraphqlRetries} after ${retryDelay}ms delay`,
+                    {
+                      jobId,
+                      date: singleDate,
+                      retryReason: "DOWNSTREAM_SERVICE_ERROR",
+                    }
+                  );
+                  await delay(retryDelay);
+                } else {
+                  // Either not retryable or max retries reached
+                  throw graphqlRetryError;
+                }
               }
-              return;
             }
 
-            await handleOtpVerification(browser, page, jobId);
-            await dualLogInfo("OTP verification completed successfully!");
-          } catch (error: any) {
-            await dualLogError("OTP verification failed:", error);
+            console.log("✅ GraphQL API call completed successfully!");
 
-            // Close browser when done with this attempt
-            if (browser) {
-              await browser.close();
-              browser = null;
+            // SUCCESS! This date is complete, move to next date
+            console.log(
+              `🎉 Day ${i + 1}/${
+                datesToProcess.length
+              } (${singleDate}) completed successfully!`
+            );
+
+            // ✅ Data stored to database via GraphQL processing above
+
+            dateCompleted = true; // Mark this date as completed
+            break; // Exit the retry attempts for this date
+          } catch (graphqlError: any) {
+            console.error("❌ GraphQL API call failed:", graphqlError);
+            throw graphqlError;
+          }
+        } catch (error: any) {
+          await dualLogError(
+            `Scraping attempt ${attemptCount} for date ${singleDate} failed:`,
+            error
+          );
+
+          // For critical errors, stop processing all dates
+          if (
+            !(error instanceof Error) ||
+            !error.message.startsWith("BROWSER_RESTART_NEEDED:")
+          ) {
+            // Clean up progress file on error
+            if (jobId) {
+              await progressManager.handleJobError(jobId, error);
+
+              // Release URL back to Available status on browser crash
+              await jobQueueUrlService.handleJobCompletion(
+                jobId,
+                "Failed",
+                error?.message || "Unknown error"
+              );
             }
-            await dualLogInfo("Browser closed successfully.");
-            // Continue even if OTP fails as it might not be required
+
+            console.error(
+              `❌ Critical error on date ${singleDate}, stopping all date processing`
+            );
             throw error;
           }
 
-          await dualLogInfo("Starting graphql scraping...");
-          // page.on("request", (req) => {
-          //   if (req.url().includes("graphql")) {
-          //     console.log("GraphQL Headers:", req.headers());
-          //   }
-          // });
-
-          // Step 3: Perform property search with the provided expedia ID
-          if (expediaId) {
-            try {
-              // Check pause state before property search
-              await scrapingStateManager.waitWhilePaused();
-              if (!scrapingStateManager.isRunning()) {
-                await dualLogInfo("Scraping was stopped, exiting...");
-                await browser.close();
-                if (jobId) {
-                  await finalizeJobLogging("failed");
-                }
-                return;
-              }
-
-              await dualLogInfo(
-                `Starting property search for Expedia ID: ${expediaId}`
-              );
-              await propertySearchAndClickReservation(
-                browser,
-                page,
-                expediaId,
-                jobId
-              );
-              await dualLogInfo(
-                "Property search and reservation completed successfully!"
-              );
-            } catch (error: any) {
-              await dualLogError("Property search failed:", error);
-
-              throw error;
-            }
-          } else {
-            await dualLogInfo(
-              "No expedia ID provided, skipping property search."
-            );
-          }
-
-          // Step 1: Navigate to login page and authenticate properly
-          console.log("🔐 Starting proper authentication flow...");
-
-          // First, go to the main login page
-          await page.goto("https://apps.expediapartnercentral.com/", {
-            waitUntil: "networkidle2",
-            timeout: 30000,
-          });
-
-          // Wait for page to load and check if we need to login
-          await delay(3000);
-
-          // Check if we're already logged in by looking for logout button or user menu
-          const isLoggedIn = await page.evaluate(() => {
-            return (
-              !document.querySelector('input[name="username"]') &&
-              !document.querySelector('input[name="password"]') &&
-              (document.querySelector('[data-testid="user-menu"]') ||
-                document.querySelector(".user-menu") ||
-                document.querySelector('[href*="logout"]'))
-            );
-          });
-
-          if (!isLoggedIn) {
-            console.log("🔑 Need to login - starting authentication...");
-
-            // Look for login form
-            const loginForm = await page.$(
-              'form[action*="login"], form[action*="auth"], #loginForm'
-            );
-
-            if (loginForm) {
-              // Fill in credentials
-              await page.type(
-                'input[name="username"], input[type="email"], #username',
-                expediaUsername || ""
-              );
-              await page.type(
-                'input[name="password"], input[type="password"], #password',
-                expediaPassword || ""
-              );
-
-              // Submit the form
-              await Promise.all([
-                page.waitForNavigation({
-                  waitUntil: "networkidle2",
-                  timeout: 30000,
-                }),
-                page.click(
-                  'button[type="submit"], input[type="submit"], .login-button'
-                ),
-              ]);
-
-              console.log("✅ Login form submitted");
-            } else {
-              console.log(
-                "⚠️ No login form found - might already be authenticated"
-              );
-            }
-          } else {
-            console.log("✅ Already logged in");
-          }
-
-          // Step 2: Navigate to reservations page to get proper session context
+          // For browser restart errors, retry this date
+          // (attemptCount already incremented at start of while loop)
           console.log(
-            "🔄 Navigating to reservations page for proper session cookies..."
+            `🔄 Retrying date ${singleDate}, attempt ${
+              attemptCount + 1
+            }/${maxAttempts}`
           );
-          await page.goto(
-            "https://apps.expediapartnercentral.com/lodging/bookings",
-            {
-              waitUntil: "networkidle2",
-              timeout: 30000,
-            }
-          );
-
-          // Wait for the page to fully load and set all necessary cookies
-          await delay(5000);
-
-          // Get cookies specifically for the API domains
-          const context = page.browserContext();
-          const allCookies = await context.cookies();
-
-          // Filter cookies for the relevant domains - EXPANDED to include all necessary domains
-          const relevantDomains = [
-            "expediapartnercentral.com",
-            "api.expediapartnercentral.com",
-            "apps.expediapartnercentral.com",
-            ".expediapartnercentral.com", // Domain with dot prefix
-            ".expedia.com", // Expedia main domain
-            "expedia.com", // Expedia main domain
-            ".expediagroup.com", // Expedia Group domain
-            ".accounts.expediagroup.com", // Account domain
-            // Bot management and security domains
-            ".akamaized.net",
-            ".akadns.net",
-            // Analytics domains
-            ".google-analytics.com",
-            ".googletagmanager.com",
-            ".doubleclick.net",
-          ];
-
-          // For GraphQL API, we need to be more permissive to capture all cookies
-          // that might be required for bot detection and session management
-          const apiCookies = allCookies.filter((cookie) => {
-            // Include all cookies from relevant domains
-            const domainMatch = relevantDomains.some(
-              (domain) =>
-                cookie.domain === domain ||
-                cookie.domain.endsWith(domain) ||
-                cookie.domain === "." + domain ||
-                domain.endsWith(cookie.domain.replace(".", ""))
-            );
-
-            // Also include specific critical cookies regardless of domain
-            const criticalCookieNames = [
-              "epcsid",
-              "EG_SESSIONTOKEN",
-              "EPCSession",
-              "JSESSIONID",
-              "HMS",
-              "MC1",
-              "DUAID",
-              "_abck",
-              "bm_sz",
-              "bm_sv",
-              "ak_bmsc", // Bot management
-              "_ga",
-              "_gid",
-              "_gat", // Google Analytics
-              "AMCV_",
-              "AMCVS_", // Adobe Analytics (partial match)
-              "QuantumMetricUserID",
-              "QuantumMetricSessionID", // Quantum Metric
-              "OptanonConsent",
-              "OptanonAlertBoxClosed", // Cookie consent
-              "CRQS",
-              "CRQSS",
-              "currency",
-              "linfo",
-              "tpid",
-              "iEAPID", // Expedia specific
-            ];
-
-            const criticalMatch = criticalCookieNames.some(
-              (name) =>
-                cookie.name === name ||
-                cookie.name.startsWith(name) ||
-                (name.endsWith("_") && cookie.name.startsWith(name))
-            );
-
-            return domainMatch || criticalMatch;
-          });
-
-          // Log all cookies for debugging
-          console.log("🍪 All cookies found:", allCookies.length);
-          console.log("📋 All domains found:", [
-            ...new Set(allCookies.map((c) => c.domain)),
-          ]);
-
-          // Log API-relevant cookies
-          console.log("🎯 API-relevant cookies found:", apiCookies.length);
-          apiCookies.forEach((cookie) => {
-            console.log(`  - ${cookie.name} (domain: ${cookie.domain})`);
-          });
-
-          // Create cookie header for GraphQL API
-          const cookieHeader = apiCookies
-            .map((c) => `${c.name}=${c.value}`)
-            .join("; ");
-
-          console.log("🍪 Cookie Header to use in GraphQL API:");
-          console.log(cookieHeader);
-
-          // Also log important cookies individually
-          const importantCookies = [
-            "epcsid", // Critical session ID
-            "EG_SESSIONTOKEN", // Critical session token
-            "EPCSession", // Critical session
-            "JSESSIONID", // Critical session ID
-            "HMS", // Session tracking
-            "MC1", // User identifier
-            "DUAID", // Device identifier
-            "_abck", // Bot management (critical!)
-            "bm_sz", // Bot management
-            "bm_sv", // Bot management
-            "ak_bmsc", // Akamai bot management
-            "_ga", // Google Analytics
-            "_gid", // Google Analytics
-            "QuantumMetricUserID", // Quantum Metric tracking
-            "AMCV_C00802BE5330A8350A490D4C@AdobeOrg", // Adobe Analytics
-            "evcsession", // EVC session (from your working curl)
-            "ssoidp", // SSO ID provider
-            "mdid", // Machine ID
-            "rsk", // Risk token
-          ];
-          console.log("🔑 Important cookies check:");
-          importantCookies.forEach((cookieName) => {
-            const cookie = apiCookies.find((c) => c.name === cookieName);
-            if (cookie) {
-              console.log(
-                `  ✅ ${cookieName}: ${cookie.value.substring(0, 50)}...`
-              );
-            } else {
-              console.log(`  ❌ ${cookieName}: NOT FOUND`);
-            }
-          });
-
-          // Now make the GraphQL API call with the extracted cookies
-          if (cookieHeader && cookieHeader.length > 0) {
-            console.log("🍪 Cookie header length:", cookieHeader.length);
-            console.log(
-              "🍪 Cookie header preview:",
-              cookieHeader.substring(0, 200) + "..."
-            );
-
-            // Check if we have the critical cookies
-            const hasCriticalCookies = importantCookies.some((cookieName) =>
-              cookieHeader.includes(cookieName + "=")
-            );
-
-            if (!hasCriticalCookies) {
-              console.warn(
-                "⚠️ Missing critical cookies - authentication might be incomplete"
-              );
-            }
-
-            // IMPORTANT: Keep browser open for GraphQL API call
-            console.log("🔒 Making GraphQL API call while browser is open...");
-
-            try {
-              await makeGraphQLRequest(
-                cookieHeader,
-                expediaId,
-                singleDate, // Use the current single date
-                singleDate, // Same start and end date for single day
-                jobId
-              );
-
-              console.log("✅ GraphQL API call completed successfully!");
-
-              // Now it's safe to close the browser
-              await dualLogInfo(
-                "GraphQL API call completed, closing browser..."
-              );
-              if (browser) {
-                await browser.close();
-                browser = null;
-              }
-              await dualLogInfo(
-                "Browser closed successfully after GraphQL API call."
-              );
-
-              // SUCCESS! This date is complete, move to next date
-              console.log(
-                `🎉 Day ${i + 1}/${
-                  datesToProcess.length
-                } (${singleDate}) completed successfully!`
-              );
-
-              // ✅ Data stored to database via GraphQL processing above
-
-              dateCompleted = true; // Mark this date as completed
-              break; // Exit the retry attempts for this date
-            } catch (graphqlError: any) {
-              console.error("❌ GraphQL API call failed:", graphqlError);
-
-              // Close browser on GraphQL error
-              if (browser) {
-                try {
-                  await browser.close();
-                  browser = null;
-                } catch (closeError) {
-                  await dualLogError(
-                    "Error closing browser after GraphQL failure:",
-                    closeError
-                  );
-                }
-              }
-
-              throw graphqlError;
-            }
-          } else {
-            console.error("❌ No valid cookies found for GraphQL API!");
-            throw new Error(
-              "Failed to extract proper session cookies for GraphQL API"
-            );
-          }
-        } else {
-          await dualLogInfo("No login credentials provided.");
-          await dualLogInfo("Browser closed successfully.");
-          // Close browser when done with this attempt
-          if (browser) {
-            await browser.close();
-          }
-          break; // Exit the retry loop
         }
-      } catch (error: any) {
-        await dualLogError(
-          `Scraping attempt ${attemptCount} for date ${singleDate} failed:`,
-          error
-        );
+      } // End of retry while loop for this date
 
-        // Close browser on error (but only if it's not a GraphQL API error)
-        if (browser && !error.message?.includes("GraphQL API")) {
-          try {
-            await browser.close();
-          } catch (closeError) {
-            await dualLogError("Error closing browser:", closeError);
-          }
-        }
-
-        // For critical errors, stop processing all dates
-        if (
-          !(error instanceof Error) ||
-          !error.message.startsWith("BROWSER_RESTART_NEEDED:")
-        ) {
-          // Clean up progress file on error
-          if (jobId) {
-            await progressManager.handleJobError(jobId, error);
-
-            // Release URL back to Available status on browser crash
-            await jobQueueUrlService.handleJobCompletion(
-              jobId,
-              "Failed",
-              error?.message || "Unknown error"
-            );
-          }
-
-          console.error(
-            `❌ Critical error on date ${singleDate}, stopping all date processing`
-          );
-          throw error;
-        }
-
-        // For browser restart errors, retry this date
-        // (attemptCount already incremented at start of while loop)
-        console.log(
-          `🔄 Retrying date ${singleDate}, attempt ${
-            attemptCount + 1
-          }/${maxAttempts}`
+      if (!dateCompleted) {
+        console.error(
+          `❌ Failed to complete date ${singleDate} after ${maxAttempts} attempts, skipping to next date`
         );
       }
-    } // End of retry while loop for this date
 
-    if (!dateCompleted) {
-      console.error(
-        `❌ Failed to complete date ${singleDate} after ${maxAttempts} attempts, skipping to next date`
-      );
-    }
+      // Add random delay between 1-10 seconds before processing next date (to avoid detection)
+      if (i < datesToProcess.length - 1) {
+        // Don't delay after the last date
+        const randomDelay = Math.floor(Math.random() * 10) + 1; // Random number between 1-10
+        console.log(
+          `⏱️ Waiting ${randomDelay} seconds before processing next date...`
+        );
+        await dualLogInfo(
+          `Adding ${randomDelay}s delay between dates to avoid detection`,
+          {
+            jobId,
+            currentDate: singleDate,
+            nextDate: datesToProcess[i + 1],
+            delaySeconds: randomDelay,
+          }
+        );
+        await delay(randomDelay * 1000); // Convert to milliseconds
+        console.log(`✅ Delay complete, proceeding to next date...`);
+      }
+    } // End of date processing for loop
 
-    // Add random delay between 1-10 seconds before processing next date (to avoid detection)
-    if (i < datesToProcess.length - 1) {
-      // Don't delay after the last date
-      const randomDelay = Math.floor(Math.random() * 10) + 1; // Random number between 1-10
-      console.log(
-        `⏱️ Waiting ${randomDelay} seconds before processing next date...`
-      );
+    console.log("🎉 All dates processed successfully!");
+  } catch (error: any) {
+    // Handle any unexpected errors during the entire scraping process
+    await dualLogError("Unexpected error during GraphQL scraping:", error);
+    throw error;
+  } finally {
+    // Clean up browser session at the very end
+    if (globalBrowser) {
       await dualLogInfo(
-        `Adding ${randomDelay}s delay between dates to avoid detection`,
-        {
-          jobId,
-          currentDate: singleDate,
-          nextDate: datesToProcess[i + 1],
-          delaySeconds: randomDelay,
-        }
+        "Cleaning up browser session after all dates processed..."
       );
-      await delay(randomDelay * 1000); // Convert to milliseconds
-      console.log(`✅ Delay complete, proceeding to next date...`);
+      try {
+        await globalBrowser.close();
+        await dualLogInfo("Browser session closed successfully.");
+      } catch (closeError) {
+        await dualLogError("Error closing browser session:", closeError);
+      }
     }
-  } // End of date processing for loop
-
-  console.log("🎉 All dates processed successfully!");
+  }
 }
 
 export default graphqlScraping;
