@@ -6,6 +6,7 @@ import { delay } from "../../common/delay.js";
 import { dualLogError, dualLogInfo } from "../../common/log-helper.js";
 import { progressManager } from "../../common/progress-manager.js";
 import { scrapingStateManager } from "../../common/scraping-state.js";
+import { timeManager } from "../../common/time-manager.js";
 import { timeoutManager } from "../../common/timeout-manager.js";
 import { PaymentInfo } from "../../models/job-item.model.js";
 import { JobService } from "../../services/job.service.js";
@@ -460,14 +461,9 @@ export async function getAgodaBookingData(
     const formattedStartDate = convertDateFormat(startDate);
     const formattedEndDate = convertDateFormat(endDate);
 
-    // Log original and converted dates in blue color text
     console.log(
       "\x1b[34m%s\x1b[0m",
-      `Original dates - startDate: ${startDate}, endDate: ${endDate}`
-    );
-    console.log(
-      "\x1b[34m%s\x1b[0m",
-      `Converted dates - startDate: ${formattedStartDate}, endDate: ${formattedEndDate}`
+      `Start Date: ${formattedStartDate}, End Date: ${formattedEndDate}`
     );
 
     // Construct the booking URL with agoda_id and date range using converted dates
@@ -486,15 +482,15 @@ export async function getAgodaBookingData(
     await dualLogInfo("Successfully navigated to booking data page");
 
     // Update progress
-    // if (jobId) {
-    //   await progressManager.updateJobProgress(
-    //     jobId,
-    //     undefined,
-    //     30,
-    //     "agoda_booking_data_retrieval",
-    //     undefined
-    //   );
-    // }
+    if (jobId) {
+      await progressManager.updateJobProgress(
+        jobId,
+        undefined,
+        30,
+        "agoda_booking_data_retrieval",
+        undefined
+      );
+    }
 
     // Wait for the page to load completely
     await delay(5000);
@@ -525,16 +521,22 @@ export async function getAgodaBookingData(
       throw new Error("CSV download button not found on the page");
     }
 
-    // Update progress
-    // if (jobId) {
-    //   await progressManager.updateJobProgress(
-    //     jobId,
-    //     undefined,
-    //     50,
-    //     "agoda_booking_data_retrieval",
-    //     undefined
-    //   );
-    // }
+    // Update progress - download button found
+    if (jobId) {
+      await progressManager.updateJobProgress(
+        jobId,
+        undefined,
+        50,
+        "agoda_download_button_found",
+        undefined
+      );
+    }
+
+    // Log time session info before download
+    await dualLogInfo("Time session info before CSV download", {
+      timeSession: timeManager.getSessionInfo(),
+      jobId,
+    });
 
     // Set up download path with platform-specific considerations
     const downloadPath = path.resolve(process.cwd(), "downloads");
@@ -726,16 +728,16 @@ export async function getAgodaBookingData(
       throw new Error("Failed to click CSV download button");
     }
 
-    // Update progress
-    // if (jobId) {
-    //   await progressManager.updateJobProgress(
-    //     jobId,
-    //     undefined,
-    //     70,
-    //     "agoda_booking_data_retrieval",
-    //     undefined
-    //   );
-    // }
+    // Update progress - CSV download initiated
+    if (jobId) {
+      await progressManager.updateJobProgress(
+        jobId,
+        undefined,
+        70,
+        "agoda_csv_download_initiated",
+        undefined
+      );
+    }
 
     // Set up download event listeners for better detection
     let downloadStarted = false;
@@ -777,11 +779,17 @@ export async function getAgodaBookingData(
     }
 
     // Check pause state during download
-    // await scrapingStateManager.waitWhilePaused();
-    // if (!scrapingStateManager.isRunning()) {
-    //   await dualLogError("Scraping was stopped during CSV download");
-    //   throw new Error("Scraping was stopped during CSV download");
-    // }
+    await scrapingStateManager.waitWhilePaused();
+    if (!scrapingStateManager.isRunning()) {
+      await dualLogError("Scraping was stopped during CSV download");
+      throw new Error("Scraping was stopped during CSV download");
+    }
+
+    // Log time session info during download wait
+    await dualLogInfo("Time session info during CSV download wait", {
+      timeSession: timeManager.getSessionInfo(),
+      jobId,
+    });
 
     // Find the downloaded CSV file with cross-platform support
     let csvFilePath: string | null = null;
@@ -888,16 +896,22 @@ export async function getAgodaBookingData(
     const fileSizeKB = Math.round(fileStats.size / 1024);
     await dualLogInfo(`CSV file size: ${fileSizeKB} KB`);
 
-    // Update progress
-    // if (jobId) {
-    //   await progressManager.updateJobProgress(
-    //     jobId,
-    //     undefined,
-    //     90,
-    //     "agoda_booking_data_retrieval",
-    //     undefined
-    //   );
-    // }
+    // Update progress - CSV file downloaded and ready for processing
+    if (jobId) {
+      await progressManager.updateJobProgress(
+        jobId,
+        undefined,
+        90,
+        "agoda_csv_file_downloaded",
+        undefined
+      );
+    }
+
+    // Log time session info before CSV processing
+    await dualLogInfo("Time session info before CSV processing", {
+      timeSession: timeManager.getSessionInfo(),
+      jobId,
+    });
 
     // Read and parse the CSV file
     await dualLogInfo("Reading and parsing CSV file...");
@@ -1112,6 +1126,13 @@ export async function getAgodaBookingData(
   } catch (error: any) {
     await dualLogError(`Error retrieving Agoda booking data:`, error);
 
+    // Log error details with time session info
+    await dualLogInfo("Error occurred during Agoda booking data retrieval", {
+      jobId,
+      error: error.message,
+      timeSession: timeManager.getSessionInfo(),
+    });
+
     // Clean up resources in error case
     try {
       if (client) {
@@ -1125,7 +1146,7 @@ export async function getAgodaBookingData(
       await dualLogError("Error during error cleanup:", cleanupError);
     }
 
-    // Update progress with error
+    // Update progress with error for non-restart errors
     if (jobId) {
       await progressManager.updateJobProgress(
         jobId,

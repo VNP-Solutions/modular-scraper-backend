@@ -1,5 +1,8 @@
 import { Browser, Page } from "puppeteer";
 import { dualLogError, dualLogInfo } from "../../common/log-helper.js";
+import { progressManager } from "../../common/progress-manager.js";
+import { scrapingStateManager } from "../../common/scraping-state.js";
+import { timeManager } from "../../common/time-manager.js";
 import { timeoutManager } from "../../common/timeout-manager.js";
 import { getAgodaSignInLink } from "./email-link-helper.js";
 import { getAgodaOtpCode } from "./email-otp-helper.js";
@@ -17,7 +20,28 @@ async function agodaLogin(
     // Get timeout configuration for this job
     const loadingTimeout = await timeoutManager.getLoadingTimeout(jobId);
     const selectorTimeout = await timeoutManager.getSelectorTimeout(jobId);
-    await dualLogInfo("Starting Agoda login process with iframe handling");
+    await dualLogInfo("Starting Agoda login process with iframe handling", {
+      jobId,
+      timeSession: timeManager.getSessionInfo(),
+    });
+
+    // Update progress - login process started
+    if (jobId) {
+      await progressManager.updateJobProgress(
+        jobId,
+        undefined,
+        16,
+        "agoda_login_process_started",
+        undefined
+      );
+    }
+
+    // Check if scraping is paused before starting
+    await scrapingStateManager.waitWhilePaused();
+    if (!scrapingStateManager.isRunning()) {
+      await dualLogError("Scraping was stopped during Agoda login");
+      throw new Error("Scraping was stopped during Agoda login");
+    }
 
     // Page and iframe initialization
     try {
@@ -41,6 +65,17 @@ async function agodaLogin(
       }
 
       await dualLogInfo("Iframe content accessible");
+
+      // Update progress - iframe accessed
+      if (jobId) {
+        await progressManager.updateJobProgress(
+          jobId,
+          undefined,
+          18,
+          "agoda_iframe_accessed",
+          undefined
+        );
+      }
 
       // Wait for the iframe content to load
       await frame.waitForSelector("body", { timeout: loadingTimeout });
@@ -91,6 +126,23 @@ async function agodaLogin(
 
       await dualLogInfo(`Successfully entered email: ${agodaUsername}`);
 
+      // Update progress - email entered
+      if (jobId) {
+        await progressManager.updateJobProgress(
+          jobId,
+          undefined,
+          20,
+          "agoda_email_entered",
+          undefined
+        );
+      }
+
+      // Log time session info before continuing
+      await dualLogInfo("Time session info after email entry", {
+        timeSession: timeManager.getSessionInfo(),
+        jobId,
+      });
+
       // Continue button handling
       await dualLogInfo("Looking for continue button in iframe...");
       const continueButton = await frame.waitForSelector(
@@ -117,6 +169,17 @@ async function agodaLogin(
       // Click the continue button
       await continueButton.click();
       await dualLogInfo("Continue button clicked successfully!");
+
+      // Update progress - continue button clicked
+      if (jobId) {
+        await progressManager.updateJobProgress(
+          jobId,
+          undefined,
+          22,
+          "agoda_continue_button_clicked",
+          undefined
+        );
+      }
 
       // Wait for either "check your email" message or OTP form
       await dualLogInfo("Waiting for next page (email link or OTP form)...");
@@ -150,15 +213,26 @@ async function agodaLogin(
       // Handle different login flows based on next page result
       if (nextPageResult === "email-link") {
         await dualLogInfo("✅ Direct email link flow detected");
-        await handleDirectLinkFlow(page);
+        await handleDirectLinkFlow(page, jobId);
       } else if (nextPageResult === "otp-form") {
         await dualLogInfo("✅ OTP form flow detected");
-        await handleOtpFlow(frame, loadingTimeout, selectorTimeout);
+        await handleOtpFlow(frame, loadingTimeout, selectorTimeout, jobId);
       } else {
         throw new Error(`Unknown next page result: ${nextPageResult}`);
       }
 
       await dualLogInfo("Agoda login process completed successfully!");
+
+      // Final login progress update
+      if (jobId) {
+        await progressManager.updateJobProgress(
+          jobId,
+          undefined,
+          24,
+          "agoda_login_completed",
+          undefined
+        );
+      }
     } catch (pageError) {
       await dualLogError("Error during page interaction:", pageError);
       shouldCloseBrowser = true;
@@ -199,9 +273,21 @@ async function agodaLogin(
 /**
  * Handle direct email link flow (existing functionality)
  */
-async function handleDirectLinkFlow(page: Page): Promise<void> {
+async function handleDirectLinkFlow(page: Page, jobId?: string): Promise<void> {
   // Wait 30 seconds for email to arrive in inbox
   await dualLogInfo("Waiting 30 seconds for email delivery...");
+
+  // Update progress - waiting for email
+  if (jobId) {
+    await progressManager.updateJobProgress(
+      jobId,
+      undefined,
+      23,
+      "agoda_waiting_for_email_link",
+      undefined
+    );
+  }
+
   await new Promise((resolve) => setTimeout(resolve, 30000));
 
   await dualLogInfo("Now fetching sign-in link from email...");
@@ -260,7 +346,8 @@ async function handleDirectLinkFlow(page: Page): Promise<void> {
 async function handleOtpFlow(
   frame: any,
   loadingTimeout: number,
-  selectorTimeout: number
+  selectorTimeout: number,
+  jobId?: string
 ): Promise<void> {
   await dualLogInfo("🔐 Processing OTP form...");
 
@@ -272,6 +359,18 @@ async function handleOtpFlow(
 
   // Wait 30 seconds for OTP email to arrive
   await dualLogInfo("Waiting 30 seconds for OTP email delivery...");
+
+  // Update progress - waiting for OTP email
+  if (jobId) {
+    await progressManager.updateJobProgress(
+      jobId,
+      undefined,
+      23,
+      "agoda_waiting_for_otp_email",
+      undefined
+    );
+  }
+
   await new Promise((resolve) => setTimeout(resolve, 30000));
 
   await dualLogInfo("Now fetching OTP code from email...");

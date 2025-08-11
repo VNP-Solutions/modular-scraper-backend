@@ -2,6 +2,9 @@ import fs from "fs";
 import path from "path";
 import { Page } from "puppeteer";
 import { dualLogError, dualLogInfo } from "../../common/log-helper.js";
+import { progressManager } from "../../common/progress-manager.js";
+import { scrapingStateManager } from "../../common/scraping-state.js";
+import { timeManager } from "../../common/time-manager.js";
 
 /**
  * Options for the Need Help automation process
@@ -138,7 +141,28 @@ export async function automateNeedHelpProcess(
   } = options;
 
   try {
-    await dualLogInfo("🚀 Starting Need Help automation process...", { jobId });
+    await dualLogInfo("🚀 Starting Need Help automation process...", {
+      jobId,
+      timeSession: timeManager.getSessionInfo(),
+    });
+
+    // Update progress - Need Help process started
+    if (jobId) {
+      await progressManager.updateJobProgress(
+        jobId,
+        undefined,
+        95,
+        "agoda_need_help_process_started",
+        undefined
+      );
+    }
+
+    // Check if scraping is paused before starting
+    await scrapingStateManager.waitWhilePaused();
+    if (!scrapingStateManager.isRunning()) {
+      await dualLogError("Scraping was stopped during Need Help automation");
+      throw new Error("Scraping was stopped during Need Help automation");
+    }
 
     // Step 1: Click "Need Help" button
     await dualLogInfo("Looking for 'Need Help' button...", { jobId });
@@ -156,6 +180,17 @@ export async function automateNeedHelpProcess(
           `✅ Clicked 'Need Help' button with selector: ${selector}`,
           { jobId }
         );
+
+        // Update progress - Need Help button clicked
+        if (jobId) {
+          await progressManager.updateJobProgress(
+            jobId,
+            undefined,
+            96,
+            "agoda_need_help_button_clicked",
+            undefined
+          );
+        }
         break;
       } catch (error) {
         continue;
@@ -227,6 +262,17 @@ export async function automateNeedHelpProcess(
           `✅ Clicked 'Submit request' button with selector: ${selector}`,
           { jobId }
         );
+
+        // Update progress - Submit request button clicked
+        if (jobId) {
+          await progressManager.updateJobProgress(
+            jobId,
+            undefined,
+            97,
+            "agoda_submit_request_clicked",
+            undefined
+          );
+        }
         break;
       } catch (error) {
         continue;
@@ -235,7 +281,18 @@ export async function automateNeedHelpProcess(
 
     // Step 5: Wait for form to load and select "Other" from issue type dropdown
     await delay(5000);
-    await dualLogInfo("Looking for issue type dropdown...", { jobId });
+
+    // Check if scraping is paused before form handling
+    await scrapingStateManager.waitWhilePaused();
+    if (!scrapingStateManager.isRunning()) {
+      await dualLogError("Scraping was stopped during form handling");
+      throw new Error("Scraping was stopped during form handling");
+    }
+
+    await dualLogInfo("Looking for issue type dropdown...", {
+      jobId,
+      timeSession: timeManager.getSessionInfo(),
+    });
 
     try {
       // Click on the dropdown to open it
@@ -385,6 +442,17 @@ export async function automateNeedHelpProcess(
             `✅ Filled issue details with selector: ${selector}`,
             { jobId }
           );
+
+          // Update progress - Issue details filled
+          if (jobId) {
+            await progressManager.updateJobProgress(
+              jobId,
+              undefined,
+              98,
+              "agoda_issue_details_filled",
+              undefined
+            );
+          }
           break;
         } catch (error) {
           continue;
@@ -398,7 +466,17 @@ export async function automateNeedHelpProcess(
 
     // Step 7: Upload CSV file from import folder
     if (!skipFileUpload) {
-      await dualLogInfo("Uploading CSV file attachment...", { jobId });
+      // Check if scraping is paused before file upload
+      await scrapingStateManager.waitWhilePaused();
+      if (!scrapingStateManager.isRunning()) {
+        await dualLogError("Scraping was stopped during file upload");
+        throw new Error("Scraping was stopped during file upload");
+      }
+
+      await dualLogInfo("Uploading CSV file attachment...", {
+        jobId,
+        timeSession: timeManager.getSessionInfo(),
+      });
       try {
         const csvFilePathToUpload =
           csvFilePath || (await findCsvFileInImport());
@@ -419,6 +497,17 @@ export async function automateNeedHelpProcess(
                   `✅ Uploaded CSV file: ${csvFilePathToUpload} with selector: ${selector}`,
                   { jobId }
                 );
+
+                // Update progress - CSV file uploaded
+                if (jobId) {
+                  await progressManager.updateJobProgress(
+                    jobId,
+                    undefined,
+                    99,
+                    "agoda_csv_file_uploaded",
+                    undefined
+                  );
+                }
                 await delay(3000); // Wait for upload to process
                 break;
               }
@@ -504,9 +593,23 @@ export async function automateNeedHelpProcess(
 
     await delay(2000); // Give time for form submission to process
 
+    // Update progress - Need Help process completed
+    if (jobId) {
+      await progressManager.updateJobProgress(
+        jobId,
+        undefined,
+        100,
+        "agoda_need_help_process_completed",
+        undefined
+      );
+    }
+
     await dualLogInfo(
       "✅ Need Help automation process completed successfully",
-      { jobId }
+      {
+        jobId,
+        timeSession: timeManager.getSessionInfo(),
+      }
     );
 
     // Cleanup CSV files if requested
@@ -521,8 +624,23 @@ export async function automateNeedHelpProcess(
     await dualLogError(
       "❌ Need Help automation process failed:",
       error.message,
-      { jobId }
+      {
+        jobId,
+        timeSession: timeManager.getSessionInfo(),
+      }
     );
+
+    // Update progress with error for Need Help process
+    if (jobId) {
+      await progressManager.updateJobProgress(
+        jobId,
+        undefined,
+        undefined,
+        "agoda_need_help_process_error",
+        undefined
+      );
+    }
+
     throw error;
   }
 }
@@ -536,7 +654,10 @@ async function cleanupCsvFiles(
   jobId?: string
 ): Promise<void> {
   try {
-    await dualLogInfo("🧹 Starting CSV cleanup process...", { jobId });
+    await dualLogInfo("🧹 Starting CSV cleanup process...", {
+      jobId,
+      timeSession: timeManager.getSessionInfo(),
+    });
 
     // Clean up downloads folder - look for agodaId_*.csv pattern
     if (agodaId) {
@@ -588,7 +709,10 @@ async function cleanupCsvFiles(
       }
     }
 
-    await dualLogInfo("✅ CSV cleanup process completed", { jobId });
+    await dualLogInfo("✅ CSV cleanup process completed", {
+      jobId,
+      timeSession: timeManager.getSessionInfo(),
+    });
   } catch (error) {
     await dualLogError("Error during CSV cleanup:", error, { jobId });
   }
