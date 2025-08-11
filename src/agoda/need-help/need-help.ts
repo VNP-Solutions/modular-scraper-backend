@@ -403,8 +403,24 @@ export async function automateNeedHelpProcess(
           }
         }
 
-        // Click outside to close dropdown
-        await page.click("body");
+        // Close dropdown by clicking the same selector that opened it
+        for (const selector of dropdownSelectors) {
+          try {
+            const element = await page.$(selector);
+            if (element) {
+              await page.click(selector);
+              await dualLogInfo(
+                `✅ Closed dropdown with selector: ${selector}`,
+                {
+                  jobId,
+                }
+              );
+              break;
+            }
+          } catch (error) {
+            continue;
+          }
+        }
         await delay(1000);
       }
     } catch (error: any) {
