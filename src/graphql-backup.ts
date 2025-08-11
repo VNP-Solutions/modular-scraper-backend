@@ -74,11 +74,11 @@ async function makeGraphQLRequest(
             startDate: "${formattedStartDate}", 
             endDate: "${formattedEndDate}", 
             dateType: "checkOut", 
-            evc: false, 
+            evc: true, 
             expediaCollect: true, 
             timezoneOffset: "-04:00", 
             firstName: null, 
-            hotelCollect: true, 
+            hotelCollect: false, 
             isSpecialRequest: false, 
             isVIPBooking: false, 
             lastName: null, 
@@ -1438,7 +1438,7 @@ async function runScrapingWithRestart(
       // Add random delay between 1-10 seconds before processing next date (to avoid detection)
       if (i < datesToProcess.length - 1) {
         // Don't delay after the last date
-        const randomDelay = Math.floor(Math.random() * 10) + 1; // Random number between 1-10
+        const randomDelay = Math.floor(Math.random() * 10) + 1;
         console.log(
           `⏱️ Waiting ${randomDelay} seconds before processing next date...`
         );
