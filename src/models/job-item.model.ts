@@ -138,11 +138,6 @@ const JobItemSchema = new Schema<IJobItem>(
       type: CardInfoSchema,
       required: false,
     },
-    case_open: {
-      type: Boolean,
-      default: false,
-      required: false,
-    },
     has_payment_info: {
       type: Boolean,
       default: false,

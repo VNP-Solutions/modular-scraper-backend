@@ -167,9 +167,7 @@ export class JobService {
         return null;
       }
 
-      console.log(
-        `✅ Found agoda_id: ${property.agoda_id} for job: ${jobId}`
-      );
+      console.log(`✅ Found agoda_id: ${property.agoda_id} for job: ${jobId}`);
       return {
         agodaId: property.agoda_id,
       };
@@ -668,6 +666,33 @@ export class JobService {
         totalPage: 1,
         limit,
       };
+    }
+  }
+
+  /**
+   * Update case_open field for all job items in a job
+   */
+  async updateJobItemsCaseOpen(
+    jobId: string,
+    caseOpen: boolean = true
+  ): Promise<{ modifiedCount: number }> {
+    try {
+      const objectId = this.validateObjectId(jobId, "jobId");
+      const result = await JobItem.updateMany(
+        { job_id: objectId },
+        {
+          case_open: caseOpen,
+          updatedAt: new Date(),
+        }
+      );
+
+      console.log(
+        `Updated case_open to ${caseOpen} for ${result.modifiedCount} job items in job ${jobId}`
+      );
+      return { modifiedCount: result.modifiedCount || 0 };
+    } catch (error) {
+      console.error(`Error updating job items case_open: ${error}`);
+      return { modifiedCount: 0 };
     }
   }
 }

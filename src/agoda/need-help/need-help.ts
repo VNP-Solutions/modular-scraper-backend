@@ -5,6 +5,10 @@ import { dualLogError, dualLogInfo } from "../../common/log-helper.js";
 import { progressManager } from "../../common/progress-manager.js";
 import { scrapingStateManager } from "../../common/scraping-state.js";
 import { timeManager } from "../../common/time-manager.js";
+import { JobService } from "../../services/job.service.js";
+
+// Initialize job service
+const jobService = new JobService();
 
 /**
  * Options for the Need Help automation process
@@ -812,6 +816,42 @@ export async function automateNeedHelpWithCleanup(
   try {
     // Run the Need Help process
     await automateNeedHelpProcess(page, options);
+
+    // Update case_open field for all job items before cleanup
+    if (options.jobId) {
+      try {
+        await dualLogInfo("🔄 Updating case_open field for all job items...", {
+          jobId: options.jobId,
+          timeSession: timeManager.getSessionInfo(),
+        });
+
+        const updateResult = await jobService.updateJobItemsCaseOpen(
+          options.jobId,
+          true
+        );
+
+        await dualLogInfo(
+          `✅ Updated case_open to true for ${updateResult.modifiedCount} job items`,
+          {
+            jobId: options.jobId,
+            modifiedCount: updateResult.modifiedCount,
+            timeSession: timeManager.getSessionInfo(),
+          }
+        );
+      } catch (caseOpenError: any) {
+        await dualLogError(
+          "❌ Error updating case_open field (continuing with cleanup):",
+          caseOpenError.message,
+          { jobId: options.jobId }
+        );
+        // Don't throw error - continue with cleanup even if case_open update fails
+      }
+    } else {
+      await dualLogInfo(
+        "⚠️ No jobId provided - skipping case_open field update",
+        { timeSession: timeManager.getSessionInfo() }
+      );
+    }
 
     // Extract cleanup information
     const { agodaId, propertyName } = await extractCleanupInfo(
