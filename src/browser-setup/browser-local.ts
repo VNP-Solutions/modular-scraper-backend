@@ -1,5 +1,6 @@
 import dotenv from "dotenv";
 import puppeteer, { Browser, Page } from "puppeteer";
+import { BROWSER_CONFIG } from "../common/browser-constants.js";
 import { delay } from "../common/delay.js";
 import {
   dualLogError,
@@ -16,19 +17,27 @@ export async function browserSetupLocal(jobId?: string): Promise<{
   let browser: Browser | null = null;
 
   try {
-    browser = await puppeteer.launch({
-      headless: false,
-      defaultViewport: null,
-      args: [
-        "--start-maximized",
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-web-security",
-        "--disable-features=IsolateOrigins,site-per-process",
-        "--disable-blink-features=AutomationControlled",
-        "--disable-extensions",
-      ],
-    });
+    try {
+      browser = await puppeteer.launch({
+        headless: false,
+        defaultViewport: null,
+        args: BROWSER_CONFIG.LAUNCH_ARGS,
+      });
+    } catch (error: any) {
+      await dualLogError("Error launching browser:", error);
+
+      // Send email notification for browser launch error
+      if (jobId) {
+        try {
+        } catch (emailError) {
+          await dualLogError(
+            "Failed to send browser launch error notification:",
+            emailError
+          );
+        }
+      }
+      throw error;
+    }
 
     // Get timeout configuration for this job
     const loadingTimeout = await timeoutManager.getLoadingTimeout(jobId);
@@ -36,10 +45,48 @@ export async function browserSetupLocal(jobId?: string): Promise<{
 
     const page: Page = await browser.newPage();
 
-    // Set user agent to avoid detection
-    await page.setUserAgent(
-      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-    );
+    // Set user agent to match GraphQL API headers exactly
+    await page.setUserAgent(BROWSER_CONFIG.USER_AGENT);
+
+    // Set additional headers to match real browser behavior
+    await page.setExtraHTTPHeaders(BROWSER_CONFIG.HEADERS);
+
+    // Hide automation indicators
+    await page.evaluateOnNewDocument(() => {
+      // Remove webdriver property
+      delete (navigator as any).webdriver;
+
+      // Override the plugins property to use a real value
+      Object.defineProperty(navigator, "plugins", {
+        get: () => [1, 2, 3, 4, 5],
+      });
+
+      // Override the languages property to use a real value
+      Object.defineProperty(navigator, "languages", {
+        get: () => ["en-US", "en"],
+      });
+
+      // Override chrome property
+      (window as any).chrome = {
+        runtime: {},
+      };
+
+      // Mock permissions
+      const originalQuery = window.navigator.permissions.query;
+      window.navigator.permissions.query = (parameters) => {
+        if (parameters.name === "notifications") {
+          return Promise.resolve({
+            state: Notification.permission,
+            name: "notifications",
+            onchange: null,
+            addEventListener: () => {},
+            removeEventListener: () => {},
+            dispatchEvent: () => false,
+          } as PermissionStatus);
+        }
+        return originalQuery(parameters);
+      };
+    });
     // Set default timeouts based on job configuration
     await page.setDefaultNavigationTimeout(loadingTimeout);
     await page.setDefaultTimeout(selectorTimeout);
@@ -87,21 +134,57 @@ export async function browserSetupLocal(jobId?: string): Promise<{
           await dualLogError("All navigation attempts failed", navError, {
             maxRetries,
           });
+
+          // Send email notification for navigation failure
+          if (jobId) {
+            try {
+            } catch (emailError) {
+              await dualLogError(
+                "Failed to send navigation error notification:",
+                emailError
+              );
+            }
+          }
+
           throw navError;
         }
       }
     }
 
     if (!navigationSuccess) {
-      throw new Error(
+      const error = new Error(
         "Failed to navigate to the target page after all attempts"
       );
+
+      // Send email notification for navigation failure
+      if (jobId) {
+        try {
+        } catch (emailError) {
+          await dualLogError(
+            "Failed to send final navigation error notification:",
+            emailError
+          );
+        }
+      }
+
+      throw error;
     }
 
     await dualLogInfo("Browser setup completed successfully");
     return { browser, page };
-  } catch (error) {
+  } catch (error: any) {
     await dualLogError("Browser setup failed:", error);
+
+    // Send email notification for general browser setup error
+    if (jobId) {
+      try {
+      } catch (emailError) {
+        await dualLogError(
+          "Failed to send browser setup error notification:",
+          emailError
+        );
+      }
+    }
 
     // Clean up browser if it was created
     if (browser) {

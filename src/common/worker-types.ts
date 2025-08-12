@@ -1,5 +1,5 @@
 export interface WorkerJobData {
-  jobType: "property-run" | "rerun-failed" | "reservation-run";
+  jobType: "property-run" | "rerun-failed" | "reservation-run" | "graphql-run";
   jobId: string;
   startDate?: string;
   endDate?: string;
