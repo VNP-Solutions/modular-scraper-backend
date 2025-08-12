@@ -221,7 +221,7 @@ async function handleOtpVerification(
 
       // Add delay before fetching verification code
       await dualLogInfo("Waiting for verification email...");
-      await delay(15000); // Wait 15 seconds for email to arrive
+      await delay(30000); // Wait 30 seconds for email to arrive
 
       // Get verification code
       try {
@@ -535,7 +535,7 @@ async function handleOtpVerification(
             await dualLogInfo(
               "SMS verification page loaded, trying to get verification code from email..."
             );
-            await delay(15000);
+            await delay(30000);
 
             const code = await getVerificationCode();
             if (!code) {
@@ -636,7 +636,7 @@ async function handleOtpVerification(
           );
 
           // Add delay before fetching verification code
-          await delay(15000); // Wait 15 seconds for email to arrive
+          await delay(30000); // Wait 30 seconds for email to arrive
 
           const code = await getVerificationCode();
           if (!code) {
