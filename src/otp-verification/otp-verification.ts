@@ -53,12 +53,12 @@ async function getVerificationCode() {
     const res = await gmail.users.messages.list({
       userId: "me",
       maxResults: 5,
-      q: "from:verify@epchotels.com subject:Login attempt", // Search for specific emails
+      q: "subject:Partner Central Your verification code is", // Search by subject pattern
     });
 
     if (!res.data.messages) {
       await dualLogInfo(
-        "No verification emails found from verify@epchotels.com."
+        "No verification emails found with Partner Central verification code."
       );
       return null;
     }
@@ -89,13 +89,10 @@ async function getVerificationCode() {
       await dualLogInfo(`Email from: ${fromEmail}`);
       await dualLogInfo(`Email subject: ${subject}`);
 
-      // Verify it's from the correct sender and has correct subject
-      if (
-        !fromEmail.includes("verify@epchotels.com") ||
-        !subject.includes("Login attempt")
-      ) {
+      // Verify it has the correct subject pattern
+      if (!subject.includes("Partner Central Your verification code is")) {
         await dualLogInfo(
-          "Skipping email - not from verify@epchotels.com or wrong subject"
+          "Skipping email - doesn't contain Partner Central verification code pattern"
         );
         continue;
       }
@@ -143,9 +140,7 @@ async function getVerificationCode() {
       }
     }
 
-    await dualLogInfo(
-      "No verification code found in emails from verify@epchotels.com."
-    );
+    await dualLogInfo("No verification code found in Partner Central emails.");
     return null;
   } catch (error: any) {
     await dualLogError("Error fetching emails:", error.message);

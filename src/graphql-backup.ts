@@ -910,7 +910,7 @@ async function fetchEVCCardData(
   let attempt = 0;
 
   // Base delay between requests (configurable) - prevent rate limiting
-  const baseDelayMs = parseInt(process.env.EVC_API_DELAY_MS || "3000"); // 3 seconds default between requests
+  const baseDelayMs = parseInt(process.env.EVC_API_DELAY_MS || "4000"); // 3 seconds default between requests
 
   while (attempt < maxRetries) {
     try {
@@ -1065,16 +1065,11 @@ async function fetchEVCCardData(
           Object.keys(cardData || {})
         );
 
-        // Check for specific error codes that might need different handling
+        // Error 20001 means card info doesn't exist for this reservation - this is normal
         if (cardData?.errorDetails?.errorCode === 20001) {
           console.log(
-            `🔄 Error 20001 detected, will retry with longer delay...`
+            `ℹ️ Error 20001: Card information not found for this reservation (normal case)`
           );
-          if (attempt < maxRetries - 1) {
-            attempt++;
-            await delay(10000); // 10 second delay for this specific error
-            continue;
-          }
         }
 
         return cardData; // Return the response anyway, let caller handle the empty data
