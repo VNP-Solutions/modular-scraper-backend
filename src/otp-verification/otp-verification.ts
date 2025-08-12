@@ -43,10 +43,13 @@ async function getVerificationCode() {
     const res = await gmail.users.messages.list({
       userId: "me",
       maxResults: 5,
+      q: "subject:Partner Central Your verification code is", // Search by subject pattern
     });
 
     if (!res.data.messages) {
-      await dualLogInfo("No new emails found.");
+      await dualLogInfo(
+        "No verification emails found with Partner Central verification code."
+      );
       return null;
     }
 
@@ -58,19 +61,76 @@ async function getVerificationCode() {
       const email = await gmail.users.messages.get({
         userId: "me",
         id: msg.id,
+        format: "full", // Get full email content instead of just snippet
       });
 
-      const body = email.data.snippet || "";
-      await dualLogInfo("Email body:", body);
-      const codeMatch = body.match(/\b\d{6,10}\b/);
-      await dualLogInfo("Code match:", codeMatch);
+      // Check if email is from the correct sender
+      const headers = email.data.payload?.headers || [];
+      const fromHeader = headers.find(
+        (header) => header.name?.toLowerCase() === "from"
+      );
+      const subjectHeader = headers.find(
+        (header) => header.name?.toLowerCase() === "subject"
+      );
 
-      if (codeMatch) {
-        return codeMatch[0];
+      const fromEmail = fromHeader?.value || "";
+      const subject = subjectHeader?.value || "";
+
+      await dualLogInfo(`Email from: ${fromEmail}`);
+      await dualLogInfo(`Email subject: ${subject}`);
+
+      // Verify it has the correct subject pattern
+      if (!subject.includes("Partner Central Your verification code is")) {
+        await dualLogInfo(
+          "Skipping email - doesn't contain Partner Central verification code pattern"
+        );
+        continue;
+      }
+
+      // Get email body content
+      let emailBody = "";
+
+      // Try to get the email body from different payload structures
+      if (email.data.payload?.body?.data) {
+        emailBody = Buffer.from(
+          email.data.payload.body.data,
+          "base64"
+        ).toString();
+      } else if (email.data.payload?.parts) {
+        // Handle multipart emails
+        for (const part of email.data.payload.parts) {
+          if (part.mimeType === "text/plain" && part.body?.data) {
+            emailBody = Buffer.from(part.body.data, "base64").toString();
+            break;
+          }
+        }
+      }
+
+      // If no body found, try snippet as fallback
+      if (!emailBody) {
+        emailBody = email.data.snippet || "";
+      }
+
+      await dualLogInfo("Email body content:", emailBody);
+
+      // Look for verification code pattern: "Your verification code is XXXXXX"
+      const codeMatch = emailBody.match(/Your verification code is (\d{6})/i);
+      await dualLogInfo("Code match result:", codeMatch);
+
+      if (codeMatch && codeMatch[1]) {
+        await dualLogInfo(`Found verification code: ${codeMatch[1]}`);
+        return codeMatch[1];
+      }
+
+      // Fallback: look for any 6-digit code in the email
+      const fallbackMatch = emailBody.match(/\b\d{6}\b/);
+      if (fallbackMatch) {
+        await dualLogInfo(`Found fallback code: ${fallbackMatch[0]}`);
+        return fallbackMatch[0];
       }
     }
 
-    await dualLogInfo("No verification code found in recent emails.");
+    await dualLogInfo("No verification code found in Partner Central emails.");
     return null;
   } catch (error: any) {
     await dualLogError("Error fetching emails:", error.message);
