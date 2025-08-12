@@ -56,6 +56,7 @@ export interface IJob extends Document {
   log_link?: string;
   live_url?: string;
   watcher_emails?: string[];
+  case_open?: boolean;
   queue_name?: string;
   worker_assigned?: string;
   batch_execution_id?: string;
@@ -196,6 +197,11 @@ const JobSchema = new Schema<IJob>(
     batch_execution_id: {
       type: String,
       required: false,
+    },
+    case_open: {
+      type: Boolean,
+      required: false,
+      default: false,
     },
   },
   {

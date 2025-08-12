@@ -670,7 +670,32 @@ export class JobService {
   }
 
   /**
+   * Update case_open field for a job
+   */
+  async updateJobCaseOpen(
+    jobId: string,
+    caseOpen: boolean = true
+  ): Promise<{ modifiedCount: number }> {
+    try {
+      const objectId = this.validateObjectId(jobId, "jobId");
+      const result = await Job.updateOne(
+        { _id: objectId },
+        {
+          case_open: caseOpen,
+        }
+      );
+
+      console.log(`Updated case_open to ${caseOpen} for job ${jobId}`);
+      return { modifiedCount: result.modifiedCount || 0 };
+    } catch (error) {
+      console.error(`Error updating job case_open: ${error}`);
+      return { modifiedCount: 0 };
+    }
+  }
+
+  /**
    * Update case_open field for all job items in a job
+   * @deprecated Use updateJobCaseOpen instead for better performance
    */
   async updateJobItemsCaseOpen(
     jobId: string,

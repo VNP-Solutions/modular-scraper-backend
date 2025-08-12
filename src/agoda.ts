@@ -8,6 +8,7 @@ import { dualLogError, dualLogInfo } from "./common/log-helper.js";
 import { progressManager } from "./common/progress-manager.js";
 import { timeManager } from "./common/time-manager.js";
 import { scrapingStateManager } from "./common/scraping-state.js";
+import { jobService } from "./services/job.service.js";
 
 dotenv.config();
 
@@ -41,6 +42,27 @@ async function agoda(
         endDate,
         1 // Single chunk for Agoda (no date splitting like Expedia)
       );
+    }
+
+    // Set case_open to false at the start of scraping
+    if (jobId) {
+      try {
+        await jobService.updateJobCaseOpen(jobId, false);
+        await dualLogInfo(
+          `Set case_open to false for job ${jobId} at start of scraping`,
+          {
+            jobId,
+            timeSession: timeManager.getSessionInfo(),
+          }
+        );
+      } catch (caseOpenError: any) {
+        await dualLogError(
+          `Warning: Failed to set case_open to false for job ${jobId}:`,
+          caseOpenError.message,
+          { jobId }
+        );
+        // Don't throw error - this shouldn't fail the job
+      }
     }
 
     // Validate credentials and required parameters first

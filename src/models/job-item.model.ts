@@ -30,7 +30,6 @@ export interface IJobItem extends Document {
   booked_date: Date;
   has_card_info: boolean;
   card_info?: CardInfo;
-  case_open?: boolean;
   has_payment_info: boolean;
   payment_info?: PaymentInfo;
   reservation_status: string;

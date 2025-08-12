@@ -817,21 +817,21 @@ export async function automateNeedHelpWithCleanup(
     // Run the Need Help process
     await automateNeedHelpProcess(page, options);
 
-    // Update case_open field for all job items before cleanup
+    // Update case_open field for the job (not job items) before cleanup
     if (options.jobId) {
       try {
-        await dualLogInfo("🔄 Updating case_open field for all job items...", {
+        await dualLogInfo("🔄 Updating case_open field for job...", {
           jobId: options.jobId,
           timeSession: timeManager.getSessionInfo(),
         });
 
-        const updateResult = await jobService.updateJobItemsCaseOpen(
+        const updateResult = await jobService.updateJobCaseOpen(
           options.jobId,
           true
         );
 
         await dualLogInfo(
-          `✅ Updated case_open to true for ${updateResult.modifiedCount} job items`,
+          `✅ Updated case_open to true for job (${updateResult.modifiedCount} job updated)`,
           {
             jobId: options.jobId,
             modifiedCount: updateResult.modifiedCount,
