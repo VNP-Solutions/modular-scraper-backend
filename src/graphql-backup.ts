@@ -453,8 +453,18 @@ async function makeGraphQLRequest(
           }
         }
 
-        // Process each reservation
+        // Process each reservation with delays to prevent rate limiting
         for (let index = 0; index < reservationItems.length; index++) {
+          // Add delay between processing reservations to avoid overwhelming the API
+          if (index > 0) {
+            const reservationDelay = parseInt(
+              process.env.RESERVATION_PROCESSING_DELAY_MS || "1000"
+            ); // 1 second between reservations
+            console.log(
+              `⏳ Reservation processing delay: ${reservationDelay}ms...`
+            );
+            await delay(reservationDelay);
+          }
           const item = reservationItems[index];
           const guestName = item.customer?.guestName || "Unknown Guest";
           const confirmationCode =
@@ -887,7 +897,7 @@ async function saveGraphQLReservationToDatabase(
 }
 
 /**
- * Fetch EVC card data for a specific reservation
+ * Fetch EVC card data for a specific reservation with rate limiting and retry logic
  */
 async function fetchEVCCardData(
   propertyId: string,
@@ -896,96 +906,219 @@ async function fetchEVCCardData(
   checkInDate: string,
   cookieHeader: string
 ): Promise<any> {
-  try {
-    const url = `https://apps.expediapartnercentral.com/lodging/bookings/evc/getEVCCardDataByCardResourceId?htid=${propertyId}&cardResourceId=${encodeURIComponent(
-      cardResourceId
-    )}`;
+  const maxRetries = 8;
+  let attempt = 0;
 
-    // Generate a unique origin-request-id for each request
-    const generateRequestId = (): string => {
-      return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(
-        /[xy]/g,
-        function (c) {
-          const r = (Math.random() * 16) | 0;
-          const v = c === "x" ? r : (r & 0x3) | 0x8;
-          return v.toString(16);
+  // Base delay between requests (configurable) - prevent rate limiting
+  const baseDelayMs = parseInt(process.env.EVC_API_DELAY_MS || "3000"); // 3 seconds default between requests
+
+  while (attempt < maxRetries) {
+    try {
+      // Add delay before each request to avoid rate limiting
+      if (attempt > 0) {
+        // Exponential backoff for retries: 8s, 16s, 32s, 60s, 60s...
+        const retryDelay = Math.min(8000 * Math.pow(2, attempt - 1), 60000);
+        console.log(
+          `⏳ Retry delay: waiting ${retryDelay}ms before retry ${attempt}/${maxRetries}...`
+        );
+        await delay(retryDelay);
+      } else {
+        // Standard delay between normal requests to prevent rate limiting
+        console.log(
+          `⏳ Rate limiting protection: ${baseDelayMs}ms delay before EVC API call...`
+        );
+        await delay(baseDelayMs);
+      }
+
+      const url = `https://apps.expediapartnercentral.com/lodging/bookings/evc/getEVCCardDataByCardResourceId?htid=${propertyId}&cardResourceId=${encodeURIComponent(
+        cardResourceId
+      )}`;
+
+      // Generate a unique origin-request-id for each request
+      const generateRequestId = (): string => {
+        return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(
+          /[xy]/g,
+          function (c) {
+            const r = (Math.random() * 16) | 0;
+            const v = c === "x" ? r : (r & 0x3) | 0x8;
+            return v.toString(16);
+          }
+        );
+      };
+
+      const requestBody = {
+        bookingItemId: bookingItemId.toString(),
+        checkInDate: checkInDate,
+      };
+
+      console.log(`💳 EVC API URL:`, url);
+      console.log(`📋 EVC Request Body:`, requestBody);
+
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          accept: "*/*",
+          "accept-language": "en-GB,en-US;q=0.9,en;q=0.8",
+          "content-type": "application/json",
+          dnt: "1",
+          origin: "https://apps.expediapartnercentral.com",
+          priority: "u=1, i",
+          referer: `https://apps.expediapartnercentral.com/lodging/bookings?htid=${propertyId}&bookingItemId=${bookingItemId}`,
+          "sec-ch-ua":
+            '"Not)A;Brand";v="8", "Chromium";v="138", "Google Chrome";v="138"',
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": '"macOS"',
+          "sec-fetch-dest": "empty",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-site": "same-origin",
+          "user-agent":
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
+          "origin-request-id": generateRequestId(), // Dynamic request ID
+          cookie: cookieHeader,
+        },
+        body: JSON.stringify(requestBody),
+      });
+
+      // Handle rate limiting specifically - MUST get data
+      if (response.status === 429) {
+        attempt++;
+        const retryAfter = response.headers.get("retry-after");
+        const waitTime = retryAfter
+          ? parseInt(retryAfter) * 1000
+          : Math.min(15000 * attempt, 120000); // Up to 2 minutes
+
+        console.log(
+          `⚠️ Rate limited (429). Waiting ${waitTime}ms before retry ${attempt}/${maxRetries}...`
+        );
+
+        if (attempt >= maxRetries) {
+          console.error(
+            `❌ Max retries reached for rate limiting. Will retry with longer delay...`
+          );
+          // Wait longer and try once more
+          await delay(180000); // 3 minutes
+          attempt = 0; // Reset attempt counter for one more try
+          continue;
         }
-      );
-    };
 
-    const requestBody = {
-      bookingItemId: bookingItemId.toString(),
-      checkInDate: checkInDate,
-    };
+        await delay(waitTime);
+        continue; // Retry the request
+      }
 
-    console.log(`🔗 EVC API URL: ${url}`);
-    console.log(`📋 EVC Request Body:`, requestBody);
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(
+          `❌ EVC API Error: ${response.status} ${response.statusText}`
+        );
+        console.error(`❌ EVC API Response:`, errorText);
 
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        accept: "*/*",
-        "accept-language": "en-GB,en-US;q=0.9,en;q=0.8",
-        "content-type": "application/json",
-        dnt: "1",
-        origin: "https://apps.expediapartnercentral.com",
-        priority: "u=1, i",
-        referer: `https://apps.expediapartnercentral.com/lodging/bookings?htid=${propertyId}&bookingItemId=${bookingItemId}`,
-        "sec-ch-ua":
-          '"Not)A;Brand";v="8", "Chromium";v="138", "Google Chrome";v="138"',
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": '"macOS"',
-        "sec-fetch-dest": "empty",
-        "sec-fetch-mode": "cors",
-        "sec-fetch-site": "same-origin",
-        "user-agent":
-          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
-        "origin-request-id": generateRequestId(), // Dynamic request ID
-        cookie: cookieHeader,
-      },
-      body: JSON.stringify(requestBody),
-    });
+        // For non-429 errors, retry with increasing delays
+        if (attempt < maxRetries - 1) {
+          attempt++;
+          const errorDelay = Math.min(5000 * attempt, 30000); // Up to 30s for errors
+          console.log(
+            `🔄 Retrying EVC API call (${attempt}/${maxRetries}) in ${errorDelay}ms due to ${response.status} error...`
+          );
+          await delay(errorDelay);
+          continue;
+        } else {
+          console.error(
+            `❌ All retries exhausted. Returning error structure to continue processing.`
+          );
+          // Return error structure but don't break the flow - we need data collection to continue
+          return {
+            cardInformation: null,
+            bookingInformation: null,
+            cardActivity: null,
+            errorDetails: {
+              errorCode: response.status,
+              errorMessage: `API Error: ${response.statusText}`,
+            },
+            isBlackListed: false,
+            newBookingItemId: null,
+            isContractExpired: false,
+            apiError: true,
+            skipReason: `HTTP ${response.status}`,
+          };
+        }
+      }
 
-    if (!response.ok) {
-      const errorText = await response.text();
+      const cardData = await response.json();
+      console.log(`✅ EVC API Response:`, cardData);
+
+      // Check if response contains actual card data - handle new API response structure
+      const hasCardData =
+        cardData &&
+        // New API structure
+        ((cardData.cardInformation && cardData.cardInformation.cardNumber) ||
+          // Old API structure (fallback)
+          cardData.cardNumber ||
+          cardData.card_number);
+
+      if (!hasCardData) {
+        console.warn(
+          `⚠️ EVC API returned response but no card data found:`,
+          cardData
+        );
+        console.log(
+          `🔍 Available keys in response:`,
+          Object.keys(cardData || {})
+        );
+
+        // Check for specific error codes that might need different handling
+        if (cardData?.errorDetails?.errorCode === 20001) {
+          console.log(
+            `🔄 Error 20001 detected, will retry with longer delay...`
+          );
+          if (attempt < maxRetries - 1) {
+            attempt++;
+            await delay(10000); // 10 second delay for this specific error
+            continue;
+          }
+        }
+
+        return cardData; // Return the response anyway, let caller handle the empty data
+      }
+
+      // Success! Return the card data
+      return cardData;
+    } catch (error: any) {
+      attempt++;
       console.error(
-        `❌ EVC API Error: ${response.status} ${response.statusText}`
+        `❌ Error fetching EVC card data (attempt ${attempt}):`,
+        error.message
       );
-      console.error(`❌ EVC API Response:`, errorText);
-      throw new Error(
-        `EVC API failed with status ${response.status}: ${errorText}`
-      );
+
+      if (attempt >= maxRetries) {
+        console.error(
+          `❌ All retry attempts exhausted. Returning null to continue processing.`
+        );
+        // Don't throw error, return null to continue with other reservations
+        return {
+          cardInformation: null,
+          bookingInformation: null,
+          cardActivity: null,
+          errorDetails: {
+            errorCode: -1,
+            errorMessage: `Network/Connection Error: ${error.message}`,
+          },
+          isBlackListed: false,
+          newBookingItemId: null,
+          isContractExpired: false,
+          networkError: true,
+          skipReason: "Network Error",
+        };
+      }
+
+      // Wait before retrying on network errors
+      const networkDelay = Math.min(5000 * attempt, 20000);
+      console.log(`🔄 Network error retry in ${networkDelay}ms...`);
+      await delay(networkDelay);
     }
-
-    const cardData = await response.json();
-    console.log(`✅ EVC API Response:`, cardData);
-
-    // Check if response contains actual card data - handle new API response structure
-    const hasCardData =
-      cardData &&
-      // New API structure
-      ((cardData.cardInformation && cardData.cardInformation.cardNumber) ||
-        // Old API structure (fallback)
-        cardData.cardNumber ||
-        cardData.card_number);
-
-    if (!hasCardData) {
-      console.warn(
-        `⚠️ EVC API returned response but no card data found:`,
-        cardData
-      );
-      console.log(
-        `🔍 Available keys in response:`,
-        Object.keys(cardData || {})
-      );
-      return null;
-    }
-
-    return cardData;
-  } catch (error: any) {
-    console.error("❌ Error fetching EVC card data:", error);
-    throw error;
   }
+
+  // This should never be reached, but just in case
+  return null;
 }
 
 async function graphqlScraping(
