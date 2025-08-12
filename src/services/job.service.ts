@@ -12,6 +12,10 @@ import {
   OTAProvider,
   PostingType,
 } from "../models/job.model.js";
+import {
+  IPropertyCredentials,
+  PropertyCredentials,
+} from "../models/property-cred.model.js";
 import { IProperty, Property } from "../models/property.model.js";
 
 export interface CreateJobData {
@@ -90,6 +94,8 @@ export class JobService {
     expediaId: string;
     user_email?: string;
     user_password?: string;
+    credentials?: Partial<IPropertyCredentials>;
+    property?: IProperty & { credentials?: Partial<IPropertyCredentials> };
   } | null> {
     try {
       const job = await this.getJobWithProperty(jobId);
@@ -121,13 +127,46 @@ export class JobService {
         return null;
       }
 
+      // Load credentials for this property and hydrate onto the response
+      const creds = await PropertyCredentials.findOne({
+        property_id: property._id,
+      });
+
+      // Attach credentials on the fly to the property object (not persisted here)
+      const propertyWithCreds = property.toObject();
+      (propertyWithCreds as any).credentials = creds
+        ? (creds.toObject() as Partial<IPropertyCredentials>)
+        : undefined;
+
       console.log(
         `✅ Found expedia_id: ${property.expedia_id} for job: ${jobId}`
       );
       return {
         expediaId: property.expedia_id,
-        user_email: property.user_email,
-        user_password: property.user_password,
+        // Map legacy fields from credentials for backward compatibility
+        user_email: creds?.expediaUsername,
+        user_password: creds?.expediaPassword,
+        credentials: creds
+          ? {
+              _id: creds._id,
+              property_id: creds.property_id,
+              expediaUsername: creds.expediaUsername,
+              expediaPassword: creds.expediaPassword,
+              agodaUsername: creds.agodaUsername,
+              agodaPassword: creds.agodaPassword,
+              bookingUsername: creds.bookingUsername,
+              bookingPassword: creds.bookingPassword,
+              expediaEmailAssociated: creds.expediaEmailAssociated,
+              propertyContactEmail: creds.propertyContactEmail,
+              portfolioContactEmail: creds.portfolioContactEmail,
+              multiplePortfolioEmails: creds.multiplePortfolioEmails,
+              createdAt: creds.createdAt,
+              updatedAt: creds.updatedAt,
+            }
+          : undefined,
+        property: propertyWithCreds as IProperty & {
+          credentials?: Partial<IPropertyCredentials>;
+        },
       };
     } catch (error) {
       console.error(`Error getting expedia_id for job ${jobId}:`, error);

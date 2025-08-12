@@ -1,5 +1,6 @@
 import { Request, Response } from "express";
 import fs from "fs";
+import { uploadTokenToS3FromData } from "../common/s3-token.js";
 import { getAuthUrl, oauth2Client } from "../config/google-config.js";
 
 export async function getAccess(req: Request, res: Response) {
@@ -22,8 +23,10 @@ export async function getOauth2Callback(req: Request, res: Response) {
       oauth2Client.setCredentials(tokens);
       fs.writeFileSync(
         process.env.TOKEN_PATH || "token.json",
-        JSON.stringify(tokens)
+        JSON.stringify(tokens, null, 2)
       );
+      // Upload token to S3
+      await uploadTokenToS3FromData(tokens);
       res.send("Authentication successful! You can close this window.");
       // res.redirect(process.env.FRONTEND_REDIRECT_URI || 'http://localhost:3000');
     } catch (error: any) {

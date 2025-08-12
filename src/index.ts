@@ -2,7 +2,7 @@ import dotenv from "dotenv";
 import mongoose from "mongoose";
 import open from "open";
 import app from "./app/app.js";
-import loadToken from "./common/load-token.js";
+import { loadAndSetCredentials } from "./common/load-token.js";
 import { workerPool } from "./common/worker-pool.js";
 dotenv.config();
 
@@ -65,7 +65,9 @@ app.listen(port, async () => {
   try {
     await connectDB();
 
-    if (!loadToken(process.env.TOKEN_PATH || "token.json")) {
+    const tokenPath = process.env.TOKEN_PATH || "token.json";
+    const ok = await loadAndSetCredentials(tokenPath);
+    if (!ok) {
       console.log("Opening browser for authentication...");
       open(`http://localhost:${port}/auth`);
     }

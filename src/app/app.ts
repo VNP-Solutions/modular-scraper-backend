@@ -571,7 +571,7 @@ app.post("/api/expedia/rerun-failed-job", (async (
     if (!jobData.user_email || !jobData.user_password) {
       return res.status(400).json({
         status: 400,
-        message: `Cannot retrieve valid user_email or user_password for job ${jobId}. Property may not have user_email or user_password assigned.`,
+        message: `Cannot retrieve valid Expedia credentials for job ${jobId}. Property may not have credentials assigned.`,
       });
     }
 

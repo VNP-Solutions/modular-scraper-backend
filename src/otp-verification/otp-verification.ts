@@ -1,5 +1,4 @@
 import dotenv from "dotenv";
-import fs from "fs";
 import { google } from "googleapis";
 import { Browser, Page } from "puppeteer";
 import { delay } from "../common/delay.js";
@@ -13,25 +12,16 @@ dotenv.config();
 // Function to load and set credentials
 async function loadCredentials() {
   try {
-    const tokenPath = process.env.TOKEN_PATH || "token.json";
-
-    if (!fs.existsSync(tokenPath)) {
+    const tokenPath = process.env.TOKEN_PATH || "../config/token.json";
+    // Always use S3 credential loader
+    const { loadAndSetCredentials } = await import("../common/load-token.js");
+    const ok = await loadAndSetCredentials(tokenPath);
+    if (!ok) {
       throw new Error(
-        `Token file not found at ${tokenPath}. Please run the authentication setup first.`
+        "Failed to load Gmail credentials from S3. Please authenticate first."
       );
     }
-
-    const token = JSON.parse(fs.readFileSync(tokenPath, "utf8"));
-
-    // Check if refresh token exists
-    if (!token.refresh_token) {
-      throw new Error(
-        "No refresh token found. Please re-authenticate with offline access."
-      );
-    }
-
-    oauth2Client.setCredentials(token);
-    await dualLogInfo("Gmail credentials loaded successfully");
+    await dualLogInfo("Gmail credentials loaded successfully from S3");
     return true;
   } catch (error) {
     await dualLogError("Error loading credentials:", error);

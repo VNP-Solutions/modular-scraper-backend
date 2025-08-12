@@ -173,7 +173,7 @@ class ScrapingWorker {
 
       if (!jobData.user_email || !jobData.user_password) {
         throw new Error(
-          `Cannot retrieve valid user_email or user_password for job ${jobId}. Property may not have user_email or user_password assigned.`
+          `Cannot retrieve valid Expedia credentials for job ${jobId}. Property may not have credentials assigned.`
         );
       }
 
@@ -303,7 +303,7 @@ class ScrapingWorker {
 
     if (!jobDetails.user_email || !jobDetails.user_password) {
       throw new Error(
-        `Cannot retrieve valid user_email or user_password for job ${jobId}`
+        `Cannot retrieve valid Expedia credentials for job ${jobId}`
       );
     }
 
