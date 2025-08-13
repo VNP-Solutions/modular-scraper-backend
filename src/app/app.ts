@@ -11,7 +11,7 @@ import healthRoutes from "../routes/shared/health.routes.js";
 import expediarJobsRoutes from "../routes/expedia/jobs.routes.js";
 import expediarScrapingControlRoutes from "../routes/expedia/scraping-control.routes.js";
 import expediarScrapingRoutes from "../routes/expedia/scraping.routes.js";
-import agodaScrapingRoutes from "../routes/agoda/scraping.routes.js"
+import agodaScrapingRoutes from "../routes/agoda/scraping.routes.js";
 
 const app = express();
 

@@ -9,6 +9,8 @@ import {
 } from "../../common/log-helper.js";
 import { progressManager } from "../../common/progress-manager.js";
 import { scrapingStateManager } from "../../common/scraping-state.js";
+import { agodaWorkerPool } from "../../common/worker-pool.js";
+import { WorkerJobData } from "../../common/worker-types.js";
 import { JobStatus } from "../../models/job.model.js";
 import { propertyCredentialsService } from "../../services/job-credentials.service.js";
 import { jobQueueUrlService } from "../../services/job-queue-url.service.js";
@@ -297,100 +299,64 @@ router.post("/property-run-job", (async (
 
     console.log(`Using agoda_id: ${agodaId} for scraping`);
 
-    // 3. Check if scraping is already running (legacy state manager check)
-    // if (scrapingStateManager.isRunning()) {
-    //   return res.status(409).json({
-    //     status: 409,
-    //     message: "Another scraping job is already running",
-    //     currentState: scrapingStateManager.getState(),
-    //   });
-    // }
+    // 3. Check if worker threads are available
+    if (
+      !agodaWorkerPool.hasAvailableWorkers() &&
+      agodaWorkerPool.isQueueFull()
+    ) {
+      return res.status(200).json({
+        status: 200,
+        message: "All Agoda workers busy, try again",
+        workerStatus: agodaWorkerPool.getStatus(),
+      });
+    }
 
-    // 4. Update job status to Running
-    console.log(`Starting job ${jobId}...`);
-    await jobService.startJob(jobId);
-
-    // 5. Initialize job logging
-    initializeJobLogging(jobId);
-    await dualLogInfo(`Starting property scraping job ${jobId}`, {
+    // 4. Prepare worker job data
+    const workerJobData: WorkerJobData = {
+      jobType: "agoda-property-run",
       jobId,
-      agodaId,
       startDate,
       endDate,
-    });
+      agodaId,
+      agodaUsername,
+      agodaPassword,
+    };
 
-    // 6. Start legacy state manager (for existing pause/resume functionality)
-    scrapingStateManager.startScraping(agodaId, jobId, startDate, endDate);
-
+    // 5. Execute job in worker thread
     try {
-      // 7. Run the main scraping function with agoda_id
-      await agoda(
-        agodaId,
-        startDate,
-        endDate,
-        jobId,
-        agodaUsername,
-        agodaPassword
-      );
+      console.log(`Submitting Agoda job ${jobId} to worker pool...`);
 
-      // 8. Get final job statistics
-      const progress = await jobService.getJobProgress(jobId);
+      const result = await agodaWorkerPool.executeJob(workerJobData);
 
-      // 9. Determine final status based on completion
-      let finalStatus = JobStatus.Completed;
-      if (progress.totalItems === 0) {
-        finalStatus = JobStatus.Failed;
-      } else if (progress.completionPercentage < 100) {
-        finalStatus = JobStatus.Partial;
+      if (result.success) {
+        return res.status(200).json(result.data);
+      } else {
+        return res.status(500).json({
+          status: 500,
+          message: "Agoda job execution failed",
+          error: result.error,
+          jobId: result.jobId,
+        });
+      }
+    } catch (workerError) {
+      console.error(`Agoda Worker error for job ${jobId}:`, workerError);
+
+      // Ensure job is marked as failed
+      try {
+        await progressManager.handleJobError(jobId, workerError);
+      } catch (cleanupError) {
+        console.error("Error during cleanup:", cleanupError);
       }
 
-      // 10. Update final job status
-      await jobService.updateJobStatus(jobId, finalStatus);
-
-      // 11. Change URL status back to Available (URL assigned by another project)
-      await jobQueueUrlService.handleJobCompletion(jobId, finalStatus);
-
-      // 12. Stop legacy state manager
-      scrapingStateManager.stopScraping();
-
-      // Get log file information if available
-      const logger = getCurrentJobLogger();
-      const logInfo = logger
-        ? {
-            logFilePath: logger.getLogFilePath(),
-            logEntriesCount: logger.getLogEntriesCount(),
-            note: "Log file uploaded to S3 and deleted locally after job completion",
-          }
-        : null;
-
-      res.status(200).json({
-        status: 200,
-        message: `Property scraping ${finalStatus.toLowerCase()} successfully`,
-        agodaId: agodaId,
-        jobId: jobId,
-        progress: progress,
-        finalStatus: finalStatus,
-        logInfo: logInfo,
-      });
-    } catch (scrapingError: any) {
-      // Mark job as failed on scraping error
-      await dualLogError(`Job ${jobId} failed`, scrapingError, { jobId });
-
-      // Send email notification for scraping errorawait progressManager.handleJobError(jobId, scrapingError);
-
-      // Release URL back to Available status on error
-      await jobQueueUrlService.handleJobCompletion(
+      return res.status(500).json({
+        status: 500,
+        message: "Agoda Worker execution failed",
+        error:
+          workerError instanceof Error
+            ? workerError.message
+            : String(workerError),
         jobId,
-        "Failed",
-        scrapingError?.message || "Unknown error"
-      );
-
-      scrapingStateManager.stopScraping();
-
-      // Finalize logging with failed status (this ensures log upload even on error)
-      await finalizeJobLogging("failed");
-
-      throw scrapingError;
+      });
     }
   } catch (err: any) {
     console.error("Error in /api/agoda/property-run-job:", err);

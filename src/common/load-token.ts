@@ -2,6 +2,7 @@ import dotenv from "dotenv";
 import fs from "fs";
 import { google } from "googleapis";
 import { dualLogError, dualLogInfo, dualLogWarn } from "./log-helper.js";
+import { readTokenDataFromS3, uploadTokenToS3FromData } from "./s3-token.js";
 
 dotenv.config();
 const CLIENT_ID = process.env.CLIENT_ID;
@@ -46,15 +47,18 @@ export async function loadTokenData(
   tokenPath: string
 ): Promise<GoogleTokenData | null> {
   try {
-    if (!fs.existsSync(tokenPath)) {
-      await dualLogWarn(
-        `Google OAuth2 token file not found at ${tokenPath}`,
-        {}
-      );
+    // Always read token directly from S3
+    const tokenData = await readTokenDataFromS3<GoogleTokenData>();
+    if (!tokenData) {
+      await dualLogWarn("Google OAuth2 token not found in S3", {});
       return null;
     }
-
-    const tokenData = JSON.parse(fs.readFileSync(tokenPath, "utf8"));
+    // Keep local file updated for compatibility/debugging
+    try {
+      fs.writeFileSync(tokenPath, JSON.stringify(tokenData, null, 2));
+    } catch {
+      // Best-effort local write; ignore errors
+    }
 
     // Validate required fields
     if (!tokenData.access_token) {
@@ -80,25 +84,37 @@ export async function loadTokenData(
 }
 
 /**
- * Save Google OAuth2 token to file
+ * Save Google OAuth2 token to file and S3
  */
 export async function saveTokenData(
   tokenPath: string,
   tokenData: GoogleTokenData
 ): Promise<boolean> {
   try {
-    // Save token data with proper formatting
-    fs.writeFileSync(tokenPath, JSON.stringify(tokenData, null, 2));
+    // Save token data to S3 first
+    const s3Success = await uploadTokenToS3FromData(tokenData);
+
+    // Save token data locally with proper formatting (best effort)
+    try {
+      fs.writeFileSync(tokenPath, JSON.stringify(tokenData, null, 2));
+    } catch (localError) {
+      await dualLogWarn("Failed to save token locally, but S3 save succeeded", {
+        tokenPath,
+        localError:
+          localError instanceof Error ? localError.message : String(localError),
+      });
+    }
 
     await dualLogInfo("Google OAuth2 token saved successfully", {
       tokenPath,
+      s3Success,
       hasRefreshToken: !!tokenData.refresh_token,
       expiryDate: tokenData.expiry_date
         ? new Date(tokenData.expiry_date).toISOString()
         : null,
     });
 
-    return true;
+    return s3Success; // Return true if S3 save was successful
   } catch (error) {
     await dualLogError("Error saving Google OAuth2 token:", error, {
       tokenPath,
@@ -218,9 +234,11 @@ export async function autoRefreshToken(
   tokenPath: string = process.env.TOKEN_PATH || "token.json"
 ): Promise<boolean> {
   try {
-    if (!fs.existsSync(tokenPath)) {
+    // Check if token exists in S3 first
+    const tokenData = await readTokenDataFromS3<GoogleTokenData>();
+    if (!tokenData) {
       await dualLogWarn(
-        "Google OAuth2 token file does not exist, skipping auto-refresh",
+        "Google OAuth2 token not found in S3, skipping auto-refresh",
         {
           tokenPath,
         }
