@@ -8,6 +8,7 @@ import handleBookingOtpVerification from "../otp-verification/booking-otp-verifi
 import { SelectorUtils } from "../common/selector-utils.js";
 import { BOOKING_LOGIN_EXCLUDE_URLS, BOOKING_LOGIN_SUCCESS_URLS, BOOKING_SELECTORS, CAPTCHA_PATTERNS, TWO_FA_PATTERNS, TWO_FA_TEXT_PATTERNS } from "../common/booking-selectors.js";
 import { emailNotifier } from "../common/email-notifier.js";
+import { bookingCookieManagerDB } from "../services/booking-cookie-manager-db.service.js";
 import { 
   BookingErrorType, 
   BookingScrapingPhase, 
@@ -144,10 +145,31 @@ export class BookingScraper extends BaseScraper {
 
     await this.logInfo('Login successful');
     const cookies = await this.page.cookies();
+    
+    // Save to file for backward compatibility
     fs.writeFileSync(this.cookiesFile, JSON.stringify(cookies, null, 2));
     await this.logInfo(`Saved ${cookies.length} cookies for future sessions`);
-    await this.takeScreenshot('booking-admin-dashboard.png');
     
+    // Save to MongoDB if propertyId is provided
+    if (propertyId) {
+      try {
+        const userAgent = await this.page.evaluate(() => navigator.userAgent);
+        await bookingCookieManagerDB.saveCookies(
+          propertyId,
+          propertyId, // Using propertyId as bookingId temporarily
+          cookies,
+          {
+            isFullLogin: true,
+            userAgent,
+          }
+        );
+        await this.logInfo(`Saved session cookies to database for property ${propertyId}`);
+      } catch (error) {
+        await this.logError('Failed to save cookies to database:', error);
+      }
+    }
+    
+    await this.takeScreenshot('booking-admin-dashboard.png');
     await this.handlePropertySearch(propertyId);
   }
 

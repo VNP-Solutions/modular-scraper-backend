@@ -4,6 +4,8 @@ import { dualLogInfo, dualLogError } from "../common/log-helper.js";
 import { initializeJobLogging, finalizeJobLogging } from "../common/log-helper.js";
 import { BOOKING_SELECTORS } from "../common/booking-selectors.js";
 import { BookingErrorType, BookingScrapingPhase } from "../common/booking-error-types.js";
+import { bookingCookieManagerDB } from "./booking-cookie-manager-db.service.js";
+import { bookingSessionPing } from "./booking-session-ping.service.js";
 
 interface TrustVerificationResult {
   propertyId: string;
@@ -39,12 +41,12 @@ export class BookingTrustSchedulerService {
   /**
    * Get properties that need trust verification based on the rules:
    * a. Properties with last_login >= 23h and trusted_status = not_trusted
-   * b. OR Properties with last_login >= 6d and trusted_status = trusted
+   * b. OR Properties with last_login >= 7d and trusted_status = trusted (weekly maintenance)
    */
   async getPropertiesForTrustVerification(): Promise<IProperty[]> {
     const now = new Date();
     const twentyThreeHoursAgo = new Date(now.getTime() - 23 * 60 * 60 * 1000);
-    const sixDaysAgo = new Date(now.getTime() - 6 * 24 * 60 * 60 * 1000);
+    const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
 
     try {
       const properties = await Property.find({
@@ -68,12 +70,12 @@ export class BookingTrustSchedulerService {
                 ],
               },
               {
-                // Trusted properties that haven't been verified in 6+ days
+                // Trusted properties - weekly maintenance login (7+ days)
                 $and: [
                   { booking_trusted_status: BookingTrustedStatus.Trusted },
                   {
                     $or: [
-                      { booking_last_login: { $lte: sixDaysAgo } },
+                      { booking_last_login: { $lte: sevenDaysAgo } },
                       { booking_last_login: { $exists: false } }, // Never logged in
                     ],
                   },
@@ -106,6 +108,7 @@ export class BookingTrustSchedulerService {
 
   /**
    * Verify trust status for a single property
+   * First attempts session ping, then falls back to full login if needed
    */
   async verifyPropertyTrust(property: IProperty): Promise<TrustVerificationResult> {
     const propertyId = property._id.toString();
@@ -123,10 +126,52 @@ export class BookingTrustSchedulerService {
       // Initialize logging for this verification
       initializeJobLogging(`trust-verify-${propertyId}`);
 
-      // Create booking scraper instance
+      // First, check if we can use session ping for trusted properties
+      const sessionInfo = await bookingCookieManagerDB.getSessionInfo(propertyId);
+      
+      if (sessionInfo && sessionInfo.isTrusted() && property.booking_trusted_status === BookingTrustedStatus.Trusted) {
+        // Try session ping first for trusted properties
+        await dualLogInfo(`Attempting session ping for trusted property ${propertyId}`);
+        
+        const pingResult = await bookingSessionPing.pingSession(property);
+        
+        if (pingResult.success && pingResult.sessionValid) {
+          // Session ping successful, update trust status
+          const newTrustScore = pingResult.trustScore;
+          const newStatus = newTrustScore >= 70 ? BookingTrustedStatus.Trusted : BookingTrustedStatus.NotTrusted;
+          
+          await this.updatePropertyTrustStatus(propertyId, newStatus, new Date(), newTrustScore);
+          
+          await dualLogInfo(`Trust verification via session ping completed for property ${propertyId}`, {
+            propertyId,
+            bookingId,
+            previousStatus,
+            newStatus,
+            trustScore: newTrustScore,
+            method: "session_ping",
+          });
+          
+          await finalizeJobLogging("success");
+          
+          return {
+            propertyId,
+            bookingId,
+            previousStatus,
+            newStatus,
+            success: true,
+            hasCardDetailsLinks: true, // Assumed true for successful ping
+          };
+        }
+        
+        await dualLogInfo(`Session ping failed for property ${propertyId}, falling back to full login`);
+      }
+
+      // Create booking scraper instance for full login
       const bookingScraper = new BookingScraper();
       
-      // Attempt booking login
+      // Attempt full booking login
+      const loginStartTime = Date.now();
+      
       try {
         await bookingScraper.login({
           email: property.user_email!,
@@ -181,8 +226,39 @@ export class BookingTrustSchedulerService {
           newStatus = BookingTrustedStatus.NotTrusted;
         }
 
-        // Update property trust status
-        await this.updatePropertyTrustStatus(propertyId, newStatus, new Date());
+        // Get page and cookies for session storage
+        const page = await bookingScraper.getPage();
+        if (page) {
+          const cookies = await page.cookies();
+          const userAgent = await page.evaluate(() => navigator.userAgent);
+          const responseTime = Date.now() - loginStartTime;
+          
+          // Save session cookies
+          await bookingCookieManagerDB.saveCookies(
+            propertyId,
+            bookingId,
+            cookies,
+            {
+              isFullLogin: true,
+              responseTime,
+              userAgent,
+            }
+          );
+        }
+        
+        // Calculate trust score based on success
+        const successfulLogins = (property.booking_successful_logins || 0) + 1;
+        const trustScore = Math.min(100, 50 + (successfulLogins * 5));
+        
+        // Update property trust status with score
+        await this.updatePropertyTrustStatus(propertyId, newStatus, new Date(), trustScore);
+        
+        // Update property metrics
+        await Property.findByIdAndUpdate(propertyId, {
+          booking_successful_logins: successfulLogins,
+          booking_failed_logins: 0,
+          booking_trust_score: trustScore,
+        });
 
         await dualLogInfo(`Trust verification completed for property ${propertyId}`, {
           propertyId,
@@ -191,6 +267,8 @@ export class BookingTrustSchedulerService {
           newStatus,
           hasCardDetailsLinks,
           statusChanged: previousStatus !== newStatus,
+          trustScore,
+          method: "full_login",
         });
 
         await finalizeJobLogging("success");
@@ -210,8 +288,26 @@ export class BookingTrustSchedulerService {
           { propertyId, bookingId, previousStatus }
         );
 
+        // Mark session as failed
+        await bookingCookieManagerDB.markSessionFailed(
+          propertyId,
+          loginError instanceof Error ? loginError.message : String(loginError),
+          {
+            requiresCaptcha: loginError instanceof Error && loginError.message.includes('captcha'),
+          }
+        );
+        
+        // Update failed login metrics
+        const failedLogins = (property.booking_failed_logins || 0) + 1;
+        const trustScore = Math.max(0, (property.booking_trust_score || 0) - 10);
+        
+        await Property.findByIdAndUpdate(propertyId, {
+          booking_failed_logins: failedLogins,
+          booking_trust_score: trustScore,
+        });
+        
         // Update last_login even if failed (for retry logic)
-        await this.updatePropertyTrustStatus(propertyId, previousStatus, new Date());
+        await this.updatePropertyTrustStatus(propertyId, previousStatus, new Date(), trustScore);
 
         await finalizeJobLogging("failed");
 
@@ -232,7 +328,8 @@ export class BookingTrustSchedulerService {
       );
 
       // Update last_login even if failed (for retry logic)
-      await this.updatePropertyTrustStatus(propertyId, previousStatus, new Date());
+      const currentScore = property.booking_trust_score || 0;
+      await this.updatePropertyTrustStatus(propertyId, previousStatus, new Date(), currentScore);
 
       await finalizeJobLogging("failed");
 
@@ -248,22 +345,38 @@ export class BookingTrustSchedulerService {
   }
 
   /**
-   * Update property trust status and last login time
+   * Update property trust status, last login time, and trust score
    */
   private async updatePropertyTrustStatus(
     propertyId: string,
     trustedStatus: BookingTrustedStatus,
-    lastLogin: Date
+    lastLogin: Date,
+    trustScore?: number
   ): Promise<void> {
     try {
-      await Property.findByIdAndUpdate(propertyId, {
+      const updateData: any = {
         booking_trusted_status: trustedStatus,
         booking_last_login: lastLogin,
-      });
+      };
+      
+      if (trustScore !== undefined) {
+        updateData.booking_trust_score = trustScore;
+      }
+      
+      // Set trust established date when becoming trusted
+      if (trustedStatus === BookingTrustedStatus.Trusted) {
+        const property = await Property.findById(propertyId);
+        if (property && !property.booking_trust_established_date) {
+          updateData.booking_trust_established_date = new Date();
+        }
+      }
+      
+      await Property.findByIdAndUpdate(propertyId, updateData);
 
       await dualLogInfo(`Updated property ${propertyId} trust status`, {
         propertyId,
         trustedStatus,
+        trustScore,
         lastLogin: lastLogin.toISOString(),
       });
     } catch (error) {
@@ -310,6 +423,9 @@ export class BookingTrustSchedulerService {
         return this.stats;
       }
 
+      // Clean up expired sessions before processing
+      await bookingCookieManagerDB.cleanupExpiredSessions();
+      
       // Process each property
       for (const property of properties) {
         try {
