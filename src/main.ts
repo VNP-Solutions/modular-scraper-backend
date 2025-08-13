@@ -2,7 +2,9 @@ import dotenv from "dotenv";
 import { browserSetupLocal } from "./browser-setup/browser-local.js";
 import { browserSetupProduction } from "./browser-setup/browser-prod.js";
 import { delay } from "./common/delay.js";
+import { emailNotifier } from "./common/email-notifier.js";
 import { decryptPassword } from "./common/encription.js";
+
 import {
   dualLogError,
   dualLogInfo,
@@ -110,8 +112,31 @@ async function main(
       }
       throw error;
     }
-  } catch (error) {
+  } catch (error: any) {
     await dualLogError("Main function error:", error);
+
+    // Send email notification for outer main function error
+    if (jobId) {
+      try {
+        await emailNotifier.notifyJobError(
+          jobId,
+          error?.message || "Unknown error in outer main function",
+          error,
+          {
+            stage: "outer_main_function",
+            progressPercentage:
+              progressManager.getJobProgress(jobId)?.progressPercentage,
+            lastProcessedDate:
+              progressManager.getJobLastProcessedDate(jobId) || undefined,
+          }
+        );
+      } catch (emailError) {
+        await dualLogError(
+          "Failed to send error notification email:",
+          emailError
+        );
+      }
+    }
 
     // End time session on error
     await timeManager.endSession();
