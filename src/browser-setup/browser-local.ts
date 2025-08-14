@@ -10,7 +10,10 @@ import {
 import { timeoutManager } from "../common/timeout-manager.js";
 dotenv.config();
 
-export async function browserSetupLocal(jobId?: string): Promise<{
+export async function browserSetupLocal(
+  jobId?: string,
+  platform?: "expedia" | "agoda"
+): Promise<{
   browser: Browser;
   page: Page;
 }> {
@@ -45,54 +48,16 @@ export async function browserSetupLocal(jobId?: string): Promise<{
 
     const page: Page = await browser.newPage();
 
-    // Set user agent to match GraphQL API headers exactly
-    await page.setUserAgent(BROWSER_CONFIG.USER_AGENT);
-
-    // Set additional headers to match real browser behavior
-    await page.setExtraHTTPHeaders(BROWSER_CONFIG.HEADERS);
-
-    // Hide automation indicators
-    await page.evaluateOnNewDocument(() => {
-      // Remove webdriver property
-      delete (navigator as any).webdriver;
-
-      // Override the plugins property to use a real value
-      Object.defineProperty(navigator, "plugins", {
-        get: () => [1, 2, 3, 4, 5],
-      });
-
-      // Override the languages property to use a real value
-      Object.defineProperty(navigator, "languages", {
-        get: () => ["en-US", "en"],
-      });
-
-      // Override chrome property
-      (window as any).chrome = {
-        runtime: {},
-      };
-
-      // Mock permissions
-      const originalQuery = window.navigator.permissions.query;
-      window.navigator.permissions.query = (parameters) => {
-        if (parameters.name === "notifications") {
-          return Promise.resolve({
-            state: Notification.permission,
-            name: "notifications",
-            onchange: null,
-            addEventListener: () => {},
-            removeEventListener: () => {},
-            dispatchEvent: () => false,
-          } as PermissionStatus);
-        }
-        return originalQuery(parameters);
-      };
-    });
-    // Set default timeouts based on job configuration
-    await page.setDefaultNavigationTimeout(loadingTimeout);
-    await page.setDefaultTimeout(selectorTimeout);
+    // Set user agent to avoid detection
+    await page.setUserAgent(
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    );
+    // Set timeouts to 0 for infinite waiting (when using DynamicWaiter)
+    await page.setDefaultNavigationTimeout(0); // No navigation timeout
+    await page.setDefaultTimeout(0); // No default timeout
 
     // Navigate to partner central with retry logic
-    await dualLogInfo("Navigating to Expedia Partner Central...");
+    // await dualLogInfo("Navigating to Expedia Partner Central...");
 
     const maxRetries = 3;
     let navigationSuccess = false;
@@ -104,19 +69,26 @@ export async function browserSetupLocal(jobId?: string): Promise<{
           maxRetries,
         });
 
-        await page.goto(
-          "https://www.expediapartnercentral.com/Account/Logon?signedOff=true",
-          {
+        if (platform === "expedia") {
+          await page.goto(
+            "https://www.expediapartnercentral.com/Account/Logon?signedOff=true",
+            {
+              waitUntil: "domcontentloaded",
+              timeout: loadingTimeout,
+            }
+          );
+        } else if (platform === "agoda") {
+          await page.goto("https://ycs.agoda.com", {
             waitUntil: "domcontentloaded",
             timeout: loadingTimeout,
-          }
-        );
-
+          });
+          await page.waitForNavigation({ waitUntil: "networkidle0" });
+        }
         // Wait for page to stabilize
         await delay(3000);
 
         // Check if page loaded successfully by looking for a common element
-        await page.waitForSelector("body", { timeout: selectorTimeout });
+        await page.waitForSelector("body", { timeout: 0 }); // No timeout
 
         navigationSuccess = true;
         await dualLogInfo("Navigation successful!", { attempt });

@@ -3,7 +3,7 @@ import { Job } from "../models/job.model.js";
 import {
   IPropertyCredentials,
   PropertyCredentials,
-} from "../models/property-cred.model.js";
+} from "../models/property-credentials.model.js";
 import { IProperty, Property } from "../models/property.model.js";
 
 export interface CreatePropertyCredentialsData {

@@ -12,11 +12,11 @@ import {
   OTAProvider,
   PostingType,
 } from "../models/job.model.js";
+import { IProperty, Property } from "../models/property.model.js";
 import {
   IPropertyCredentials,
   PropertyCredentials,
-} from "../models/property-cred.model.js";
-import { IProperty, Property } from "../models/property.model.js";
+} from "../models/property-credentials.model.js";
 
 export interface CreateJobData {
   name?: string;
@@ -174,6 +174,51 @@ export class JobService {
     }
   }
 
+  /**
+   * Get expedia_id from job's property
+   */
+  async getAgodaIdFromJob(jobId: string): Promise<{
+    agodaId: string;
+  } | null> {
+    try {
+      const job = await this.getJobWithProperty(jobId);
+
+      if (!job) {
+        console.error(`Job not found: ${jobId}`);
+        return null;
+      }
+
+      if (!job.property_id) {
+        console.error(`Job ${jobId} has no property_id assigned`);
+        return null;
+      }
+
+      // Get property details
+      const property = await Property.findById(job.property_id);
+
+      if (!property) {
+        console.error(
+          `Property not found for job ${jobId}, property_id: ${job.property_id}`
+        );
+        return null;
+      }
+
+      if (!property.agoda_id || property.agoda_id === "0") {
+        console.error(
+          `Property ${property._id} has no valid agoda_id (current: ${property.agoda_id})`
+        );
+        return null;
+      }
+
+      console.log(`✅ Found agoda_id: ${property.agoda_id} for job: ${jobId}`);
+      return {
+        agodaId: property.agoda_id,
+      };
+    } catch (error) {
+      console.error(`Error getting agoda_id for job ${jobId}:`, error);
+      return null;
+    }
+  }
   /**
    * Create job (external jobs creation - read only for scraper)
    */
@@ -664,6 +709,58 @@ export class JobService {
         totalPage: 1,
         limit,
       };
+    }
+  }
+
+  /**
+   * Update case_open field for a job
+   */
+  async updateJobCaseOpen(
+    jobId: string,
+    caseOpen: boolean = true
+  ): Promise<{ modifiedCount: number }> {
+    try {
+      const objectId = this.validateObjectId(jobId, "jobId");
+      const result = await Job.updateOne(
+        { _id: objectId },
+        {
+          case_open: caseOpen,
+        }
+      );
+
+      console.log(`Updated case_open to ${caseOpen} for job ${jobId}`);
+      return { modifiedCount: result.modifiedCount || 0 };
+    } catch (error) {
+      console.error(`Error updating job case_open: ${error}`);
+      return { modifiedCount: 0 };
+    }
+  }
+
+  /**
+   * Update case_open field for all job items in a job
+   * @deprecated Use updateJobCaseOpen instead for better performance
+   */
+  async updateJobItemsCaseOpen(
+    jobId: string,
+    caseOpen: boolean = true
+  ): Promise<{ modifiedCount: number }> {
+    try {
+      const objectId = this.validateObjectId(jobId, "jobId");
+      const result = await JobItem.updateMany(
+        { job_id: objectId },
+        {
+          case_open: caseOpen,
+          updatedAt: new Date(),
+        }
+      );
+
+      console.log(
+        `Updated case_open to ${caseOpen} for ${result.modifiedCount} job items in job ${jobId}`
+      );
+      return { modifiedCount: result.modifiedCount || 0 };
+    } catch (error) {
+      console.error(`Error updating job items case_open: ${error}`);
+      return { modifiedCount: 0 };
     }
   }
 }
