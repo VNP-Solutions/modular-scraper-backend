@@ -804,7 +804,7 @@ app.post("/api/expedia/rerun-failed-job", (async (
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  */
-app.post("/api/expedia/property-run-job", (async (
+app.post("/api/expedia/propertys-run-job", (async (
   req: express.Request,
   res: express.Response
 ) => {
@@ -1671,7 +1671,7 @@ app.get("/api/jobs/:jobId/log", (async (
  *                   description: Detailed error message
  *                   example: "GraphQL query failed: Network timeout"
  */
-app.post("/api/expedia/graphql-run-job", (async (
+app.post("/api/expedia/property-run-job", (async (
   req: express.Request,
   res: express.Response
 ) => {
