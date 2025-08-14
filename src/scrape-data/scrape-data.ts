@@ -624,39 +624,272 @@ export async function scrapeData(
                       };
                     }
 
-                    // Extract "Remaining amount to charge" and "Amount to refund"
+                    // Extract "Amount to charge", "Remaining amount to charge" and "Amount to refund"
                     const additionalPaymentInfo = await page.evaluate(() => {
-                      // Find "Remaining amount to charge"
-                      const remainingAmountSection = Array.from(
-                        document.querySelectorAll(".fds-cell.sidePanelSection")
-                      ).find((section) =>
-                        section.textContent?.includes(
-                          "Remaining amount to charge"
+                      // First, try to find "Amount to charge" (priority) with improved selectors
+                      // Based on the HTML structure: <div class="fds-cell sidePanelSection all-y-gutter-12">Amount to charge<div class="sidePanelSectionTitle...
+                      const amountToChargeSection = Array.from(
+                        document.querySelectorAll(
+                          ".fds-cell.sidePanelSection, .sidePanelSection"
                         )
+                      ).find(
+                        (section) =>
+                          section.textContent?.includes("Amount to charge") &&
+                          !section.textContent?.includes("Remaining")
                       );
 
-                      const remainingAmount =
-                        remainingAmountSection
-                          ?.querySelector(".fds-currency-value")
-                          ?.textContent?.trim() || "";
+                      let amountToCharge = "";
+                      if (amountToChargeSection) {
+                        // Try multiple selectors to find the currency value
+                        const currencyValue =
+                          amountToChargeSection.querySelector(
+                            ".fds-currency-value"
+                          ) ||
+                          amountToChargeSection.querySelector(
+                            ".sidePanelSectionTitle .fds-currency-value"
+                          ) ||
+                          amountToChargeSection.querySelector(
+                            ".fds-currency .fds-currency-value"
+                          );
+
+                        amountToCharge =
+                          currencyValue?.textContent?.trim() || "";
+                      }
+
+                      // If "Amount to charge" not found, try "Remaining amount to charge"
+                      let remainingAmount = "";
+                      if (!amountToCharge) {
+                        const remainingAmountSection = Array.from(
+                          document.querySelectorAll(
+                            ".fds-cell.sidePanelSection, .sidePanelSection"
+                          )
+                        ).find((section) =>
+                          section.textContent?.includes(
+                            "Remaining amount to charge"
+                          )
+                        );
+
+                        if (remainingAmountSection) {
+                          const currencyValue =
+                            remainingAmountSection.querySelector(
+                              ".fds-currency-value"
+                            ) ||
+                            remainingAmountSection.querySelector(
+                              ".sidePanelSectionTitle .fds-currency-value"
+                            ) ||
+                            remainingAmountSection.querySelector(
+                              ".fds-currency .fds-currency-value"
+                            );
+
+                          remainingAmount =
+                            currencyValue?.textContent?.trim() || "";
+                        }
+                      }
 
                       // Find "Amount to refund"
                       const refundSection = Array.from(
-                        document.querySelectorAll(".fds-grid.sidePanelSection")
+                        document.querySelectorAll(
+                          ".fds-cell.sidePanelSection, .sidePanelSection, .fds-grid.sidePanelSection"
+                        )
                       ).find((section) =>
                         section.textContent?.includes("Amount to refund")
                       );
 
-                      const refundAmount =
-                        refundSection
-                          ?.querySelector(".fds-currency-value")
-                          ?.textContent?.trim() || "";
+                      let refundAmount = "";
+                      if (refundSection) {
+                        const currencyValue =
+                          refundSection.querySelector(".fds-currency-value") ||
+                          refundSection.querySelector(
+                            ".sidePanelSectionTitle .fds-currency-value"
+                          ) ||
+                          refundSection.querySelector(
+                            ".fds-currency .fds-currency-value"
+                          );
+
+                        refundAmount = currencyValue?.textContent?.trim() || "";
+                      }
 
                       return {
+                        amountToCharge: amountToCharge,
                         remainingAmountToCharge: remainingAmount,
                         amountToRefund: refundAmount,
                       };
                     });
+
+                    // Log what we found in the sidebar
+                    if (additionalPaymentInfo.amountToCharge) {
+                      await dualLogInfo(
+                        `Found "Amount to charge" in sidebar: ${additionalPaymentInfo.amountToCharge}`,
+                        { jobId }
+                      );
+                    } else if (additionalPaymentInfo.remainingAmountToCharge) {
+                      await dualLogInfo(
+                        `Found "Remaining amount to charge" in sidebar: ${additionalPaymentInfo.remainingAmountToCharge}`,
+                        { jobId }
+                      );
+                    } else {
+                      await dualLogInfo(
+                        "No amount to charge found in sidebar, will check 'See card activity' button",
+                        { jobId }
+                      );
+                    }
+
+                    // Check if we found "Amount to charge" in sidebar, if not, click "See card activity"
+                    let finalAmountToCharge =
+                      additionalPaymentInfo.amountToCharge ||
+                      additionalPaymentInfo.remainingAmountToCharge;
+
+                    // If no amount to charge found in sidebar, click "See card activity" button
+                    if (!finalAmountToCharge) {
+                      await dualLogInfo(
+                        "Amount to charge not found in sidebar, looking for 'See card activity' button",
+                        { jobId }
+                      );
+
+                      try {
+                        // Try to find "See card activity" button using multiple approaches
+                        const seeCardActivityButton =
+                          (await page
+                            .$$("button.fds-button2.utility.small")
+                            .then(async (buttons) => {
+                              for (const button of buttons) {
+                                const text = await button.evaluate(
+                                  (el) => el.textContent
+                                );
+                                if (text?.includes("See card activity")) {
+                                  return button;
+                                }
+                              }
+                              return null;
+                            })) ||
+                          (await page.$(
+                            ".fds-cell.all-y-gutter-16 button.fds-button2.utility.small"
+                          ));
+
+                        if (seeCardActivityButton) {
+                          await dualLogInfo(
+                            "Found 'See card activity' button, clicking it to get amount to charge...",
+                            { jobId }
+                          );
+
+                          // Get href or onclick URL from the button
+                          const buttonUrl = await page.evaluate(() => {
+                            const button = document.querySelector(
+                              ".fds-cell.all-y-gutter-16 button.fds-button2.utility.small"
+                            ) as HTMLElement;
+                            if (!button) return null;
+
+                            // Click the button but prevent navigation by returning the URL
+                            const originalOpen = window.open;
+                            let capturedUrl: string | null = null;
+
+                            // Override window.open temporarily to capture the URL
+                            window.open = (url?: string | URL) => {
+                              capturedUrl = url?.toString() || null;
+                              return { focus: () => {} } as any; // Mock window object
+                            };
+
+                            // Simulate click to trigger any onclick handlers
+                            button.click();
+
+                            // Restore original window.open
+                            window.open = originalOpen;
+
+                            return capturedUrl;
+                          });
+
+                          if (buttonUrl) {
+                            // Get browser from page
+                            const browser = page.browser();
+                            let newPage: Page | null = null;
+                            try {
+                              // Create a new page/tab
+                              newPage = await browser.newPage();
+                              await newPage.goto(buttonUrl, {
+                                waitUntil: "networkidle0",
+                                timeout: 30000,
+                              });
+
+                              await delay(3000); // Give time for the page to fully load
+
+                              // Extract amount to charge from card activity page
+                              finalAmountToCharge = await newPage.evaluate(
+                                () => {
+                                  // Try multiple selectors to find the amount to charge
+                                  const selectors = [
+                                    ".fds-currency-value",
+                                    "[class*='amount'] .fds-currency-value",
+                                    "[class*='charge'] .fds-currency-value",
+                                    ".evc-mock-card-remaining-balance .fds-currency-value",
+                                  ];
+
+                                  for (const selector of selectors) {
+                                    const elements =
+                                      document.querySelectorAll(selector);
+                                    for (const element of elements) {
+                                      const parent = element.closest("div");
+                                      if (
+                                        parent &&
+                                        (parent.textContent
+                                          ?.toLowerCase()
+                                          .includes("amount to charge") ||
+                                          parent.textContent
+                                            ?.toLowerCase()
+                                            .includes("charge") ||
+                                          parent.textContent
+                                            ?.toLowerCase()
+                                            .includes("balance"))
+                                      ) {
+                                        return (
+                                          element.textContent?.trim() || ""
+                                        );
+                                      }
+                                    }
+                                  }
+
+                                  // If specific amount not found, try to get any currency value
+                                  const anyAmount = document.querySelector(
+                                    ".fds-currency-value"
+                                  );
+                                  return anyAmount
+                                    ? anyAmount.textContent?.trim() || ""
+                                    : "";
+                                }
+                              );
+
+                              await dualLogInfo(
+                                `Extracted amount to charge from card activity: ${finalAmountToCharge}`,
+                                { jobId }
+                              );
+
+                              // Close the new tab
+                              if (newPage) {
+                                await newPage.close();
+                              }
+                            } catch (error: any) {
+                              if (newPage) {
+                                await newPage.close();
+                              }
+                              await dualLogError(
+                                "Error accessing card activity page",
+                                error.message,
+                                { jobId }
+                              );
+                            }
+                          }
+                        } else {
+                          await dualLogInfo(
+                            "'See card activity' button not found",
+                            { jobId }
+                          );
+                        }
+                      } catch (error: any) {
+                        await dualLogError(
+                          `Error processing card activity for amount to charge: ${error.message}`,
+                          { jobId }
+                        );
+                      }
+                    }
 
                     // Update payment data and card data with additional info
                     if (additionalPaymentInfo) {
@@ -676,27 +909,28 @@ export async function scrapeData(
 
                       // Update payment data if it exists, or create it
                       if (paymentData) {
-                        if (remainingBalance) {
+                        if (finalAmountToCharge) {
                           paymentData.amount_to_charge_or_refund =
-                            parsePaymentAmount(remainingBalance);
-                        } else if (remainingBalance) {
+                            parsePaymentAmount(finalAmountToCharge);
+                        } else if (amountToRefund) {
                           paymentData.amount_to_charge_or_refund =
-                            -parsePaymentAmount(remainingBalance); // Negative for refund
+                            -parsePaymentAmount(amountToRefund); // Negative for refund
                         }
-                      } else if (remainingBalance) {
+                      } else if (finalAmountToCharge || amountToRefund) {
                         // Create payment data if we have charge/refund info but no other payment data
                         paymentData = {
                           total_guest_payment: 0,
                           cancellation_fee: 0,
                           total_payout: 0,
-                          amount_to_charge_or_refund:
-                            parsePaymentAmount(remainingBalance),
+                          amount_to_charge_or_refund: finalAmountToCharge
+                            ? parsePaymentAmount(finalAmountToCharge)
+                            : -parsePaymentAmount(amountToRefund || "0"),
                         };
                       }
 
                       // Update card data with reason_for_charge (moved from payment data)
                       if (cardData) {
-                        if (remainingAmountToCharge) {
+                        if (finalAmountToCharge) {
                           cardData.reason_for_charge =
                             hasEvcCard.status || "Charged In Full";
                         } else if (amountToRefund) {
@@ -704,7 +938,7 @@ export async function scrapeData(
                             hasEvcCard.status || "Amount to refund";
                         }
                       } else if (
-                        (remainingAmountToCharge || amountToRefund) &&
+                        (finalAmountToCharge || amountToRefund) &&
                         !cardData
                       ) {
                         // Create basic card data with reason if we have charge/refund info but no card data
@@ -715,9 +949,10 @@ export async function scrapeData(
                         };
                       }
 
-                      if (remainingAmountToCharge) {
+                      // Log the final amounts that will be used
+                      if (finalAmountToCharge) {
                         await dualLogInfo(
-                          `Found Remaining amount to charge: ${remainingAmountToCharge}`,
+                          `Final amount to charge: ${finalAmountToCharge}`,
                           { jobId }
                         );
                       }
@@ -921,8 +1156,8 @@ async function saveReservationToDatabase(
       guest_name: basicData.guestName || "Unknown Guest",
       reservation_id: basicData.reservationId,
       confirmation_number: basicData.confirmationCode || "",
-      check_in_date: parseDate(basicData.checkInDate),
-      check_out_date: parseDate(basicData.checkOutDate),
+      check_in_date: basicData.checkInDate,
+      check_out_date: basicData.checkOutDate,
       room_type: basicData.roomType || "Unknown",
       booking_amount: parseAmount(basicData.bookingAmount),
       booked_date: parseDate(basicData.bookedDate),

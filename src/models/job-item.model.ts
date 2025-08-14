@@ -23,8 +23,8 @@ export interface IJobItem extends Document {
   guest_name: string;
   reservation_id: string;
   confirmation_number: string;
-  check_in_date: Date;
-  check_out_date: Date;
+  check_in_date: string;
+  check_out_date: string;
   room_type: string;
   booking_amount: number;
   booked_date: Date;
@@ -109,11 +109,11 @@ const JobItemSchema = new Schema<IJobItem>(
       required: true,
     },
     check_in_date: {
-      type: Date,
+      type: String,
       required: true,
     },
     check_out_date: {
-      type: Date,
+      type: String,
       required: true,
     },
     room_type: {
