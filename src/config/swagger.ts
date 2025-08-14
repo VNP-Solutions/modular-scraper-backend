@@ -151,9 +151,21 @@ const options: swaggerJsdoc.Options = {
         name: "Scraping Jobs",
         description: "Endpoints for starting scraping jobs",
       },
+      {
+        name: "Expedia Scraping",
+        description: "Expedia-specific scraping endpoints",
+      },
+      {
+        name: "Agoda Scraping",
+        description: "Agoda-specific scraping endpoints",
+      },
+      {
+        name: "Job Monitoring",
+        description: "Job monitoring and progress tracking endpoints",
+      },
     ],
   },
-  apis: ["./src/app/*.ts"], // Path to the API docs
+  apis: ["./src/app/*.ts", "./src/routes/**/*.ts"], // Path to the API docs
 };
 
 const specs = swaggerJsdoc(options);
