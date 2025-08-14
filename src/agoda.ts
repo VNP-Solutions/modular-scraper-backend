@@ -9,6 +9,8 @@ import { progressManager } from "./common/progress-manager.js";
 import { timeManager } from "./common/time-manager.js";
 import { scrapingStateManager } from "./common/scraping-state.js";
 import { jobService } from "./services/job.service.js";
+import { emailNotifier } from "./common/email-notifier.js";
+import { JobStatus } from "./models/job.model.js";
 
 dotenv.config();
 
@@ -192,9 +194,30 @@ async function agoda(
       timeSession: timeManager.getSessionInfo(),
     });
 
-    // Send ONE email notification per job failure
+    // Send email notification for outer main function error
     if (jobId) {
-      // Email notification logic would go here
+      // Make the job fail
+      const CurrentJob = await jobService.getJobById(jobId);
+      if (CurrentJob) {
+        await jobService.updateJobStatus(jobId, JobStatus.Failed);
+      }
+      try {
+        await emailNotifier.notifyJobError(
+          jobId,
+          error?.message || "Unknown error in outer main function",
+          error,
+          {
+            stage: "outer_main_function",
+            progressPercentage:
+              progressManager.getJobProgress(jobId)?.progressPercentage,
+          }
+        );
+      } catch (emailError) {
+        await dualLogError(
+          "Failed to send error notification email:",
+          emailError
+        );
+      }
     }
 
     throw error;
