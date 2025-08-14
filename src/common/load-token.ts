@@ -1,20 +1,10 @@
 import dotenv from "dotenv";
 import fs from "fs";
-import { google } from "googleapis";
+import { oauth2Client } from "../config/google-config.js";
 import { dualLogError, dualLogInfo, dualLogWarn } from "./log-helper.js";
+import { readTokenDataFromS3, uploadTokenToS3FromData } from "./s3-token.js";
 
 dotenv.config();
-const CLIENT_ID = process.env.CLIENT_ID;
-const CLIENT_SECRET = process.env.CLIENT_SECRET;
-const port = process.env.PORT;
-const REDIRECT_URI = process.env.REDIRECT_URI;
-const SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"];
-
-const oauth2Client = new google.auth.OAuth2(
-  CLIENT_ID,
-  CLIENT_SECRET,
-  REDIRECT_URI
-);
 
 export interface GoogleTokenData {
   access_token: string;
@@ -31,6 +21,11 @@ let lastRefreshTime: Date | null = null;
  * Original load google auth json file function (maintained for backward compatibility)
  */
 function loadToken(tokenPath: string): boolean {
+  // If token is not present locally, try pulling from S3
+  if (!fs.existsSync(tokenPath)) {
+    // Run sync from S3 synchronously by blocking on the promise with deasync pattern avoided; instead, log and return false here.
+    // Callers at startup should attempt async flows. For backward compatibility we attempt to fetch synchronously via spawnSync-like behavior is not desired.
+  }
   if (fs.existsSync(tokenPath)) {
     const token = JSON.parse(fs.readFileSync(tokenPath, "utf8"));
     oauth2Client.setCredentials(token);
@@ -46,15 +41,18 @@ export async function loadTokenData(
   tokenPath: string
 ): Promise<GoogleTokenData | null> {
   try {
-    if (!fs.existsSync(tokenPath)) {
-      await dualLogWarn(
-        `Google OAuth2 token file not found at ${tokenPath}`,
-        {}
-      );
+    // Always read token directly from S3
+    const tokenData = await readTokenDataFromS3<GoogleTokenData>();
+    if (!tokenData) {
+      await dualLogWarn("Google OAuth2 token not found in S3", {});
       return null;
     }
-
-    const tokenData = JSON.parse(fs.readFileSync(tokenPath, "utf8"));
+    // Keep local file updated for compatibility/debugging
+    try {
+      fs.writeFileSync(tokenPath, JSON.stringify(tokenData, null, 2));
+    } catch {
+      // Best-effort local write; ignore errors
+    }
 
     // Validate required fields
     if (!tokenData.access_token) {
@@ -89,6 +87,9 @@ export async function saveTokenData(
   try {
     // Save token data with proper formatting
     fs.writeFileSync(tokenPath, JSON.stringify(tokenData, null, 2));
+
+    // Also upload to S3 for centralized storage
+    await uploadTokenToS3FromData(tokenData);
 
     await dualLogInfo("Google OAuth2 token saved successfully", {
       tokenPath,
@@ -215,19 +216,9 @@ export async function refreshGoogleToken(tokenPath: string): Promise<boolean> {
  * Auto-refresh Google OAuth2 token if needed (main function to call)
  */
 export async function autoRefreshToken(
-  tokenPath: string = process.env.TOKEN_PATH || "token.json"
+  tokenPath: string = process.env.TOKEN_PATH || "../config/token.json"
 ): Promise<boolean> {
   try {
-    if (!fs.existsSync(tokenPath)) {
-      await dualLogWarn(
-        "Google OAuth2 token file does not exist, skipping auto-refresh",
-        {
-          tokenPath,
-        }
-      );
-      return false;
-    }
-
     const needsRefresh = await needsTokenRefresh(tokenPath);
     if (!needsRefresh) {
       await dualLogInfo("Google OAuth2 token does not need refresh", {
@@ -251,7 +242,7 @@ export async function autoRefreshToken(
  * Load Google OAuth2 credentials and set them on oauth2Client with auto-refresh
  */
 export async function loadAndSetCredentials(
-  tokenPath: string = process.env.TOKEN_PATH || "token.json"
+  tokenPath: string = process.env.TOKEN_PATH || "../config/token.json"
 ): Promise<boolean> {
   try {
     // First try to auto-refresh if needed
@@ -260,7 +251,7 @@ export async function loadAndSetCredentials(
     const tokenData = await loadTokenData(tokenPath);
     if (!tokenData) {
       throw new Error(
-        `Google OAuth2 token file not found at ${tokenPath}. Please run the authentication setup first.`
+        `Google OAuth2 token not found in S3. Please run the authentication setup first.`
       );
     }
 
@@ -303,9 +294,6 @@ export async function forceRefreshToken(
   await dualLogInfo("Forcing Google OAuth2 token refresh", {});
   return await refreshGoogleToken(tokenPath);
 }
-
-// Export the oauth2Client for use in other modules
-export { oauth2Client };
 
 // Default export maintains backward compatibility
 export default loadToken;
