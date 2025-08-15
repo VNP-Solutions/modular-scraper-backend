@@ -8,7 +8,6 @@ import handleBookingOtpVerification from "../otp-verification/booking-otp-verifi
 import { SelectorUtils } from "../common/selector-utils.js";
 import { BOOKING_LOGIN_EXCLUDE_URLS, BOOKING_LOGIN_SUCCESS_URLS, BOOKING_SELECTORS, CAPTCHA_PATTERNS, TWO_FA_PATTERNS, TWO_FA_TEXT_PATTERNS } from "../common/booking-selectors.js";
 import { emailNotifier } from "../common/email-notifier.js";
-import { bookingCookieManagerDB } from "../services/booking-cookie-manager-db.service.js";
 import { 
   BookingErrorType, 
   BookingScrapingPhase, 
@@ -80,6 +79,27 @@ export class BookingScraper extends BaseScraper {
       await page.setDefaultNavigationTimeout(loadingTimeout);
       await page.setDefaultTimeout(selectorTimeout);
 
+      // Start recording and generate live URL for captcha solving
+      const cdp = await page.createCDPSession();
+      await (cdp as any).send("Browserless.startRecording");
+      await this.logInfo("Recording started successfully");
+
+      await this.delay(2000);
+
+      try {
+        const { liveURL } = (await (cdp as any).send("Browserless.liveURL", {
+          timeout: 600_000,
+        })) as { liveURL: string };
+        
+        this.sessionUrl = liveURL;
+        await this.logInfo("Live URL generated for captcha solving:", { liveURL });
+
+      } catch (liveUrlError) {
+        await this.logError("Failed to generate live URL:", liveUrlError);
+        await this.logInfo("Live URL generation failed - will use session URL instead");
+        this.sessionUrl = `https://production-sfo.browserless.io?token=${this.browserlessToken}#/live/${session.id}`;
+      }
+
       // Load saved cookies if they exist
       if (fs.existsSync(this.cookiesFile)) {
         const cookies = JSON.parse(fs.readFileSync(this.cookiesFile, 'utf8'));
@@ -142,34 +162,13 @@ export class BookingScraper extends BaseScraper {
    */
   private async handleSuccessfulLogin(propertyId?: string): Promise<void> {
     if (!this.page) throw new Error('Page not initialized');
-
+    
     await this.logInfo('Login successful');
     const cookies = await this.page.cookies();
-    
-    // Save to file for backward compatibility
     fs.writeFileSync(this.cookiesFile, JSON.stringify(cookies, null, 2));
     await this.logInfo(`Saved ${cookies.length} cookies for future sessions`);
-    
-    // Save to MongoDB if propertyId is provided
-    if (propertyId) {
-      try {
-        const userAgent = await this.page.evaluate(() => navigator.userAgent);
-        await bookingCookieManagerDB.saveCookies(
-          propertyId,
-          propertyId, // Using propertyId as bookingId temporarily
-          cookies,
-          {
-            isFullLogin: true,
-            userAgent,
-          }
-        );
-        await this.logInfo(`Saved session cookies to database for property ${propertyId}`);
-      } catch (error) {
-        await this.logError('Failed to save cookies to database:', error);
-      }
-    }
-    
     await this.takeScreenshot('booking-admin-dashboard.png');
+    
     await this.handlePropertySearch(propertyId);
   }
 
@@ -202,16 +201,11 @@ export class BookingScraper extends BaseScraper {
     return isIncluded && !isExcluded;
   }
 
-  async login(credentials?: LoginCredentials, propertyId?: string, skipAlreadyLogged?: boolean): Promise<void> {
+  async login(credentials: LoginCredentials, propertyId?: string): Promise<void> {
     if (!this.page) throw new Error('Page not initialized');
 
-    const loginCredentials = credentials || this.credentials;
-    if (!loginCredentials) {
-      throw new Error('No credentials provided for login. Please provide credentials or set them on the scraper instance.');
-    }
-    
     try {
-      if (this.isAlreadyLoggedIn() && !skipAlreadyLogged) {
+      if (this.isAlreadyLoggedIn()) {
         await this.logInfo('Already logged in');
         await this.handlePropertySearch(propertyId);
         return;
@@ -222,11 +216,12 @@ export class BookingScraper extends BaseScraper {
       await this.handleCaptcha({
         type: 'browserless_ui',
         sessionUrl: this.sessionUrl,
+        timeout: 180000
       });
 
       await this.logInfo('Entering email address');
-
-      const emailEntered = await this.enterEmail(loginCredentials.email);
+      
+      const emailEntered = await this.enterEmail(credentials.email);
       if (!emailEntered) {
         await this.takeScreenshot('booking-no-email-field.png');
         throw new Error('Email field not found');
@@ -246,10 +241,11 @@ export class BookingScraper extends BaseScraper {
       await this.handleCaptcha({
         type: 'browserless_ui',
         sessionUrl: this.sessionUrl,
+        timeout: 180000
       });
 
       await this.logInfo('Looking for password field');
-
+   
       let passwordField = null;
       let attempts = 0;
       const maxAttempts = 6;
@@ -279,41 +275,42 @@ export class BookingScraper extends BaseScraper {
           await this.delay(5000);
         }
       }
-      
+
       if (!passwordField) {
         await this.takeScreenshot('booking-no-password-field.png');
         throw new Error('Password field not found after multiple attempts');
       }
 
       // Enter password using the new function
-      const passwordEntered = await this.enterPassword(loginCredentials.password);
+      const passwordEntered = await this.enterPassword(credentials.password);
       if (!passwordEntered) {
         await this.takeScreenshot('booking-password-entry-failed.png');
         throw new Error('Failed to enter password');
       }
-      
+
       await this.logInfo('Submitting login');
-      
+
       const loginClicked = await this.clickLoginButton();
       if (!loginClicked) {
         throw new Error('Login Button not found');
       }
-      
+
       // Check for captcha after login submission
       await this.handleCaptcha({
         type: 'browserless_ui',
         sessionUrl: this.sessionUrl,
+        timeout: 180000
       });      
-      
+
       await this.takeScreenshot('booking-after-password.png');
-      
+
       // Wait for navigation
       await this.logInfo('Waiting for login response');
       await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
-      
+
       // Check for login errors
       await this.checkLoginErrors();
-      
+
       // Handle successful login
       if (this.isAlreadyLoggedIn()) {
         await this.handleSuccessfulLogin(propertyId);
@@ -337,7 +334,7 @@ export class BookingScraper extends BaseScraper {
           throw new Error('2FA verification failed');
         }
       }
-      
+
     } catch (error) {
       await dualLogError(
         `[${new Date().toISOString()}] ${getBookingErrorDescription(BookingErrorType.LOGIN_FAILED)}`,
@@ -377,16 +374,15 @@ export class BookingScraper extends BaseScraper {
     }
   }
 
-  private async checkIfLoginNeeded(page?: Page): Promise<boolean> {
-    const currentPage = page || this.page
-    if (!currentPage) throw new Error('Page not initialized');
+  private async checkIfLoginNeeded(): Promise<boolean> {
+    if (!this.page) throw new Error('Page not initialized');
 
     try {
       const hasLoginForm = await SelectorUtils.trySelectors(
-        currentPage,
+        this.page,
         [...BOOKING_SELECTORS.email, ...BOOKING_SELECTORS.password],
         async (selector: string) => {
-          const el = await currentPage!.$(selector);
+          const el = await this.page!.$(selector);
           return !!el;
         },
         5000
@@ -429,14 +425,7 @@ export class BookingScraper extends BaseScraper {
       const propertyClicked = await SelectorUtils.findAndClick(this.page, propertySelectors);
       
       if (!propertyClicked) {
-        await dualLogError(
-          `[${new Date().toISOString()}] ${getBookingErrorDescription(BookingErrorType.PROPERTY_NOT_FOUND)}`,
-          {
-            errorType: BookingErrorType.PROPERTY_NOT_FOUND,
-            phase: BookingScrapingPhase.NAVIGATION,
-            platform: 'booking'
-          }
-        );
+        // TO DO - add logs
         await this.logInfo('Property not found with predefined selectors, trying alternative approaches...');
       }
       
@@ -479,7 +468,7 @@ export class BookingScraper extends BaseScraper {
             return false; // Indicate login is needed
           } else {
             await this.logInfo('Property selection verification inconclusive but no login needed');
-            return true;
+            return true; // Assume success if we can't verify and no login needed
           }
         }
         
@@ -512,35 +501,12 @@ export class BookingScraper extends BaseScraper {
       await this.logInfo('Captcha detected');
       await this.takeScreenshot('booking-captcha.png');
 
-      // Start recording and generate live URL for captcha solving
-      const cdp = await currentPage.createCDPSession();
-      await (cdp as any).send("Browserless.startRecording");
-      await this.logInfo("Recording started successfully");
-
-      await this.delay(2000);
-
-      try {
-        /* TO DO - check with their documentation/support why this can't be increased. 
-          I receive "Couldn't establish a secure connection to the server." when
-          trying to increase timeout.
-        */
-        const { liveURL } = (await (cdp as any).send("Browserless.liveURL", {
-          timeout: 600_000, 
-        })) as { liveURL: string };
-        
-        this.sessionUrl = liveURL;
-        await this.logInfo("Live URL generated for captcha solving:", { liveURL });
-
-      } catch (liveUrlError) {
-        await this.logError("Failed to generate live URL:", liveUrlError);
-      }
-
       if (options?.type === 'automatic') {
         return await this.solveCaptchaAutomatically();
-      } else if (options?.type === 'browserless_ui') {
-        return await this.solveCaptchaWithUI(this.sessionUrl || options.sessionUrl!, options.timeout || 86400000);
+      } else if (options?.type === 'browserless_ui' && options.sessionUrl) {
+        return await this.solveCaptchaWithUI(options.sessionUrl, options.timeout || 180000);
       } else {
-        return await this.solveCaptchaManually(options?.timeout || 86400000);
+        return await this.solveCaptchaManually(options?.timeout || 180000);
       }
     } catch (error) {
       await dualLogError(
@@ -649,6 +615,7 @@ export class BookingScraper extends BaseScraper {
 
   async clickViewAllVccsToCharge(): Promise<boolean> {
     return await SelectorUtils.findAndClick(this.page!, [BOOKING_SELECTORS.vccs.vccsToChargeLink]);
+
   }
 
   async getPaginationInfo(): Promise<{ currentPage: number; totalPages: number } | null> {
@@ -837,7 +804,11 @@ export class BookingScraper extends BaseScraper {
       });
 
       // Click the reservation link
-      await SelectorUtils.findAndClick(this.page, BOOKING_SELECTORS.reservations.item(reservationId));
+      const reservationLink = await this.page.$(`a[href*="res_id=${reservationId}"]`);
+      if (!reservationLink) {
+        throw new Error(`Reservation link with ID ${reservationId} not found`);
+      }
+      await reservationLink.click();
 
       const newPage = await newPagePromise;
       
@@ -845,6 +816,7 @@ export class BookingScraper extends BaseScraper {
       let captchaHandled = await this.handleCaptcha({
         type: 'browserless_ui',
         sessionUrl: this.sessionUrl,
+        timeout: 180000,
         page: newPage
       });
   
@@ -852,8 +824,6 @@ export class BookingScraper extends BaseScraper {
         await this.logInfo('Captcha not solved in new tab');
         return false;
       }
-
-      await this.delay(2000);
 
       // Check on 2fa
       const twoFASuccess = await this.handle2FA({ page: newPage });
@@ -867,6 +837,7 @@ export class BookingScraper extends BaseScraper {
       captchaHandled = await this.handleCaptcha({
         type: 'browserless_ui',
         sessionUrl: this.sessionUrl,
+        timeout: 180000,
         page: newPage
       });
   
@@ -898,7 +869,7 @@ export class BookingScraper extends BaseScraper {
       this.page = newPage;
       
       try {
-        const success = await this.processReservationDetail(reservationId, jobId, propertyId);
+        const success = await this.processReservationDetail(reservationId);
         if (!success) {
           await this.logInfo(`Failed to process reservation detail for ${reservationId}`);
         }
@@ -910,8 +881,8 @@ export class BookingScraper extends BaseScraper {
       // Close the new tab and switch back
       await newPage.close();
       await this.logInfo(`Closed reservation detail tab`);
+      
       return true;
-
     } catch (error) {
       await dualLogError(
         `[${new Date().toISOString()}] ${getBookingErrorDescription(BookingErrorType.DOM_NOT_FOUND)}`,
@@ -1251,17 +1222,12 @@ export class BookingScraper extends BaseScraper {
     }
   }
 
-  // Public method to access the page for trust verification
-  public async getPage(): Promise<Page | null> {
-    return this.page;
-  }
-
   private async createBrowserlessSession(): Promise<any> {
     try {
       await this.logInfo('Creating Browserless session with UI access');
 
       const sessionConfig = {
-        ttl: 86400000, // 24h
+        ttl: 180000, // 3 minutes
         stealth: true,
         headless: false,
         args: [
@@ -1657,6 +1623,64 @@ export class BookingScraper extends BaseScraper {
     return BookingErrorType.LOGIN_FAILED;
   }
 
+  async extractReservationDetails(reservationId: string): Promise<{
+    basicData: any;
+    // paymentData: any;
+    cardData: any;
+  } | null> {
+    if (!this.page) throw new Error('Page not initialized');
+
+    try {
+      // TO DO - work in progress
+      await this.logInfo(`Extracting reservation details for ID: ${reservationId}`);
+
+      // Extract basic reservation data from current detail page
+      const basicData = await this.extractBasicReservationData();
+      if (!basicData) {
+        await this.logError('Failed to extract basic reservation data');
+        return null;
+      }
+
+      await this.logInfo('Basic reservation data extracted successfully');
+
+      // Go back to the previous page
+      await this.logInfo('Going back to VCCS Management list');
+      await this.page.goBack();
+      
+      // Wait for the page to load
+      await this.page.waitForNavigation({ 
+        waitUntil: 'networkidle2', 
+        timeout: 30000 
+      });
+
+      // Find the specific reservation row and click "View card details"
+      await this.logInfo(`Looking for reservation row with ID: ${reservationId}`);
+      
+      const cardDetailsClicked = await this.clickCardDetailsFromRow(reservationId);
+      if (!cardDetailsClicked) {
+        await this.logError('Failed to click "View card details" from reservation row');
+        await this.takeScreenshot('booking-card-details-click-failed.png');
+        return {
+          basicData,
+          cardData: null
+        };
+      }
+
+      // Extract card details from the new page
+      const cardData = await this.extractCardDetailsFromPage(this.page);
+
+      return {
+        basicData,
+        cardData
+      };
+
+    } catch (error) {
+      await this.logError('Error extracting reservation details:', error);
+      await this.takeScreenshot('booking-reservation-details-error.png');
+      return null;
+    }
+  }
+
   private async clickCardDetailsFromRow(reservationId: string): Promise<boolean> {
     if (!this.page) throw new Error('Page not initialized');
 
@@ -1689,6 +1713,13 @@ export class BookingScraper extends BaseScraper {
 
       if (cardDetailsClicked) {
         await this.logInfo('Successfully clicked "View card details" link');
+        
+        // Wait for the new page to load
+        await this.page.waitForNavigation({ 
+          waitUntil: 'networkidle2', 
+          timeout: 30000 
+        });
+        
         return true;
       } else {
         await this.logError(`Could not find "View card details" link for reservation ${reservationId}`);
@@ -1702,52 +1733,33 @@ export class BookingScraper extends BaseScraper {
     }
   }
 
-
-  private async extractCardDetailsFromPage(page: Page): Promise<{
-    cardNumber: string;
-    expiry: string;
-    cvv: string;
-    cardholder: string;
-  } | null> {
+  private async extractCardDetailsFromPage(page: Page): Promise<any> {
     try {
       const cardData = await page.evaluate(() => {
-        const result: {
-          cardNumber: string;
-          expiry: string;
-          cvv: string;
-          cardholder: string;
-        } = {
-          cardNumber: '',
-          expiry: '',
-          cvv: '',
-          cardholder: ''
+        // Extract credit card information
+        const cardNumberElement = document.querySelector('.credit-card-number');
+        const cardNumber = cardNumberElement?.textContent?.trim() || '';
+
+        const expiryElement = document.querySelector('.credit-card-expiry');
+        const expiry = expiryElement?.textContent?.trim() || '';
+
+        const cvvElement = document.querySelector('.credit-card-cvv');
+        const cvv = cvvElement?.textContent?.trim() || '';
+
+        const cardholderElement = document.querySelector('.credit-card-holder');
+        const cardholder = cardholderElement?.textContent?.trim() || '';
+
+        return {
+          cardNumber,
+          expiry,
+          cvv,
+          cardholder
         };
-  
-        const labelMap: Record<string, keyof typeof result> = {
-          'Card number:': 'cardNumber',
-          'Expiration Date:': 'expiry',
-          'CVC Code:': 'cvv',
-          "Card holder's name:": 'cardholder'
-        };
-  
-        const rows = document.querySelectorAll('table tr');
-        rows.forEach((row) => {
-          const cells = row.querySelectorAll('td');
-          if (cells.length === 2) {
-            const label = cells[0].textContent?.trim() || '';
-            const value = cells[1].textContent?.trim() || '';
-            const key = labelMap[label];
-            if (key) {
-              result[key] = value;
-            }
-          }
-        });
-  
-        return result;
       });
-  
+
       await this.logInfo('Extracted card details', cardData);
       return cardData;
+
     } catch (error) {
       await this.logError('Failed to extract card details', error);
       return null;
@@ -1763,10 +1775,10 @@ export class BookingScraper extends BaseScraper {
           guestName: '',
           checkInDate: '',
           checkOutDate: '',
-          totalAmount: '',
+          bookingAmount: '',
           reservationId: '',
           bookedDate: '',
-          totalPayout: '',
+          commissionAmount: '',
           roomType: '',
           reservationStatus: ''
         };
@@ -1775,10 +1787,10 @@ export class BookingScraper extends BaseScraper {
           'Guest name:': 'guestName',
           'Check-in': 'checkInDate',
           'Check-out': 'checkOutDate',
-          'Total price': 'totalAmount',
+          'Total price': 'bookingAmount',
           'Booking number:': 'reservationId',
           'Received': 'bookedDate',
-          'Commissionable amount:': 'totalPayout'
+          'Commissionable amount:': 'commissionAmount'
         };
 
         // Extract all label elements
@@ -1817,13 +1829,15 @@ export class BookingScraper extends BaseScraper {
 
   async saveReservationToDatabase(
     jobId: string,
+    propertyId: string,
     basicData: any,
+    // paymentData: any,
     cardData: any
   ): Promise<any> {
     try {
       // Validate inputs
-      if (jobId || !this.propertyIdForDb) {
-        throw new Error('JobId and propertyIdForDb are required');
+      if (!jobId || !propertyId) {
+        throw new Error('JobId and PropertyId are required');
       }
 
       // Parse dates
@@ -1854,26 +1868,22 @@ export class BookingScraper extends BaseScraper {
 
       const jobItemData = {
         job_id: jobId,
-        property_id: this.propertyIdForDb,
+        property_id: propertyId,
         guest_name: basicData.guestName || 'Unknown Guest',
         reservation_id: basicData.bookingNumber || '',
         confirmation_number: basicData.bookingNumber || '', // Use booking number as confirmation
         check_in_date: parseDate(basicData.checkInDate),
         check_out_date: parseDate(basicData.checkOutDate),
         room_type: basicData.roomType || 'Unknown',
-        booking_amount: parseAmount(basicData.totalAmount),
+        booking_amount: parseAmount(basicData.totalPrice),
         booked_date: parseDate(basicData.receivedDate),
         has_card_info: !!cardData,
-        has_payment_info: !!basicData.totalPayout,
-        payment_info: { 
-          total_guest_payment: parseAmount(basicData.totalAmount),
-          total_payout: parseAmount(basicData.totalPayout)
-        },
+        // has_payment_info: !!paymentData,
+        // payment_info: paymentData || undefined,
         card_info: cardData || undefined,
         reservation_status: basicData.reservationStatus,
+        additional_text: basicData.commissionAmount || undefined
       };
-
-      this.logInfo(`JobData to be saved: `, jobItemData);
 
       // Import jobService dynamically to avoid circular dependencies
       const { jobService } = await import('../services/job.service.js');
@@ -1892,65 +1902,19 @@ export class BookingScraper extends BaseScraper {
     try {
       await this.logInfo(`Processing reservation detail: ${reservationId}`);
 
-      // Extract reservation basic data
-      if (!this.page) throw new Error('Page not initialized');
-      const basicData = await this.extractBasicReservationData();
-
-      if (!basicData) {
-        await this.logError('Failed to extract basic reservation data');
-      }
-
+      // Extract all reservation data
+      const extractionResult = await this.extractReservationDetails(reservationId);
       
-      await this.logInfo('Basic reservation data extracted successfully');
-
-      // Go back to the previous page
-      await this.logInfo('Going back to VCCS Management list');
-      // await this.page.goBack(); // throws captcha & 2fa
-      
-      // I do this workaround in order to avoid captcha and 2fa
-      await this.navigateToMenuSection('finance', 'vccs_management', 'vccs_management');
-      await this.clickViewAllVccsToCharge();
-
-      // Wait for the page to load
-      await this.page.waitForNavigation({ 
-        waitUntil: 'networkidle2', 
-        timeout: 30000 
-      });
-      
-      // Listen for new page creation for card details view
-      const newPagePromise = new Promise<Page>((resolve) => {
-        this.browser!.once('targetcreated', async (target) => {
-          if (target.type() === 'page') {
-            const newPage = await target.page();
-            await newPage!.bringToFront();
-            resolve(newPage!);
-          }
-        });
-      });
-
-      const cardDetailsClick = this.clickCardDetailsFromRow(reservationId)
-      if (!cardDetailsClick) {
+      if (!extractionResult) {
         await this.logError(`Failed to extract data for reservation ${reservationId}`);
+        return false;
       }
 
-      const newPage = await newPagePromise;
-      this.page = newPage; // switch page 
-      
-      // Check and handle login on the new page
-      const needsLogin = await this.checkIfLoginNeeded(newPage);
-      if (needsLogin) {
-        // skip already logged in check
-        await this.login(this.credentials, undefined, true);
-      }
+      const { basicData, /*paymentData,*/ cardData } = extractionResult;
 
-      const cardData = await this.extractCardDetailsFromPage(this.page)
-      
-      // Close page
-      await SelectorUtils.findAndClick(this.page, BOOKING_SELECTORS.reservations.closeCardDetails);
-      
       // Save to database if jobId and propertyId are provided
       if (jobId && propertyId) {
-        await this.saveReservationToDatabase(jobId, basicData, cardData);
+        await this.saveReservationToDatabase(jobId, propertyId, basicData, /*paymentData,*/ cardData);
       }
 
       await this.logInfo(`Successfully processed reservation ${reservationId}`);

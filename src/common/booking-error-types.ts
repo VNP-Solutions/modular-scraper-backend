@@ -35,8 +35,7 @@ export enum BookingScrapingPhase {
   PROPERTY_SEARCH = "property_search",
   PRICE_EXTRACTION = "price_extraction",
   AVAILABILITY_CHECK = "availability_check",
-  FORM_FILLING = "form_filling",
-  BUILDING_TRUST = "BUILDING_TRUST"
+  FORM_FILLING = "form_filling"
 }
 
 /**

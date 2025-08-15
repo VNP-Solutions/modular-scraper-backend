@@ -565,7 +565,6 @@ class ScrapingWorker {
       await mainMultiPlatform({
         platform: 'booking',
         propertyId: finalBookingId,
-        propertyIdForDb: propertyId,
         startDate,
         endDate,
         jobId,

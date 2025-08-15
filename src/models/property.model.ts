@@ -30,11 +30,6 @@ export interface IProperty extends Document {
   // Booking trust fields
   booking_trusted_status?: BookingTrustedStatus;
   booking_last_login?: Date;
-  // Trust scoring fields for weekly maintenance
-  booking_trust_score?: number; // 0-100 score based on successful logins
-  booking_successful_logins?: number; // Count of successful consecutive logins
-  booking_failed_logins?: number; // Count of failed logins since last success
-  booking_trust_established_date?: Date; // Date when property became trusted
 }
 
 function isValidId(value: string): boolean {
@@ -133,28 +128,6 @@ const PropertySchema = new Schema<IProperty>(
       required: false,
     },
     booking_last_login: {
-      type: Date,
-      required: false,
-    },
-    // Trust scoring fields for weekly maintenance
-    booking_trust_score: {
-      type: Number,
-      default: 0,
-      min: 0,
-      max: 100,
-      required: false,
-    },
-    booking_successful_logins: {
-      type: Number,
-      default: 0,
-      required: false,
-    },
-    booking_failed_logins: {
-      type: Number,
-      default: 0,
-      required: false,
-    },
-    booking_trust_established_date: {
       type: Date,
       required: false,
     },

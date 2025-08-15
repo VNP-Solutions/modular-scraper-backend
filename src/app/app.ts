@@ -23,9 +23,6 @@ import expediarJobsRoutes from "../routes/expedia/jobs.routes.js";
 import expediarScrapingControlRoutes from "../routes/expedia/scraping-control.routes.js";
 import expediarScrapingRoutes from "../routes/expedia/scraping.routes.js";
 
-// Booking-specific routes
-import bookingSessionRoutes from "../routes/booking-session.routes.js";
-
 const app = express();
 
 app.set("trust proxy", true);
@@ -245,7 +242,6 @@ app.use("/", authRoutes);
 app.use("/api/scraping", expediarScrapingControlRoutes);
 app.use("/api/jobs", expediarJobsRoutes);
 app.use("/api/expedia", expediarScrapingRoutes);
-app.use("/api/booking/sessions", bookingSessionRoutes);
 
 // Global error handle middleware
     // Check if worker threads are available

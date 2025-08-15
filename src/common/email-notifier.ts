@@ -43,8 +43,8 @@ export class EmailNotifier {
       const emailService = process.env.EMAIL_SERVICE || "gmail";
       const emailUser = process.env.EMAIL_USER;
       const emailPassword = process.env.EMAIL_PASSWORD;
-      const smtpHost = process.env.SMTP_HOST;
-      const smtpPort = parseInt(process.env.SMTP_PORT || "587");
+      const smtpHost = process.env.SMTP_HOST || "stonesoup-mailhog";
+      const smtpPort = parseInt(process.env.SMTP_PORT || "1025");
 
       if (!emailUser || !emailPassword) {
         await dualLogWarn(
@@ -64,7 +64,10 @@ export class EmailNotifier {
         this.transporter = nodemailer.createTransport({
           host: smtpHost,
           port: smtpPort,
-          secure: smtpPort === 465, // true for 465, false for other ports
+          secure: false, // MailHog doesn't use TLS
+          tls: {
+            rejectUnauthorized: false, // Allow self-signed certificates
+          },
           auth: {
             user: emailUser,
             pass: emailPassword,
@@ -283,6 +286,17 @@ export class EmailNotifier {
                 <div class="error-box">
                     <h3>Error Details</h3>
                     <p><strong>Message:</strong> ${data.errorMessage}</p>
+                    ${data.errorDetails && data.errorDetails.sessionUrl && data.errorDetails.sessionUrl !== 'N/A' ? `
+                    <div style="margin-top: 15px; padding: 10px; background-color: #d4edda; border: 1px solid #c3e6cb; border-radius: 5px;">
+                        <p><strong>🔗 Browser Session URL:</strong></p>
+                        <a href="${data.errorDetails.sessionUrl}" target="_blank" style="color: #155724; font-weight: bold; word-break: break-all;">
+                            ${data.errorDetails.sessionUrl}
+                        </a>
+                        <p style="margin-top: 10px; font-size: 14px; color: #155724;">
+                            Click the link above to access the live browser session and solve the CAPTCHA manually.
+                        </p>
+                    </div>
+                    ` : ''}
                 </div>
                 
                 <table class="info-table">
@@ -293,6 +307,9 @@ export class EmailNotifier {
                     <tr><th>Error Time</th><td>${formatDate(
                       data.timestamp
                     )}</td></tr>
+                    ${data.errorDetails && data.errorDetails.currentUrl ? `
+                    <tr><th>Current Page</th><td style="word-break: break-all;">${data.errorDetails.currentUrl}</td></tr>
+                    ` : ''}
                 </table>
 
                 <div style="background-color: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; border-radius: 5px; margin: 15px 0;">
@@ -337,6 +354,12 @@ A scraping job has encountered an error and requires attention.
 
 ERROR DETAILS:
 Message: ${data.errorMessage}
+${data.errorDetails && data.errorDetails.sessionUrl && data.errorDetails.sessionUrl !== 'N/A' ? `
+🔗 BROWSER SESSION URL:
+${data.errorDetails.sessionUrl}
+
+Click the link above to access the live browser session and solve the CAPTCHA manually.
+` : ''}
 
 JOB INFORMATION:
 - Job ID: ${data.jobId}
@@ -344,6 +367,7 @@ JOB INFORMATION:
 - Property: ${data.propertyName || "N/A"}
 - Expedia ID: ${data.expediaId || "N/A"}
 - Error Time: ${formatDate(data.timestamp)}
+${data.errorDetails && data.errorDetails.currentUrl ? `- Current Page: ${data.errorDetails.currentUrl}` : ''}
 ${data.stage ? `- Current Stage: ${data.stage}` : ""}
 ${
   data.lastProcessedDate

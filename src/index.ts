@@ -6,7 +6,6 @@ import loadToken from "./common/load-token.js";
 import { workerPool } from "./common/worker-pool.js";
 import { jobQueueUrlService } from "./services/job-queue-url.service.js";
 import { bookingTrustCron } from "./services/booking-trust-cron.service.js";
-import { bookingSessionMaintenance } from "./services/booking-session-maintenance.service.js";
 dotenv.config();
 
 const port: number = parseInt(process.env.PORT || "3000");
@@ -64,10 +63,6 @@ const gracefulShutdown = async (signal: string): Promise<void> => {
     // Stop booking trust cron scheduler
     console.log("Stopping booking trust scheduler...");
     bookingTrustCron.stop();
-    
-    // Stop session maintenance scheduler
-    console.log("Stopping session maintenance scheduler...");
-    bookingSessionMaintenance.stop();
 
     // Shutdown worker pool first
     console.log("Shutting down worker pool...");
@@ -97,10 +92,6 @@ app.listen(port, async () => {
     // Start booking trust scheduler after database connection
     console.log("Starting booking trust verification scheduler...");
     bookingTrustCron.start();
-    
-    // Start session maintenance scheduler
-    console.log("Starting booking session maintenance scheduler...");
-    bookingSessionMaintenance.start();
 
     // Initialize job queue URLs after database connection
     await initializeJobQueueUrls();
