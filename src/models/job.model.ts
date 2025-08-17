@@ -59,6 +59,7 @@ export interface IJob extends Document {
   worker_assigned?: string;
   batch_execution_id?: string;
   watcher_emails?: string[];
+  case_open?: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -196,6 +197,11 @@ const JobSchema = new Schema<IJob>(
       type: [String],
       required: false,
       default: [],
+    },
+    case_open: {
+      type: Boolean,
+      required: false,
+      default: false,
     },
   },
   {

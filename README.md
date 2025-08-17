@@ -1,6 +1,6 @@
 # Modular Scraper Backend
 
-A Node.js backend application for automated web scraping with worker thread parallelization, time-based browser management and resume functionality.
+A Node.js backend application for automated web scraping with worker thread parallelization, supporting both **Expedia** and **Agoda** platforms, featuring time-based browser management and resume functionality.
 
 ## Features
 
@@ -22,14 +22,27 @@ A Node.js backend application for automated web scraping with worker thread para
 - **Progress Tracking**: Tracks job progress and last processed dates in the database
 - **Robust Error Handling**: Handles browser crashes and network issues gracefully
 
+### ✨ Multi-Platform Support
+
+- **Dual Platform Integration**: Supports both Expedia and Agoda scraping in the same system
+- **Unified Worker Pool**: Single worker thread pool handles jobs from both platforms
+- **Platform-Specific Authentication**:
+  - Expedia: Traditional username/password login
+  - Agoda: Email-based sign-in link authentication with OTP support
+- **Credential Management**: Separate credential storage for each platform per property
+- **Email Integration**: Gmail API integration for Agoda sign-in link extraction
+- **Error Notifications**: Multi-provider email notification system for job failures
+
 ### Core Features
 
 - Modular architecture for easy maintenance and scaling
-- Automated login and OTP verification
+- Automated login and OTP verification for both platforms
 - Property search and reservation management
 - Date range processing with chunking
 - Real-time progress tracking and logging
 - Comprehensive error handling and recovery
+- CSV processing and export functionality
+- Need Help automation for Agoda support tickets
 
 ## Environment Configuration
 
@@ -61,6 +74,39 @@ BROWSER_TIME_LIMIT=1h
 # Scraping Configuration
 # Number of days to process in each chunk (default: 2)
 CHUNK_SIZE=2
+
+# AWS S3 Configuration (for log storage)
+AWS_ACCESS_KEY_ID=your-aws-access-key
+AWS_SECRET_ACCESS_KEY=your-aws-secret-key
+AWS_S3_BUCKET_NAME=your-s3-bucket-name
+AWS_S3_REGION=us-east-1
+
+# Google OAuth Configuration (for Gmail API access)
+GOOGLE_CLIENT_ID=your-google-client-id
+GOOGLE_CLIENT_SECRET=your-google-client-secret
+GOOGLE_REDIRECT_URI=http://localhost:3000/oauth/callback
+TOKEN_PATH=token.json
+
+# Email Notification Configuration
+# Option 1: Service-based (Gmail, Outlook)
+EMAIL_SERVICE=gmail
+EMAIL_USER=your-email@gmail.com
+EMAIL_PASSWORD=your-app-password
+EMAIL_FROM=your-email@gmail.com
+
+# Option 2: SMTP-based (Custom email server)
+# SMTP_HOST=smtp.yourdomain.com
+# SMTP_PORT=587
+# EMAIL_USER=your-email@yourdomain.com
+# EMAIL_PASSWORD=your-email-password
+# EMAIL_FROM=your-email@yourdomain.com
+
+# Steel SDK Configuration (for production browser automation)
+STEEL_API_KEY=your-steel-api-key
+
+# BrowserBase Configuration (alternative browser service)
+BROWSERBASE_API_KEY=your-browserbase-api-key
+BROWSERBASE_PROJECT_ID=your-browserbase-project-id
 ```
 
 ### Worker Thread Configuration
@@ -159,9 +205,16 @@ Process:
 
 ### Job Management
 
-- `POST /api/expedia/property-run-job` - Start property scraping job (uses worker threads)
-- `POST /api/expedia/rerun-failed-job` - Rerun failed or partial jobs (uses worker threads)
-- `POST /api/expedia/reservation-run-job` - Start reservation scraping job (uses worker threads)
+#### Expedia Jobs
+
+- `POST /api/expedia/property-run-job` - Start Expedia property scraping job (uses worker threads)
+- `POST /api/expedia/rerun-failed-job` - Rerun failed or partial Expedia jobs (uses worker threads)
+- `POST /api/expedia/reservation-run-job` - Start Expedia reservation scraping job (uses worker threads)
+
+#### Agoda Jobs
+
+- `POST /api/agoda/property-run-job` - Start Agoda property scraping job (uses worker threads)
+- `POST /api/agoda/rerun-failed-job` - Rerun failed or partial Agoda jobs (uses worker threads)
 
 ### Progress Monitoring
 

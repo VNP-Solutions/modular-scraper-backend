@@ -1,11 +1,20 @@
 export interface WorkerJobData {
-  jobType: "property-run" | "rerun-failed" | "reservation-run" | "graphql-run";
+  jobType:
+    | "property-run"
+    | "rerun-failed"
+    | "reservation-run"
+    | "graphql-run"
+    | "agoda-property-run"
+    | "agoda-rerun-failed";
   jobId: string;
   startDate?: string;
   endDate?: string;
   expediaId?: string;
   user_email?: string;
   user_password?: string;
+  agodaId?: string;
+  agodaUsername?: string;
+  agodaPassword?: string;
   reservations?: any[];
   originalStatus?: string;
 }
