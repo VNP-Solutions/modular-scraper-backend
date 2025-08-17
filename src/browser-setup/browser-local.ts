@@ -10,7 +10,10 @@ import {
 import { timeoutManager } from "../common/timeout-manager.js";
 dotenv.config();
 
-export async function browserSetupLocal(jobId?: string): Promise<{
+export async function browserSetupLocal(
+  jobId?: string,
+  platform?: "expedia" | "agoda"
+): Promise<{
   browser: Browser;
   page: Page;
 }> {
@@ -92,7 +95,8 @@ export async function browserSetupLocal(jobId?: string): Promise<{
     await page.setDefaultTimeout(selectorTimeout);
 
     // Navigate to partner central with retry logic
-    await dualLogInfo("Navigating to Expedia Partner Central...");
+    const platformName = platform === "agoda" ? "Agoda" : "Expedia";
+    await dualLogInfo(`Navigating to ${platformName} platform...`);
 
     const maxRetries = 3;
     let navigationSuccess = false;
@@ -104,13 +108,30 @@ export async function browserSetupLocal(jobId?: string): Promise<{
           maxRetries,
         });
 
-        await page.goto(
-          "https://www.expediapartnercentral.com/Account/Logon?signedOff=true",
-          {
+        if (platform === "expedia") {
+          await page.goto(
+            "https://www.expediapartnercentral.com/Account/Logon?signedOff=true",
+            {
+              waitUntil: "domcontentloaded",
+              timeout: loadingTimeout,
+            }
+          );
+        } else if (platform === "agoda") {
+          await page.goto("https://ycs.agoda.com", {
             waitUntil: "domcontentloaded",
             timeout: loadingTimeout,
-          }
-        );
+          });
+          await page.waitForNavigation({ waitUntil: "networkidle0" });
+        } else {
+          // Default to Expedia for backward compatibility
+          await page.goto(
+            "https://www.expediapartnercentral.com/Account/Logon?signedOff=true",
+            {
+              waitUntil: "domcontentloaded",
+              timeout: loadingTimeout,
+            }
+          );
+        }
 
         // Wait for page to stabilize
         await delay(3000);

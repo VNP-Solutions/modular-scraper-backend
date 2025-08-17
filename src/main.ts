@@ -174,9 +174,9 @@ async function runScrapingWithRestart(
       await dualLogInfo("Setting up browser...");
       let setupResult = null;
       if (environment === "browserless") {
-        setupResult = await browserSetupProduction(jobId);
+        setupResult = await browserSetupProduction(jobId, "expedia");
       } else {
-        setupResult = await browserSetupLocal(jobId);
+        setupResult = await browserSetupLocal(jobId, "expedia");
       }
       browser = setupResult.browser;
       const page = setupResult.page;

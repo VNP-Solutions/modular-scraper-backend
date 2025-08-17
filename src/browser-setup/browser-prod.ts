@@ -10,7 +10,10 @@ import { timeoutManager } from "../common/timeout-manager.js";
 import { JobService } from "../services/job.service.js";
 dotenv.config();
 
-export async function browserSetupProduction(jobId?: string): Promise<{
+export async function browserSetupProduction(
+  jobId?: string,
+  platform?: "expedia" | "agoda"
+): Promise<{
   browser: Browser;
   page: Page;
 }> {
@@ -138,7 +141,8 @@ export async function browserSetupProduction(jobId?: string): Promise<{
     await page.setDefaultTimeout(selectorTimeout);
 
     // Navigate to partner central with retry logic
-    await dualLogInfo("Navigating to Expedia Partner Central...");
+    const platformName = platform === "agoda" ? "Agoda" : "Expedia";
+    await dualLogInfo(`Navigating to ${platformName} platform...`);
 
     const maxRetries = 3;
     let navigationSuccess = false;
@@ -150,13 +154,30 @@ export async function browserSetupProduction(jobId?: string): Promise<{
           maxRetries,
         });
 
-        await page.goto(
-          "https://www.expediapartnercentral.com/Account/Logon?signedOff=true",
-          {
-            waitUntil: "domcontentloaded",
-            timeout: loadingTimeout,
-          }
-        );
+        if (platform === "expedia") {
+          await page.goto(
+            "https://www.expediapartnercentral.com/Account/Logon?signedOff=true",
+            {
+              waitUntil: "domcontentloaded",
+              timeout: loadingTimeout,
+            }
+          );
+        } else if (platform === "agoda") {
+          // Navigate directly to the login page to avoid redirect timing issues
+          await page.goto("https://ycs.agoda.com/mldc/en-us/public/login", {
+            waitUntil: "networkidle2", // Wait for network to be idle to handle redirects
+            timeout: 0, // No timeout for Agoda navigation
+          });
+        } else {
+          // Default to Expedia for backward compatibility
+          await page.goto(
+            "https://www.expediapartnercentral.com/Account/Logon?signedOff=true",
+            {
+              waitUntil: "domcontentloaded",
+              timeout: loadingTimeout,
+            }
+          );
+        }
 
         // Wait for page to stabilize
         await delay(3000);

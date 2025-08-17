@@ -28,9 +28,9 @@ async function reservation(
     await dualLogInfo("Setting up browser...");
     let setupResult = null;
     if (environment === "production") {
-      setupResult = await browserSetupProduction();
+      setupResult = await browserSetupProduction(undefined, "expedia");
     } else {
-      setupResult = await browserSetupLocal();
+      setupResult = await browserSetupLocal(undefined, "expedia");
     }
     browser = setupResult.browser;
     const page = setupResult.page;

@@ -104,9 +104,9 @@ async function agoda(
 
     let setupResult = null;
     if (environment === "production") {
-      setupResult = await browserSetupProduction(jobId);
+      setupResult = await browserSetupProduction(jobId, "agoda");
     } else {
-      setupResult = await browserSetupLocal(jobId);
+      setupResult = await browserSetupLocal(jobId, "agoda");
     }
 
     browser = setupResult.browser;

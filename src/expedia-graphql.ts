@@ -1313,9 +1313,9 @@ async function runScrapingWithRestart(
     await dualLogInfo("Setting up browser for all dates...");
     let setupResult = null;
     if (environment === "production") {
-      setupResult = await browserSetupProduction(jobId);
+      setupResult = await browserSetupProduction(jobId, "expedia");
     } else {
-      setupResult = await browserSetupLocal(jobId);
+      setupResult = await browserSetupLocal(jobId, "expedia");
     }
     globalBrowser = setupResult.browser;
     globalPage = setupResult.page;
