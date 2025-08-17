@@ -120,9 +120,9 @@ function mapCsvToJobItem(
   );
 
   const paymentInfo: PaymentInfo = {
-    total_guest_payment: 0,
-    cancellation_fee: 0,
-    total_payout: 0,
+    // total_guest_payment: 0,
+    // cancellation_fee: 0,
+    // total_payout: 0,
     amount_to_charge_or_refund: amountToChargeOrRefund,
   };
 
@@ -924,8 +924,8 @@ export async function getAgodaBookingData(
     const parseResult = Papa.parse(csvContent, {
       header: true,
       skipEmptyLines: true,
-      transform: (value: string) => value.trim(), // Trim whitespace from values
-      transformHeader: (header: string) => header.trim(), // Trim whitespace from headers
+      transform: (value) => value.trim(), // Trim whitespace from values
+      transformHeader: (header) => header.trim(), // Trim whitespace from headers
     });
 
     if (parseResult.errors.length > 0) {
