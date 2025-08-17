@@ -546,7 +546,7 @@ async function makeGraphQLRequest(
                 const mapReasonForCharge = (chargeStatus: string): string => {
                   switch (chargeStatus?.toLowerCase()) {
                     case "deactivatedduetofullcharge":
-                      return "Charge is full";
+                      return "Charge in full";
                     case "partiallycharged":
                       return "Partially charged";
                     case "readytocharge":
@@ -617,7 +617,7 @@ async function makeGraphQLRequest(
                 const mapReasonForCharge = (graphqlReason: string): string => {
                   switch (graphqlReason?.toLowerCase()) {
                     case "deactivatedduetofullcharge":
-                      return "Charge is full";
+                      return "Charge in full";
                     case "partiallycharged":
                       return "Partially charged";
                     case "readytocharge":
