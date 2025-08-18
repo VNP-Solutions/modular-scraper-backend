@@ -12,7 +12,7 @@ export interface PaymentInfo {
   total_guest_payment?: number;
   cancellation_fee?: number;
   total_payout?: number;
-  amount_to_charge_or_refund: number; // Reverted back to number type
+  amount_to_charge_or_refund: number; // Required field for calculations
 }
 
 // Interface for the JobItem document
@@ -22,7 +22,7 @@ export interface IJobItem extends Document {
   property_id: Types.ObjectId;
   guest_name: string;
   reservation_id: string;
-  confirmation_number: string;
+  confirmation_number?: string;
   check_in_date: Date;
   check_out_date: Date;
   room_type: string;
@@ -65,15 +65,15 @@ const PaymentInfoSchema = new Schema<PaymentInfo>(
   {
     total_guest_payment: {
       type: Number,
-      required: true,
+      required: false,
     },
     cancellation_fee: {
       type: Number,
-      required: true,
+      required: false,
     },
     total_payout: {
       type: Number,
-      required: true,
+      required: false,
     },
     amount_to_charge_or_refund: {
       type: Number,
@@ -102,11 +102,11 @@ const JobItemSchema = new Schema<IJobItem>(
     },
     reservation_id: {
       type: String,
-      required: true,
+      required: false,
     },
     confirmation_number: {
       type: String,
-      required: true,
+      required: false,
     },
     check_in_date: {
       type: Date,
@@ -122,7 +122,7 @@ const JobItemSchema = new Schema<IJobItem>(
     },
     booking_amount: {
       type: Number,
-      required: true,
+      required: false,
     },
     booked_date: {
       type: Date,
@@ -131,7 +131,7 @@ const JobItemSchema = new Schema<IJobItem>(
     has_card_info: {
       type: Boolean,
       default: false,
-      required: true,
+      required: false,
     },
     card_info: {
       type: CardInfoSchema,
@@ -140,7 +140,7 @@ const JobItemSchema = new Schema<IJobItem>(
     has_payment_info: {
       type: Boolean,
       default: false,
-      required: true,
+      required: false,
     },
     payment_info: {
       type: PaymentInfoSchema,
@@ -165,7 +165,6 @@ const JobItemSchema = new Schema<IJobItem>(
 JobItemSchema.index({ job_id: 1 });
 JobItemSchema.index({ property_id: 1 });
 JobItemSchema.index({ reservation_id: 1 });
-JobItemSchema.index({ confirmation_number: 1 });
 JobItemSchema.index({ job_id: 1, property_id: 1 });
 JobItemSchema.index({ guest_name: 1 });
 JobItemSchema.index({ check_in_date: 1 });

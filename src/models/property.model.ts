@@ -3,8 +3,9 @@ import mongoose, { Document, Schema, Types } from "mongoose";
 // Interface for the Property document
 export interface IProperty extends Document {
   _id: Types.ObjectId;
-  expedia_id: string; // The actual Expedia property ID used for scraping
-  agoda_id: string; // The actual Agoda property ID used for scraping
+  expedia_id?: string; // The actual Expedia property ID used for scraping
+  agoda_id?: string; // The actual Agoda property ID used for scraping
+  booking_id?: string; // The actual Booking property ID used for scraping
   property_name: string;
   address?: string;
   city?: string;
@@ -28,27 +29,18 @@ const PropertySchema = new Schema<IProperty>(
   {
     expedia_id: {
       type: String,
-      required: true,
+      required: false,
       unique: true,
-      validate: {
-        validator: function (v: string): boolean {
-          // expedia_id cannot be "0" or empty
-          return !!(v && v !== "0" && v.trim().length > 0);
-        },
-        message: 'Expedia ID cannot be "0" or empty',
-      },
     },
     agoda_id: {
       type: String,
-      required: true,
+      required: false,
       unique: true,
-      validate: {
-        validator: function (v: string): boolean {
-          // agoda_id cannot be "0" or empty
-          return !!(v && v !== "0" && v.trim().length > 0);
-        },
-        message: 'Agoda ID cannot be "0" or empty',
-      },
+    },
+    booking_id: {
+      type: String,
+      required: false,
+      unique: true,
     },
     property_name: {
       type: String,

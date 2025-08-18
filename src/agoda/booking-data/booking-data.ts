@@ -471,6 +471,8 @@ export async function getAgodaBookingData(
     const bookingUrl = `https://ycs.agoda.com/mldc/en-us/app/reporting/booking/${agodaId}?startDate=${formattedStartDate}&endDate=${formattedEndDate}`;
     await dualLogInfo(`Navigating to booking data URL: ${bookingUrl}`);
 
+    await delay(5000);
+
     // Navigate to the booking data page
     const newPage = await browser.newPage();
     await newPage.goto(bookingUrl, {

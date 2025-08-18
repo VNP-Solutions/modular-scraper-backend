@@ -6,6 +6,7 @@ import { timeManager } from "../../common/time-manager.js";
 import { timeoutManager } from "../../common/timeout-manager.js";
 import { getAgodaSignInLink } from "./email-link-helper.js";
 import { getAgodaOtpCode } from "./email-otp-helper.js";
+import { delay } from "../../common/delay.js";
 
 async function agodaLogin(
   browser: Browser,
@@ -338,6 +339,10 @@ async function handleDirectLinkFlow(page: Page, jobId?: string): Promise<void> {
     waitUntil: "networkidle2",
     timeout: 50000,
   });
+
+  // Wait 10 seconds after navigating to the sign-in link
+  await dualLogInfo("Waiting 10 seconds after navigating to sign-in link...");
+  await delay(10000);
 }
 
 /**
