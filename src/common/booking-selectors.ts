@@ -49,7 +49,9 @@ export const BOOKING_SELECTORS = {
     ],
   },
   vccs: {
-    vccsToChargeLink: 'a[href*="route=vccs_to_charge"]'
+    vccsToChargeLink: 'a[href*="route=vccs_to_charge"]',
+    table: 'pay-hub__table',
+    viewCardDetailsLink: 'a.pay-hub__view_cc_link',
   },
   pagination: {
     nextPageButton: 'a[aria-label="Next page"]',
@@ -66,7 +68,12 @@ export const BOOKING_SELECTORS = {
     reservationChargeBefore: '[data-heading="Charge before"] span',
     reservationAmount: '[data-heading="Amount"]',
     reservationCardholder: '[data-heading="Cardholder"]',
-    reservationName: 'span[data-test-id="reservation-overview-name"]'
+    reservationName: 'span[data-test-id="reservation-overview-name"]',
+    closeCardDetails: ['#close_button', '//button[text()="Close"]'],
+    item: (reservationId: string) => [
+      `a[href*="res_id=${reservationId}"]`,
+      `a[href*="res_id=${reservationId}"]:contains("${reservationId}")`
+    ],
   },
   property: {
     searchInput: [

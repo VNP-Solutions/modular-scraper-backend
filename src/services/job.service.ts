@@ -26,7 +26,7 @@ export interface CreateJobData {
   property_name: string;
   billing_type: string;
   next_due_date: Date;
-  OTA: OTAProvider;
+  ota_provider: OTAProvider;
   execution_type: string;
   job_backoff_length_loading: number;
   job_backoff_length_selector: number;

@@ -43,8 +43,7 @@ export interface IJob extends Document {
   property_name: string;
   billing_type: string;
   next_due_date: Date;
-  OTA: OTAProvider;
-  ota_provider?: OTAProvider; // Alias for compatibility
+  ota_provider: OTAProvider;
   remaining_direct_billed: number;
   total_collectable: number;
   total_amount_confirmed: number;
@@ -123,11 +122,10 @@ const JobSchema = new Schema<IJob>(
       type: Date,
       required: true,
     },
-    OTA: {
+    ota_provider: {
       type: String,
       enum: Object.values(OTAProvider),
       required: true,
-      alias: 'ota_provider',
     },
     remaining_direct_billed: {
       type: Number,

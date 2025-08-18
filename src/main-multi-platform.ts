@@ -14,6 +14,7 @@ dotenv.config();
 interface MultiPlatformJobParams {
   platform?: SupportedPlatforms | string;
   propertyId?: string;
+  propertyIdForDb?: string;
   startDate?: string;
   endDate?: string;
   jobId?: string;
@@ -89,6 +90,7 @@ async function mainMultiPlatform(params: MultiPlatformJobParams): Promise<void> 
     const scrapingParams: ScrapingJobParams = {
       jobId: params.jobId,
       propertyId: params.propertyId,
+      propertyIdForDb: params.propertyIdForDb,
       startDate: params.startDate,
       endDate: params.endDate,
       credentials: {
