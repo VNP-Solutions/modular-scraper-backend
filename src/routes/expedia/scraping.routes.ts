@@ -22,7 +22,7 @@ const router = express.Router();
  * /api/expedia/rerun-failed-job:
  *   post:
  *     tags:
- *       - Scraping Jobs
+ *       - Expedia Jobs
  *     summary: Rerun failed or partial failed job
  *     description: Rerun a job that has failed or partially completed. This endpoint specifically handles jobs with Failed or Partial status and resets them to run again.
  *     requestBody:
@@ -327,7 +327,7 @@ router.post("/rerun-failed-job", (async (
  * /api/expedia/property-run-job:
  *   post:
  *     tags:
- *       - Scraping Jobs
+ *       - Expedia Jobs
  *     summary: Start property scraping job
  *     description: Start a new property scraping job for the specified property ID, date range, and job ID
  *     requestBody:
@@ -611,7 +611,7 @@ router.post("/property-run-job", (async (
  * /api/expedia/reservation-run-job:
  *   post:
  *     tags:
- *       - Scraping Jobs
+ *       - Expedia Jobs
  *     summary: Start reservation scraping job
  *     description: Start a new reservation scraping job for the specified reservations
  *     requestBody:
