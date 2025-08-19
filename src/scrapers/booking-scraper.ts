@@ -67,15 +67,15 @@ export class BookingScraper extends BaseScraper {
       // Connect to the created Browserless session
       const browser = await puppeteer.connect({
         browserWSEndpoint: session.connect,
-        protocolTimeout: 300000
+        protocolTimeout: 300000,
+        defaultViewport: null
       });
 
       const page = await browser.newPage();
-      
       await this.logInfo("Connected to Browserless session successfully");
       
       // Set viewport and timeouts
-      await page.setViewport({ width: 1920, height: 1080 });
+      await page.setViewport({ width: 2560, height: 1440 });
       await page.setDefaultNavigationTimeout(loadingTimeout);
       await page.setDefaultTimeout(selectorTimeout);
 
@@ -403,22 +403,66 @@ export class BookingScraper extends BaseScraper {
       
       await this.logInfo('Property ID entered in search field');
       
+      // Wait a bit for search results to load
+      await this.delay(2000);
+      
+      await this.takeScreenshot('booking-property-search-results.png');
+      
       const propertySelectors = BOOKING_SELECTORS.property.item(propertyId);
+      
       const propertyClicked = await SelectorUtils.findAndClick(this.page, propertySelectors);
       
       if (!propertyClicked) {
-        await dualLogError(
-          `[${new Date().toISOString()}] ${getBookingErrorDescription(BookingErrorType.PROPERTY_NOT_FOUND)}`,
-          {
-            errorType: BookingErrorType.PROPERTY_NOT_FOUND,
-            phase: BookingScrapingPhase.NAVIGATION,
-            platform: 'booking'
-          }
-        );
         await this.logInfo('Property not found with predefined selectors, trying alternative approaches...');
+        
+        // Try alternative approach - look for any link containing the property ID
+        const alternativeClicked = await this.page.evaluate((propertyId) => {
+          const links = Array.from(document.querySelectorAll('a[href*="hotel_id"]'));
+          console.log(`Found ${links.length} links with hotel_id in href`);
+          
+          for (const link of links) {
+            const href = link.getAttribute('href');
+            const text = link.textContent?.trim();
+            console.log(`Link href: ${href}, text: ${text}`);
+            
+            if (href && href.includes(`hotel_id=${propertyId}`)) {
+              console.log(`Found matching link: ${href}`);
+              (link as HTMLElement).click();
+              return true;
+            }
+          }
+          
+          // Try looking for links with the property ID as text
+          const textLinks = Array.from(document.querySelectorAll('a'));
+          for (const link of textLinks) {
+            const text = link.textContent?.trim();
+            if (text === propertyId) {
+              console.log(`Found link with matching text: ${text}`);
+              (link as HTMLElement).click();
+              return true;
+            }
+          }
+          
+          return false;
+        }, propertyId);
+        
+        if (alternativeClicked) {
+          await this.logInfo('Property found and clicked using alternative method');
+        } else {
+          await dualLogError(
+            `[${new Date().toISOString()}] ${getBookingErrorDescription(BookingErrorType.PROPERTY_NOT_FOUND)}`,
+            {
+              errorType: BookingErrorType.PROPERTY_NOT_FOUND,
+              phase: BookingScrapingPhase.NAVIGATION,
+              platform: 'booking'
+            }
+          );
+          await this.logError('Property not found with any method');
+          return false;
+        }
+      } else {
+        await this.logInfo('Property clicked successfully with predefined selectors');
       }
-      
-      await this.logInfo('Property clicked successfully');
       
       // Listen for new page creation for property selection
       const newPagePromise = new Promise<Page>((resolve) => {
@@ -1249,7 +1293,8 @@ export class BookingScraper extends BaseScraper {
           "--disable-backgrounding-occluded-windows",
           "--disable-renderer-backgrounding",
           "--enable-javascript",
-          "--disable-web-security"
+          "--disable-web-security",
+          "--window-size=2560,1440"
         ],
       };
   

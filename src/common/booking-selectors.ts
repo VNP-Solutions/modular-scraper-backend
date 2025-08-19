@@ -89,7 +89,11 @@ export const BOOKING_SELECTORS = {
     item: (propertyId: string) => [
       `a[href*="hotel_id=${propertyId}"][target="_blank"]`,
       `a[href*="hotel_id=${propertyId}&"]`,
+      `a[href*="hotel_id=${propertyId}"]`,
       `a[href*="hotel_id=${propertyId}"]:contains("${propertyId}")`,
+      `a[href*="hotel_id=${propertyId}"]`,
+      `a[href*="${propertyId}"]`,
+      `a:contains("${propertyId}")`,
     ],
   }
 };

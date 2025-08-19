@@ -689,7 +689,7 @@ app.post("/api/booking/run-job", (async (
       });
     }
 
-    if (!jobData.portfolioId || !jobData.propertyId) {
+    if (!jobData.propertyId) {
       return res.status(400).json({
         status: 400,
         message: `Cannot retrieve valid portfolioId or propertyId for job ${jobId}. Job may be missing required references.`,
@@ -997,7 +997,7 @@ app.post("/api/booking/rerun-failed-job", (async (
       });
     }
 
-    if (!jobData.portfolioId || !jobData.propertyId) {
+    if (!jobData.propertyId) {
       return res.status(400).json({
         status: 400,
         message: `Cannot retrieve valid portfolioId or propertyId for job ${jobId}. Job may be missing required references.`,
