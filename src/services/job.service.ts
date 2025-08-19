@@ -193,8 +193,6 @@ export class JobService {
    */
   async getBookingIdFromJob(jobId: string): Promise<{
     bookingId: string;
-    user_email?: string;
-    user_password?: string;
     portfolioId?: string;
     propertyId?: string;
   } | null> {
@@ -228,8 +226,6 @@ export class JobService {
       );
       return {
         bookingId: property.booking_id,
-        user_email: property.user_email,
-        user_password: property.user_password,
         portfolioId: job.portfolio_id?.toString(),
         propertyId: job.property_id?.toString(),
       };

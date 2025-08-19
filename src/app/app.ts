@@ -10,6 +10,7 @@ import { specs, swaggerUi } from "../config/swagger.js";
 import { getAccess, getOauth2Callback } from "../get-access/access.js";
 import { Job, JobStatus } from "../models/job.model.js";
 import { jobService } from "../services/job.service.js";
+import { propertyCredentialsService } from "../services/job-credentials.service.js";
 import { bookingTrustScheduler } from "../services/booking-trust-scheduler.service.js";
 import { bookingTrustCron } from "../services/booking-trust-cron.service.js";
 import { emailNotifier } from "../common/email-notifier.js";
@@ -669,9 +670,10 @@ app.post("/api/booking/run-job", (async (
       });
     }
 
-    // 2. Get booking_id, credentials, and job details from job's property
+    // 2. Get booking_id from job's property
     console.log(`Getting booking_id and job details for booking job ${jobId}...`);
     const jobData = await jobService.getBookingIdFromJob(jobId);
+    const bookingCredentials = await propertyCredentialsService.getBookingCredentialsFromJob(jobId);
 
     if (!jobData || !jobData.bookingId) {
       return res.status(400).json({
@@ -680,10 +682,10 @@ app.post("/api/booking/run-job", (async (
       });
     }
 
-    if (!jobData.user_email || !jobData.user_password) {
+    if (!bookingCredentials?.bookingUsername || !bookingCredentials?.bookingPassword) {
       return res.status(400).json({
         status: 400,
-        message: `Cannot retrieve valid user_email or user_password for job ${jobId}. Property may not have user_email or user_password assigned.`,
+        message: `Cannot retrieve valid bookingUsername or bookingPassword for job ${jobId}. Property may not have booking credentials assigned.`,
       });
     }
 
@@ -694,7 +696,8 @@ app.post("/api/booking/run-job", (async (
       });
     }
 
-    const { bookingId, user_email, user_password, portfolioId, propertyId } = jobData;
+    const { bookingId, portfolioId, propertyId } = jobData;
+    const { bookingUsername, bookingPassword } = bookingCredentials;
 
     console.log(`Using booking_id: ${bookingId} for booking scraping`);
 
@@ -707,8 +710,8 @@ app.post("/api/booking/run-job", (async (
       startDate,
       endDate,
       bookingId,
-      user_email,
-      user_password,
+      user_email: bookingUsername,
+      user_password: bookingPassword,
     };
 
     // 4. Execute job in worker thread
@@ -978,6 +981,7 @@ app.post("/api/booking/rerun-failed-job", (async (
     // 3. Get booking_id and credentials from job's property
     console.log(`Getting booking_id for failed job rerun ${jobId}...`);
     const jobData = await jobService.getBookingIdFromJob(jobId);
+    const bookingCredentials = await propertyCredentialsService.getBookingCredentialsFromJob(jobId);
 
     if (!jobData || !jobData.bookingId) {
       return res.status(400).json({
@@ -986,10 +990,10 @@ app.post("/api/booking/rerun-failed-job", (async (
       });
     }
 
-    if (!jobData.user_email || !jobData.user_password) {
+    if (!bookingCredentials?.bookingUsername || !bookingCredentials?.bookingPassword) {
       return res.status(400).json({
         status: 400,
-        message: `Cannot retrieve valid user_email or user_password for job ${jobId}. Property may not have user_email or user_password assigned.`,
+        message: `Cannot retrieve valid booking credentials for job ${jobId}. Property may not have booking username or password assigned.`,
       });
     }
 
@@ -1000,7 +1004,8 @@ app.post("/api/booking/rerun-failed-job", (async (
       });
     }
 
-    const { bookingId, user_email, user_password, portfolioId, propertyId } = jobData;
+    const { bookingId, portfolioId, propertyId } = jobData;
+    const { bookingUsername, bookingPassword } = bookingCredentials;
 
     console.log(
       `Rerunning failed booking job ${jobId} (attempt ${updatedJob.retries_attempted}/${updatedJob.max_retries}) with booking_id: ${bookingId}`
@@ -1015,8 +1020,8 @@ app.post("/api/booking/rerun-failed-job", (async (
       startDate,
       endDate,
       bookingId,
-      user_email,
-      user_password,
+      user_email: bookingUsername,
+      user_password: bookingPassword,
       originalStatus,
     };
 

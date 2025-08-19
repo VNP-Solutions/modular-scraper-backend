@@ -15,6 +15,7 @@ import { scrapingStateManager } from "../common/scraping-state.js";
 import main from "../main.js";
 import reservation from "../reservation/reservation.js";
 import { jobService } from "../services/job.service.js";
+import { propertyCredentialsService } from "../services/job-credentials.service.js";
 import { mainMultiPlatform } from "../main-multi-platform.js";
 import { JobStatus } from "../models/job.model.js";
 import { 
@@ -517,6 +518,7 @@ class ScrapingWorker {
     if (!finalBookingId || !finalUserEmail || !finalUserPassword) {
       console.log(`Getting job data for booking job ${jobId}...`);
       const jobData = await jobService.getBookingIdFromJob(jobId);
+      const bookingCredentials = await propertyCredentialsService.getBookingCredentialsFromJob(jobId);
 
       if (!jobData || !jobData.bookingId) {
         throw new Error(
@@ -524,15 +526,15 @@ class ScrapingWorker {
         );
       }
 
-      if (!jobData.user_email || !jobData.user_password) {
+      if (!bookingCredentials?.bookingUsername || !bookingCredentials?.bookingPassword) {
         throw new Error(
-          `Cannot retrieve valid user_email or user_password for job ${jobId}. Property may not have user_email or user_password assigned.`
+          `Cannot retrieve valid booking credentials for job ${jobId}. Property may not have booking username or password assigned.`
         );
       }
 
       finalBookingId = jobData.bookingId;
-      finalUserEmail = jobData.user_email;
-      finalUserPassword = jobData.user_password;
+      finalUserEmail = bookingCredentials.bookingUsername;
+      finalUserPassword = bookingCredentials.bookingPassword;
     }
 
     console.log(`Worker: Using booking_id: ${finalBookingId} for booking scraping`);
