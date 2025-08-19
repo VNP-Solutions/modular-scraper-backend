@@ -1,4 +1,9 @@
 import { Browser, Page } from "puppeteer";
+import { delay } from "../../common/delay.js";
+import {
+  autoDetectCleanupParams,
+  cleanupFoldersOnError,
+} from "../../common/folder-cleanup.js";
 import { dualLogError, dualLogInfo } from "../../common/log-helper.js";
 import { progressManager } from "../../common/progress-manager.js";
 import { scrapingStateManager } from "../../common/scraping-state.js";
@@ -6,7 +11,6 @@ import { timeManager } from "../../common/time-manager.js";
 import { timeoutManager } from "../../common/timeout-manager.js";
 import { getAgodaSignInLink } from "./email-link-helper.js";
 import { getAgodaOtpCode } from "./email-otp-helper.js";
-import { delay } from "../../common/delay.js";
 
 async function agodaLogin(
   browser: Browser,
@@ -241,6 +245,39 @@ async function agodaLogin(
     }
   } catch (error) {
     await dualLogError("Critical error during Agoda login process:", error);
+
+    // Cleanup folders on login error
+    try {
+      await dualLogInfo("Starting folder cleanup due to login error", {
+        jobId,
+        timeSession: timeManager.getSessionInfo(),
+      });
+
+      // Try to auto-detect cleanup parameters
+      const cleanupParams = await autoDetectCleanupParams(jobId);
+
+      const cleanupResult = await cleanupFoldersOnError(
+        cleanupParams.agodaId,
+        cleanupParams.propertyName,
+        jobId
+      );
+
+      await dualLogInfo("Folder cleanup completed after login error", {
+        jobId,
+        downloadsCleanedCount: cleanupResult.downloadsCleanedCount,
+        importCleanedCount: cleanupResult.importCleanedCount,
+        totalFilesProcessed: cleanupResult.totalFilesProcessed,
+        errors: cleanupResult.errors.length,
+        timeSession: timeManager.getSessionInfo(),
+      });
+    } catch (cleanupError: any) {
+      await dualLogError(
+        "Error during folder cleanup (continuing with error handling):",
+        cleanupError.message,
+        { jobId }
+      );
+      // Don't throw cleanup error - continue with original error handling
+    }
 
     // Clean up browser if needed
     if (shouldCloseBrowser && browser) {

@@ -2,6 +2,7 @@ import dotenv from "dotenv";
 import { browserSetupLocal } from "./browser-setup/browser-local.js";
 import { browserSetupProduction } from "./browser-setup/browser-prod.js";
 import { delay } from "./common/delay.js";
+import { emailNotifier } from "./common/email-notifier.js";
 import { decryptPassword } from "./common/encription.js";
 import {
   dualLogError,
@@ -15,8 +16,10 @@ import { timeManager } from "./common/time-manager.js";
 import { splitDateRange } from "./date-split/date-split.js";
 import { getNextDateFromCompleted } from "./date-split/helper.js";
 import login from "./login/login.js";
+import { JobStatus } from "./models/job.model.js";
 import handleOtpVerification from "./otp-verification/otp-verification.js";
 import { propertySearchAndClickReservation } from "./property-search/property-search.js";
+import { jobService } from "./services/job.service.js";
 
 dotenv.config();
 
@@ -104,6 +107,45 @@ async function main(
         await progressManager.handleJobError(jobId, error);
       }
 
+      // Check job items count and set appropriate job status
+      if (jobId) {
+        try {
+          const jobItemsCount = await jobService.getJobItemsCount(jobId);
+
+          if (jobItemsCount > 0) {
+            // If job items found, set status to Partial
+            await jobService.updateJobStatus(jobId, JobStatus.Partial);
+            await dualLogInfo(
+              `Job status set to Partial - found ${jobItemsCount} job items`,
+              { jobId, jobItemsCount }
+            );
+          } else {
+            // If no job items found, set status to Failed
+            await jobService.updateJobStatus(jobId, JobStatus.Failed);
+            await dualLogInfo("Job status set to Failed - no job items found", {
+              jobId,
+              jobItemsCount: 0,
+            });
+          }
+        } catch (statusError) {
+          await dualLogError(
+            "Error updating job status based on job items count:",
+            statusError,
+            { jobId }
+          );
+          // Fallback to Failed status if there's an error checking job items
+          try {
+            await jobService.updateJobStatus(jobId, JobStatus.Failed);
+          } catch (fallbackError) {
+            await dualLogError(
+              "Error setting fallback Failed status:",
+              fallbackError,
+              { jobId }
+            );
+          }
+        }
+      }
+
       // Finalize logging with failed status
       if (jobId) {
         await finalizeJobLogging("failed");
@@ -113,12 +155,74 @@ async function main(
   } catch (error) {
     await dualLogError("Main function error:", error);
 
+    // Send email notification for outer main function error
+    if (jobId) {
+      try {
+        await emailNotifier.notifyJobError(
+          jobId,
+          (error as any)?.message || "Unknown error in outer main function",
+          error,
+          {
+            stage: "outer_main_function",
+            progressPercentage:
+              progressManager.getJobProgress(jobId)?.progressPercentage,
+            lastProcessedDate:
+              progressManager.getJobLastProcessedDate(jobId) || undefined,
+          }
+        );
+      } catch (emailError) {
+        await dualLogError(
+          "Failed to send error notification email:",
+          emailError
+        );
+      }
+    }
+
     // End time session on error
     await timeManager.endSession();
 
     // Clean up progress file on main function error
     if (jobId) {
       await progressManager.handleJobError(jobId, error);
+    }
+
+    // Check job items count and set appropriate job status
+    if (jobId) {
+      try {
+        const jobItemsCount = await jobService.getJobItemsCount(jobId);
+
+        if (jobItemsCount > 0) {
+          // If job items found, set status to Partial
+          await jobService.updateJobStatus(jobId, JobStatus.Partial);
+          await dualLogInfo(
+            `Job status set to Partial - found ${jobItemsCount} job items`,
+            { jobId, jobItemsCount }
+          );
+        } else {
+          // If no job items found, set status to Failed
+          await jobService.updateJobStatus(jobId, JobStatus.Failed);
+          await dualLogInfo("Job status set to Failed - no job items found", {
+            jobId,
+            jobItemsCount: 0,
+          });
+        }
+      } catch (statusError) {
+        await dualLogError(
+          "Error updating job status based on job items count:",
+          statusError,
+          { jobId }
+        );
+        // Fallback to Failed status if there's an error checking job items
+        try {
+          await jobService.updateJobStatus(jobId, JobStatus.Failed);
+        } catch (fallbackError) {
+          await dualLogError(
+            "Error setting fallback Failed status:",
+            fallbackError,
+            { jobId }
+          );
+        }
+      }
     }
 
     // Finalize logging with failed status
@@ -422,6 +526,49 @@ async function runScrapingWithRestart(
         if (jobId) {
           await progressManager.handleJobError(jobId, error);
         }
+
+        // Check job items count and set appropriate job status
+        if (jobId) {
+          try {
+            const jobItemsCount = await jobService.getJobItemsCount(jobId);
+
+            if (jobItemsCount > 0) {
+              // If job items found, set status to Partial
+              await jobService.updateJobStatus(jobId, JobStatus.Partial);
+              await dualLogInfo(
+                `Job status set to Partial - found ${jobItemsCount} job items`,
+                { jobId, jobItemsCount }
+              );
+            } else {
+              // If no job items found, set status to Failed
+              await jobService.updateJobStatus(jobId, JobStatus.Failed);
+              await dualLogInfo(
+                "Job status set to Failed - no job items found",
+                {
+                  jobId,
+                  jobItemsCount: 0,
+                }
+              );
+            }
+          } catch (statusError) {
+            await dualLogError(
+              "Error updating job status based on job items count:",
+              statusError,
+              { jobId }
+            );
+            // Fallback to Failed status if there's an error checking job items
+            try {
+              await jobService.updateJobStatus(jobId, JobStatus.Failed);
+            } catch (fallbackError) {
+              await dualLogError(
+                "Error setting fallback Failed status:",
+                fallbackError,
+                { jobId }
+              );
+            }
+          }
+        }
+
         throw error;
       }
     }
@@ -435,6 +582,50 @@ async function runScrapingWithRestart(
     if (jobId) {
       await progressManager.handleJobError(jobId, maxAttemptsError);
     }
+
+    // Check job items count and set appropriate job status for max attempts error
+    if (jobId) {
+      try {
+        const jobItemsCount = await jobService.getJobItemsCount(jobId);
+
+        if (jobItemsCount > 0) {
+          // If job items found, set status to Partial
+          await jobService.updateJobStatus(jobId, JobStatus.Partial);
+          await dualLogInfo(
+            `Job status set to Partial - found ${jobItemsCount} job items (max attempts exceeded)`,
+            { jobId, jobItemsCount, maxAttempts }
+          );
+        } else {
+          // If no job items found, set status to Failed
+          await jobService.updateJobStatus(jobId, JobStatus.Failed);
+          await dualLogInfo(
+            "Job status set to Failed - no job items found (max attempts exceeded)",
+            {
+              jobId,
+              jobItemsCount: 0,
+              maxAttempts,
+            }
+          );
+        }
+      } catch (statusError) {
+        await dualLogError(
+          "Error updating job status based on job items count:",
+          statusError,
+          { jobId }
+        );
+        // Fallback to Failed status if there's an error checking job items
+        try {
+          await jobService.updateJobStatus(jobId, JobStatus.Failed);
+        } catch (fallbackError) {
+          await dualLogError(
+            "Error setting fallback Failed status:",
+            fallbackError,
+            { jobId }
+          );
+        }
+      }
+    }
+
     throw maxAttemptsError;
   }
 

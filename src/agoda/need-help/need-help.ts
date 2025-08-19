@@ -1,6 +1,10 @@
 import fs from "fs";
 import path from "path";
 import { Page } from "puppeteer";
+import {
+  autoDetectCleanupParams,
+  cleanupFoldersOnError,
+} from "../../common/folder-cleanup.js";
 import { dualLogError, dualLogInfo } from "../../common/log-helper.js";
 import { progressManager } from "../../common/progress-manager.js";
 import { scrapingStateManager } from "../../common/scraping-state.js";
@@ -650,6 +654,43 @@ export async function automateNeedHelpProcess(
       }
     );
 
+    // Cleanup folders on Need Help error
+    try {
+      await dualLogInfo("Starting folder cleanup due to Need Help error", {
+        jobId,
+        agodaId,
+        propertyName,
+        timeSession: timeManager.getSessionInfo(),
+      });
+
+      // Try to auto-detect cleanup parameters if not provided
+      const cleanupParams = await autoDetectCleanupParams(jobId);
+      const finalAgodaId = agodaId || cleanupParams.agodaId;
+      const finalPropertyName = propertyName || cleanupParams.propertyName;
+
+      const cleanupResult = await cleanupFoldersOnError(
+        finalAgodaId,
+        finalPropertyName,
+        jobId
+      );
+
+      await dualLogInfo("Folder cleanup completed after Need Help error", {
+        jobId,
+        downloadsCleanedCount: cleanupResult.downloadsCleanedCount,
+        importCleanedCount: cleanupResult.importCleanedCount,
+        totalFilesProcessed: cleanupResult.totalFilesProcessed,
+        errors: cleanupResult.errors.length,
+        timeSession: timeManager.getSessionInfo(),
+      });
+    } catch (cleanupError: any) {
+      await dualLogError(
+        "Error during folder cleanup (continuing with error handling):",
+        cleanupError.message,
+        { jobId }
+      );
+      // Don't throw cleanup error - continue with original error handling
+    }
+
     // Update progress with error for Need Help process
     if (jobId) {
       await progressManager.updateJobProgress(
@@ -868,6 +909,46 @@ export async function automateNeedHelpWithCleanup(
       error.message,
       { jobId: options.jobId }
     );
+
+    // Emergency cleanup on complete failure
+    try {
+      await dualLogInfo(
+        "Starting emergency folder cleanup due to complete failure",
+        {
+          jobId: options.jobId,
+          timeSession: timeManager.getSessionInfo(),
+        }
+      );
+
+      // Try to auto-detect cleanup parameters if not provided
+      const cleanupParams = await autoDetectCleanupParams(options.jobId);
+      const finalAgodaId = options.agodaId || cleanupParams.agodaId;
+      const finalPropertyName =
+        options.propertyName || cleanupParams.propertyName;
+
+      const cleanupResult = await cleanupFoldersOnError(
+        finalAgodaId,
+        finalPropertyName,
+        options.jobId
+      );
+
+      await dualLogInfo("Emergency folder cleanup completed", {
+        jobId: options.jobId,
+        downloadsCleanedCount: cleanupResult.downloadsCleanedCount,
+        importCleanedCount: cleanupResult.importCleanedCount,
+        totalFilesProcessed: cleanupResult.totalFilesProcessed,
+        errors: cleanupResult.errors.length,
+        timeSession: timeManager.getSessionInfo(),
+      });
+    } catch (cleanupError: any) {
+      await dualLogError(
+        "Error during emergency folder cleanup:",
+        cleanupError.message,
+        { jobId: options.jobId }
+      );
+      // Don't throw cleanup error - continue with original error handling
+    }
+
     throw error;
   }
 }

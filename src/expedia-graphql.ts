@@ -17,6 +17,7 @@ import { timeManager } from "./common/time-manager.js";
 import { getNextDateFromCompleted } from "./date-split/helper.js";
 import login from "./login/login.js";
 import { CardInfo, PaymentInfo } from "./models/job-item.model.js";
+import { JobStatus } from "./models/job.model.js";
 import handleOtpVerification from "./otp-verification/otp-verification.js";
 import { CreateJobItemData, jobService } from "./services/job.service.js";
 
@@ -1199,6 +1200,45 @@ async function graphqlScraping(
         await progressManager.handleJobError(jobId, error);
       }
 
+      // Check job items count and set appropriate job status
+      if (jobId) {
+        try {
+          const jobItemsCount = await jobService.getJobItemsCount(jobId);
+
+          if (jobItemsCount > 0) {
+            // If job items found, set status to Partial
+            await jobService.updateJobStatus(jobId, JobStatus.Partial);
+            await dualLogInfo(
+              `Job status set to Partial - found ${jobItemsCount} job items`,
+              { jobId, jobItemsCount }
+            );
+          } else {
+            // If no job items found, set status to Failed
+            await jobService.updateJobStatus(jobId, JobStatus.Failed);
+            await dualLogInfo("Job status set to Failed - no job items found", {
+              jobId,
+              jobItemsCount: 0,
+            });
+          }
+        } catch (statusError) {
+          await dualLogError(
+            "Error updating job status based on job items count:",
+            statusError,
+            { jobId }
+          );
+          // Fallback to Failed status if there's an error checking job items
+          try {
+            await jobService.updateJobStatus(jobId, JobStatus.Failed);
+          } catch (fallbackError) {
+            await dualLogError(
+              "Error setting fallback Failed status:",
+              fallbackError,
+              { jobId }
+            );
+          }
+        }
+      }
+
       // Finalize logging with failed status
       if (jobId) {
         await finalizeJobLogging("failed");
@@ -1208,8 +1248,45 @@ async function graphqlScraping(
   } catch (error: any) {
     await dualLogError("Main function error:", error);
 
-    // Send email notification for outer main function error
+    // Check job items count and set appropriate job status
     if (jobId) {
+      try {
+        const jobItemsCount = await jobService.getJobItemsCount(jobId);
+
+        if (jobItemsCount > 0) {
+          // If job items found, set status to Partial
+          await jobService.updateJobStatus(jobId, JobStatus.Partial);
+          await dualLogInfo(
+            `Job status set to Partial - found ${jobItemsCount} job items`,
+            { jobId, jobItemsCount }
+          );
+        } else {
+          // If no job items found, set status to Failed
+          await jobService.updateJobStatus(jobId, JobStatus.Failed);
+          await dualLogInfo("Job status set to Failed - no job items found", {
+            jobId,
+            jobItemsCount: 0,
+          });
+        }
+      } catch (statusError) {
+        await dualLogError(
+          "Error updating job status based on job items count:",
+          statusError,
+          { jobId }
+        );
+        // Fallback to Failed status if there's an error checking job items
+        try {
+          await jobService.updateJobStatus(jobId, JobStatus.Failed);
+        } catch (fallbackError) {
+          await dualLogError(
+            "Error setting fallback Failed status:",
+            fallbackError,
+            { jobId }
+          );
+        }
+      }
+
+      // Send email notification for outer main function error
       try {
         await emailNotifier.notifyJobError(
           jobId,
