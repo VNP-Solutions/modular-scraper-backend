@@ -78,7 +78,7 @@ app.get("/", (req, res, next) => {
   try {
     res
       .status(200)
-      .json({ messge: "Connection established on time-gap3 branch" });
+      .json({ messge: "Connection established on graphql-agoda-thread branch" });
   } catch (err: any) {
     next(createError(err.status, err.message));
   }
