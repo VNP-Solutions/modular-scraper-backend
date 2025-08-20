@@ -14,7 +14,8 @@ import {
   shouldRetryBookingError, 
   getBookingErrorDescription 
 } from "../common/booking-error-types.js";
-import { dualLogError } from "../common/log-helper.js";
+import { dualLogError, dualLogInfo } from "../common/log-helper.js";
+import { delay } from "../common/delay.js";
 
 export class BookingScraper extends BaseScraper {
   private cookiesFile = 'booking-admin-cookies.json';
@@ -78,6 +79,8 @@ export class BookingScraper extends BaseScraper {
       await page.setViewport({ width: 2560, height: 1440 });
       await page.setDefaultNavigationTimeout(loadingTimeout);
       await page.setDefaultTimeout(selectorTimeout);
+
+      await this.generateLiveUrl(page);
 
       // Load saved cookies if they exist
       if (fs.existsSync(this.cookiesFile)) {
@@ -522,6 +525,8 @@ export class BookingScraper extends BaseScraper {
 
     if (!currentPage) return false;
 
+    await this.logInfo(`Current page: ${currentPage.url()}`);
+
     try {
       const pageContent = await currentPage.content();
       const hasCaptcha = CAPTCHA_PATTERNS.some(pattern => pattern.test(pageContent));
@@ -619,41 +624,66 @@ export class BookingScraper extends BaseScraper {
         );
         
         // Fallback to manual 2FA if automated fails
-        if (this.sessionUrl) {
-          await this.logInfo(`Manual 2FA can be completed in Browserless UI: ${this.sessionUrl}`);
-        }
+        // if (this.sessionUrl) {
+          // await this.logInfo(`Manual 2FA can be completed in Browserless UI: ${this.sessionUrl}`);
+          // await this.logInfo('Waiting for manual 2FA completion...');
+          // await this.delay(300000);
+          
+          // await this.logInfo('Manual 2FA timeout reached, continuing...');
+          // return true;
+          const cdp = await currentPage.createCDPSession();
+          await (cdp as any).send("Browserless.startRecording");
+          await this.logInfo("Recording started successfully");
+
+          await this.delay(2000);
+          try {
+            const { liveURL } = (await (cdp as any).send("Browserless.liveURL", {
+              timeout: 600_000, 
+            })) as { liveURL: string };
+            
+            this.sessionUrl = liveURL;
+            await this.logInfo("Live URL generated for 2FA solving:", { liveURL });
+  
+          } catch (liveUrlError) {
+            await this.logError("Failed to generate live URL:", liveUrlError);
+          }
+          
+          await this.delay(300000);
+          await this.logInfo('Manual 2FA timeout reached, continuing...');
+          return true
+        // }
 
         // Find OTP input field for manual entry
-        for (const selector of BOOKING_SELECTORS.tfaSelectors) {
-          try {
-            await currentPage.waitForSelector(selector, { timeout: 10000 });
-            await this.logInfo(`Found 2FA field for manual entry: ${selector}`);
+        // for (const selector of BOOKING_SELECTORS.tfaSelectors) {
+        //   try {
+        //     await currentPage.waitForSelector(selector, { timeout: 10000 });
+        //     await this.logInfo(`Found 2FA field for manual entry: ${selector}`);
             
-            const code = await this.prompt2FA(options?.timeout || 120000);
-            await currentPage.type(selector, code, { delay: 100 });
-            await currentPage.keyboard.press('Enter');
-            await this.logInfo('Manual 2FA code submitted');
+        //     const code = await this.prompt2FA(options?.timeout || 120000);
+        //     await currentPage.type(selector, code, { delay: 100 });
+        //     await currentPage.keyboard.press('Enter');
+        //     await this.logInfo('Manual 2FA code submitted');
             
-            await currentPage.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }).catch(() => {
-              this.logInfo('Navigation timeout after manual 2FA');
-            });
+        //     await currentPage.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }).catch(() => {
+        //       this.logInfo('Navigation timeout after manual 2FA');
+        //     });
             
-            return true;
-          } catch (e) {
-            // Try next selector
-            continue;
-          }
-        }
+        //     return true;
+        //   } catch (e) {
+        //     // Try next selector
+        //     continue;
+        //   }
+        // }
 
-        await dualLogError(
-          `[${new Date().toISOString()}] [booking] Both automated and manual 2FA methods failed`,
-          {
-            errorType: BookingErrorType.TWO_FA_ERROR,
-            phase: BookingScrapingPhase.LOGIN,
-            platform: 'booking'
-          }
-        );
-        return false;
+        // await dualLogError(
+        //   `[${new Date().toISOString()}] [booking] Both automated and manual 2FA methods failed`,
+        //   {
+        //     errorType: BookingErrorType.TWO_FA_ERROR,
+        //     phase: BookingScrapingPhase.LOGIN,
+        //     platform: 'booking'
+        //   }
+        // );
+        // return false;
       }
     } catch (error) {
       await dualLogError(
@@ -859,6 +889,7 @@ export class BookingScraper extends BaseScraper {
       });
 
       // Click the reservation link
+      await this.logInfo(`Click the reservation link`);
       await SelectorUtils.findAndClick(this.page, BOOKING_SELECTORS.reservations.item(reservationId));
 
       const newPage = await newPagePromise;
@@ -896,9 +927,11 @@ export class BookingScraper extends BaseScraper {
         await this.logInfo('Captcha not solved in new tab');
         return false;
       }
+
+      await this.delay(2000);
       
       try {
-        await newPage.waitForSelector(BOOKING_SELECTORS.reservations.reservationName, { timeout: 15000 });
+        await newPage.waitForSelector(BOOKING_SELECTORS.reservations.reservationName, { timeout: 60000 });
         this.logInfo('Reservation detail page loaded successfully.');
       } catch (error) {
         await dualLogError(
@@ -1278,6 +1311,45 @@ export class BookingScraper extends BaseScraper {
     return this.page;
   }
 
+  /**
+   * Generate a live URL for the current page context
+   * This method regenerates the live URL to ensure it points to the current active page
+   */
+  async generateLiveUrl(page: Page): Promise<string | null> {
+    if (!page) {
+      await dualLogError("Cannot generate live URL: no page available");
+      return null;
+    }
+
+    try {
+      const cdp = await page.createCDPSession();
+      
+      // Wait a bit before generating live URL
+      await this.delay(2000);
+
+      // Generate live URL for user interaction
+      const liveUrlResponse = (await (cdp as any).send("Browserless.liveURL", {
+        timeout: 600_000,
+      })) as { liveURL: string };
+      
+      const liveURL = liveUrlResponse.liveURL;
+      
+      await dualLogInfo("Live URL generated successfully", { 
+        liveURL,
+        currentPageUrl: page.url() 
+      });
+      
+      return liveURL;
+    } catch (error: any) {
+      await dualLogError("Error generating live URL:", error, {
+        platform: 'booking',
+        action: 'generate_live_url',
+        currentPageUrl: page.url()
+      });
+      return null;
+    }
+  }
+
   private async createBrowserlessSession(): Promise<any> {
     try {
       await this.logInfo('Creating Browserless session with UI access');
@@ -1548,15 +1620,27 @@ export class BookingScraper extends BaseScraper {
         output: process.stdout
       });
       
+      this.logInfo('Manual 2FA verification required');
+      this.logInfo('Check support email for verification code');
+      this.logInfo('Timeout: ' + Math.floor(timeout / 1000) + ' seconds');
+
       const timer = setTimeout(() => {
         rl.close();
-        reject(new Error('2FA timeout'));
+        reject(new Error('2FA timeout - no code entered within ' + Math.floor(timeout / 1000) + ' seconds'));
       }, timeout);
       
       rl.question('Enter 2FA code (6 digits): ', (code) => {
         clearTimeout(timer);
         rl.close();
-        resolve(code);
+        
+        if (!/^\d{6}$/.test(code.trim())) {
+          console.log('Invalid code format. Please enter exactly 6 digits.');
+          reject(new Error('Invalid 2FA code format'));
+          return;
+        }
+        
+        console.log('✅ Code accepted, submitting...');
+        resolve(code.trim());
       });
     });
   }
@@ -1932,12 +2016,16 @@ export class BookingScraper extends BaseScraper {
       
       // I do this workaround in order to avoid captcha and 2fa
       await this.navigateToMenuSection('finance', 'vccs_management', 'vccs_management');
+      await delay(2000);
       await this.clickViewAllVccsToCharge();
 
       // Wait for the page to load
-      await this.page.waitForNavigation({ 
-        waitUntil: 'networkidle2', 
-        timeout: 30000 
+      // await this.page.waitForNavigation({ 
+      //   waitUntil: 'networkidle2', 
+      //   timeout: 30000 
+      // });
+      await this.page.waitForSelector(BOOKING_SELECTORS.vccs.table, {
+        timeout: 30000
       });
       
       // Listen for new page creation for card details view
@@ -1958,6 +2046,8 @@ export class BookingScraper extends BaseScraper {
 
       const newPage = await newPagePromise;
       this.page = newPage; // switch page 
+
+      // const currentLiveUrl = await this.generateLiveUrl();
       
       // Check and handle login on the new page
       const needsLogin = await this.checkIfLoginNeeded(newPage);

@@ -281,7 +281,6 @@ async function handleBookingOtpVerification(
 
   } catch (error) {
     await dualLogError("Error in handleBookingOtpVerification:", error);
-    await closeBrowserOnError(browser);
     throw error;
   }
 }
@@ -298,7 +297,7 @@ async function selectCorrectPhoneNumber(page: Page /* , jobId?: string */): Prom
     
     // Check if we're on the phone selection page and find the correct phone
     const phoneSelected = await page.evaluate((ourContact) => {
-      dualLogInfo('Starting phone selection process');
+      console.log('Starting phone selection process');
       
       try {
         // Simple inline validation to avoid any function name conflicts

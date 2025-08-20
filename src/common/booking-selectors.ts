@@ -50,7 +50,7 @@ export const BOOKING_SELECTORS = {
   },
   vccs: {
     vccsToChargeLink: 'a[href*="route=vccs_to_charge"]',
-    table: 'pay-hub__table',
+    table: '.pay-hub__table',
     viewCardDetailsLink: 'a.pay-hub__view_cc_link',
   },
   pagination: {
@@ -72,7 +72,9 @@ export const BOOKING_SELECTORS = {
     closeCardDetails: ['#close_button', '//button[text()="Close"]'],
     item: (reservationId: string) => [
       `a[href*="res_id=${reservationId}"]`,
-      `a[href*="res_id=${reservationId}"]:contains("${reservationId}")`
+      `a[href*="res_id=${reservationId}"][target="_blank"]`,
+      `a.bui-link--primary[href*="res_id=${reservationId}"]`,
+      `a[href*="res_id=${reservationId}"]`
     ],
   },
   property: {
