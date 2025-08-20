@@ -525,8 +525,6 @@ export class BookingScraper extends BaseScraper {
 
     if (!currentPage) return false;
 
-    await this.logInfo(`Current page: ${currentPage.url()}`);
-
     try {
       const pageContent = await currentPage.content();
       const hasCaptcha = CAPTCHA_PATTERNS.some(pattern => pattern.test(pageContent));
@@ -539,13 +537,18 @@ export class BookingScraper extends BaseScraper {
       await this.logInfo('Captcha detected');
       await this.takeScreenshot('booking-captcha.png');
 
+      
+      // wait fo page
+      await this.delay(20000);
+      
+
       // Start recording and generate live URL for captcha solving
       const cdp = await currentPage.createCDPSession();
       await (cdp as any).send("Browserless.startRecording");
       await this.logInfo("Recording started successfully");
 
       await this.delay(2000);
-
+      await this.logInfo(`Current page: ${currentPage.url()}`);
       try {
         /* TO DO - check with their documentation/support why this can't be increased. 
           I receive "Couldn't establish a secure connection to the server." when
@@ -556,7 +559,7 @@ export class BookingScraper extends BaseScraper {
         })) as { liveURL: string };
         
         this.sessionUrl = liveURL;
-        await this.logInfo("Live URL generated for captcha solving:", { liveURL });
+        await this.logInfo("Live URL generated for captcha solving:", { liveURL, currentPage: currentPage.url() });
 
       } catch (liveUrlError) {
         await this.logError("Failed to generate live URL:", liveUrlError);
@@ -892,8 +895,10 @@ export class BookingScraper extends BaseScraper {
       await this.logInfo(`Click the reservation link`);
       await SelectorUtils.findAndClick(this.page, BOOKING_SELECTORS.reservations.item(reservationId));
 
+      await this.logInfo(`Waiting for new tab loading`);
       const newPage = await newPagePromise;
-      
+      await this.logInfo(`New tab loaded`);
+
       // Check on captcha
       let captchaHandled = await this.handleCaptcha({
         type: 'browserless_ui',
