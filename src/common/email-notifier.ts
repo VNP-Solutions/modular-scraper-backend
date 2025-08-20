@@ -271,7 +271,7 @@ export class EmailNotifier {
       errorDetailsSection = `
         ${data.errorDetails.sessionUrl ? `
           <tr>
-            <th>Session URL</th>
+            <th style="width: 120px;">Session URL</th>
             <td style="word-break: break-all;">
               <a href="${data.errorDetails.sessionUrl}" target="_blank" style="text-decoration: none;">
                 ${data.errorDetails.sessionUrl}
