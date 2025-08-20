@@ -29,6 +29,10 @@ export class BookingScraper extends BaseScraper {
     this.browserlessToken = process.env.BROWSERLESS_TOKEN || '2SXlnLjeZpwR2tV6ab1698bfe680a3959c2c681f06939ee3b';
   }
 
+  public setPage(page: Page): void {
+    this.page = page;
+  }
+
   async setupBrowser(jobId?: string): Promise<{ browser: Browser; page: Page }> {
     try {
       await this.logInfo('Setting up Booking.com browser with Browserless session');
