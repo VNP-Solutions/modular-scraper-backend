@@ -1,4 +1,5 @@
 import mongoose, { Document, Schema, Types } from "mongoose";
+import { IPropertyCredentials } from "./Property-credentials";
 
 // Enum for booking trust status
 export enum BookingTrustedStatus {
@@ -30,6 +31,8 @@ export interface IProperty extends Document {
   // Booking trust fields
   booking_trusted_status?: BookingTrustedStatus;
   booking_last_login?: Date;
+
+  credentials?: IPropertyCredentials[];
 }
 
 function isValidId(value: string): boolean {
@@ -135,6 +138,8 @@ const PropertySchema = new Schema<IProperty>(
   {
     timestamps: true,
     collection: "properties",
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true }
   }
 );
 
@@ -145,5 +150,13 @@ PropertySchema.index({ property_name: 1 });
 // Booking trust scheduling indexes
 PropertySchema.index({ booking_trusted_status: 1, booking_last_login: 1 });
 PropertySchema.index({ booking_id: 1, booking_trusted_status: 1 });
+
+// Virtual for credentials
+PropertySchema.virtual('credentials', {
+  ref: 'PropertyCredentials',
+  localField: '_id',
+  foreignField: 'property_id',
+  justOne: false
+});
 
 export const Property = mongoose.model<IProperty>("Property", PropertySchema);

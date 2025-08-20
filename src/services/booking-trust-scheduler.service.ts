@@ -1,9 +1,10 @@
 import { Property, IProperty, BookingTrustedStatus } from "../models/property.model.js";
-import { BookingScraper } from "../scrapers/booking-scraper.js";
+import { BookingScraper, ScraperContext } from "../scrapers/booking-scraper.js";
 import { dualLogInfo, dualLogError } from "../common/log-helper.js";
 import { initializeJobLogging, finalizeJobLogging } from "../common/log-helper.js";
 import { BOOKING_SELECTORS } from "../common/booking-selectors.js";
 import { BookingErrorType, BookingScrapingPhase } from "../common/booking-error-types.js";
+import { decryptPassword } from "../common/encription.js";
 
 interface TrustVerificationResult {
   propertyId: string;
@@ -79,6 +80,12 @@ export class BookingTrustSchedulerService {
             ],
           },
         ],
+      }).populate({
+        path: 'credentials',
+        match: {
+          bookingUsername: { $exists: true, $ne: null },
+          bookingPassword: { $exists: true, $ne: null }
+        }
       });
 
       await dualLogInfo(
@@ -121,17 +128,22 @@ export class BookingTrustSchedulerService {
       initializeJobLogging(`trust-verify-${propertyId}`);
 
       // Create booking scraper instance
-      const bookingScraper = new BookingScraper();
-
-      const { page } = await bookingScraper.setupBrowser();
-      bookingScraper.setPage(page)
+      const bookingScraper = new BookingScraper(ScraperContext.TRUST_VERIFICATION);
+      
+      const { browser, page } = await bookingScraper.setupBrowser();
+      bookingScraper.setBrowserData(page, browser)
 
       // Attempt booking login
       try {
+        const credentials = property.credentials?.[0];
+        const password = credentials?.bookingPassword ? decryptPassword(credentials.bookingPassword) : undefined;
+
         await bookingScraper.login({
-          email: property.user_email!,
-          password: property.user_password!,
-        });
+            email: credentials?.bookingUsername!,
+            password: password!,
+          }, 
+          property.booking_id
+        );
 
         // Navigate to VCCS management page to verify card details access
         await dualLogInfo(`Navigating to VCCS management for property ${propertyId}`);
