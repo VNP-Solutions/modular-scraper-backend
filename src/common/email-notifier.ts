@@ -103,7 +103,8 @@ export class EmailNotifier {
     jobId: string,
     errorMessage: string,
     errorDetails?: any,
-    additionalData?: Partial<EmailNotificationData>
+    additionalData?: Partial<EmailNotificationData>,
+    captchaRecipients?: string[]
   ): Promise<void> {
     try {
       if (!this.transporter) {
@@ -124,7 +125,15 @@ export class EmailNotifier {
       }
 
       const watcherEmails = job.watcher_emails || [];
-      if (watcherEmails.length === 0) {
+
+      const captchaEmails = captchaRecipients || [];
+
+      // avoid duplicates
+      const recipients = Array.from(
+        new Set([...watcherEmails, ...captchaEmails])
+      );
+
+      if (recipients.length === 0) {
         await dualLogInfo(
           `No watcher emails configured for job ${jobId}. Skipping notification.`,
           { jobId }
@@ -167,14 +176,14 @@ export class EmailNotifier {
       };
 
       // Send email to all watcher emails
-      await this.sendErrorEmail(watcherEmails, notificationData);
+      await this.sendErrorEmail(recipients, notificationData);
 
       await dualLogInfo(
         `Error notification sent successfully for job ${jobId}`,
         {
           jobId,
-          recipientCount: watcherEmails.length,
-          recipients: watcherEmails,
+          recipientCount: recipients.length,
+          recipients: recipients,
         }
       );
     } catch (error) {
@@ -257,6 +266,44 @@ export class EmailNotifier {
       });
     };
 
+    let errorDetailsSection = '';
+    if (data.errorDetails) {
+      errorDetailsSection = `
+        ${data.errorDetails.sessionUrl ? `
+          <tr>
+            <th style="width: 120px;">Session URL</th>
+            <td style="word-break: break-all;">
+              <a href="${data.errorDetails.sessionUrl}" target="_blank" style="text-decoration: none;">
+                ${data.errorDetails.sessionUrl}
+              </a>
+            </td>
+          </tr>
+        ` : ''}
+        ${data.errorDetails.currentUrl ? `
+          <tr>
+            <th>Current URL</th>
+            <td style="word-break: break-all;">
+              <a href="${data.errorDetails.currentUrl}" target="_blank" style="text-decoration: none;">
+              ${data.errorDetails.currentUrl}
+            </a>
+            </td>
+          </tr>
+        ` : ''}
+        ${data.errorDetails.stage ? `
+          <tr>
+            <th>Stage</th>
+            <td>${data.errorDetails.stage}</td>
+          </tr>
+        ` : ''}
+        ${data.errorDetails.instructions ? `
+          <tr>
+            <th>Instructions</th>
+            <td>${data.errorDetails.instructions}</td>
+          </tr>
+        ` : ''}
+      `;
+    }
+
     return `
     <!DOCTYPE html>
     <html>
@@ -284,8 +331,8 @@ export class EmailNotifier {
                     <h3>Error Details</h3>
                     <p><strong>Message:</strong> ${data.errorMessage}</p>
                 </div>
-                
                 <table class="info-table">
+                    ${errorDetailsSection}
                     <tr><th>Job ID</th><td>${data.jobId}</td></tr>
                     <tr><th>Property</th><td>${
                       data.propertyName || "N/A"
@@ -294,16 +341,18 @@ export class EmailNotifier {
                       data.timestamp
                     )}</td></tr>
                 </table>
-
-                <div style="background-color: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; border-radius: 5px; margin: 15px 0;">
-                    <h4>🔧 Next Steps</h4>
-                    <ul>
-                        <li>Go to website, and check the job status.</li>
-                        <li>Update the Job status to Pending, and change start date and end date also</li>
-                        <li>run the job again</li>
-                        <li>If the issue persists, please contact the development team.</li>
-                    </ul>
-                </div>
+                ${!data.errorMessage.includes("CAPTCHA") ?
+                  `<div style="background-color: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; border-radius: 5px; margin: 15px 0;">
+                      <h4>🔧 Next Steps</h4>
+                      <ul>
+                          <li>Go to website, and check the job status.</li>
+                          <li>Update the Job status to Pending, and change start date and end date also</li>
+                          <li>run the job again</li>
+                          <li>If the issue persists, please contact the development team.</li>
+                      </ul>
+                  </div>`
+                  : ""
+                }
             </div>
             <div class="footer">
                 <p>This is an automated notification from the Modular Scraper System.</p>

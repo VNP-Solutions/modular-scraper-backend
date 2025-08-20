@@ -179,11 +179,14 @@ const options: swaggerJsdoc.Options = {
     paths: loadYamlDocs(),
   },
   apis: [
-    "./src/app/*.ts",
+    "./src/app/app.ts",
     "./src/routes/**/*.ts", // Include all route files for API documentation
   ],
 };
 
-const specs = swaggerJsdoc(options);
+const specs = swaggerJsdoc(options) as any;
+
+// Debug: Log the generated paths
+console.log('Swagger paths loaded:', Object.keys(specs.paths || {}));
 
 export { specs, swaggerUi };

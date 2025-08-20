@@ -149,6 +149,6 @@ Thumbs.db
 tmp/
 temp/
 
-# Docker files (per code review feedback)
-Dockerfile*
-docker-compose*.yml
+# Docker files (per code review feedback) - REMOVED: We need Dockerfiles in monorepo
+# Dockerfile*
+# docker-compose*.yml

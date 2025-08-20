@@ -10,6 +10,7 @@ import { specs, swaggerUi } from "../config/swagger.js";
 import { getAccess, getOauth2Callback } from "../get-access/access.js";
 import { Job, JobStatus } from "../models/job.model.js";
 import { jobService } from "../services/job.service.js";
+import { propertyCredentialsService } from "../services/job-credentials.service.js";
 import { bookingTrustScheduler } from "../services/booking-trust-scheduler.service.js";
 import { bookingTrustCron } from "../services/booking-trust-cron.service.js";
 import { emailNotifier } from "../common/email-notifier.js";
@@ -579,6 +580,63 @@ app.post("/api/expedia/reservation-run-job", (async (
   }
 }) as any);
 
+/**
+ * @swagger
+ * /api/booking/run-job:
+ *   post:
+ *     tags:
+ *       - Booking Jobs
+ *     summary: Start booking scraping job
+ *     description: Start a booking scraping job for the specified date range. Portfolio and property information is retrieved from the job record.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - jobId
+ *               - startDate
+ *               - endDate
+ *             properties:
+ *               jobId:
+ *                 type: string
+ *                 description: MongoDB ObjectId of the job to run
+ *                 example: "507f1f77bcf86cd799439011"
+ *               startDate:
+ *                 type: string
+ *                 description: Start date for booking scraping (MM/DD/YYYY format)
+ *                 example: "01/01/2024"
+ *               endDate:
+ *                 type: string
+ *                 description: End date for booking scraping (MM/DD/YYYY format)
+ *                 example: "01/31/2024"
+ *     responses:
+ *       200:
+ *         description: Booking scraping job completed successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 200
+ *                 message:
+ *                   type: string
+ *                   example: Booking scraping job started successfully
+ *                 jobId:
+ *                   type: string
+ *                   example: "507f1f77bcf86cd799439011"
+ *       400:
+ *         description: Missing required parameters
+ *       404:
+ *         description: Job not found
+ *       409:
+ *         description: Job not in runnable state
+ *       500:
+ *         description: Error processing booking job
+ */
 app.post("/api/booking/run-job", (async (
   req: express.Request,
   res: express.Response
@@ -612,9 +670,10 @@ app.post("/api/booking/run-job", (async (
       });
     }
 
-    // 2. Get booking_id, credentials, and job details from job's property
+    // 2. Get booking_id from job's property
     console.log(`Getting booking_id and job details for booking job ${jobId}...`);
     const jobData = await jobService.getBookingIdFromJob(jobId);
+    const bookingCredentials = await propertyCredentialsService.getBookingCredentialsFromJob(jobId);
 
     if (!jobData || !jobData.bookingId) {
       return res.status(400).json({
@@ -623,21 +682,22 @@ app.post("/api/booking/run-job", (async (
       });
     }
 
-    if (!jobData.user_email || !jobData.user_password) {
+    if (!bookingCredentials?.bookingUsername || !bookingCredentials?.bookingPassword) {
       return res.status(400).json({
         status: 400,
-        message: `Cannot retrieve valid user_email or user_password for job ${jobId}. Property may not have user_email or user_password assigned.`,
+        message: `Cannot retrieve valid bookingUsername or bookingPassword for job ${jobId}. Property may not have booking credentials assigned.`,
       });
     }
 
-    if (!jobData.portfolioId || !jobData.propertyId) {
+    if (!jobData.propertyId) {
       return res.status(400).json({
         status: 400,
         message: `Cannot retrieve valid portfolioId or propertyId for job ${jobId}. Job may be missing required references.`,
       });
     }
 
-    const { bookingId, user_email, user_password, portfolioId, propertyId } = jobData;
+    const { bookingId, portfolioId, propertyId } = jobData;
+    const { bookingUsername, bookingPassword } = bookingCredentials;
 
     console.log(`Using booking_id: ${bookingId} for booking scraping`);
 
@@ -650,8 +710,8 @@ app.post("/api/booking/run-job", (async (
       startDate,
       endDate,
       bookingId,
-      user_email,
-      user_password,
+      user_email: bookingUsername,
+      user_password: bookingPassword,
     };
 
     // 4. Execute job in worker thread
@@ -710,6 +770,52 @@ app.post("/api/booking/run-job", (async (
   }
 }) as any);
 
+/**
+ * @swagger
+ * /api/booking/stop-job:
+ *   post:
+ *     tags:
+ *       - Booking Jobs
+ *     summary: Stop a running booking job
+ *     description: Stop a currently running booking scraping job
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - jobId
+ *             properties:
+ *               jobId:
+ *                 type: string
+ *                 description: The ID of the job to stop
+ *                 example: "507f1f77bcf86cd799439011"
+ *     responses:
+ *       200:
+ *         description: Job stopped successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 200
+ *                 message:
+ *                   type: string
+ *                   example: Job stopped successfully
+ *                 jobId:
+ *                   type: string
+ *       400:
+ *         description: Job ID is required
+ *       404:
+ *         description: Job not found
+ *       409:
+ *         description: Job is not running
+ *       500:
+ *         description: Error stopping job
+ */
 app.post("/api/booking/stop-job", (async (
   req: express.Request,
   res: express.Response
@@ -768,6 +874,60 @@ app.post("/api/booking/stop-job", (async (
   }
 }) as any);
 
+/**
+ * @swagger
+ * /api/booking/rerun-failed-job:
+ *   post:
+ *     tags:
+ *       - Booking Jobs
+ *     summary: Rerun a failed booking job
+ *     description: Rerun a previously failed booking scraping job with the same parameters
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - jobId
+ *               - startDate
+ *               - endDate
+ *             properties:
+ *               jobId:
+ *                 type: string
+ *                 description: MongoDB ObjectId of the failed job to rerun
+ *                 example: "507f1f77bcf86cd799439011"
+ *               startDate:
+ *                 type: string
+ *                 description: Start date for booking scraping (MM/DD/YYYY format)
+ *                 example: "01/01/2024"
+ *               endDate:
+ *                 type: string
+ *                 description: End date for booking scraping (MM/DD/YYYY format)
+ *                 example: "01/31/2024"
+ *     responses:
+ *       200:
+ *         description: Failed job rerun successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 200
+ *                 message:
+ *                   type: string
+ *                   example: Booking job rerun successfully
+ *                 jobId:
+ *                   type: string
+ *       400:
+ *         description: Missing required parameters or job not in failed state
+ *       404:
+ *         description: Job not found
+ *       500:
+ *         description: Error rerunning job
+ */
 app.post("/api/booking/rerun-failed-job", (async (
   req: express.Request,
   res: express.Response
@@ -821,6 +981,7 @@ app.post("/api/booking/rerun-failed-job", (async (
     // 3. Get booking_id and credentials from job's property
     console.log(`Getting booking_id for failed job rerun ${jobId}...`);
     const jobData = await jobService.getBookingIdFromJob(jobId);
+    const bookingCredentials = await propertyCredentialsService.getBookingCredentialsFromJob(jobId);
 
     if (!jobData || !jobData.bookingId) {
       return res.status(400).json({
@@ -829,21 +990,22 @@ app.post("/api/booking/rerun-failed-job", (async (
       });
     }
 
-    if (!jobData.user_email || !jobData.user_password) {
+    if (!bookingCredentials?.bookingUsername || !bookingCredentials?.bookingPassword) {
       return res.status(400).json({
         status: 400,
-        message: `Cannot retrieve valid user_email or user_password for job ${jobId}. Property may not have user_email or user_password assigned.`,
+        message: `Cannot retrieve valid booking credentials for job ${jobId}. Property may not have booking username or password assigned.`,
       });
     }
 
-    if (!jobData.portfolioId || !jobData.propertyId) {
+    if (!jobData.propertyId) {
       return res.status(400).json({
         status: 400,
         message: `Cannot retrieve valid portfolioId or propertyId for job ${jobId}. Job may be missing required references.`,
       });
     }
 
-    const { bookingId, user_email, user_password, portfolioId, propertyId } = jobData;
+    const { bookingId, portfolioId, propertyId } = jobData;
+    const { bookingUsername, bookingPassword } = bookingCredentials;
 
     console.log(
       `Rerunning failed booking job ${jobId} (attempt ${updatedJob.retries_attempted}/${updatedJob.max_retries}) with booking_id: ${bookingId}`
@@ -858,8 +1020,8 @@ app.post("/api/booking/rerun-failed-job", (async (
       startDate,
       endDate,
       bookingId,
-      user_email,
-      user_password,
+      user_email: bookingUsername,
+      user_password: bookingPassword,
       originalStatus,
     };
 
@@ -1134,6 +1296,32 @@ app.get(
 // Booking Trust Scheduler Endpoints
 
 // API to run booking trust scheduler manually
+/**
+ * @swagger
+ * /api/booking/trust-scheduler/run:
+ *   post:
+ *     tags:
+ *       - Booking Trust Scheduler
+ *     summary: Run trust verification scheduler
+ *     description: Manually trigger the booking trust verification scheduler to process eligible properties
+ *     responses:
+ *       200:
+ *         description: Trust scheduler started successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *                   example: Trust scheduler started
+ *       409:
+ *         description: Scheduler already running
+ *       500:
+ *         description: Error starting scheduler
+ */
 app.post("/api/booking/trust-scheduler/run", (async (
   req: express.Request,
   res: express.Response
@@ -1157,6 +1345,40 @@ app.post("/api/booking/trust-scheduler/run", (async (
 }) as any);
 
 // API to get booking trust scheduler status
+/**
+ * @swagger
+ * /api/booking/trust-scheduler/status:
+ *   get:
+ *     tags:
+ *       - Booking Trust Scheduler
+ *     summary: Get trust scheduler status
+ *     description: Get the current status of the booking trust verification scheduler
+ *     responses:
+ *       200:
+ *         description: Scheduler status retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 isRunning:
+ *                   type: boolean
+ *                 stats:
+ *                   type: object
+ *                   properties:
+ *                     totalProperties:
+ *                       type: integer
+ *                     verifiedCount:
+ *                       type: integer
+ *                     remainingCount:
+ *                       type: integer
+ *                     successCount:
+ *                       type: integer
+ *                     failureCount:
+ *                       type: integer
+ *       500:
+ *         description: Error getting scheduler status
+ */
 app.get("/api/booking/trust-scheduler/status", (
   req: express.Request,
   res: express.Response
@@ -1180,6 +1402,42 @@ app.get("/api/booking/trust-scheduler/status", (
 });
 
 // API to manually verify a specific property's trust status
+/**
+ * @swagger
+ * /api/booking/trust-scheduler/verify/{propertyId}:
+ *   post:
+ *     tags:
+ *       - Booking Trust Scheduler
+ *     summary: Verify single property
+ *     description: Manually trigger trust verification for a specific property
+ *     parameters:
+ *       - in: path
+ *         name: propertyId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: The property ID to verify
+ *     responses:
+ *       200:
+ *         description: Property verification completed
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 propertyId:
+ *                   type: string
+ *                 result:
+ *                   type: object
+ *       400:
+ *         description: Invalid property ID
+ *       404:
+ *         description: Property not found
+ *       500:
+ *         description: Error verifying property
+ */
 app.post("/api/booking/trust-scheduler/verify/:propertyId", (async (
   req: express.Request,
   res: express.Response
@@ -1212,6 +1470,46 @@ app.post("/api/booking/trust-scheduler/verify/:propertyId", (async (
 }) as any);
 
 // API to get properties eligible for trust verification
+/**
+ * @swagger
+ * /api/booking/trust-scheduler/eligible-properties:
+ *   get:
+ *     tags:
+ *       - Booking Trust Scheduler
+ *     summary: Get eligible properties
+ *     description: Get list of properties eligible for trust verification (having booking credentials)
+ *     responses:
+ *       200:
+ *         description: Eligible properties retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 count:
+ *                   type: integer
+ *                 properties:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       _id:
+ *                         type: string
+ *                       property_name:
+ *                         type: string
+ *                       booking_id:
+ *                         type: string
+ *                       booking_trusted_status:
+ *                         type: string
+ *                         enum: [not_trusted, trusted]
+ *                       booking_last_login:
+ *                         type: string
+ *                         format: date-time
+ *       500:
+ *         description: Error getting eligible properties
+ */
 app.get("/api/booking/trust-scheduler/eligible-properties", (async (
   req: express.Request,
   res: express.Response
@@ -1246,6 +1544,40 @@ app.get("/api/booking/trust-scheduler/eligible-properties", (async (
 // Booking Trust Cron Management Endpoints
 
 // API to get booking trust cron status
+/**
+ * @swagger
+ * /api/booking/trust-scheduler/cron/status:
+ *   get:
+ *     tags:
+ *       - Booking Trust Scheduler
+ *     summary: Get cron job status
+ *     description: Get the status of the booking trust verification cron job
+ *     responses:
+ *       200:
+ *         description: Cron status retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 enabled:
+ *                   type: boolean
+ *                 isRunning:
+ *                   type: boolean
+ *                 lastRun:
+ *                   type: string
+ *                   format: date-time
+ *                   nullable: true
+ *                 nextRun:
+ *                   type: string
+ *                   format: date-time
+ *                   nullable: true
+ *                 currentSchedule:
+ *                   type: string
+ *                   example: "0 3 * * *"
+ *       500:
+ *         description: Error getting cron status
+ */
 app.get("/api/booking/trust-scheduler/cron/status", (
   req: express.Request,
   res: express.Response
@@ -1273,6 +1605,32 @@ app.get("/api/booking/trust-scheduler/cron/status", (
 });
 
 // API to manually trigger cron verification (for testing)
+/**
+ * @swagger
+ * /api/booking/trust-scheduler/cron/trigger:
+ *   post:
+ *     tags:
+ *       - Booking Trust Scheduler
+ *     summary: Trigger cron job manually
+ *     description: Manually trigger the booking trust verification cron job
+ *     responses:
+ *       200:
+ *         description: Cron job triggered successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *                   example: Cron job triggered successfully
+ *       409:
+ *         description: Cron job already running
+ *       500:
+ *         description: Error triggering cron job
+ */
 app.post("/api/booking/trust-scheduler/cron/trigger", (async (
   req: express.Request,
   res: express.Response
