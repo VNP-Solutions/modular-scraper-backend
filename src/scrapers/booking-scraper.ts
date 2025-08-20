@@ -1585,34 +1585,22 @@ export class BookingScraper extends BaseScraper {
       // Get email recipients from environment variable
       const recipients = process.env.CAPTCHA_RECIPIENTS 
         ? process.env.CAPTCHA_RECIPIENTS.split(',').map(email => email.trim())
-        : [
-            process.env.CAPTCHA_NOTIFICATION_EMAIL || 'admin@vnpsolutions.com',
-            'developer@vnpsolutions.com'  // Fallback default
-          ];
+        : [process.env.EMAIL_USER || 'ITSUPPORT@vnpsolutions.com'];
       
-      const captchaData = {
-        jobId: this.jobId || 'unknown-job',
-        jobName: 'Booking.com Scraping Job',
-        propertyName: this.currentPropertyName || 'Unknown Property',
-        expediaId: this.currentPropertyId || '',
-        errorMessage: 'CAPTCHA detected during Booking.com login - Manual intervention required',
-        errorDetails: {
+      await emailNotifier.notifyJobError(
+        this.jobId || 'Unknown job',
+        'CAPTCHA detected during Booking.com login - Manual intervention required',
+        {
           sessionUrl: sessionUrl,
           currentUrl: this.page?.url() || 'Unknown',
           timestamp: new Date().toISOString(),
           instructions: 'Please visit the session URL to solve the CAPTCHA. The system will automatically detect when solved.',
+          stage: 'Login - CAPTCHA Challenge'
         },
-        timestamp: new Date(),
-        stage: 'Login - CAPTCHA Challenge',
-      };
-
-      await emailNotifier.sendErrorEmail(recipients, captchaData);
+        undefined,
+        recipients
+      );
       
-      await this.logInfo('CAPTCHA notification email sent', { 
-        recipients, 
-        sessionUrl, 
-        jobId: this.jobId 
-      });
     } catch (error) {
       await this.logError('Failed to send CAPTCHA notification email:', error);
     }
