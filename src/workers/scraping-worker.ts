@@ -514,6 +514,7 @@ class ScrapingWorker {
     let finalBookingId = bookingId;
     let finalUserEmail = user_email;
     let finalUserPassword = user_password;
+    let propertyName = 'Unknown Property';
 
     if (!finalBookingId || !finalUserEmail || !finalUserPassword) {
       console.log(`Getting job data for booking job ${jobId}...`);
@@ -533,6 +534,7 @@ class ScrapingWorker {
       }
 
       finalBookingId = jobData.bookingId;
+      propertyName = jobData.propertyName || 'Unknown Property';
       finalUserEmail = bookingCredentials.bookingUsername;
       finalUserPassword = bookingCredentials.bookingPassword;
     }
@@ -568,6 +570,8 @@ class ScrapingWorker {
         platform: 'booking',
         propertyId: finalBookingId,
         propertyIdForDb: propertyId,
+        propertyName: propertyName,
+        bookingId: finalBookingId,
         startDate,
         endDate,
         jobId,

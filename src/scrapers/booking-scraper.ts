@@ -29,6 +29,18 @@ export class BookingScraper extends BaseScraper {
     this.browserlessToken = process.env.BROWSERLESS_TOKEN || '2SXlnLjeZpwR2tV6ab1698bfe680a3959c2c681f06939ee3b';
   }
 
+  /**
+   * Set property information for CAPTCHA emails and logging
+   */
+  setPropertyInfo(propertyId: string, propertyName: string, bookingId?: string): void {
+    this.currentPropertyId = propertyId;
+    this.currentPropertyName = propertyName;
+    if (bookingId) {
+      this.currentPropertyId = bookingId; // Use booking ID as the property ID for Booking platform
+    }
+    this.logInfo(`Property info set: ${propertyName} (ID: ${propertyId}, Booking ID: ${bookingId || 'N/A'})`);
+  }
+
   async setupBrowser(jobId?: string): Promise<{ browser: Browser; page: Page }> {
     try {
       await this.logInfo('Setting up Booking.com browser with Browserless session');
@@ -80,7 +92,11 @@ export class BookingScraper extends BaseScraper {
       await page.setDefaultNavigationTimeout(loadingTimeout);
       await page.setDefaultTimeout(selectorTimeout);
 
-      await this.generateLiveUrl(page);
+      const liveUrl = await this.generateLiveUrl(page);
+      if (liveUrl) {
+        this.sessionUrl = liveUrl;
+        await this.logInfo(`Session URL stored for CAPTCHA handling: ${liveUrl}`);
+      }
 
       // Load saved cookies if they exist
       if (fs.existsSync(this.cookiesFile)) {

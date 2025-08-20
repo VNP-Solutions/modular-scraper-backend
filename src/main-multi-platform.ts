@@ -15,6 +15,8 @@ interface MultiPlatformJobParams {
   platform?: SupportedPlatforms | string;
   propertyId?: string;
   propertyIdForDb?: string;
+  propertyName?: string;
+  bookingId?: string;
   startDate?: string;
   endDate?: string;
   jobId?: string;
@@ -75,6 +77,18 @@ async function mainMultiPlatform(params: MultiPlatformJobParams): Promise<void> 
       enableUI: true,
       timeout: 300000
     });
+
+    // Set property info for Booking scraper
+    if (platform === SupportedPlatforms.BOOKING && params.propertyName) {
+      const bookingScraper = scraper as any; // Type assertion for accessing setPropertyInfo
+      if (bookingScraper.setPropertyInfo) {
+        bookingScraper.setPropertyInfo(
+          params.propertyIdForDb || params.propertyId || '',
+          params.propertyName,
+          params.bookingId || params.propertyId
+        );
+      }
+    }
 
     // Check if scraping should continue
     await scrapingStateManager.waitWhilePaused();
