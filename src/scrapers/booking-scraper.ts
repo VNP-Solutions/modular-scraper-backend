@@ -17,16 +17,27 @@ import {
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
 import { delay } from "../common/delay.js";
 
+export enum ScraperContext {
+  JOB = 'job',
+  TRUST_VERIFICATION = 'trust-verification'
+}
 export class BookingScraper extends BaseScraper {
   private cookiesFile = 'booking-admin-cookies.json';
   private browserlessToken: string;
   private sessionUrl?: string;
   protected currentPropertyName?: string;
   protected currentPropertyId?: string;
+  private context?: ScraperContext;
 
-  constructor() {
+  constructor(context?: ScraperContext) {
     super('booking', 'https://admin.booking.com');
     this.browserlessToken = process.env.BROWSERLESS_TOKEN || '2SXlnLjeZpwR2tV6ab1698bfe680a3959c2c681f06939ee3b';
+    this.context = context;
+  }
+
+  public setBrowserData(page: Page, browser: Browser): void {
+    this.page = page;
+    this.browser = browser;
   }
 
   async setupBrowser(jobId?: string): Promise<{ browser: Browser; page: Page }> {
@@ -589,7 +600,7 @@ export class BookingScraper extends BaseScraper {
   async handle2FA(options?: TwoFactorAuthOptions): Promise<boolean> {
     const currentPage = options?.page || this.page;
 
-    if (!currentPage || !this.browser) return false;
+    if (!currentPage) return false;
 
     try {
       const currentUrl = currentPage.url();
@@ -612,7 +623,7 @@ export class BookingScraper extends BaseScraper {
       await this.takeScreenshot('booking-2fa-page.png');
 
       try {
-        await handleBookingOtpVerification(this.browser, currentPage);
+        await handleBookingOtpVerification(currentPage);
         await this.logInfo('Automated OTP verification completed successfully');
         return true;
       } catch (otpError) {
@@ -626,67 +637,26 @@ export class BookingScraper extends BaseScraper {
           }
         );
         
-        // Fallback to manual 2FA if automated fails
-        // if (this.sessionUrl) {
-          // await this.logInfo(`Manual 2FA can be completed in Browserless UI: ${this.sessionUrl}`);
-          // await this.logInfo('Waiting for manual 2FA completion...');
-          // await this.delay(300000);
+        const cdp = await currentPage.createCDPSession();
+        await (cdp as any).send("Browserless.startRecording");
+        await this.logInfo("Recording started successfully");
+
+        await this.delay(2000);
+        try {
+          const { liveURL } = (await (cdp as any).send("Browserless.liveURL", {
+            timeout: 600_000, 
+          })) as { liveURL: string };
           
-          // await this.logInfo('Manual 2FA timeout reached, continuing...');
-          // return true;
-          const cdp = await currentPage.createCDPSession();
-          await (cdp as any).send("Browserless.startRecording");
-          await this.logInfo("Recording started successfully");
+          this.sessionUrl = liveURL;
+          await this.logInfo("Live URL generated for 2FA solving:", { liveURL });
 
-          await this.delay(2000);
-          try {
-            const { liveURL } = (await (cdp as any).send("Browserless.liveURL", {
-              timeout: 600_000, 
-            })) as { liveURL: string };
-            
-            this.sessionUrl = liveURL;
-            await this.logInfo("Live URL generated for 2FA solving:", { liveURL });
-  
-          } catch (liveUrlError) {
-            await this.logError("Failed to generate live URL:", liveUrlError);
-          }
-          
-          await this.delay(300000);
-          await this.logInfo('Manual 2FA timeout reached, continuing...');
-          return true
-        // }
-
-        // Find OTP input field for manual entry
-        // for (const selector of BOOKING_SELECTORS.tfaSelectors) {
-        //   try {
-        //     await currentPage.waitForSelector(selector, { timeout: 10000 });
-        //     await this.logInfo(`Found 2FA field for manual entry: ${selector}`);
-            
-        //     const code = await this.prompt2FA(options?.timeout || 120000);
-        //     await currentPage.type(selector, code, { delay: 100 });
-        //     await currentPage.keyboard.press('Enter');
-        //     await this.logInfo('Manual 2FA code submitted');
-            
-        //     await currentPage.waitForNavigation({ waitUntil: 'networkidle2', timeout: 60000 }).catch(() => {
-        //       this.logInfo('Navigation timeout after manual 2FA');
-        //     });
-            
-        //     return true;
-        //   } catch (e) {
-        //     // Try next selector
-        //     continue;
-        //   }
-        // }
-
-        // await dualLogError(
-        //   `[${new Date().toISOString()}] [booking] Both automated and manual 2FA methods failed`,
-        //   {
-        //     errorType: BookingErrorType.TWO_FA_ERROR,
-        //     phase: BookingScrapingPhase.LOGIN,
-        //     platform: 'booking'
-        //   }
-        // );
-        // return false;
+        } catch (liveUrlError) {
+          await this.logError("Failed to generate live URL:", liveUrlError);
+        }
+        
+        await this.delay(300000);
+        await this.logInfo('Manual 2FA timeout reached, continuing...');
+        return true;
       }
     } catch (error) {
       await dualLogError(
@@ -1579,27 +1549,42 @@ export class BookingScraper extends BaseScraper {
 
   private async sendCaptchaEmail(): Promise<void> {
     try {
-      // Get the session URL for the user to solve CAPTCHA
-      const sessionUrl = this.sessionUrl || 'N/A';
-      
       // Get email recipients from environment variable
       const recipients = process.env.CAPTCHA_RECIPIENTS 
         ? process.env.CAPTCHA_RECIPIENTS.split(',').map(email => email.trim())
         : [process.env.EMAIL_USER || 'ITSUPPORT@vnpsolutions.com'];
       
-      await emailNotifier.notifyJobError(
-        this.jobId || 'Unknown job',
-        'CAPTCHA detected during Booking.com login - Manual intervention required',
-        {
-          sessionUrl: sessionUrl,
-          currentUrl: this.page?.url() || 'Unknown',
-          timestamp: new Date().toISOString(),
-          instructions: 'Please visit the session URL to solve the CAPTCHA. The system will automatically detect when solved.',
-          stage: 'Login - CAPTCHA Challenge'
-        },
-        undefined,
-        recipients
-      );
+      const errorMessage = 'CAPTCHA detected during Booking.com login - Manual intervention required';
+
+      const errorDetails = {
+        sessionUrl: this.sessionUrl || 'N/A',
+        currentUrl: this.page?.url() || 'Unknown',
+        timestamp: new Date().toISOString(),
+        instructions: 'Please visit the session URL to solve the CAPTCHA. The system will automatically detect when solved',
+        stage: 'Login - CAPTCHA Challenge'
+      };
+
+      if (this.context === ScraperContext.TRUST_VERIFICATION) {
+        await emailNotifier.sendErrorEmail(
+          recipients,
+          {
+            jobId: 'Trust Verification',
+            jobName: '',
+            errorMessage,
+            errorDetails,
+            timestamp: new Date(),
+          }
+        );
+      } else {
+        await emailNotifier.notifyJobError(
+          this.jobId || 'Unknown job',
+          errorMessage,
+          errorDetails,
+          undefined,
+          recipients
+        );
+      }
+      
       
     } catch (error) {
       await this.logError('Failed to send CAPTCHA notification email:', error);
@@ -2012,11 +1997,6 @@ export class BookingScraper extends BaseScraper {
       await delay(2000);
       await this.clickViewAllVccsToCharge();
 
-      // Wait for the page to load
-      // await this.page.waitForNavigation({ 
-      //   waitUntil: 'networkidle2', 
-      //   timeout: 30000 
-      // });
       await this.page.waitForSelector(BOOKING_SELECTORS.vccs.table, {
         timeout: 30000
       });

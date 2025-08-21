@@ -1,9 +1,10 @@
 import { Property, IProperty, BookingTrustedStatus } from "../models/property.model.js";
-import { BookingScraper } from "../scrapers/booking-scraper.js";
+import { BookingScraper, ScraperContext } from "../scrapers/booking-scraper.js";
 import { dualLogInfo, dualLogError } from "../common/log-helper.js";
 import { initializeJobLogging, finalizeJobLogging } from "../common/log-helper.js";
 import { BOOKING_SELECTORS } from "../common/booking-selectors.js";
 import { BookingErrorType, BookingScrapingPhase } from "../common/booking-error-types.js";
+import { decryptPassword } from "../common/encription.js";
 
 interface TrustVerificationResult {
   propertyId: string;
@@ -50,9 +51,6 @@ export class BookingTrustSchedulerService {
       const properties = await Property.find({
         $and: [
           { booking_id: { $exists: true, $ne: null, $nin: ["0", ""] } }, // Must have valid booking_id
-          { user_email: { $exists: true, $ne: null } }, // Must have credentials
-          { user_password: { $exists: true, $ne: null } },
-          { status: "active" }, // Only active properties
           {
             $or: [
               {
@@ -82,6 +80,12 @@ export class BookingTrustSchedulerService {
             ],
           },
         ],
+      }).populate({
+        path: 'credentials',
+        match: {
+          bookingUsername: { $exists: true, $ne: null },
+          bookingPassword: { $exists: true, $ne: null }
+        }
       });
 
       await dualLogInfo(
@@ -124,20 +128,31 @@ export class BookingTrustSchedulerService {
       initializeJobLogging(`trust-verify-${propertyId}`);
 
       // Create booking scraper instance
-      const bookingScraper = new BookingScraper();
+      const bookingScraper = new BookingScraper(ScraperContext.TRUST_VERIFICATION);
       
+      const { browser, page } = await bookingScraper.setupBrowser();
+      bookingScraper.setBrowserData(page, browser)
+
       // Attempt booking login
       try {
+        const credentials = property.credentials?.[0];
+        const password = credentials?.bookingPassword ? decryptPassword(credentials.bookingPassword) : undefined;
+
         await bookingScraper.login({
-          email: property.user_email!,
-          password: property.user_password!,
-        });
+            email: credentials?.bookingUsername!,
+            password: password!,
+          }, 
+          property.booking_id
+        );
 
         // Navigate to VCCS management page to verify card details access
         await dualLogInfo(`Navigating to VCCS management for property ${propertyId}`);
         
         let hasCardDetailsLinks = false;
         let newStatus = BookingTrustedStatus.NotTrusted;
+
+        // Update property trust status
+        await this.updatePropertyTrustStatus(propertyId, newStatus, new Date());
         
         try {
           await bookingScraper.navigateToMenuSection('finance', 'vccs_management', 'vccs_management');
@@ -149,8 +164,8 @@ export class BookingTrustSchedulerService {
             await page.waitForSelector(BOOKING_SELECTORS.vccs.table, { timeout: 10000 });
             
             // Check if there are any "View card details" links available and clickable (have href)
-            hasCardDetailsLinks = await page.evaluate(() => {
-              const cardDetailLinks = document.querySelectorAll(BOOKING_SELECTORS.vccs.viewCardDetailsLink);
+            hasCardDetailsLinks = await page.evaluate((selectors) => {
+              const cardDetailLinks = document.querySelectorAll(selectors);
               let clickableLinks = 0;
               
               cardDetailLinks.forEach(link => {
@@ -161,7 +176,7 @@ export class BookingTrustSchedulerService {
               });
               
               return clickableLinks > 0;
-            });
+            }, BOOKING_SELECTORS.vccs.viewCardDetailsLink);
             
             await dualLogInfo(`Card details verification for property ${propertyId}`, {
               hasCardDetailsLinks,
@@ -169,7 +184,30 @@ export class BookingTrustSchedulerService {
           }
           
           newStatus = hasCardDetailsLinks ? BookingTrustedStatus.Trusted : BookingTrustedStatus.NotTrusted;
-          
+
+          // Update property trust status
+          await this.updatePropertyTrustStatus(propertyId, newStatus, new Date());
+
+          await dualLogInfo(`Trust verification completed for property ${propertyId}`, {
+            propertyId,
+            bookingId,
+            previousStatus,
+            newStatus,
+            hasCardDetailsLinks,
+            statusChanged: previousStatus !== newStatus,
+          });
+  
+          await finalizeJobLogging("success");
+  
+          return {
+            propertyId,
+            bookingId,
+            previousStatus,
+            newStatus,
+            success: true,
+            hasCardDetailsLinks,
+          };
+
         } catch (navigationError) {
           await dualLogError(
             `Trust verification failed - navigation to VCCS management failed for property ${propertyId}`,
@@ -177,41 +215,23 @@ export class BookingTrustSchedulerService {
             { propertyId, bookingId, previousStatus }
           );
           
-          // If navigation fails, property not trusted
-          newStatus = BookingTrustedStatus.NotTrusted;
+          await finalizeJobLogging("failed");
+
+          return {
+            propertyId,
+            bookingId,
+            previousStatus,
+            newStatus: previousStatus,
+            success: false,
+            error: navigationError instanceof Error ? navigationError.message : String(navigationError),
+          };
         }
-
-        // Update property trust status
-        await this.updatePropertyTrustStatus(propertyId, newStatus, new Date());
-
-        await dualLogInfo(`Trust verification completed for property ${propertyId}`, {
-          propertyId,
-          bookingId,
-          previousStatus,
-          newStatus,
-          hasCardDetailsLinks,
-          statusChanged: previousStatus !== newStatus,
-        });
-
-        await finalizeJobLogging("success");
-
-        return {
-          propertyId,
-          bookingId,
-          previousStatus,
-          newStatus,
-          success: true,
-          hasCardDetailsLinks,
-        };
       } catch (loginError) {
         await dualLogError(
           `Trust verification failed - login failed for property ${propertyId}`,
           loginError,
           { propertyId, bookingId, previousStatus }
         );
-
-        // Update last_login even if failed (for retry logic)
-        await this.updatePropertyTrustStatus(propertyId, previousStatus, new Date());
 
         await finalizeJobLogging("failed");
 
@@ -230,9 +250,6 @@ export class BookingTrustSchedulerService {
         error,
         { propertyId, bookingId, previousStatus }
       );
-
-      // Update last_login even if failed (for retry logic)
-      await this.updatePropertyTrustStatus(propertyId, previousStatus, new Date());
 
       await finalizeJobLogging("failed");
 
