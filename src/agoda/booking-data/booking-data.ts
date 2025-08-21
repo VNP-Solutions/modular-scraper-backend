@@ -433,6 +433,7 @@ export async function getAgodaBookingData(
 ): Promise<any[]> {
   let newPage: Page | undefined;
   let client: any;
+  let isHeadless = false;
 
   try {
     // Check if scraping is paused before starting
@@ -549,17 +550,55 @@ export async function getAgodaBookingData(
       { jobId, platform: process.platform, downloadPath }
     );
 
-    // Configure download behavior using CDP session with macOS-specific settings
+    // Configure download behavior using CDP session with headless-compatible settings
     client = await newPage.createCDPSession();
 
-    // Enable downloads with more permissive settings for macOS
+    // Check if running in headless mode
+    isHeadless = await newPage.evaluate(() => {
+      return navigator.webdriver === true || window.outerHeight === 0;
+    });
+
+    await dualLogInfo(
+      `Browser mode detected: ${isHeadless ? "headless" : "headed"}`,
+      { jobId }
+    );
+
+    // Enable downloads with headless-compatible settings
     await client.send("Page.setDownloadBehavior", {
       behavior: "allow",
       downloadPath: downloadPath,
-      eventsEnabled: true, // Enable download events
+      eventsEnabled: true,
     });
 
-    // Additional macOS-specific browser settings
+    // Set additional permissions for headless mode
+    if (isHeadless) {
+      await dualLogInfo("Applying headless-specific download settings...");
+
+      // Enable file system access for headless mode
+      try {
+        await client.send("Browser.grantPermissions", {
+          permissions: ["downloads", "downloadsOpen"],
+          origin: "https://ycs.agoda.com",
+        });
+      } catch (error) {
+        await dualLogInfo(
+          "Browser.grantPermissions not supported, trying alternative..."
+        );
+      }
+
+      // Set download behavior with additional headless flags
+      try {
+        await client.send("Page.setDownloadBehavior", {
+          behavior: "allowAndName",
+          downloadPath: downloadPath,
+          eventsEnabled: true,
+        });
+      } catch (error) {
+        await dualLogInfo("allowAndName not supported, using allow behavior");
+      }
+    }
+
+    // Platform-specific settings (keeping existing macOS logic)
     if (process.platform === "darwin") {
       await dualLogInfo("Applying macOS-specific download settings...");
 
@@ -609,7 +648,7 @@ export async function getAgodaBookingData(
       throw new Error("Download button not found with any selector");
     }
 
-    // Try multiple click approaches for better macOS compatibility
+    // Try multiple click approaches with headless-compatible methods
     try {
       await dualLogInfo("Attempting download button click...");
 
@@ -669,6 +708,30 @@ export async function getAgodaBookingData(
         throw new Error("Download button is hidden via CSS");
       }
 
+      // Set up network request interception for headless download fallback
+      let downloadUrl: string | null = null;
+      const requestHandler = (request: any) => {
+        const url = request.url();
+        // Look for CSV download requests
+        if (
+          url.includes("csv") ||
+          url.includes("download") ||
+          request.headers()["content-disposition"]
+        ) {
+          downloadUrl = url;
+          dualLogInfo(`Intercepted potential download URL: ${url}`);
+        }
+      };
+
+      // Enable request interception for headless mode
+      if (isHeadless) {
+        await newPage.setRequestInterception(true);
+        newPage.on("request", (request) => {
+          requestHandler(request);
+          request.continue();
+        });
+      }
+
       // Method 1: Scroll to button and ensure it's in view
       await newPage.evaluate((selector) => {
         const button = document.querySelector(selector) as HTMLButtonElement;
@@ -679,16 +742,10 @@ export async function getAgodaBookingData(
 
       await delay(1000); // Wait for scroll to complete
 
-      // Method 2: Regular Puppeteer click
+      // Method 2: Enhanced JavaScript click with comprehensive event simulation (works better in headless)
       await dualLogInfo(
-        `Executing Puppeteer click with selector: ${usedSelector}`
+        "Executing enhanced JavaScript click for headless compatibility..."
       );
-      await newPage.click(usedSelector);
-
-      await delay(2000); // Give time for click to register
-
-      // Method 3: Enhanced JavaScript click with comprehensive event simulation
-      await dualLogInfo("Executing enhanced JavaScript click...");
       await newPage.evaluate((selector) => {
         const button = document.querySelector(selector) as HTMLButtonElement;
         if (button) {
@@ -716,8 +773,29 @@ export async function getAgodaBookingData(
           if (span) {
             span.click();
           }
+
+          // For headless mode, also trigger any onclick handlers directly
+          if (button.onclick) {
+            button.onclick(new MouseEvent("click"));
+          }
         }
       }, usedSelector);
+
+      await delay(1000);
+
+      // Method 3: Regular Puppeteer click as backup
+      await dualLogInfo(
+        `Executing Puppeteer click with selector: ${usedSelector}`
+      );
+      try {
+        await newPage.click(usedSelector);
+      } catch (clickError) {
+        await dualLogInfo(
+          "Puppeteer click failed, continuing with JS click method"
+        );
+      }
+
+      await delay(2000); // Give time for click to register
 
       await dualLogInfo("Multiple click methods executed");
 
@@ -759,18 +837,111 @@ export async function getAgodaBookingData(
       }
     });
 
-    // Wait for download to complete with event-based detection
+    // Wait for download to complete with enhanced detection for headless mode
     await dualLogInfo("Waiting for CSV download to complete...");
 
-    // Initial wait to let download start
-    await delay(3000);
+    // Enhanced download detection for headless mode
+    let downloadDetectionAttempts = 0;
+    const maxDetectionAttempts = 15; // 30 seconds total
+
+    while (
+      downloadDetectionAttempts < maxDetectionAttempts &&
+      !downloadStarted
+    ) {
+      await delay(2000);
+      downloadDetectionAttempts++;
+
+      // Check for files in download directory
+      try {
+        const files = fs.readdirSync(downloadPath);
+        const csvFiles = files.filter(
+          (f) =>
+            f.endsWith(".csv") &&
+            !f.includes(".crdownload") &&
+            !f.includes(".download")
+        );
+
+        if (csvFiles.length > 0) {
+          await dualLogInfo(`Found CSV file during detection: ${csvFiles[0]}`);
+          downloadStarted = true;
+          break;
+        }
+      } catch (error) {
+        // Continue checking
+      }
+
+      await dualLogInfo(
+        `Download detection attempt ${downloadDetectionAttempts}/${maxDetectionAttempts}`
+      );
+    }
 
     // Check if download started
     if (!downloadStarted) {
-      await dualLogError("Download did not start within 3 seconds", {
+      await dualLogError("Download did not start within detection period", {
         jobId,
         platform: process.platform,
+        isHeadless,
       });
+
+      // In headless mode, try alternative download method
+      if (isHeadless) {
+        await dualLogInfo(
+          "Attempting alternative download method for headless mode..."
+        );
+
+        try {
+          // Try to get the download URL by inspecting network requests
+          const downloadUrlFromNetwork = await newPage.evaluate(() => {
+            // Look for any recent network requests that might be the CSV download
+            const performanceEntries = performance.getEntriesByType("resource");
+            const recentEntries = performanceEntries.filter(
+              (entry) =>
+                entry.name.includes("csv") ||
+                entry.name.includes("download") ||
+                entry.name.includes("booking")
+            );
+            return recentEntries.length > 0
+              ? recentEntries[recentEntries.length - 1].name
+              : null;
+          });
+
+          if (downloadUrlFromNetwork) {
+            await dualLogInfo(
+              `Found potential download URL: ${downloadUrlFromNetwork}`
+            );
+
+            // Download the file directly using fetch
+            const response = await newPage.evaluate(async (url) => {
+              const response = await fetch(url);
+              if (response.ok) {
+                const blob = await response.blob();
+                return await new Promise((resolve) => {
+                  const reader = new FileReader();
+                  reader.onload = () => resolve(reader.result);
+                  reader.readAsText(blob);
+                });
+              }
+              return null;
+            }, downloadUrlFromNetwork);
+
+            if (response) {
+              // Save the file directly
+              const timestamp = Date.now();
+              const fallbackFilename = `agoda_booking_data_${timestamp}.csv`;
+              const fallbackPath = path.join(downloadPath, fallbackFilename);
+              fs.writeFileSync(fallbackPath, response as string);
+
+              await dualLogInfo(
+                `Successfully downloaded CSV using fallback method: ${fallbackFilename}`
+              );
+              downloadStarted = true;
+              downloadCompleted = true;
+            }
+          }
+        } catch (fallbackError) {
+          await dualLogError("Fallback download method failed:", fallbackError);
+        }
+      }
     } else {
       await dualLogInfo("Download detected, waiting for completion...");
 
@@ -1116,6 +1287,19 @@ export async function getAgodaBookingData(
 
     // Clean up CDP session and close the page
     try {
+      // Disable request interception if it was enabled
+      if (isHeadless) {
+        try {
+          await newPage.setRequestInterception(false);
+          newPage.removeAllListeners("request");
+        } catch (interceptionError) {
+          await dualLogInfo(
+            "Error disabling request interception:",
+            interceptionError
+          );
+        }
+      }
+
       await client.detach();
       await newPage.close();
     } catch (cleanupError) {
@@ -1135,6 +1319,19 @@ export async function getAgodaBookingData(
 
     // Clean up resources in error case
     try {
+      // Disable request interception if it was enabled
+      if (newPage && isHeadless) {
+        try {
+          await newPage.setRequestInterception(false);
+          newPage.removeAllListeners("request");
+        } catch (interceptionError) {
+          await dualLogInfo(
+            "Error disabling request interception during cleanup:",
+            interceptionError
+          );
+        }
+      }
+
       if (client) {
         await client.detach();
       }
