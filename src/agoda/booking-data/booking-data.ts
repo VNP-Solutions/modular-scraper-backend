@@ -625,8 +625,53 @@ export async function getAgodaBookingData(
     // Wait for the download button container to be visible
     await dualLogInfo("Looking for CSV download button...");
 
+    // Add debugging information about the page state
     try {
-      // Wait for the download button using the specific selector from the HTML structure
+      await dualLogInfo(
+        "Debugging page state for download button detection..."
+      );
+
+      // Set viewport to ensure consistent rendering
+      await newPage.setViewport({ width: 1920, height: 1080 });
+      await delay(2000);
+
+      // Get page info for debugging
+      const pageInfo = await newPage.evaluate(() => {
+        return {
+          url: window.location.href,
+          title: document.title,
+          bodyText: document.body.textContent?.substring(0, 500) || "",
+          allButtons: Array.from(document.querySelectorAll("button"))
+            .map((btn) => ({
+              text: btn.textContent?.trim() || "",
+              className: btn.className || "",
+              dataElementName: btn.getAttribute("data-element-name") || "",
+              leadingIcon: btn.getAttribute("leadingicon") || "",
+              visible: btn.offsetParent !== null,
+              disabled: btn.disabled,
+            }))
+            .slice(0, 10), // First 10 buttons for debugging
+          hasDownloadButton: !!document.querySelector(
+            'button[data-element-name="ycs-booking-list-download"]'
+          ),
+          hasAnyDownloadText:
+            document.body.textContent?.toLowerCase().includes("download") ||
+            false,
+        };
+      });
+
+      await dualLogInfo("Page debugging info:", pageInfo);
+
+      // Scroll to ensure all content is loaded
+      await newPage.evaluate(() => {
+        window.scrollTo(0, 0);
+        window.scrollTo(0, document.body.scrollHeight);
+        window.scrollTo(0, 0);
+      });
+
+      await delay(3000);
+
+      // Try to wait for the download button using the specific selector with longer timeout
       await newPage.waitForSelector(
         'button[data-element-name="ycs-booking-list-download"]',
         {
@@ -638,6 +683,61 @@ export async function getAgodaBookingData(
       await dualLogInfo("CSV download button found");
     } catch (error: any) {
       await dualLogError("Error waiting for CSV download button:", error);
+
+      // Additional debugging when button is not found
+      try {
+        await dualLogInfo(
+          "Performing additional debugging for missing download button..."
+        );
+
+        const additionalDebug = await newPage.evaluate(() => {
+          // Look for any elements that might be the download button
+          const possibleButtons = Array.from(
+            document.querySelectorAll("button")
+          ).filter((btn) => {
+            const text = btn.textContent?.toLowerCase() || "";
+            const className = btn.className.toLowerCase();
+            const dataName = btn.getAttribute("data-element-name") || "";
+
+            return (
+              text.includes("download") ||
+              text.includes("csv") ||
+              className.includes("download") ||
+              dataName.includes("download")
+            );
+          });
+
+          return {
+            possibleDownloadButtons: possibleButtons.map((btn) => ({
+              text: btn.textContent?.trim(),
+              className: btn.className,
+              dataElementName: btn.getAttribute("data-element-name"),
+              leadingIcon: btn.getAttribute("leadingicon"),
+              id: btn.id,
+              visible: btn.offsetParent !== null,
+              disabled: btn.disabled,
+              outerHTML: btn.outerHTML.substring(0, 200),
+            })),
+            pageHasData:
+              document.body.textContent?.includes("Booking ID") || false,
+            pageHasTable: !!document.querySelector("table"),
+            pageHasList: !!document.querySelector('[data-testid*="booking"]'),
+            fullPageText: document.body.textContent?.substring(0, 1000) || "",
+          };
+        });
+
+        await dualLogInfo("Additional debugging info:", additionalDebug);
+
+        // Check if there might be no data to download
+        if (!additionalDebug.pageHasData && !additionalDebug.pageHasTable) {
+          await dualLogInfo(
+            "Page might not have booking data to download - this could be expected if no reservations exist for the date range"
+          );
+        }
+      } catch (debugError) {
+        await dualLogError("Error during additional debugging:", debugError);
+      }
+
       throw new Error("CSV download button not found on the page");
     }
 
@@ -699,6 +799,10 @@ export async function getAgodaBookingData(
     await dualLogInfo("Download path configured, initiating CSV download...");
 
     // Wait for the button to be fully interactive with multiple selectors
+    await dualLogInfo(
+      "Attempting to find download button with multiple selectors..."
+    );
+
     const downloadButtonSelectors = [
       'button[data-element-name="ycs-booking-list-download"]',
       'button[leadingicon="fill.arrow.download"]',
@@ -709,6 +813,7 @@ export async function getAgodaBookingData(
     let buttonFound = false;
     let usedSelector = "";
 
+    // First try the standard selectors
     for (const selector of downloadButtonSelectors) {
       try {
         await newPage.waitForSelector(selector, {
@@ -725,43 +830,186 @@ export async function getAgodaBookingData(
       }
     }
 
+    // If standard selectors fail, try alternative detection methods
     if (!buttonFound) {
-      throw new Error("Download button not found with any selector");
+      await dualLogInfo(
+        "Standard selectors failed, trying alternative detection methods..."
+      );
+
+      try {
+        // Method 1: Look for any button containing "Download" text
+        const downloadButtonByText = await newPage.evaluate(() => {
+          const buttons = Array.from(document.querySelectorAll("button"));
+          return buttons.find((btn) => {
+            const text = btn.textContent?.toLowerCase() || "";
+            return (
+              text.includes("download") &&
+              (text.includes("csv") || text.includes(".csv"))
+            );
+          });
+        });
+
+        if (downloadButtonByText) {
+          // Create a selector for this button
+          usedSelector = "button"; // We'll use evaluate to click it
+          buttonFound = true;
+          await dualLogInfo("Download button found by text content");
+        }
+      } catch (textSearchError) {
+        await dualLogInfo("Text-based button search failed");
+      }
+
+      // Method 2: Look for buttons with download-related attributes
+      if (!buttonFound) {
+        try {
+          const downloadButtonByAttr = await newPage.evaluate(() => {
+            const buttons = Array.from(document.querySelectorAll("button"));
+            return buttons.find((btn) => {
+              const dataName = btn.getAttribute("data-element-name") || "";
+              const className = btn.className.toLowerCase();
+              const leadingIcon = btn.getAttribute("leadingicon") || "";
+
+              return (
+                dataName.includes("download") ||
+                className.includes("download") ||
+                leadingIcon.includes("download") ||
+                leadingIcon.includes("arrow")
+              );
+            });
+          });
+
+          if (downloadButtonByAttr) {
+            usedSelector =
+              'button[data-element-name*="download"], button[class*="download"], button[leadingicon*="download"], button[leadingicon*="arrow"]';
+            buttonFound = true;
+            await dualLogInfo("Download button found by attributes");
+          }
+        } catch (attrSearchError) {
+          await dualLogInfo("Attribute-based button search failed");
+        }
+      }
+
+      // Method 3: Check if page has no data (empty state)
+      if (!buttonFound) {
+        const pageState = await newPage.evaluate(() => {
+          const bodyText = document.body.textContent?.toLowerCase() || "";
+          return {
+            hasNoDataMessage:
+              bodyText.includes("no data") ||
+              bodyText.includes("no results") ||
+              bodyText.includes("no reservations") ||
+              bodyText.includes("no bookings"),
+            hasEmptyState:
+              bodyText.includes("empty") ||
+              bodyText.includes("nothing to show"),
+            totalButtons: document.querySelectorAll("button").length,
+            hasTableData: !!document.querySelector(
+              "table tbody tr:not(:empty)"
+            ),
+            hasListData: !!document.querySelector(
+              '[data-testid*="booking"], [data-testid*="reservation"]'
+            ),
+          };
+        });
+
+        await dualLogInfo("Page state analysis:", pageState);
+
+        if (
+          pageState.hasNoDataMessage ||
+          pageState.hasEmptyState ||
+          (!pageState.hasTableData && !pageState.hasListData)
+        ) {
+          await dualLogInfo(
+            "Page appears to have no booking data - this might be expected for the selected date range"
+          );
+          // In this case, we should handle it gracefully rather than throwing an error
+          // Return empty data instead of failing
+          return [];
+        }
+      }
     }
 
-    // Try multiple click approaches for better macOS compatibility
+    if (!buttonFound) {
+      throw new Error("Download button not found with any detection method");
+    }
+
+    // Try multiple click approaches for better compatibility
     try {
       await dualLogInfo("Attempting download button click...");
 
-      // First check if button is actually present and enabled
-      const buttonInfo = await newPage.evaluate((selector) => {
-        const button = document.querySelector(selector) as HTMLButtonElement;
-        if (!button) return { exists: false };
+      // Handle different selector types
+      let buttonInfo;
 
-        // Get computed styles for better visibility detection
-        const computedStyle = window.getComputedStyle(button);
-        const rect = button.getBoundingClientRect();
+      if (usedSelector === "button") {
+        // For text-based detection, find the specific button
+        buttonInfo = await newPage.evaluate(() => {
+          const buttons = Array.from(document.querySelectorAll("button"));
+          const downloadButton = buttons.find((btn) => {
+            const text = btn.textContent?.toLowerCase() || "";
+            return (
+              text.includes("download") &&
+              (text.includes("csv") || text.includes(".csv"))
+            );
+          });
 
-        return {
-          exists: true,
-          visible: button.offsetParent !== null,
-          disabled: button.disabled,
-          textContent: button.textContent?.trim(),
-          className: button.className,
-          style: button.getAttribute("style"),
-          computedDisplay: computedStyle.display,
-          computedVisibility: computedStyle.visibility,
-          computedOpacity: computedStyle.opacity,
-          boundingRect: {
-            width: rect.width,
-            height: rect.height,
-            top: rect.top,
-            left: rect.left,
-          },
-          leadingIcon: button.getAttribute("leadingicon"),
-          buttonType: button.getAttribute("type"),
-        };
-      }, usedSelector);
+          if (!downloadButton) return { exists: false };
+
+          const computedStyle = window.getComputedStyle(downloadButton);
+          const rect = downloadButton.getBoundingClientRect();
+
+          return {
+            exists: true,
+            visible: downloadButton.offsetParent !== null,
+            disabled: downloadButton.disabled,
+            textContent: downloadButton.textContent?.trim(),
+            className: downloadButton.className,
+            style: downloadButton.getAttribute("style"),
+            computedDisplay: computedStyle.display,
+            computedVisibility: computedStyle.visibility,
+            computedOpacity: computedStyle.opacity,
+            boundingRect: {
+              width: rect.width,
+              height: rect.height,
+              top: rect.top,
+              left: rect.left,
+            },
+            leadingIcon: downloadButton.getAttribute("leadingicon"),
+            buttonType: downloadButton.getAttribute("type"),
+            dataElementName: downloadButton.getAttribute("data-element-name"),
+          };
+        });
+      } else {
+        // For standard selectors
+        buttonInfo = await newPage.evaluate((selector) => {
+          const button = document.querySelector(selector) as HTMLButtonElement;
+          if (!button) return { exists: false };
+
+          // Get computed styles for better visibility detection
+          const computedStyle = window.getComputedStyle(button);
+          const rect = button.getBoundingClientRect();
+
+          return {
+            exists: true,
+            visible: button.offsetParent !== null,
+            disabled: button.disabled,
+            textContent: button.textContent?.trim(),
+            className: button.className,
+            style: button.getAttribute("style"),
+            computedDisplay: computedStyle.display,
+            computedVisibility: computedStyle.visibility,
+            computedOpacity: computedStyle.opacity,
+            boundingRect: {
+              width: rect.width,
+              height: rect.height,
+              top: rect.top,
+              left: rect.left,
+            },
+            leadingIcon: button.getAttribute("leadingicon"),
+            buttonType: button.getAttribute("type"),
+            dataElementName: button.getAttribute("data-element-name"),
+          };
+        }, usedSelector);
+      }
 
       await dualLogInfo("Download button status:", buttonInfo);
 
@@ -790,54 +1038,122 @@ export async function getAgodaBookingData(
       }
 
       // Method 1: Scroll to button and ensure it's in view
-      await newPage.evaluate((selector) => {
-        const button = document.querySelector(selector) as HTMLButtonElement;
-        if (button) {
-          button.scrollIntoView({ behavior: "smooth", block: "center" });
-        }
-      }, usedSelector);
+      if (usedSelector === "button") {
+        // For text-based detection
+        await newPage.evaluate(() => {
+          const buttons = Array.from(document.querySelectorAll("button"));
+          const downloadButton = buttons.find((btn) => {
+            const text = btn.textContent?.toLowerCase() || "";
+            return (
+              text.includes("download") &&
+              (text.includes("csv") || text.includes(".csv"))
+            );
+          });
+          if (downloadButton) {
+            downloadButton.scrollIntoView({
+              behavior: "smooth",
+              block: "center",
+            });
+          }
+        });
+      } else {
+        // For standard selectors
+        await newPage.evaluate((selector) => {
+          const button = document.querySelector(selector) as HTMLButtonElement;
+          if (button) {
+            button.scrollIntoView({ behavior: "smooth", block: "center" });
+          }
+        }, usedSelector);
+      }
 
       await delay(1000); // Wait for scroll to complete
 
-      // Method 2: Regular Puppeteer click
-      await dualLogInfo(
-        `Executing Puppeteer click with selector: ${usedSelector}`
-      );
-      await newPage.click(usedSelector);
-
-      await delay(2000); // Give time for click to register
+      // Method 2: Regular Puppeteer click (only for standard selectors)
+      if (usedSelector !== "button") {
+        await dualLogInfo(
+          `Executing Puppeteer click with selector: ${usedSelector}`
+        );
+        try {
+          await newPage.click(usedSelector);
+          await delay(2000); // Give time for click to register
+        } catch (clickError) {
+          await dualLogInfo("Puppeteer click failed, trying JavaScript click");
+        }
+      }
 
       // Method 3: Enhanced JavaScript click with comprehensive event simulation
       await dualLogInfo("Executing enhanced JavaScript click...");
-      await newPage.evaluate((selector) => {
-        const button = document.querySelector(selector) as HTMLButtonElement;
-        if (button) {
-          // Focus the button first
-          button.focus();
+      if (usedSelector === "button") {
+        // For text-based detection
+        await newPage.evaluate(() => {
+          const buttons = Array.from(document.querySelectorAll("button"));
+          const downloadButton = buttons.find((btn) => {
+            const text = btn.textContent?.toLowerCase() || "";
+            return (
+              text.includes("download") &&
+              (text.includes("csv") || text.includes(".csv"))
+            );
+          }) as HTMLButtonElement;
 
-          // Comprehensive mouse event simulation
-          const events = [
-            new MouseEvent("mouseover", { bubbles: true, cancelable: true }),
-            new MouseEvent("mouseenter", { bubbles: true, cancelable: true }),
-            new MouseEvent("mousedown", { bubbles: true, cancelable: true }),
-            new MouseEvent("mouseup", { bubbles: true, cancelable: true }),
-            new MouseEvent("click", { bubbles: true, cancelable: true }),
-          ];
+          if (downloadButton) {
+            // Focus the button first
+            downloadButton.focus();
 
-          events.forEach((event) => {
-            button.dispatchEvent(event);
-          });
+            // Comprehensive mouse event simulation
+            const events = [
+              new MouseEvent("mouseover", { bubbles: true, cancelable: true }),
+              new MouseEvent("mouseenter", { bubbles: true, cancelable: true }),
+              new MouseEvent("mousedown", { bubbles: true, cancelable: true }),
+              new MouseEvent("mouseup", { bubbles: true, cancelable: true }),
+              new MouseEvent("click", { bubbles: true, cancelable: true }),
+            ];
 
-          // Also try direct click
-          button.click();
+            events.forEach((event) => {
+              downloadButton.dispatchEvent(event);
+            });
 
-          // Try clicking on child elements (span with text)
-          const span = button.querySelector("span");
-          if (span) {
-            span.click();
+            // Also try direct click
+            downloadButton.click();
+
+            // Try clicking on child elements (span with text)
+            const span = downloadButton.querySelector("span");
+            if (span) {
+              span.click();
+            }
           }
-        }
-      }, usedSelector);
+        });
+      } else {
+        // For standard selectors
+        await newPage.evaluate((selector) => {
+          const button = document.querySelector(selector) as HTMLButtonElement;
+          if (button) {
+            // Focus the button first
+            button.focus();
+
+            // Comprehensive mouse event simulation
+            const events = [
+              new MouseEvent("mouseover", { bubbles: true, cancelable: true }),
+              new MouseEvent("mouseenter", { bubbles: true, cancelable: true }),
+              new MouseEvent("mousedown", { bubbles: true, cancelable: true }),
+              new MouseEvent("mouseup", { bubbles: true, cancelable: true }),
+              new MouseEvent("click", { bubbles: true, cancelable: true }),
+            ];
+
+            events.forEach((event) => {
+              button.dispatchEvent(event);
+            });
+
+            // Also try direct click
+            button.click();
+
+            // Try clicking on child elements (span with text)
+            const span = button.querySelector("span");
+            if (span) {
+              span.click();
+            }
+          }
+        }, usedSelector);
+      }
 
       await dualLogInfo("Multiple click methods executed");
 
