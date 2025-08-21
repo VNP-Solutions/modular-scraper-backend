@@ -438,7 +438,6 @@ export async function getAgodaBookingData(
 ): Promise<any[]> {
   let newPage: Page | undefined;
   let client: any;
-  let isHeadless = false;
 
   try {
     // Check if scraping is paused before starting
@@ -467,12 +466,6 @@ export async function getAgodaBookingData(
     const formattedStartDate = convertDateFormat(startDate);
     const formattedEndDate = convertDateFormat(endDate);
 
-    // Set up download path early so it's available for retry
-    const downloadPath = path.resolve(process.cwd(), "downloads");
-    if (!fs.existsSync(downloadPath)) {
-      fs.mkdirSync(downloadPath, { recursive: true });
-    }
-
     console.log(
       "\x1b[34m%s\x1b[0m",
       `Start Date: ${formattedStartDate}, End Date: ${formattedEndDate}`
@@ -485,15 +478,131 @@ export async function getAgodaBookingData(
     await delay(5000);
 
     // Navigate to the booking data page
-    newPage = await browser.newPage();
-    await newPage.goto(bookingUrl, {
-      waitUntil: "networkidle2",
-      timeout: loadingTimeout,
-    });
+    const newPage = await browser.newPage();
 
-    await newPage.waitForSelector("body", { timeout: loadingTimeout });
+    let navigationAttempts = 0;
+    const maxNavigationAttempts = 3;
+    let reservationsFound = false;
 
-    await dualLogInfo("Successfully navigated to booking data page");
+    while (navigationAttempts < maxNavigationAttempts && !reservationsFound) {
+      navigationAttempts++;
+
+      await dualLogInfo(
+        `Navigation attempt ${navigationAttempts}/${maxNavigationAttempts} to booking data URL: ${bookingUrl}`
+      );
+
+      await newPage.goto(bookingUrl, {
+        waitUntil: "networkidle2",
+        timeout: loadingTimeout,
+      });
+
+      await newPage.waitForSelector("body", { timeout: loadingTimeout });
+
+      // Wait for the page to load completely
+      await delay(5000);
+
+      // Check for "Reservations" text on the page
+      try {
+        await dualLogInfo("Checking for 'Reservations' text on the page...");
+
+        // Look for the Reservations heading using multiple selectors
+        const reservationsSelectors = [
+          'h2:has-text("Reservations")',
+          "h2.sc-iMTnTL.sc-krNlru.ioCOri.jnyliE",
+          'h2:contains("Reservations")',
+          '[class*="Reservations"]',
+        ];
+
+        let reservationsElement = null;
+
+        // Try to find the reservations element using different approaches
+        for (const selector of reservationsSelectors) {
+          try {
+            // First try with Puppeteer's built-in selector
+            if (
+              selector.includes(":has-text") ||
+              selector.includes(":contains")
+            ) {
+              // Use evaluate for text-based selectors
+              reservationsElement = await newPage.evaluate(() => {
+                const headings = Array.from(document.querySelectorAll("h2"));
+                return (
+                  headings.find(
+                    (h) => h.textContent?.trim() === "Reservations"
+                  ) || null
+                );
+              });
+            } else {
+              // Use regular selector
+              reservationsElement = await newPage.$(selector);
+            }
+
+            if (reservationsElement) {
+              await dualLogInfo(
+                `Found Reservations element with selector: ${selector}`
+              );
+              break;
+            }
+          } catch (selectorError) {
+            // Continue to next selector
+            continue;
+          }
+        }
+
+        // Alternative approach: search for "Reservations" text in the page content
+        if (!reservationsElement) {
+          const pageText = await newPage.evaluate(
+            () => document.body.textContent || ""
+          );
+          if (pageText.includes("Reservations")) {
+            await dualLogInfo("Found 'Reservations' text in page content");
+            reservationsElement = true; // Mark as found
+          }
+        }
+
+        if (reservationsElement) {
+          reservationsFound = true;
+          console.log(
+            "\x1b[32m%s\x1b[0m",
+            "✅ Reservations text found - page loaded successfully!"
+          );
+          await dualLogInfo(
+            "✅ Reservations text found - page loaded successfully!"
+          );
+          break;
+        } else {
+          await dualLogInfo(
+            `❌ Reservations text not found on attempt ${navigationAttempts}`
+          );
+
+          if (navigationAttempts < maxNavigationAttempts) {
+            await dualLogInfo(`Retrying navigation in 3 seconds...`);
+            await delay(3000);
+          }
+        }
+      } catch (checkError: any) {
+        await dualLogError(
+          `Error checking for Reservations text on attempt ${navigationAttempts}:`,
+          checkError.message
+        );
+
+        if (navigationAttempts < maxNavigationAttempts) {
+          await dualLogInfo(`Retrying navigation due to check error...`);
+          await delay(3000);
+        }
+      }
+    }
+
+    // Final validation
+    if (!reservationsFound) {
+      const errorMessage = `Failed to find 'Reservations' text after ${maxNavigationAttempts} navigation attempts`;
+      await dualLogError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    await dualLogInfo(
+      "Successfully navigated to booking data page and confirmed Reservations section"
+    );
 
     // Update progress
     if (jobId) {
@@ -506,10 +615,6 @@ export async function getAgodaBookingData(
       );
     }
 
-    // Wait for the page to load completely with enhanced server environment handling
-    await dualLogInfo("Waiting for page to load completely...");
-    await delay(5000);
-
     // Check pause state before proceeding
     // await scrapingStateManager.waitWhilePaused();
     // if (!scrapingStateManager.isRunning()) {
@@ -517,799 +622,23 @@ export async function getAgodaBookingData(
     //   throw new Error("Scraping was stopped during booking data retrieval");
     // }
 
-    // Enhanced page debugging for server environment
-    await dualLogInfo(
-      "Starting enhanced page analysis for server environment..."
-    );
+    // Wait for the download button container to be visible
+    await dualLogInfo("Looking for CSV download button...");
 
-    // Check current URL and page state
-    const currentUrl = newPage.url();
-    await dualLogInfo(`Current page URL: ${currentUrl}`);
-
-    // Check if we're on the right page
-    if (
-      !currentUrl.includes("ycs.agoda.com") ||
-      !currentUrl.includes("booking")
-    ) {
-      await dualLogError(
-        `Unexpected page URL. Expected booking page, got: ${currentUrl}`
-      );
-
-      // Take a screenshot for debugging
-      try {
-        const screenshot = await newPage.screenshot({ encoding: "base64" });
-        await dualLogInfo(
-          `Page screenshot taken (${screenshot.length} chars)`,
-          { jobId }
-        );
-      } catch (screenshotError) {
-        await dualLogError("Failed to take screenshot:", screenshotError);
-      }
-
-      throw new Error(
-        `Not on expected booking page. Current URL: ${currentUrl}`
-      );
-    }
-
-    // Check page content and authentication state
-    const pageAnalysis = await newPage.evaluate(() => {
-      const body = document.body;
-      const title = document.title;
-      const hasLoginForm =
-        !!document.querySelector('form[action*="login"]') ||
-        !!document.querySelector('input[type="password"]');
-      const hasErrorMessage = !!document.querySelector(
-        '.error, .alert, [class*="error"], [class*="alert"]'
-      );
-      const bodyText = body ? body.innerText.substring(0, 500) : "";
-      const allButtons = Array.from(document.querySelectorAll("button")).map(
-        (btn) => ({
-          text: btn.textContent?.trim() || "",
-          className: btn.className,
-          dataElement: btn.getAttribute("data-element-name"),
-          id: btn.id,
-          visible: (btn as HTMLElement).offsetParent !== null,
-        })
-      );
-
-      return {
-        title,
-        hasLoginForm,
-        hasErrorMessage,
-        bodyTextPreview: bodyText,
-        buttonCount: allButtons.length,
-        buttons: allButtons.slice(0, 10), // First 10 buttons for analysis
-        pageHeight: body ? body.scrollHeight : 0,
-        pageWidth: body ? body.scrollWidth : 0,
-      };
-    });
-
-    await dualLogInfo("Page analysis results:", {
-      jobId,
-      pageAnalysis: {
-        ...pageAnalysis,
-        bodyTextPreview: pageAnalysis.bodyTextPreview.substring(0, 200) + "...",
-      },
-    });
-
-    // Check for authentication issues
-    if (pageAnalysis.hasLoginForm) {
-      await dualLogError("Login form detected - user may not be authenticated");
-      throw new Error(
-        "Authentication required - login form detected on booking page"
-      );
-    }
-
-    if (pageAnalysis.hasErrorMessage) {
-      await dualLogError("Error message detected on page");
-    }
-
-    // Wait for page to be fully interactive with multiple strategies
-    await dualLogInfo("Waiting for page to be fully interactive...");
-
-    // Strategy 1: Wait for network to be idle
     try {
-      await newPage.waitForNavigation({
-        waitUntil: "networkidle0",
-        timeout: 10000,
-      });
-    } catch (networkError) {
-      await dualLogInfo("Network idle wait failed, continuing...");
-      await delay(3000);
-    }
-
-    // Strategy 2: Wait for common page elements to be present
-    const commonSelectors = [
-      "body",
-      "main",
-      '[role="main"]',
-      ".content",
-      "#content",
-      ".page-content",
-    ];
-
-    for (const selector of commonSelectors) {
-      try {
-        await newPage.waitForSelector(selector, { timeout: 5000 });
-        await dualLogInfo(`Found common element: ${selector}`);
-        break;
-      } catch (error) {
-        continue;
-      }
-    }
-
-    // Strategy 3: Wait for any button to be present (indicates page is loaded)
-    try {
-      await newPage.waitForSelector("button", { timeout: 10000 });
-      await dualLogInfo("At least one button found on page");
-    } catch (error) {
-      await dualLogError(
-        "No buttons found on page - page may not be loaded properly"
-      );
-    }
-
-    // Additional wait for server environment
-    await dualLogInfo("Additional wait for server environment stability...");
-    await delay(8000);
-
-    // First check if there are any bookings on the page
-    await dualLogInfo("Checking if page has booking data...");
-
-    const pageContentAnalysis = await newPage.evaluate(() => {
-      // Look for indicators that there are bookings
-      const bookingIndicators = [
-        "booking",
-        "reservation",
-        "guest",
-        "check-in",
-        "check-out",
-        "total",
-        "amount",
-      ];
-
-      const pageText = document.body?.innerText?.toLowerCase() || "";
-      const foundIndicators = bookingIndicators.filter((indicator) =>
-        pageText.includes(indicator)
-      );
-
-      // Look for specific booking-related elements
-      const bookingElements = [
-        "table",
-        '[data-element-name*="booking"]',
-        '[class*="booking"]',
-        '[class*="reservation"]',
-        ".booking-list",
-        ".reservation-list",
-      ];
-
-      const foundElements = bookingElements.map((selector) => {
-        try {
-          const elements = document.querySelectorAll(selector);
-          return {
-            selector,
-            count: elements.length,
-            hasContent: elements.length > 0,
-          };
-        } catch (error) {
-          return {
-            selector,
-            count: 0,
-            hasContent: false,
-          };
-        }
-      });
-
-      // Check for "no data" or "empty" messages
-      const noDataIndicators = [
-        "no bookings",
-        "no reservations",
-        "no data",
-        "no results",
-        "empty",
-        "no records found",
-      ];
-
-      const foundNoDataIndicators = noDataIndicators.filter((indicator) =>
-        pageText.includes(indicator)
-      );
-
-      return {
-        pageTextLength: pageText.length,
-        foundBookingIndicators: foundIndicators,
-        foundElements: foundElements,
-        foundNoDataIndicators: foundNoDataIndicators,
-        hasBookingTable: !!document.querySelector("table"),
-        pageTextSample: pageText.substring(0, 500),
-      };
-    });
-
-    await dualLogInfo("Page content analysis:", pageContentAnalysis);
-
-    // If we detect "no data" indicators, return empty result early
-    if (pageContentAnalysis.foundNoDataIndicators.length > 0) {
-      await dualLogInfo(
-        "Detected 'no data' indicators on page - no bookings available for this date range"
-      );
-
-      // Update progress to indicate completion with no data
-      if (jobId) {
-        await progressManager.updateJobProgress(
-          jobId,
-          undefined,
-          100,
-          "agoda_booking_data_no_data_available",
-          undefined
-        );
-      }
-
-      return []; // Return empty array for no data scenarios
-    }
-
-    // If booking data is found, wait for the download button to appear
-    // The download button may take time to load after the booking data appears
-    if (
-      pageContentAnalysis.foundBookingIndicators.length > 0 ||
-      pageContentAnalysis.hasBookingTable
-    ) {
-      await dualLogInfo(
-        "Booking data detected - waiting for download button to appear..."
-      );
-
-      // Try clicking the search button to ensure booking data is fully loaded
-      try {
-        await dualLogInfo(
-          "Attempting to click search button to ensure data is loaded..."
-        );
-
-        const searchButton = await newPage.$(
-          'button[data-element-name="ycs-booking-search-button-apply"]'
-        );
-        if (searchButton) {
-          await searchButton.click();
-          await dualLogInfo(
-            "Search button clicked - waiting for results to load..."
-          );
-          await delay(5000);
-        } else {
-          await dualLogInfo(
-            "Search button not found - continuing without search click"
-          );
-        }
-      } catch (searchError) {
-        await dualLogInfo("Error clicking search button:", searchError);
-        // Continue anyway
-      }
-
-      // Wait longer for the download button to appear after booking data loads
-      await delay(10000); // Additional 10 seconds wait
-
-      // Check if the page text now contains download button text
-      const downloadButtonCheck = await newPage.evaluate(() => {
-        const pageText = document.body?.innerText?.toLowerCase() || "";
-        const hasDownloadText =
-          pageText.includes("download") && pageText.includes("csv");
-        const downloadButtons = Array.from(
-          document.querySelectorAll("button")
-        ).filter((btn) => {
-          const text = btn.textContent?.toLowerCase() || "";
-          return text.includes("download") || text.includes("csv");
-        });
-
-        return {
-          hasDownloadText,
-          downloadButtonCount: downloadButtons.length,
-          downloadButtonTexts: downloadButtons
-            .map((btn) => btn.textContent?.trim())
-            .slice(0, 5),
-          totalButtons: document.querySelectorAll("button").length,
-          pageTextSample: pageText.substring(pageText.length - 200), // Last 200 chars
-        };
-      });
-
-      await dualLogInfo(
-        "Download button check after waiting:",
-        downloadButtonCheck
-      );
-
-      // If still no download button, try scrolling to make sure all content is loaded
-      if (downloadButtonCheck.downloadButtonCount === 0) {
-        await dualLogInfo(
-          "No download button found - trying to scroll to load more content..."
-        );
-
-        // Scroll to bottom to trigger any lazy loading
-        await newPage.evaluate(() => {
-          window.scrollTo(0, document.body.scrollHeight);
-        });
-
-        await delay(3000);
-
-        // Scroll back to top
-        await newPage.evaluate(() => {
-          window.scrollTo(0, 0);
-        });
-
-        await delay(3000);
-
-        // Check again after scrolling
-        const postScrollCheck = await newPage.evaluate(() => {
-          const pageText = document.body?.innerText?.toLowerCase() || "";
-          const downloadButtons = Array.from(
-            document.querySelectorAll("button")
-          ).filter((btn) => {
-            const text = btn.textContent?.toLowerCase() || "";
-            return text.includes("download") || text.includes("csv");
-          });
-
-          return {
-            downloadButtonCount: downloadButtons.length,
-            downloadButtonTexts: downloadButtons
-              .map((btn) => btn.textContent?.trim())
-              .slice(0, 5),
-            totalButtons: document.querySelectorAll("button").length,
-          };
-        });
-
-        await dualLogInfo(
-          "Download button check after scrolling:",
-          postScrollCheck
-        );
-      }
-    }
-
-    // Wait for the download button container to be visible with enhanced detection
-    await dualLogInfo(
-      "Looking for CSV download button with enhanced detection..."
-    );
-
-    // Multiple selector strategies for the download button
-    const downloadButtonSelectors = [
-      'button[data-element-name="ycs-booking-list-download"]',
-      'button[leadingicon="fill.arrow.download"]',
-      'button:has-text("Download")',
-      'button:has-text("CSV")',
-      'button:has-text(".csv")',
-      'button[class*="download"]',
-      '[data-element-name*="download"]',
-      'button:contains("Download")',
-      'button span:contains("Download")',
-    ];
-
-    let downloadButtonFound = false;
-    let foundSelector = "";
-
-    // Try each selector with individual timeouts
-    for (let i = 0; i < downloadButtonSelectors.length; i++) {
-      const selector = downloadButtonSelectors[i];
-
-      try {
-        await dualLogInfo(
-          `Trying selector ${i + 1}/${
-            downloadButtonSelectors.length
-          }: ${selector}`
-        );
-
-        await newPage.waitForSelector(selector, {
+      // Wait for the download button using the specific selector from the HTML structure
+      await newPage.waitForSelector(
+        'button[data-element-name="ycs-booking-list-download"]',
+        {
           visible: true,
-          timeout: 8000, // 8 seconds per selector
-        });
-
-        foundSelector = selector;
-        downloadButtonFound = true;
-        await dualLogInfo(
-          `✅ CSV download button found with selector: ${selector}`
-        );
-        break;
-      } catch (selectorError) {
-        await dualLogInfo(`❌ Selector failed: ${selector}`);
-
-        // If this is the primary selector, wait a bit longer and try again
-        if (i === 0) {
-          await dualLogInfo(
-            "Primary selector failed, waiting longer and retrying..."
-          );
-          await delay(5000);
-
-          try {
-            await newPage.waitForSelector(selector, {
-              visible: true,
-              timeout: 15000, // Longer timeout for primary selector retry
-            });
-
-            foundSelector = selector;
-            downloadButtonFound = true;
-            await dualLogInfo(
-              `✅ CSV download button found on retry with primary selector: ${selector}`
-            );
-            break;
-          } catch (retryError) {
-            await dualLogInfo(
-              "Primary selector retry also failed, continuing with other selectors..."
-            );
-          }
+          timeout: selectorTimeout,
         }
-
-        continue;
-      }
-    }
-
-    if (!downloadButtonFound) {
-      // Before giving up, try reopening the page once more
-      await dualLogError(
-        "CSV download button not found with any selector. Attempting page reload and retry..."
       );
 
-      try {
-        await dualLogInfo("Closing current page and reopening booking URL...");
-
-        // Close the current page
-        await newPage.close();
-
-        // Wait a moment before reopening
-        await delay(3000);
-
-        // Create a new page and navigate again
-        newPage = await browser.newPage();
-
-        // Construct the booking URL again
-        const retryBookingUrl = `https://ycs.agoda.com/mldc/en-us/app/reporting/booking/${agodaId}?startDate=${formattedStartDate}&endDate=${formattedEndDate}`;
-        await dualLogInfo(
-          `Retry - Navigating to booking data URL: ${retryBookingUrl}`
-        );
-
-        await newPage.goto(retryBookingUrl, {
-          waitUntil: "networkidle2",
-          timeout: loadingTimeout,
-        });
-
-        await newPage.waitForSelector("body", { timeout: loadingTimeout });
-        await dualLogInfo(
-          "Retry - Successfully navigated to booking data page"
-        );
-
-        // Wait for page to load completely
-        await delay(8000);
-
-        // Check if running in headless mode again
-        isHeadless = await newPage.evaluate(() => {
-          return navigator.webdriver === true || window.outerHeight === 0;
-        });
-
-        await dualLogInfo(
-          `Retry - Browser mode detected: ${
-            isHeadless ? "headless" : "headed"
-          }`,
-          { jobId }
-        );
-
-        // Try to find the download button again with a shorter timeout
-        await dualLogInfo("Retry - Looking for CSV download button...");
-
-        let retryButtonFound = false;
-        let retryFoundSelector = "";
-
-        for (let i = 0; i < downloadButtonSelectors.length; i++) {
-          const selector = downloadButtonSelectors[i];
-
-          try {
-            await dualLogInfo(
-              `Retry - Trying selector ${i + 1}/${
-                downloadButtonSelectors.length
-              }: ${selector}`
-            );
-
-            await newPage.waitForSelector(selector, {
-              visible: true,
-              timeout: 10000, // Shorter timeout for retry
-            });
-
-            retryFoundSelector = selector;
-            retryButtonFound = true;
-            await dualLogInfo(
-              `✅ Retry - CSV download button found with selector: ${selector}`
-            );
-            break;
-          } catch (selectorError) {
-            await dualLogInfo(`❌ Retry - Selector failed: ${selector}`);
-            continue;
-          }
-        }
-
-        if (retryButtonFound) {
-          // Update the found selector and continue with the download process
-          foundSelector = retryFoundSelector;
-          downloadButtonFound = true;
-          await dualLogInfo(
-            "✅ Retry successful - Download button found after page reload!"
-          );
-
-          // Set up CDP session and download configuration again for the new page
-          try {
-            await dualLogInfo(
-              "Setting up download configuration for retry page..."
-            );
-
-            // Create CDP session for the new page
-            client = await newPage.createCDPSession();
-
-            // Enable downloads with headless-compatible settings
-            await client.send("Page.setDownloadBehavior", {
-              behavior: "allow",
-              downloadPath: downloadPath,
-              eventsEnabled: true,
-            });
-
-            // Set additional permissions for headless mode
-            if (isHeadless) {
-              await dualLogInfo(
-                "Applying headless-specific download settings for retry..."
-              );
-
-              // Enable file system access for headless mode
-              try {
-                await client.send("Browser.grantPermissions", {
-                  permissions: ["downloads", "downloadsOpen"],
-                  origin: "https://ycs.agoda.com",
-                });
-              } catch (error) {
-                await dualLogInfo(
-                  "Browser.grantPermissions not supported, trying alternative..."
-                );
-              }
-
-              // Set download behavior with additional headless flags
-              try {
-                await client.send("Page.setDownloadBehavior", {
-                  behavior: "allowAndName",
-                  downloadPath: downloadPath,
-                  eventsEnabled: true,
-                });
-              } catch (error) {
-                await dualLogInfo(
-                  "allowAndName not supported, using allow behavior"
-                );
-              }
-            }
-
-            // Platform-specific settings (keeping existing macOS logic)
-            if (process.platform === "darwin") {
-              await dualLogInfo(
-                "Applying macOS-specific download settings for retry..."
-              );
-
-              // Set permissions for downloads
-              await client
-                .send("Browser.setPermission", {
-                  permission: { name: "downloads" },
-                  setting: "granted",
-                  origin: "https://ycs.agoda.com",
-                })
-                .catch(() => {
-                  // Ignore if this fails - not all browser versions support this
-                  dualLogInfo(
-                    "Browser.setPermission not supported, continuing..."
-                  );
-                });
-            }
-
-            await dualLogInfo(
-              "Download configuration completed for retry page"
-            );
-          } catch (setupError: any) {
-            await dualLogError(
-              "Error setting up download configuration for retry:",
-              setupError.message
-            );
-            // Continue anyway - the download might still work
-          }
-
-          // Continue to the download process (we'll break out of this error handling)
-        } else {
-          await dualLogError(
-            "Retry failed - Download button still not found after page reload"
-          );
-        }
-      } catch (retryError: any) {
-        await dualLogError(
-          "Error during page reload retry:",
-          retryError.message
-        );
-      }
-    }
-
-    // If still not found after retry, perform final analysis
-    if (!downloadButtonFound) {
-      // Final debugging before failing
-      await dualLogError(
-        "CSV download button not found even after retry. Performing final analysis..."
-      );
-
-      const finalAnalysis = await newPage.evaluate(() => {
-        // Helper function to safely get className as string
-        const getClassNameString = (el: Element): string => {
-          try {
-            if (typeof el.className === "string") {
-              return el.className.toLowerCase();
-            } else if (
-              el.className &&
-              typeof (el.className as any).toString === "function"
-            ) {
-              return (el.className as any).toString().toLowerCase();
-            } else if (el.getAttribute) {
-              return (el.getAttribute("class") || "").toLowerCase();
-            }
-            return "";
-          } catch (error) {
-            return "";
-          }
-        };
-
-        // Helper function to safely get text content
-        const getTextContent = (el: Element): string => {
-          try {
-            return (el.textContent || "").toLowerCase();
-          } catch (error) {
-            return "";
-          }
-        };
-
-        // Helper function to safely get id
-        const getId = (el: Element): string => {
-          try {
-            return (el.id || "").toLowerCase();
-          } catch (error) {
-            return "";
-          }
-        };
-
-        const allElements = Array.from(document.querySelectorAll("*"))
-          .filter((el) => {
-            try {
-              const text = getTextContent(el);
-              const className = getClassNameString(el);
-              const id = getId(el);
-
-              return (
-                text.includes("download") ||
-                text.includes("csv") ||
-                className.includes("download") ||
-                id.includes("download") ||
-                el.hasAttribute("data-element-name")
-              );
-            } catch (error) {
-              return false;
-            }
-          })
-          .map((el) => {
-            try {
-              return {
-                tagName: el.tagName || "UNKNOWN",
-                textContent: (el.textContent || "").trim().substring(0, 50),
-                className: getClassNameString(el),
-                id: el.id || "",
-                dataElementName: el.getAttribute("data-element-name") || null,
-                visible: !!(el as HTMLElement).offsetParent,
-              };
-            } catch (error) {
-              return {
-                tagName: "ERROR",
-                textContent: "Error reading element",
-                className: "",
-                id: "",
-                dataElementName: null,
-                visible: false,
-              };
-            }
-          });
-
-        // Also check for "no data" or "empty" messages
-        const noDataMessages = Array.from(document.querySelectorAll("*"))
-          .filter((el) => {
-            try {
-              const text = getTextContent(el);
-              return (
-                text.includes("no data") ||
-                text.includes("no bookings") ||
-                text.includes("no results") ||
-                text.includes("empty") ||
-                text.includes("no records")
-              );
-            } catch (error) {
-              return false;
-            }
-          })
-          .map((el) => {
-            try {
-              return {
-                tagName: el.tagName || "UNKNOWN",
-                textContent: (el.textContent || "").trim().substring(0, 100),
-                visible: !!(el as HTMLElement).offsetParent,
-              };
-            } catch (error) {
-              return {
-                tagName: "ERROR",
-                textContent: "Error reading element",
-                visible: false,
-              };
-            }
-          });
-
-        // Safely get body className
-        let bodyClasses = "";
-        try {
-          if (document.body) {
-            bodyClasses = getClassNameString(document.body);
-          }
-        } catch (error) {
-          bodyClasses = "error-reading-body-classes";
-        }
-
-        // Safely get body text sample
-        let bodyTextSample = "";
-        try {
-          if (document.body && document.body.innerText) {
-            bodyTextSample = document.body.innerText.substring(0, 1000);
-          }
-        } catch (error) {
-          bodyTextSample = "error-reading-body-text";
-        }
-
-        return {
-          elementsWithDownload: allElements.slice(0, 20),
-          totalElements: allElements.length,
-          noDataMessages: noDataMessages.slice(0, 5),
-          pageTitle: document.title || "Unknown Title",
-          bodyClasses: bodyClasses,
-          url: window.location.href || "Unknown URL",
-          bodyTextSample: bodyTextSample,
-        };
-      });
-
-      await dualLogError(
-        "Final page analysis - elements that might be download buttons:",
-        finalAnalysis
-      );
-
-      // Check if this might be a "no data" scenario
-      if (finalAnalysis.noDataMessages.length > 0) {
-        await dualLogInfo(
-          "Detected possible 'no data' scenario:",
-          finalAnalysis.noDataMessages
-        );
-
-        // Return empty array instead of throwing error for no data scenarios
-        await dualLogInfo(
-          "No booking data available for the specified date range - returning empty result"
-        );
-
-        // Update progress to indicate completion with no data
-        if (jobId) {
-          await progressManager.updateJobProgress(
-            jobId,
-            undefined,
-            100,
-            "agoda_booking_data_no_data_available",
-            undefined
-          );
-        }
-
-        return []; // Return empty array for no data scenarios
-      }
-
-      // Take a screenshot for debugging
-      try {
-        const screenshot = await newPage.screenshot({ encoding: "base64" });
-        await dualLogInfo(
-          `Debug screenshot taken (${screenshot.length} chars)`,
-          { jobId }
-        );
-      } catch (screenshotError) {
-        await dualLogError("Failed to take debug screenshot:", screenshotError);
-      }
-
-      throw new Error(
-        "CSV download button not found on the page after comprehensive search"
-      );
+      await dualLogInfo("CSV download button found");
+    } catch (error: any) {
+      await dualLogError("Error waiting for CSV download button:", error);
+      throw new Error("CSV download button not found on the page");
     }
 
     // Update progress - download button found
@@ -1329,60 +658,26 @@ export async function getAgodaBookingData(
       jobId,
     });
 
-    // Download path already set up earlier
+    // Set up download path with platform-specific considerations
+    const downloadPath = path.resolve(process.cwd(), "downloads");
+    if (!fs.existsSync(downloadPath)) {
+      fs.mkdirSync(downloadPath, { recursive: true });
+    }
 
     await dualLogInfo(
       `Download configuration - Platform: ${process.platform}, Path: ${downloadPath}`,
       { jobId, platform: process.platform, downloadPath }
     );
 
-    // Configure download behavior using CDP session with headless-compatible settings
+    // Configure download behavior using CDP session with macOS-specific settings
     client = await newPage.createCDPSession();
 
-    // Check if running in headless mode
-    isHeadless = await newPage.evaluate(() => {
-      return navigator.webdriver === true || window.outerHeight === 0;
-    });
-
-    await dualLogInfo(
-      `Browser mode detected: ${isHeadless ? "headless" : "headed"}`,
-      { jobId }
-    );
-
-    // Enable downloads with headless-compatible settings
+    // Enable downloads with more permissive settings for macOS
     await client.send("Page.setDownloadBehavior", {
       behavior: "allow",
       downloadPath: downloadPath,
-      eventsEnabled: true,
+      eventsEnabled: true, // Enable download events
     });
-
-    // Set additional permissions for headless mode
-    if (isHeadless) {
-      await dualLogInfo("Applying headless-specific download settings...");
-
-      // Enable file system access for headless mode
-      try {
-        await client.send("Browser.grantPermissions", {
-          permissions: ["downloads", "downloadsOpen"],
-          origin: "https://ycs.agoda.com",
-        });
-      } catch (error) {
-        await dualLogInfo(
-          "Browser.grantPermissions not supported, trying alternative..."
-        );
-      }
-
-      // Set download behavior with additional headless flags
-      try {
-        await client.send("Page.setDownloadBehavior", {
-          behavior: "allowAndName",
-          downloadPath: downloadPath,
-          eventsEnabled: true,
-        });
-      } catch (error) {
-        await dualLogInfo("allowAndName not supported, using allow behavior");
-      }
-    }
 
     // Additional macOS-specific browser settings
     if (process.platform === "darwin") {
@@ -1403,8 +698,36 @@ export async function getAgodaBookingData(
 
     await dualLogInfo("Download path configured, initiating CSV download...");
 
-    // Use the found selector from the enhanced detection above
-    const usedSelector = foundSelector;
+    // Wait for the button to be fully interactive with multiple selectors
+    const downloadButtonSelectors = [
+      'button[data-element-name="ycs-booking-list-download"]',
+      'button[leadingicon="fill.arrow.download"]',
+      'button:has-text("Download (.csv)")',
+      'button:has([role="img"]) span:has-text("Download")',
+    ];
+
+    let buttonFound = false;
+    let usedSelector = "";
+
+    for (const selector of downloadButtonSelectors) {
+      try {
+        await newPage.waitForSelector(selector, {
+          visible: true,
+          timeout: 10000,
+        });
+        usedSelector = selector;
+        buttonFound = true;
+        await dualLogInfo(`Download button found with selector: ${selector}`);
+        break;
+      } catch (error) {
+        await dualLogInfo(`Selector failed: ${selector}`);
+        continue;
+      }
+    }
+
+    if (!buttonFound) {
+      throw new Error("Download button not found with any selector");
+    }
 
     // Try multiple click approaches for better macOS compatibility
     try {
@@ -1466,30 +789,6 @@ export async function getAgodaBookingData(
         throw new Error("Download button is hidden via CSS");
       }
 
-      // Set up network request interception for headless download fallback
-      let downloadUrl: string | null = null;
-      const requestHandler = (request: any) => {
-        const url = request.url();
-        // Look for CSV download requests
-        if (
-          url.includes("csv") ||
-          url.includes("download") ||
-          request.headers()["content-disposition"]
-        ) {
-          downloadUrl = url;
-          dualLogInfo(`Intercepted potential download URL: ${url}`);
-        }
-      };
-
-      // Enable request interception for headless mode
-      if (isHeadless) {
-        await newPage.setRequestInterception(true);
-        newPage.on("request", (request) => {
-          requestHandler(request);
-          request.continue();
-        });
-      }
-
       // Method 1: Scroll to button and ensure it's in view
       await newPage.evaluate((selector) => {
         const button = document.querySelector(selector) as HTMLButtonElement;
@@ -1537,11 +836,6 @@ export async function getAgodaBookingData(
           if (span) {
             span.click();
           }
-
-          // For headless mode, also trigger any onclick handlers directly
-          if (button.onclick) {
-            button.onclick(new MouseEvent("click"));
-          }
         }
       }, usedSelector);
 
@@ -1585,111 +879,18 @@ export async function getAgodaBookingData(
       }
     });
 
-    // Wait for download to complete with enhanced detection for headless mode
+    // Wait for download to complete with event-based detection
     await dualLogInfo("Waiting for CSV download to complete...");
 
-    // Enhanced download detection for headless mode
-    let downloadDetectionAttempts = 0;
-    const maxDetectionAttempts = 15; // 30 seconds total
-
-    while (
-      downloadDetectionAttempts < maxDetectionAttempts &&
-      !downloadStarted
-    ) {
-      await delay(2000);
-      downloadDetectionAttempts++;
-
-      // Check for files in download directory
-      try {
-        const files = fs.readdirSync(downloadPath);
-        const csvFiles = files.filter(
-          (f) =>
-            f.endsWith(".csv") &&
-            !f.includes(".crdownload") &&
-            !f.includes(".download")
-        );
-
-        if (csvFiles.length > 0) {
-          await dualLogInfo(`Found CSV file during detection: ${csvFiles[0]}`);
-          downloadStarted = true;
-          break;
-        }
-      } catch (error) {
-        // Continue checking
-      }
-
-      await dualLogInfo(
-        `Download detection attempt ${downloadDetectionAttempts}/${maxDetectionAttempts}`
-      );
-    }
+    // Initial wait to let download start
+    await delay(3000);
 
     // Check if download started
     if (!downloadStarted) {
-      await dualLogError("Download did not start within detection period", {
+      await dualLogError("Download did not start within 3 seconds", {
         jobId,
         platform: process.platform,
-        isHeadless,
       });
-
-      // In headless mode, try alternative download method
-      if (isHeadless) {
-        await dualLogInfo(
-          "Attempting alternative download method for headless mode..."
-        );
-
-        try {
-          // Try to get the download URL by inspecting network requests
-          const downloadUrlFromNetwork = await newPage.evaluate(() => {
-            // Look for any recent network requests that might be the CSV download
-            const performanceEntries = performance.getEntriesByType("resource");
-            const recentEntries = performanceEntries.filter(
-              (entry) =>
-                entry.name.includes("csv") ||
-                entry.name.includes("download") ||
-                entry.name.includes("booking")
-            );
-            return recentEntries.length > 0
-              ? recentEntries[recentEntries.length - 1].name
-              : null;
-          });
-
-          if (downloadUrlFromNetwork) {
-            await dualLogInfo(
-              `Found potential download URL: ${downloadUrlFromNetwork}`
-            );
-
-            // Download the file directly using fetch
-            const response = await newPage.evaluate(async (url) => {
-              const response = await fetch(url);
-              if (response.ok) {
-                const blob = await response.blob();
-                return await new Promise((resolve) => {
-                  const reader = new FileReader();
-                  reader.onload = () => resolve(reader.result);
-                  reader.readAsText(blob);
-                });
-              }
-              return null;
-            }, downloadUrlFromNetwork);
-
-            if (response) {
-              // Save the file directly
-              const timestamp = Date.now();
-              const fallbackFilename = `agoda_booking_data_${timestamp}.csv`;
-              const fallbackPath = path.join(downloadPath, fallbackFilename);
-              fs.writeFileSync(fallbackPath, response as string);
-
-              await dualLogInfo(
-                `Successfully downloaded CSV using fallback method: ${fallbackFilename}`
-              );
-              downloadStarted = true;
-              downloadCompleted = true;
-            }
-          }
-        } catch (fallbackError) {
-          await dualLogError("Fallback download method failed:", fallbackError);
-        }
-      }
     } else {
       await dualLogInfo("Download detected, waiting for completion...");
 
