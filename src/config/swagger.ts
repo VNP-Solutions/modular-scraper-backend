@@ -10,6 +10,7 @@ dotenv.config();
 const port = process.env.PORT || "3000";
 const serverUrl = `http://localhost:${port}`;
 const serverUrl2 = "https://modular-api-2.vnpmanage.online";
+const serverUrl3 = process.env.SWAGGER_BASE_URL;
 
 // Load external YAML files
 function loadYamlDocs() {
@@ -45,6 +46,10 @@ const options: swaggerJsdoc.Options = {
       {
         url: serverUrl2,
         description: "Development server",
+      },
+      {
+        url: serverUrl3,
+        description: "Demo server",
       },
     ],
     components: {
