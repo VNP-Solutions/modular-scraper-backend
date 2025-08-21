@@ -438,6 +438,7 @@ export async function getAgodaBookingData(
 ): Promise<any[]> {
   let newPage: Page | undefined;
   let client: any;
+  let isHeadless = false;
 
   try {
     // Check if scraping is paused before starting
@@ -499,7 +500,8 @@ export async function getAgodaBookingData(
       );
     }
 
-    // Wait for the page to load completely
+    // Wait for the page to load completely with enhanced server environment handling
+    await dualLogInfo("Waiting for page to load completely...");
     await delay(5000);
 
     // Check pause state before proceeding
@@ -509,23 +511,321 @@ export async function getAgodaBookingData(
     //   throw new Error("Scraping was stopped during booking data retrieval");
     // }
 
-    // Wait for the download button container to be visible
-    await dualLogInfo("Looking for CSV download button...");
+    // Enhanced page debugging for server environment
+    await dualLogInfo(
+      "Starting enhanced page analysis for server environment..."
+    );
 
-    try {
-      // Wait for the download button using the specific selector from the HTML structure
-      await newPage.waitForSelector(
-        'button[data-element-name="ycs-booking-list-download"]',
-        {
-          visible: true,
-          timeout: selectorTimeout,
-        }
+    // Check current URL and page state
+    const currentUrl = newPage.url();
+    await dualLogInfo(`Current page URL: ${currentUrl}`);
+
+    // Check if we're on the right page
+    if (
+      !currentUrl.includes("ycs.agoda.com") ||
+      !currentUrl.includes("booking")
+    ) {
+      await dualLogError(
+        `Unexpected page URL. Expected booking page, got: ${currentUrl}`
       );
 
-      await dualLogInfo("CSV download button found");
-    } catch (error: any) {
-      await dualLogError("Error waiting for CSV download button:", error);
-      throw new Error("CSV download button not found on the page");
+      // Take a screenshot for debugging
+      try {
+        const screenshot = await newPage.screenshot({ encoding: "base64" });
+        await dualLogInfo(
+          `Page screenshot taken (${screenshot.length} chars)`,
+          { jobId }
+        );
+      } catch (screenshotError) {
+        await dualLogError("Failed to take screenshot:", screenshotError);
+      }
+
+      throw new Error(
+        `Not on expected booking page. Current URL: ${currentUrl}`
+      );
+    }
+
+    // Check page content and authentication state
+    const pageAnalysis = await newPage.evaluate(() => {
+      const body = document.body;
+      const title = document.title;
+      const hasLoginForm =
+        !!document.querySelector('form[action*="login"]') ||
+        !!document.querySelector('input[type="password"]');
+      const hasErrorMessage = !!document.querySelector(
+        '.error, .alert, [class*="error"], [class*="alert"]'
+      );
+      const bodyText = body ? body.innerText.substring(0, 500) : "";
+      const allButtons = Array.from(document.querySelectorAll("button")).map(
+        (btn) => ({
+          text: btn.textContent?.trim() || "",
+          className: btn.className,
+          dataElement: btn.getAttribute("data-element-name"),
+          id: btn.id,
+          visible: (btn as HTMLElement).offsetParent !== null,
+        })
+      );
+
+      return {
+        title,
+        hasLoginForm,
+        hasErrorMessage,
+        bodyTextPreview: bodyText,
+        buttonCount: allButtons.length,
+        buttons: allButtons.slice(0, 10), // First 10 buttons for analysis
+        pageHeight: body ? body.scrollHeight : 0,
+        pageWidth: body ? body.scrollWidth : 0,
+      };
+    });
+
+    await dualLogInfo("Page analysis results:", {
+      jobId,
+      pageAnalysis: {
+        ...pageAnalysis,
+        bodyTextPreview: pageAnalysis.bodyTextPreview.substring(0, 200) + "...",
+      },
+    });
+
+    // Check for authentication issues
+    if (pageAnalysis.hasLoginForm) {
+      await dualLogError("Login form detected - user may not be authenticated");
+      throw new Error(
+        "Authentication required - login form detected on booking page"
+      );
+    }
+
+    if (pageAnalysis.hasErrorMessage) {
+      await dualLogError("Error message detected on page");
+    }
+
+    // Wait for page to be fully interactive with multiple strategies
+    await dualLogInfo("Waiting for page to be fully interactive...");
+
+    // Strategy 1: Wait for network to be idle
+    try {
+      await newPage.waitForNavigation({
+        waitUntil: "networkidle0",
+        timeout: 10000,
+      });
+    } catch (networkError) {
+      await dualLogInfo("Network idle wait failed, continuing...");
+      await delay(3000);
+    }
+
+    // Strategy 2: Wait for common page elements to be present
+    const commonSelectors = [
+      "body",
+      "main",
+      '[role="main"]',
+      ".content",
+      "#content",
+      ".page-content",
+    ];
+
+    for (const selector of commonSelectors) {
+      try {
+        await newPage.waitForSelector(selector, { timeout: 5000 });
+        await dualLogInfo(`Found common element: ${selector}`);
+        break;
+      } catch (error) {
+        continue;
+      }
+    }
+
+    // Strategy 3: Wait for any button to be present (indicates page is loaded)
+    try {
+      await newPage.waitForSelector("button", { timeout: 10000 });
+      await dualLogInfo("At least one button found on page");
+    } catch (error) {
+      await dualLogError(
+        "No buttons found on page - page may not be loaded properly"
+      );
+    }
+
+    // Additional wait for server environment
+    await dualLogInfo("Additional wait for server environment stability...");
+    await delay(8000);
+
+    // Wait for the download button container to be visible with enhanced detection
+    await dualLogInfo(
+      "Looking for CSV download button with enhanced detection..."
+    );
+
+    // Multiple selector strategies for the download button
+    const downloadButtonSelectors = [
+      'button[data-element-name="ycs-booking-list-download"]',
+      'button[leadingicon="fill.arrow.download"]',
+      'button:has-text("Download")',
+      'button:has-text("CSV")',
+      'button:has-text(".csv")',
+      'button[class*="download"]',
+      '[data-element-name*="download"]',
+      'button:contains("Download")',
+      'button span:contains("Download")',
+    ];
+
+    let downloadButtonFound = false;
+    let foundSelector = "";
+
+    // Try each selector with individual timeouts
+    for (let i = 0; i < downloadButtonSelectors.length; i++) {
+      const selector = downloadButtonSelectors[i];
+
+      try {
+        await dualLogInfo(
+          `Trying selector ${i + 1}/${
+            downloadButtonSelectors.length
+          }: ${selector}`
+        );
+
+        await newPage.waitForSelector(selector, {
+          visible: true,
+          timeout: 8000, // 8 seconds per selector
+        });
+
+        foundSelector = selector;
+        downloadButtonFound = true;
+        await dualLogInfo(
+          `✅ CSV download button found with selector: ${selector}`
+        );
+        break;
+      } catch (selectorError) {
+        await dualLogInfo(`❌ Selector failed: ${selector}`);
+
+        // If this is the primary selector, wait a bit longer and try again
+        if (i === 0) {
+          await dualLogInfo(
+            "Primary selector failed, waiting longer and retrying..."
+          );
+          await delay(5000);
+
+          try {
+            await newPage.waitForSelector(selector, {
+              visible: true,
+              timeout: 15000, // Longer timeout for primary selector retry
+            });
+
+            foundSelector = selector;
+            downloadButtonFound = true;
+            await dualLogInfo(
+              `✅ CSV download button found on retry with primary selector: ${selector}`
+            );
+            break;
+          } catch (retryError) {
+            await dualLogInfo(
+              "Primary selector retry also failed, continuing with other selectors..."
+            );
+          }
+        }
+
+        continue;
+      }
+    }
+
+    if (!downloadButtonFound) {
+      // Final debugging before failing
+      await dualLogError(
+        "CSV download button not found with any selector. Performing final analysis..."
+      );
+
+      const finalAnalysis = await newPage.evaluate(() => {
+        const allElements = Array.from(document.querySelectorAll("*"))
+          .filter((el) => {
+            const text = el.textContent?.toLowerCase() || "";
+            const className = el.className?.toLowerCase() || "";
+            const id = el.id?.toLowerCase() || "";
+
+            return (
+              text.includes("download") ||
+              text.includes("csv") ||
+              className.includes("download") ||
+              id.includes("download") ||
+              el.hasAttribute("data-element-name")
+            );
+          })
+          .map((el) => ({
+            tagName: el.tagName,
+            textContent: el.textContent?.trim().substring(0, 50),
+            className: el.className,
+            id: el.id,
+            dataElementName: el.getAttribute("data-element-name"),
+            visible: (el as HTMLElement).offsetParent !== null,
+          }));
+
+        // Also check for "no data" or "empty" messages
+        const noDataMessages = Array.from(document.querySelectorAll("*"))
+          .filter((el) => {
+            const text = el.textContent?.toLowerCase() || "";
+            return (
+              text.includes("no data") ||
+              text.includes("no bookings") ||
+              text.includes("no results") ||
+              text.includes("empty") ||
+              text.includes("no records")
+            );
+          })
+          .map((el) => ({
+            tagName: el.tagName,
+            textContent: el.textContent?.trim().substring(0, 100),
+            visible: (el as HTMLElement).offsetParent !== null,
+          }));
+
+        return {
+          elementsWithDownload: allElements.slice(0, 20),
+          totalElements: allElements.length,
+          noDataMessages: noDataMessages.slice(0, 5),
+          pageTitle: document.title,
+          bodyClasses: document.body?.className || "",
+          url: window.location.href,
+          bodyTextSample: document.body?.innerText?.substring(0, 1000) || "",
+        };
+      });
+
+      await dualLogError(
+        "Final page analysis - elements that might be download buttons:",
+        finalAnalysis
+      );
+
+      // Check if this might be a "no data" scenario
+      if (finalAnalysis.noDataMessages.length > 0) {
+        await dualLogInfo(
+          "Detected possible 'no data' scenario:",
+          finalAnalysis.noDataMessages
+        );
+
+        // Return empty array instead of throwing error for no data scenarios
+        await dualLogInfo(
+          "No booking data available for the specified date range - returning empty result"
+        );
+
+        // Update progress to indicate completion with no data
+        if (jobId) {
+          await progressManager.updateJobProgress(
+            jobId,
+            undefined,
+            100,
+            "agoda_booking_data_no_data_available",
+            undefined
+          );
+        }
+
+        return []; // Return empty array for no data scenarios
+      }
+
+      // Take a screenshot for debugging
+      try {
+        const screenshot = await newPage.screenshot({ encoding: "base64" });
+        await dualLogInfo(
+          `Debug screenshot taken (${screenshot.length} chars)`,
+          { jobId }
+        );
+      } catch (screenshotError) {
+        await dualLogError("Failed to take debug screenshot:", screenshotError);
+      }
+
+      throw new Error(
+        "CSV download button not found on the page after comprehensive search"
+      );
     }
 
     // Update progress - download button found
@@ -556,15 +856,53 @@ export async function getAgodaBookingData(
       { jobId, platform: process.platform, downloadPath }
     );
 
-    // Configure download behavior using CDP session with macOS-specific settings
+    // Configure download behavior using CDP session with headless-compatible settings
     client = await newPage.createCDPSession();
 
-    // Enable downloads with more permissive settings for macOS
+    // Check if running in headless mode
+    isHeadless = await newPage.evaluate(() => {
+      return navigator.webdriver === true || window.outerHeight === 0;
+    });
+
+    await dualLogInfo(
+      `Browser mode detected: ${isHeadless ? "headless" : "headed"}`,
+      { jobId }
+    );
+
+    // Enable downloads with headless-compatible settings
     await client.send("Page.setDownloadBehavior", {
       behavior: "allow",
       downloadPath: downloadPath,
-      eventsEnabled: true, // Enable download events
+      eventsEnabled: true,
     });
+
+    // Set additional permissions for headless mode
+    if (isHeadless) {
+      await dualLogInfo("Applying headless-specific download settings...");
+
+      // Enable file system access for headless mode
+      try {
+        await client.send("Browser.grantPermissions", {
+          permissions: ["downloads", "downloadsOpen"],
+          origin: "https://ycs.agoda.com",
+        });
+      } catch (error) {
+        await dualLogInfo(
+          "Browser.grantPermissions not supported, trying alternative..."
+        );
+      }
+
+      // Set download behavior with additional headless flags
+      try {
+        await client.send("Page.setDownloadBehavior", {
+          behavior: "allowAndName",
+          downloadPath: downloadPath,
+          eventsEnabled: true,
+        });
+      } catch (error) {
+        await dualLogInfo("allowAndName not supported, using allow behavior");
+      }
+    }
 
     // Additional macOS-specific browser settings
     if (process.platform === "darwin") {
@@ -585,36 +923,8 @@ export async function getAgodaBookingData(
 
     await dualLogInfo("Download path configured, initiating CSV download...");
 
-    // Wait for the button to be fully interactive with multiple selectors
-    const downloadButtonSelectors = [
-      'button[data-element-name="ycs-booking-list-download"]',
-      'button[leadingicon="fill.arrow.download"]',
-      'button:has-text("Download (.csv)")',
-      'button:has([role="img"]) span:has-text("Download")',
-    ];
-
-    let buttonFound = false;
-    let usedSelector = "";
-
-    for (const selector of downloadButtonSelectors) {
-      try {
-        await newPage.waitForSelector(selector, {
-          visible: true,
-          timeout: 10000,
-        });
-        usedSelector = selector;
-        buttonFound = true;
-        await dualLogInfo(`Download button found with selector: ${selector}`);
-        break;
-      } catch (error) {
-        await dualLogInfo(`Selector failed: ${selector}`);
-        continue;
-      }
-    }
-
-    if (!buttonFound) {
-      throw new Error("Download button not found with any selector");
-    }
+    // Use the found selector from the enhanced detection above
+    const usedSelector = foundSelector;
 
     // Try multiple click approaches for better macOS compatibility
     try {
@@ -676,6 +986,30 @@ export async function getAgodaBookingData(
         throw new Error("Download button is hidden via CSS");
       }
 
+      // Set up network request interception for headless download fallback
+      let downloadUrl: string | null = null;
+      const requestHandler = (request: any) => {
+        const url = request.url();
+        // Look for CSV download requests
+        if (
+          url.includes("csv") ||
+          url.includes("download") ||
+          request.headers()["content-disposition"]
+        ) {
+          downloadUrl = url;
+          dualLogInfo(`Intercepted potential download URL: ${url}`);
+        }
+      };
+
+      // Enable request interception for headless mode
+      if (isHeadless) {
+        await newPage.setRequestInterception(true);
+        newPage.on("request", (request) => {
+          requestHandler(request);
+          request.continue();
+        });
+      }
+
       // Method 1: Scroll to button and ensure it's in view
       await newPage.evaluate((selector) => {
         const button = document.querySelector(selector) as HTMLButtonElement;
@@ -723,6 +1057,11 @@ export async function getAgodaBookingData(
           if (span) {
             span.click();
           }
+
+          // For headless mode, also trigger any onclick handlers directly
+          if (button.onclick) {
+            button.onclick(new MouseEvent("click"));
+          }
         }
       }, usedSelector);
 
@@ -766,18 +1105,111 @@ export async function getAgodaBookingData(
       }
     });
 
-    // Wait for download to complete with event-based detection
+    // Wait for download to complete with enhanced detection for headless mode
     await dualLogInfo("Waiting for CSV download to complete...");
 
-    // Initial wait to let download start
-    await delay(3000);
+    // Enhanced download detection for headless mode
+    let downloadDetectionAttempts = 0;
+    const maxDetectionAttempts = 15; // 30 seconds total
+
+    while (
+      downloadDetectionAttempts < maxDetectionAttempts &&
+      !downloadStarted
+    ) {
+      await delay(2000);
+      downloadDetectionAttempts++;
+
+      // Check for files in download directory
+      try {
+        const files = fs.readdirSync(downloadPath);
+        const csvFiles = files.filter(
+          (f) =>
+            f.endsWith(".csv") &&
+            !f.includes(".crdownload") &&
+            !f.includes(".download")
+        );
+
+        if (csvFiles.length > 0) {
+          await dualLogInfo(`Found CSV file during detection: ${csvFiles[0]}`);
+          downloadStarted = true;
+          break;
+        }
+      } catch (error) {
+        // Continue checking
+      }
+
+      await dualLogInfo(
+        `Download detection attempt ${downloadDetectionAttempts}/${maxDetectionAttempts}`
+      );
+    }
 
     // Check if download started
     if (!downloadStarted) {
-      await dualLogError("Download did not start within 3 seconds", {
+      await dualLogError("Download did not start within detection period", {
         jobId,
         platform: process.platform,
+        isHeadless,
       });
+
+      // In headless mode, try alternative download method
+      if (isHeadless) {
+        await dualLogInfo(
+          "Attempting alternative download method for headless mode..."
+        );
+
+        try {
+          // Try to get the download URL by inspecting network requests
+          const downloadUrlFromNetwork = await newPage.evaluate(() => {
+            // Look for any recent network requests that might be the CSV download
+            const performanceEntries = performance.getEntriesByType("resource");
+            const recentEntries = performanceEntries.filter(
+              (entry) =>
+                entry.name.includes("csv") ||
+                entry.name.includes("download") ||
+                entry.name.includes("booking")
+            );
+            return recentEntries.length > 0
+              ? recentEntries[recentEntries.length - 1].name
+              : null;
+          });
+
+          if (downloadUrlFromNetwork) {
+            await dualLogInfo(
+              `Found potential download URL: ${downloadUrlFromNetwork}`
+            );
+
+            // Download the file directly using fetch
+            const response = await newPage.evaluate(async (url) => {
+              const response = await fetch(url);
+              if (response.ok) {
+                const blob = await response.blob();
+                return await new Promise((resolve) => {
+                  const reader = new FileReader();
+                  reader.onload = () => resolve(reader.result);
+                  reader.readAsText(blob);
+                });
+              }
+              return null;
+            }, downloadUrlFromNetwork);
+
+            if (response) {
+              // Save the file directly
+              const timestamp = Date.now();
+              const fallbackFilename = `agoda_booking_data_${timestamp}.csv`;
+              const fallbackPath = path.join(downloadPath, fallbackFilename);
+              fs.writeFileSync(fallbackPath, response as string);
+
+              await dualLogInfo(
+                `Successfully downloaded CSV using fallback method: ${fallbackFilename}`
+              );
+              downloadStarted = true;
+              downloadCompleted = true;
+            }
+          }
+        } catch (fallbackError) {
+          await dualLogError("Fallback download method failed:", fallbackError);
+        }
+      }
     } else {
       await dualLogInfo("Download detected, waiting for completion...");
 
