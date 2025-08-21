@@ -467,6 +467,12 @@ export async function getAgodaBookingData(
     const formattedStartDate = convertDateFormat(startDate);
     const formattedEndDate = convertDateFormat(endDate);
 
+    // Set up download path early so it's available for retry
+    const downloadPath = path.resolve(process.cwd(), "downloads");
+    if (!fs.existsSync(downloadPath)) {
+      fs.mkdirSync(downloadPath, { recursive: true });
+    }
+
     console.log(
       "\x1b[34m%s\x1b[0m",
       `Start Date: ${formattedStartDate}, End Date: ${formattedEndDate}`
@@ -479,7 +485,7 @@ export async function getAgodaBookingData(
     await delay(5000);
 
     // Navigate to the booking data page
-    const newPage = await browser.newPage();
+    newPage = await browser.newPage();
     await newPage.goto(bookingUrl, {
       waitUntil: "networkidle2",
       timeout: loadingTimeout,
@@ -646,6 +652,99 @@ export async function getAgodaBookingData(
     await dualLogInfo("Additional wait for server environment stability...");
     await delay(8000);
 
+    // First check if there are any bookings on the page
+    await dualLogInfo("Checking if page has booking data...");
+
+    const pageContentAnalysis = await newPage.evaluate(() => {
+      // Look for indicators that there are bookings
+      const bookingIndicators = [
+        "booking",
+        "reservation",
+        "guest",
+        "check-in",
+        "check-out",
+        "total",
+        "amount",
+      ];
+
+      const pageText = document.body?.innerText?.toLowerCase() || "";
+      const foundIndicators = bookingIndicators.filter((indicator) =>
+        pageText.includes(indicator)
+      );
+
+      // Look for specific booking-related elements
+      const bookingElements = [
+        "table",
+        '[data-element-name*="booking"]',
+        '[class*="booking"]',
+        '[class*="reservation"]',
+        ".booking-list",
+        ".reservation-list",
+      ];
+
+      const foundElements = bookingElements.map((selector) => {
+        try {
+          const elements = document.querySelectorAll(selector);
+          return {
+            selector,
+            count: elements.length,
+            hasContent: elements.length > 0,
+          };
+        } catch (error) {
+          return {
+            selector,
+            count: 0,
+            hasContent: false,
+          };
+        }
+      });
+
+      // Check for "no data" or "empty" messages
+      const noDataIndicators = [
+        "no bookings",
+        "no reservations",
+        "no data",
+        "no results",
+        "empty",
+        "no records found",
+      ];
+
+      const foundNoDataIndicators = noDataIndicators.filter((indicator) =>
+        pageText.includes(indicator)
+      );
+
+      return {
+        pageTextLength: pageText.length,
+        foundBookingIndicators: foundIndicators,
+        foundElements: foundElements,
+        foundNoDataIndicators: foundNoDataIndicators,
+        hasBookingTable: !!document.querySelector("table"),
+        pageTextSample: pageText.substring(0, 500),
+      };
+    });
+
+    await dualLogInfo("Page content analysis:", pageContentAnalysis);
+
+    // If we detect "no data" indicators, return empty result early
+    if (pageContentAnalysis.foundNoDataIndicators.length > 0) {
+      await dualLogInfo(
+        "Detected 'no data' indicators on page - no bookings available for this date range"
+      );
+
+      // Update progress to indicate completion with no data
+      if (jobId) {
+        await progressManager.updateJobProgress(
+          jobId,
+          undefined,
+          100,
+          "agoda_booking_data_no_data_available",
+          undefined
+        );
+      }
+
+      return []; // Return empty array for no data scenarios
+    }
+
     // Wait for the download button container to be visible with enhanced detection
     await dualLogInfo(
       "Looking for CSV download button with enhanced detection..."
@@ -723,61 +822,334 @@ export async function getAgodaBookingData(
     }
 
     if (!downloadButtonFound) {
+      // Before giving up, try reopening the page once more
+      await dualLogError(
+        "CSV download button not found with any selector. Attempting page reload and retry..."
+      );
+
+      try {
+        await dualLogInfo("Closing current page and reopening booking URL...");
+
+        // Close the current page
+        await newPage.close();
+
+        // Wait a moment before reopening
+        await delay(3000);
+
+        // Create a new page and navigate again
+        newPage = await browser.newPage();
+
+        // Construct the booking URL again
+        const retryBookingUrl = `https://ycs.agoda.com/mldc/en-us/app/reporting/booking/${agodaId}?startDate=${formattedStartDate}&endDate=${formattedEndDate}`;
+        await dualLogInfo(
+          `Retry - Navigating to booking data URL: ${retryBookingUrl}`
+        );
+
+        await newPage.goto(retryBookingUrl, {
+          waitUntil: "networkidle2",
+          timeout: loadingTimeout,
+        });
+
+        await newPage.waitForSelector("body", { timeout: loadingTimeout });
+        await dualLogInfo(
+          "Retry - Successfully navigated to booking data page"
+        );
+
+        // Wait for page to load completely
+        await delay(8000);
+
+        // Check if running in headless mode again
+        isHeadless = await newPage.evaluate(() => {
+          return navigator.webdriver === true || window.outerHeight === 0;
+        });
+
+        await dualLogInfo(
+          `Retry - Browser mode detected: ${
+            isHeadless ? "headless" : "headed"
+          }`,
+          { jobId }
+        );
+
+        // Try to find the download button again with a shorter timeout
+        await dualLogInfo("Retry - Looking for CSV download button...");
+
+        let retryButtonFound = false;
+        let retryFoundSelector = "";
+
+        for (let i = 0; i < downloadButtonSelectors.length; i++) {
+          const selector = downloadButtonSelectors[i];
+
+          try {
+            await dualLogInfo(
+              `Retry - Trying selector ${i + 1}/${
+                downloadButtonSelectors.length
+              }: ${selector}`
+            );
+
+            await newPage.waitForSelector(selector, {
+              visible: true,
+              timeout: 10000, // Shorter timeout for retry
+            });
+
+            retryFoundSelector = selector;
+            retryButtonFound = true;
+            await dualLogInfo(
+              `✅ Retry - CSV download button found with selector: ${selector}`
+            );
+            break;
+          } catch (selectorError) {
+            await dualLogInfo(`❌ Retry - Selector failed: ${selector}`);
+            continue;
+          }
+        }
+
+        if (retryButtonFound) {
+          // Update the found selector and continue with the download process
+          foundSelector = retryFoundSelector;
+          downloadButtonFound = true;
+          await dualLogInfo(
+            "✅ Retry successful - Download button found after page reload!"
+          );
+
+          // Set up CDP session and download configuration again for the new page
+          try {
+            await dualLogInfo(
+              "Setting up download configuration for retry page..."
+            );
+
+            // Create CDP session for the new page
+            client = await newPage.createCDPSession();
+
+            // Enable downloads with headless-compatible settings
+            await client.send("Page.setDownloadBehavior", {
+              behavior: "allow",
+              downloadPath: downloadPath,
+              eventsEnabled: true,
+            });
+
+            // Set additional permissions for headless mode
+            if (isHeadless) {
+              await dualLogInfo(
+                "Applying headless-specific download settings for retry..."
+              );
+
+              // Enable file system access for headless mode
+              try {
+                await client.send("Browser.grantPermissions", {
+                  permissions: ["downloads", "downloadsOpen"],
+                  origin: "https://ycs.agoda.com",
+                });
+              } catch (error) {
+                await dualLogInfo(
+                  "Browser.grantPermissions not supported, trying alternative..."
+                );
+              }
+
+              // Set download behavior with additional headless flags
+              try {
+                await client.send("Page.setDownloadBehavior", {
+                  behavior: "allowAndName",
+                  downloadPath: downloadPath,
+                  eventsEnabled: true,
+                });
+              } catch (error) {
+                await dualLogInfo(
+                  "allowAndName not supported, using allow behavior"
+                );
+              }
+            }
+
+            // Platform-specific settings (keeping existing macOS logic)
+            if (process.platform === "darwin") {
+              await dualLogInfo(
+                "Applying macOS-specific download settings for retry..."
+              );
+
+              // Set permissions for downloads
+              await client
+                .send("Browser.setPermission", {
+                  permission: { name: "downloads" },
+                  setting: "granted",
+                  origin: "https://ycs.agoda.com",
+                })
+                .catch(() => {
+                  // Ignore if this fails - not all browser versions support this
+                  dualLogInfo(
+                    "Browser.setPermission not supported, continuing..."
+                  );
+                });
+            }
+
+            await dualLogInfo(
+              "Download configuration completed for retry page"
+            );
+          } catch (setupError: any) {
+            await dualLogError(
+              "Error setting up download configuration for retry:",
+              setupError.message
+            );
+            // Continue anyway - the download might still work
+          }
+
+          // Continue to the download process (we'll break out of this error handling)
+        } else {
+          await dualLogError(
+            "Retry failed - Download button still not found after page reload"
+          );
+        }
+      } catch (retryError: any) {
+        await dualLogError(
+          "Error during page reload retry:",
+          retryError.message
+        );
+      }
+    }
+
+    // If still not found after retry, perform final analysis
+    if (!downloadButtonFound) {
       // Final debugging before failing
       await dualLogError(
-        "CSV download button not found with any selector. Performing final analysis..."
+        "CSV download button not found even after retry. Performing final analysis..."
       );
 
       const finalAnalysis = await newPage.evaluate(() => {
+        // Helper function to safely get className as string
+        const getClassNameString = (el: Element): string => {
+          try {
+            if (typeof el.className === "string") {
+              return el.className.toLowerCase();
+            } else if (
+              el.className &&
+              typeof (el.className as any).toString === "function"
+            ) {
+              return (el.className as any).toString().toLowerCase();
+            } else if (el.getAttribute) {
+              return (el.getAttribute("class") || "").toLowerCase();
+            }
+            return "";
+          } catch (error) {
+            return "";
+          }
+        };
+
+        // Helper function to safely get text content
+        const getTextContent = (el: Element): string => {
+          try {
+            return (el.textContent || "").toLowerCase();
+          } catch (error) {
+            return "";
+          }
+        };
+
+        // Helper function to safely get id
+        const getId = (el: Element): string => {
+          try {
+            return (el.id || "").toLowerCase();
+          } catch (error) {
+            return "";
+          }
+        };
+
         const allElements = Array.from(document.querySelectorAll("*"))
           .filter((el) => {
-            const text = el.textContent?.toLowerCase() || "";
-            const className = el.className?.toLowerCase() || "";
-            const id = el.id?.toLowerCase() || "";
+            try {
+              const text = getTextContent(el);
+              const className = getClassNameString(el);
+              const id = getId(el);
 
-            return (
-              text.includes("download") ||
-              text.includes("csv") ||
-              className.includes("download") ||
-              id.includes("download") ||
-              el.hasAttribute("data-element-name")
-            );
+              return (
+                text.includes("download") ||
+                text.includes("csv") ||
+                className.includes("download") ||
+                id.includes("download") ||
+                el.hasAttribute("data-element-name")
+              );
+            } catch (error) {
+              return false;
+            }
           })
-          .map((el) => ({
-            tagName: el.tagName,
-            textContent: el.textContent?.trim().substring(0, 50),
-            className: el.className,
-            id: el.id,
-            dataElementName: el.getAttribute("data-element-name"),
-            visible: (el as HTMLElement).offsetParent !== null,
-          }));
+          .map((el) => {
+            try {
+              return {
+                tagName: el.tagName || "UNKNOWN",
+                textContent: (el.textContent || "").trim().substring(0, 50),
+                className: getClassNameString(el),
+                id: el.id || "",
+                dataElementName: el.getAttribute("data-element-name") || null,
+                visible: !!(el as HTMLElement).offsetParent,
+              };
+            } catch (error) {
+              return {
+                tagName: "ERROR",
+                textContent: "Error reading element",
+                className: "",
+                id: "",
+                dataElementName: null,
+                visible: false,
+              };
+            }
+          });
 
         // Also check for "no data" or "empty" messages
         const noDataMessages = Array.from(document.querySelectorAll("*"))
           .filter((el) => {
-            const text = el.textContent?.toLowerCase() || "";
-            return (
-              text.includes("no data") ||
-              text.includes("no bookings") ||
-              text.includes("no results") ||
-              text.includes("empty") ||
-              text.includes("no records")
-            );
+            try {
+              const text = getTextContent(el);
+              return (
+                text.includes("no data") ||
+                text.includes("no bookings") ||
+                text.includes("no results") ||
+                text.includes("empty") ||
+                text.includes("no records")
+              );
+            } catch (error) {
+              return false;
+            }
           })
-          .map((el) => ({
-            tagName: el.tagName,
-            textContent: el.textContent?.trim().substring(0, 100),
-            visible: (el as HTMLElement).offsetParent !== null,
-          }));
+          .map((el) => {
+            try {
+              return {
+                tagName: el.tagName || "UNKNOWN",
+                textContent: (el.textContent || "").trim().substring(0, 100),
+                visible: !!(el as HTMLElement).offsetParent,
+              };
+            } catch (error) {
+              return {
+                tagName: "ERROR",
+                textContent: "Error reading element",
+                visible: false,
+              };
+            }
+          });
+
+        // Safely get body className
+        let bodyClasses = "";
+        try {
+          if (document.body) {
+            bodyClasses = getClassNameString(document.body);
+          }
+        } catch (error) {
+          bodyClasses = "error-reading-body-classes";
+        }
+
+        // Safely get body text sample
+        let bodyTextSample = "";
+        try {
+          if (document.body && document.body.innerText) {
+            bodyTextSample = document.body.innerText.substring(0, 1000);
+          }
+        } catch (error) {
+          bodyTextSample = "error-reading-body-text";
+        }
 
         return {
           elementsWithDownload: allElements.slice(0, 20),
           totalElements: allElements.length,
           noDataMessages: noDataMessages.slice(0, 5),
-          pageTitle: document.title,
-          bodyClasses: document.body?.className || "",
-          url: window.location.href,
-          bodyTextSample: document.body?.innerText?.substring(0, 1000) || "",
+          pageTitle: document.title || "Unknown Title",
+          bodyClasses: bodyClasses,
+          url: window.location.href || "Unknown URL",
+          bodyTextSample: bodyTextSample,
         };
       });
 
@@ -845,11 +1217,7 @@ export async function getAgodaBookingData(
       jobId,
     });
 
-    // Set up download path with platform-specific considerations
-    const downloadPath = path.resolve(process.cwd(), "downloads");
-    if (!fs.existsSync(downloadPath)) {
-      fs.mkdirSync(downloadPath, { recursive: true });
-    }
+    // Download path already set up earlier
 
     await dualLogInfo(
       `Download configuration - Platform: ${process.platform}, Path: ${downloadPath}`,
