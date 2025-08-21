@@ -745,6 +745,118 @@ export async function getAgodaBookingData(
       return []; // Return empty array for no data scenarios
     }
 
+    // If booking data is found, wait for the download button to appear
+    // The download button may take time to load after the booking data appears
+    if (
+      pageContentAnalysis.foundBookingIndicators.length > 0 ||
+      pageContentAnalysis.hasBookingTable
+    ) {
+      await dualLogInfo(
+        "Booking data detected - waiting for download button to appear..."
+      );
+
+      // Try clicking the search button to ensure booking data is fully loaded
+      try {
+        await dualLogInfo(
+          "Attempting to click search button to ensure data is loaded..."
+        );
+
+        const searchButton = await newPage.$(
+          'button[data-element-name="ycs-booking-search-button-apply"]'
+        );
+        if (searchButton) {
+          await searchButton.click();
+          await dualLogInfo(
+            "Search button clicked - waiting for results to load..."
+          );
+          await delay(5000);
+        } else {
+          await dualLogInfo(
+            "Search button not found - continuing without search click"
+          );
+        }
+      } catch (searchError) {
+        await dualLogInfo("Error clicking search button:", searchError);
+        // Continue anyway
+      }
+
+      // Wait longer for the download button to appear after booking data loads
+      await delay(10000); // Additional 10 seconds wait
+
+      // Check if the page text now contains download button text
+      const downloadButtonCheck = await newPage.evaluate(() => {
+        const pageText = document.body?.innerText?.toLowerCase() || "";
+        const hasDownloadText =
+          pageText.includes("download") && pageText.includes("csv");
+        const downloadButtons = Array.from(
+          document.querySelectorAll("button")
+        ).filter((btn) => {
+          const text = btn.textContent?.toLowerCase() || "";
+          return text.includes("download") || text.includes("csv");
+        });
+
+        return {
+          hasDownloadText,
+          downloadButtonCount: downloadButtons.length,
+          downloadButtonTexts: downloadButtons
+            .map((btn) => btn.textContent?.trim())
+            .slice(0, 5),
+          totalButtons: document.querySelectorAll("button").length,
+          pageTextSample: pageText.substring(pageText.length - 200), // Last 200 chars
+        };
+      });
+
+      await dualLogInfo(
+        "Download button check after waiting:",
+        downloadButtonCheck
+      );
+
+      // If still no download button, try scrolling to make sure all content is loaded
+      if (downloadButtonCheck.downloadButtonCount === 0) {
+        await dualLogInfo(
+          "No download button found - trying to scroll to load more content..."
+        );
+
+        // Scroll to bottom to trigger any lazy loading
+        await newPage.evaluate(() => {
+          window.scrollTo(0, document.body.scrollHeight);
+        });
+
+        await delay(3000);
+
+        // Scroll back to top
+        await newPage.evaluate(() => {
+          window.scrollTo(0, 0);
+        });
+
+        await delay(3000);
+
+        // Check again after scrolling
+        const postScrollCheck = await newPage.evaluate(() => {
+          const pageText = document.body?.innerText?.toLowerCase() || "";
+          const downloadButtons = Array.from(
+            document.querySelectorAll("button")
+          ).filter((btn) => {
+            const text = btn.textContent?.toLowerCase() || "";
+            return text.includes("download") || text.includes("csv");
+          });
+
+          return {
+            downloadButtonCount: downloadButtons.length,
+            downloadButtonTexts: downloadButtons
+              .map((btn) => btn.textContent?.trim())
+              .slice(0, 5),
+            totalButtons: document.querySelectorAll("button").length,
+          };
+        });
+
+        await dualLogInfo(
+          "Download button check after scrolling:",
+          postScrollCheck
+        );
+      }
+    }
+
     // Wait for the download button container to be visible with enhanced detection
     await dualLogInfo(
       "Looking for CSV download button with enhanced detection..."
