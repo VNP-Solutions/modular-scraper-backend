@@ -15,11 +15,7 @@ import { TWO_FA_TEXT_PATTERNS } from "../common/booking-selectors.js";
 dotenv.config();
 
 
-async function handleBookingOtpVerification(
-  browser: Browser,
-  page: Page,
-  // jobId?: string
-): Promise<void> {
+async function handleBookingOtpVerification(page: Page): Promise<void> {
   try {
     // Check if scraping is paused before starting OTP verification
     await initializeStateManager();

@@ -191,7 +191,4 @@ const options: swaggerJsdoc.Options = {
 
 const specs = swaggerJsdoc(options) as any;
 
-// Debug: Log the generated paths
-console.log('Swagger paths loaded:', Object.keys(specs.paths || {}));
-
 export { specs, swaggerUi };
