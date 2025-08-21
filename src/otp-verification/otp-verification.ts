@@ -2,6 +2,7 @@ import dotenv from "dotenv";
 import { google } from "googleapis";
 import { Browser, Page } from "puppeteer";
 import { delay } from "../common/delay.js";
+import { loadAndSetCredentials } from "../common/load-token.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import { timeoutManager } from "../common/timeout-manager.js";
@@ -9,18 +10,18 @@ import { oauth2Client } from "../config/google-config.js";
 
 dotenv.config();
 
-// Function to load and set credentials
+// Function to load and set credentials from S3
 async function loadCredentials() {
   try {
-    const tokenPath = process.env.TOKEN_PATH || "../config/token.json";
-    // Always use S3 credential loader
-    const { loadAndSetCredentials } = await import("../common/load-token.js");
-    const ok = await loadAndSetCredentials(tokenPath);
-    if (!ok) {
+    const tokenPath = process.env.TOKEN_PATH || "token.json";
+    const success = await loadAndSetCredentials(tokenPath);
+
+    if (!success) {
       throw new Error(
-        "Failed to load Gmail credentials from S3. Please authenticate first."
+        "Failed to load Gmail credentials from S3 or local file. Please run the authentication setup first."
       );
     }
+
     await dualLogInfo("Gmail credentials loaded successfully from S3");
     return true;
   } catch (error) {
@@ -155,10 +156,26 @@ async function handleOtpVerification(
 
     // Wait for verification code page using the correct selector
     await dualLogInfo("Waiting for verification page...");
-    await page.waitForSelector('input[name="passcode-input"]', {
-      visible: true,
-      timeout: selectorTimeout,
-    });
+    try {
+      await page.waitForSelector('input[name="passcode-input"]', {
+        visible: true,
+        timeout: selectorTimeout,
+      });
+    } catch (error: any) {
+      await dualLogError("Error waiting for verification page:", error);
+
+      // Send email notification for verification page error
+      if (jobId) {
+        try {
+        } catch (emailError) {
+          await dualLogError(
+            "Failed to send verification page error notification:",
+            emailError
+          );
+        }
+      }
+      throw error;
+    }
     const ourContact = process.env.OUR_CONTACT || "01828704004";
 
     // Extract the phone number from the verification message
@@ -189,40 +206,96 @@ async function handleOtpVerification(
 
       // Add delay before fetching verification code
       await dualLogInfo("Waiting for verification email...");
-      await delay(15000); // Wait 15 seconds for email to arrive
+      await delay(30000); // Wait 30 seconds for email to arrive
 
       // Get verification code
-      const code = await getVerificationCode();
-      if (!code) {
-        throw new Error("Failed to get verification code from email");
+      try {
+        const code = await getVerificationCode();
+        if (!code) {
+          const error = new Error("Failed to get verification code from email");
+
+          // Send email notification for verification code error
+          if (jobId) {
+            try {
+            } catch (emailError) {
+              await dualLogError(
+                "Failed to send verification code error notification:",
+                emailError
+              );
+            }
+          }
+
+          throw error;
+        }
+        await dualLogInfo("Got verification code:", code);
+
+        // Enter verification code using the correct selector
+        await page.type('input[name="passcode-input"]', code, { delay: 100 });
+        await delay(1000);
+
+        const verifyButtonHandle = await page.$(
+          'button[data-testid="passcode-submit-button"]'
+        );
+
+        if (!verifyButtonHandle) {
+          const error = new Error("Verify button not found");
+
+          // Send email notification for verify button error
+          if (jobId) {
+            try {
+            } catch (emailError) {
+              await dualLogError(
+                "Failed to send verify button error notification:",
+                emailError
+              );
+            }
+          }
+
+          throw error;
+        }
+
+        // Check if the button is disabled
+        const isDisabled = await page.evaluate(
+          (button) => button.disabled,
+          verifyButtonHandle
+        );
+
+        if (isDisabled) {
+          const error = new Error("Verify button is disabled");
+
+          // Send email notification for disabled button error
+          if (jobId) {
+            try {
+            } catch (emailError) {
+              await dualLogError(
+                "Failed to send disabled button error notification:",
+                emailError
+              );
+            }
+          }
+
+          throw error;
+        }
+
+        // Click the button
+        await verifyButtonHandle.click();
+        await dualLogInfo("Clicked the verify button successfully!");
+      } catch (error: any) {
+        await dualLogError("Error in primary verification flow:", error);
+
+        // Send email notification for primary verification error
+        if (jobId) {
+          try {
+          } catch (emailError) {
+            await dualLogError(
+              "Failed to send primary verification error notification:",
+              emailError
+            );
+          }
+        }
+
+        throw error;
       }
-      await dualLogInfo("Got verification code:", code);
-
-      // Enter verification code using the correct selector
-      await page.type('input[name="passcode-input"]', code, { delay: 100 });
-      await delay(1000);
-
-      const verifyButtonHandle = await page.$(
-        'button[data-testid="passcode-submit-button"]'
-      );
-
-      if (!verifyButtonHandle) {
-        throw new Error("Verify button not found");
-      }
-
-      // Check if the button is disabled
-      const isDisabled = await page.evaluate(
-        (button) => button.disabled,
-        verifyButtonHandle
-      );
-
-      if (isDisabled) {
-        throw new Error("Verify button is disabled");
-      }
-
-      // Click the button
-      await verifyButtonHandle.click();
-      await dualLogInfo("Clicked the verify button successfully!");
     } else {
       await dualLogInfo(
         `Phone numbers don't match! Looking for fallback verification options...`
@@ -239,7 +312,20 @@ async function handleOtpVerification(
           .catch(() => null);
 
         if (!fallbacksExists) {
-          throw new Error("No fallback verification options found");
+          const error = new Error("No fallback verification options found");
+
+          // Send email notification for no fallback options
+          if (jobId) {
+            try {
+            } catch (emailError) {
+              await dualLogError(
+                "Failed to send fallback options error notification:",
+                emailError
+              );
+            }
+          }
+
+          throw error;
         }
 
         await dualLogInfo(
@@ -434,7 +520,7 @@ async function handleOtpVerification(
             await dualLogInfo(
               "SMS verification page loaded, trying to get verification code from email..."
             );
-            await delay(15000);
+            await delay(30000);
 
             const code = await getVerificationCode();
             if (!code) {
@@ -535,7 +621,7 @@ async function handleOtpVerification(
           );
 
           // Add delay before fetching verification code
-          await delay(15000); // Wait 15 seconds for email to arrive
+          await delay(30000); // Wait 30 seconds for email to arrive
 
           const code = await getVerificationCode();
           if (!code) {
@@ -580,7 +666,19 @@ async function handleOtpVerification(
           fallbackError instanceof Error
             ? fallbackError.message
             : "Unknown error";
-        console.log(`Error with fallback verification: ${errorMessage}`);
+        await dualLogError(`Error with fallback verification: ${errorMessage}`);
+
+        // Send email notification for fallback verification error
+        if (jobId) {
+          try {
+          } catch (emailError) {
+            await dualLogError(
+              "Failed to send fallback verification error notification:",
+              emailError
+            );
+          }
+        }
+
         throw new Error(
           `Phone number mismatch and fallback verification failed. Expected ending with ${ourLastThree}, but got ${currentLastThree}. Fallback error: ${errorMessage}`
         );
@@ -589,14 +687,42 @@ async function handleOtpVerification(
 
     // Wait for successful login
     const loadingTimeout = await timeoutManager.getLoadingTimeout(jobId);
-    await page.waitForNavigation({
-      waitUntil: "networkidle0",
-      timeout: loadingTimeout,
-    });
+    try {
+      await page.waitForNavigation({
+        waitUntil: "networkidle0",
+        timeout: loadingTimeout,
+      });
+      console.log("Login successful!");
+    } catch (error: any) {
+      await dualLogError("Error waiting for navigation after OTP:", error);
 
-    console.log("Login successful!");
-  } catch (error) {
-    console.error("Error in handleOtpVerification:", error);
+      // Send email notification for navigation error
+      if (jobId) {
+        try {
+        } catch (emailError) {
+          await dualLogError(
+            "Failed to send navigation error notification:",
+            emailError
+          );
+        }
+      }
+
+      throw error;
+    }
+  } catch (error: any) {
+    await dualLogError("Error in handleOtpVerification:", error);
+
+    // Send email notification for general OTP verification error
+    if (jobId) {
+      try {
+      } catch (emailError) {
+        await dualLogError(
+          "Failed to send general OTP error notification:",
+          emailError
+        );
+      }
+    }
+
     // Close browser when done with this attempt
     if (browser) {
       await browser.close();
