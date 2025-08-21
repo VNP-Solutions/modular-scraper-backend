@@ -493,8 +493,8 @@ class ScrapingWorker {
   private async handleBookingRun(jobData: WorkerJobData): Promise<any> {
     const { jobId, portfolioId, propertyId, startDate, endDate, bookingId, user_email, user_password } = jobData;
     
-    if (!startDate || !endDate || !jobId) {
-      throw new Error("startDate, endDate, and jobId are required for booking-run jobs");
+    if (!jobId) {
+      throw new Error("jobId is required for booking-run jobs");
     }
 
     // 1. Validate job exists and can be run
