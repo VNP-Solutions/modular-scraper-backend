@@ -148,3 +148,5 @@ Thumbs.db
 # Temporary files
 tmp/
 temp/
+downloads/
+imports/
