@@ -116,7 +116,7 @@ export class BookingScraper extends BaseScraper {
         await this.delay(5000);
       }
 
-      await this.takeScreenshot('booking-initial-page.png');
+      await this.takeScreenshot();
       
       return { browser, page };
     } catch (error) {
@@ -160,7 +160,7 @@ export class BookingScraper extends BaseScraper {
     const cookies = await this.page.cookies();
     fs.writeFileSync(this.cookiesFile, JSON.stringify(cookies, null, 2));
     await this.logInfo(`Saved ${cookies.length} cookies for future sessions`);
-    await this.takeScreenshot('booking-admin-dashboard.png');
+    await this.takeScreenshot();
     
     await this.handlePropertySearch(propertyId);
   }
@@ -175,7 +175,7 @@ export class BookingScraper extends BaseScraper {
     const cookies = await this.page.cookies();
     fs.writeFileSync(this.cookiesFile, JSON.stringify(cookies, null, 2));
     await this.logInfo(`Saved ${cookies.length} cookies after 2FA`);
-    await this.takeScreenshot('booking-admin-dashboard-after-2fa.png');
+    await this.takeScreenshot();
     
     await this.handlePropertySearch(propertyId);
   }
@@ -220,7 +220,7 @@ export class BookingScraper extends BaseScraper {
 
       const emailEntered = await this.enterEmail(loginCredentials.email);
       if (!emailEntered) {
-        await this.takeScreenshot('booking-no-email-field.png');
+        await this.takeScreenshot();
         throw new Error('Email field not found');
       }
 
@@ -231,7 +231,7 @@ export class BookingScraper extends BaseScraper {
         throw new Error('Continue Button not found');
       }
 
-      await this.takeScreenshot('booking-after-email.png');
+      await this.takeScreenshot();
       await this.delay(5000);
 
       // Check for captcha after email submission
@@ -273,14 +273,14 @@ export class BookingScraper extends BaseScraper {
       }
       
       if (!passwordField) {
-        await this.takeScreenshot('booking-no-password-field.png');
+        await this.takeScreenshot();
         throw new Error('Password field not found after multiple attempts');
       }
 
       // Enter password using the new function
       const passwordEntered = await this.enterPassword(loginCredentials.password);
       if (!passwordEntered) {
-        await this.takeScreenshot('booking-password-entry-failed.png');
+        await this.takeScreenshot();
         throw new Error('Failed to enter password');
       }
       
@@ -297,7 +297,7 @@ export class BookingScraper extends BaseScraper {
         sessionUrl: this.sessionUrl,
       });      
       
-      await this.takeScreenshot('booking-after-password.png');
+      await this.takeScreenshot();
       
       // Wait for navigation
       await this.logInfo('Waiting for login response');
@@ -325,7 +325,7 @@ export class BookingScraper extends BaseScraper {
               platform: 'booking'
             }
           );
-          await this.takeScreenshot('booking-2fa-failed.png');
+          await this.takeScreenshot();
           throw new Error('2FA verification failed');
         }
       }
@@ -340,7 +340,7 @@ export class BookingScraper extends BaseScraper {
           platform: 'booking'
         }
       );
-      await this.takeScreenshot('booking-login-error.png');
+      await this.takeScreenshot();
       throw error;
     }
   }
@@ -411,7 +411,7 @@ export class BookingScraper extends BaseScraper {
       
       if (!searchInputFound) {
         await this.logError('Property search input not found');
-        await this.takeScreenshot('booking-no-search-input.png');
+        await this.takeScreenshot();
         return false;
       }
       
@@ -420,7 +420,7 @@ export class BookingScraper extends BaseScraper {
       // Wait a bit for search results to load
       await this.delay(2000);
       
-      await this.takeScreenshot('booking-property-search-results.png');
+      await this.takeScreenshot();
       
       const propertySelectors = BOOKING_SELECTORS.property.item(propertyId);
       
@@ -502,11 +502,11 @@ export class BookingScraper extends BaseScraper {
         
         if (currentUrl.includes(`hotel_id=${propertyId}`)) {
           await this.logInfo('Property selection verified via URL');
-          await this.takeScreenshot('booking-property-selected.png');
+          await this.takeScreenshot();
           return true;
         } else {
           await this.logInfo('Property selection verification failed, checking if login is needed');
-          await this.takeScreenshot('booking-property-selection-verification.png');
+          await this.takeScreenshot();
           
           // Check if we need to login again
           const needsLogin = await this.checkIfLoginNeeded();
@@ -526,7 +526,7 @@ export class BookingScraper extends BaseScraper {
       
     } catch (error) {
       await this.logError('Error searching and selecting property:', error);
-      await this.takeScreenshot('booking-property-search-error.png');
+      await this.takeScreenshot();
       return false;
     }
   }
@@ -546,7 +546,7 @@ export class BookingScraper extends BaseScraper {
       }
 
       await this.logInfo('Captcha detected');
-      await this.takeScreenshot('booking-captcha.png');
+      await this.takeScreenshot();
 
       
       // wait fo page
@@ -620,7 +620,7 @@ export class BookingScraper extends BaseScraper {
       }
 
       await this.logInfo('2FA verification required, using automated OTP handler');
-      await this.takeScreenshot('booking-2fa-page.png');
+      await this.takeScreenshot();
 
       try {
         await handleBookingOtpVerification(currentPage);
@@ -919,7 +919,7 @@ export class BookingScraper extends BaseScraper {
             action: 'click_reservation_detail',
           }
         );
-        await this.takeScreenshot(`reservation-detail-failure.png`);
+        await this.takeScreenshot();
         throw new Error('Reservation detail page did not load as expected.');
       }
       
@@ -1135,7 +1135,7 @@ export class BookingScraper extends BaseScraper {
       const mainMenuClicked = await this.expandMainMenu(mainSection);
       if (!mainMenuClicked) {
         await this.logError(`${mainSection} menu button not found`);
-        await this.takeScreenshot(`booking-${mainSection}-menu-not-found.png`);
+        await this.takeScreenshot();
         throw new Error(`${mainSection} menu button not found`);
       }
       
@@ -1144,14 +1144,14 @@ export class BookingScraper extends BaseScraper {
 
       if (!subMenuClicked) {
         await this.logError(`${subSection} link not found by any selector or text`);
-        await this.takeScreenshot(`booking-${subSection}-link-not-found.png`);
+        await this.takeScreenshot();
         throw new Error(`${subSection} link not found by any selector or text`);
       }
       
       await this.logInfo(`Clicked on ${subSection} link`);
       await this.waitForNavigationAndVerify(expectedUrl);
       await this.logInfo(`Successfully navigated to ${subSection} page`);
-      await this.takeScreenshot(`booking-${subSection}-page.png`);
+      await this.takeScreenshot();
       return true;
     } catch (error) {
       await dualLogError(
@@ -1165,7 +1165,7 @@ export class BookingScraper extends BaseScraper {
           mainSection: mainSection
         }
       );
-      await this.takeScreenshot('booking-navigation-error.png');
+      await this.takeScreenshot();
       return false;
     }
   }
@@ -1211,7 +1211,7 @@ export class BookingScraper extends BaseScraper {
       await this.logInfo(`Errors encountered: ${traversalResult.errors}`);
       
       // Step 4: Take final screenshot
-      await this.takeScreenshot('booking-scraping-complete.png');
+      await this.takeScreenshot();
       
       // Prepare the result data
       const data = {
@@ -1251,7 +1251,7 @@ export class BookingScraper extends BaseScraper {
         }
       );
       
-      await this.takeScreenshot(`booking-scraping-error-${Date.now()}.png`);
+      await this.takeScreenshot();
       
       return {
         success: false,
@@ -1670,7 +1670,7 @@ export class BookingScraper extends BaseScraper {
                 }
               );
               
-              await this.takeScreenshot('booking-login-error.png');
+              await this.takeScreenshot();
               return true;
             }
           }
@@ -1777,7 +1777,7 @@ export class BookingScraper extends BaseScraper {
         return true;
       } else {
         await this.logError(`Could not find "View card details" link for reservation ${reservationId}`);
-        await this.takeScreenshot('booking-card-details-link-not-found.png');
+        await this.takeScreenshot();
         return false;
       }
 
