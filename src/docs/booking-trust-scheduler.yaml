@@ -1,0 +1,258 @@
+"/api/booking/trust-scheduler/run":
+  post:
+    tags:
+      - Booking Trust Scheduler
+    summary: Run trust verification scheduler
+    description: Manually trigger the booking trust verification scheduler to process eligible properties
+    responses:
+      '200':
+        description: Trust scheduler started successfully
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: integer
+                  example: 200
+                message:
+                  type: string
+                  example: Booking trust scheduler completed successfully
+                stats:
+                  type: object
+                  properties:
+                    totalPropertiesChecked:
+                      type: integer
+                      example: 150
+                    successfulVerifications:
+                      type: integer
+                      example: 145
+                    failedVerifications:
+                      type: integer
+                      example: 5
+                    newlyTrusted:
+                      type: integer
+                      example: 12
+                    remainingUntrusted:
+                      type: integer
+                      example: 38
+                    totalRuntime:
+                      type: integer
+                      example: 45000
+      '409':
+        description: Scheduler already running
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: integer
+                  example: 409
+                message:
+                  type: string
+                  example: Trust scheduler already running
+      '500':
+        description: Error starting scheduler
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: integer
+                  example: 500
+                message:
+                  type: string
+                  example: Error running booking trust scheduler
+
+"/api/booking/trust-scheduler/status":
+  get:
+    tags:
+      - Booking Trust Scheduler
+    summary: Get trust scheduler status
+    description: Get the current status of the booking trust verification scheduler
+    responses:
+      '200':
+        description: Scheduler status retrieved successfully
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: integer
+                  example: 200
+                message:
+                  type: string
+                  example: Trust scheduler status retrieved successfully
+                data:
+                  type: object
+                  properties:
+                    isRunning:
+                      type: boolean
+                      example: false
+                    lastRun:
+                      type: string
+                      format: date-time
+                      example: "2025-08-22T10:00:00Z"
+                    stats:
+                      type: object
+                      properties:
+                        totalPropertiesChecked:
+                          type: integer
+                          example: 150
+                        successfulVerifications:
+                          type: integer
+                          example: 145
+                        failedVerifications:
+                          type: integer
+                          example: 5
+                        newlyTrusted:
+                          type: integer
+                          example: 12
+                        remainingUntrusted:
+                          type: integer
+                          example: 38
+      '500':
+        description: Error getting scheduler status
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: integer
+                  example: 500
+                message:
+                  type: string
+                  example: Error retrieving trust scheduler status
+
+"/api/booking/trust-scheduler/verify/{propertyId}":
+  post:
+    tags:
+      - Booking Trust Scheduler
+    summary: Verify specific property trust
+    description: Manually verify the trust status of a specific property
+    parameters:
+      - in: path
+        name: propertyId
+        required: true
+        schema:
+          type: string
+        description: MongoDB ObjectId of the property to verify
+        example: "507f1f77bcf86cd799439011"
+    responses:
+      '200':
+        description: Property trust verification completed
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: integer
+                  example: 200
+                message:
+                  type: string
+                  example: Property trust verification completed successfully
+                data:
+                  type: object
+                  properties:
+                    propertyId:
+                      type: string
+                      example: "507f1f77bcf86cd799439011"
+                    verified:
+                      type: boolean
+                      example: true
+                    newTrustStatus:
+                      type: string
+                      example: "trusted"
+                    verificationTime:
+                      type: string
+                      format: date-time
+                      example: "2025-08-22T10:00:00Z"
+      '404':
+        description: Property not found
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: integer
+                  example: 404
+                message:
+                  type: string
+                  example: Property not found
+      '500':
+        description: Error verifying property
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: integer
+                  example: 500
+                message:
+                  type: string
+                  example: Error verifying property trust
+
+"/api/booking/trust-scheduler/eligible-properties":
+  get:
+    tags:
+      - Booking Trust Scheduler
+    summary: Get eligible properties for verification
+    description: Get a list of properties that are eligible for trust verification
+    responses:
+      '200':
+        description: Eligible properties retrieved successfully
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: integer
+                  example: 200
+                message:
+                  type: string
+                  example: Eligible properties retrieved successfully
+                data:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      _id:
+                        type: string
+                        example: "507f1f77bcf86cd799439011"
+                      property_name:
+                        type: string
+                        example: "Test Hotel"
+                      booking_trusted_status:
+                        type: string
+                        example: "not_trusted"
+                      booking_last_login:
+                        type: string
+                        format: date-time
+                        example: "2025-08-21T10:00:00Z"
+                      expedia_id:
+                        type: string
+                        example: "TEST123"
+                totalCount:
+                  type: integer
+                  example: 150
+      '500':
+        description: Error retrieving eligible properties
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: integer
+                  example: 500
+                message:
+                  type: string
+                  example: Error retrieving eligible properties

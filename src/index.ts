@@ -106,7 +106,7 @@ app.listen(port, async () => {
         workerPool.getStatus().totalWorkers
       } workers`
     );
-    console.log("Booking trust verification scheduler started - running every hour");
+    console.log("Booking trust verification scheduler started");
   } catch (err) {
     console.log("Server cannot be connected because of the error:");
     console.log(err);

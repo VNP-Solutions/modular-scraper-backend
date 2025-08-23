@@ -57,7 +57,7 @@ export class WorkerPool extends EventEmitter {
       // Use JavaScript wrapper for development, compiled JS for production
       const workerPath = process.env.NODE_ENV === 'production' 
         ? path.resolve(__dirname, "../../dist/workers/scraping-worker.js")
-        : path.resolve(__dirname, "../workers/scraping-worker.js");
+        : path.resolve(__dirname, "../workers/scraping-worker-wrapper.js");
       
       console.log(`Creating worker with path: ${workerPath}`);
 
