@@ -3,23 +3,23 @@ import { bookingTrustScheduler } from "./booking-trust-scheduler.service.js";
 import { dualLogInfo, dualLogError } from "../common/log-helper.js";
 import { BookingErrorType, getBookingErrorDescription } from "../common/booking-error-types.js";
 
-enum ScheduleType {
+export enum ScheduleType {
   INTERVAL = 'interval',
   CRON = 'cron',
   SPECIFIC = 'specific'
 }
 
-enum TimeUnit {
+export enum TimeUnit {
   MINUTES = 'minutes',
   HOURS = 'hours',
   DAYS = 'days',
   WEEKS = 'weeks'
 }
-interface CronConfig {
+export interface CronConfig {
   enabled: boolean;
   schedule: {
     type: ScheduleType;
-    value: string | number | string[];
+    value: string | number; // e.g: 9:00 for specific time | 30 for interval
     unit?: TimeUnit;
   };
   timezone?: string;
@@ -159,14 +159,12 @@ export class BookingTrustCronService {
 
     // Validate specific times
     if (config.schedule.type === ScheduleType.SPECIFIC) {
-      if (!Array.isArray(config.schedule.value) || config.schedule.value.length === 0) {
+      if (typeof config.schedule.value !== 'string') {
         return false;
       }
       // Validate time format (HH:MM)
-      for (const time of config.schedule.value) {
-        if (typeof time !== 'string' || !/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(time)) {
-          return false;
-        }
+      if (!/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(config.schedule.value)) {
+        return false;
       }
     }
 
@@ -187,7 +185,7 @@ export class BookingTrustCronService {
         return value as string;
       
       case ScheduleType.SPECIFIC:
-        return this.specificTimesToCron(value as string[]);
+        return this.convertTimesToCron(value as string);
       
       default:
         return "0 * * * *"; // Default: every hour
@@ -215,14 +213,7 @@ export class BookingTrustCronService {
   /**
    * Convert specific times to cron expression
    */
-  private specificTimesToCron(times: string[]): string {
-    // For multiple specific times, we need to create multiple cron jobs
-    // I'll use the first time and log a warning
-    if (times.length > 1) {
-      dualLogInfo("Multiple specific times provided, using first time", { times });
-    }
-    
-    const time = times[0];
+  private convertTimesToCron(time: string): string {
     const [hour, minute] = time.split(':').map(Number);
     return `${minute} ${hour} * * *`;
   }
