@@ -205,52 +205,113 @@ export async function automateNeedHelpProcess(
       }
     }
 
-    // Step 2: Click "Payments/Fees" button
+    // Step 2: Wait for sidebar to load and handle chat input
     await delay(3000);
-    await dualLogInfo("Looking for 'Payments/Fees' button...", { jobId });
-    const paymentsSelectors = [
-      'button[data-element-value="Payments/Fees"]',
-      'button[data-testid="suggestion-text-button"][data-element-value="Payments/Fees"]',
-      'button:has-text("Payments/Fees")',
-    ];
+    await dualLogInfo("Waiting for chat sidebar to load...", { jobId });
 
-    for (const selector of paymentsSelectors) {
-      try {
-        await page.waitForSelector(selector, { visible: true, timeout: 10000 });
-        await page.click(selector);
-        await dualLogInfo(
-          `✅ Clicked 'Payments/Fees' button with selector: ${selector}`,
+    try {
+      // Wait for the chat input field to be available
+      const chatInputSelectors = [
+        'fieldset[data-testid="ChatWidgetInputFieldset"]',
+        'div[class*="IRISCwMessenger__Bottomm"] fieldset',
+        'fieldset[class*="a9c57-border"]',
+      ];
+
+      let chatInputFound = false;
+      for (const selector of chatInputSelectors) {
+        try {
+          await page.waitForSelector(selector, {
+            visible: true,
+            timeout: 15000,
+          });
+          await dualLogInfo(
+            `✅ Chat input field found with selector: ${selector}`,
+            { jobId }
+          );
+          chatInputFound = true;
+          break;
+        } catch (error) {
+          continue;
+        }
+      }
+
+      if (chatInputFound) {
+        // Wait a bit more for the input to be fully interactive
+        await delay(2000);
+
+        // Type "contact agoda" in the input field
+        await dualLogInfo("Typing 'contact agoda' in chat input...", { jobId });
+
+        const inputFieldSelectors = [
+          'fieldset[data-testid="ChatWidgetInputFieldset"]',
+          'div[class*="IRISCwMessenger__Bottomm"] fieldset',
+        ];
+
+        for (const selector of inputFieldSelectors) {
+          try {
+            await page.click(selector);
+            await page.type(selector, "contact agoda");
+            await dualLogInfo(
+              `✅ Typed 'contact agoda' with selector: ${selector}`,
+              { jobId }
+            );
+            break;
+          } catch (error) {
+            continue;
+          }
+        }
+
+        // Wait a moment for the send button to become enabled
+        await delay(1000);
+
+        // Click the send button (right side button)
+        await dualLogInfo("Looking for send button...", { jobId });
+        const sendButtonSelectors = [
+          'button[leadingicon="fill.symbol.send"]',
+          'button[class*="a9c57-bg-generic-base-transparent"]:has(svg[role="img"])',
+          'div[class*="IRISCwMessenger__Bottomm"] button:last-child',
+        ];
+
+        for (const selector of sendButtonSelectors) {
+          try {
+            await page.waitForSelector(selector, {
+              visible: true,
+              timeout: 10000,
+            });
+            await page.click(selector);
+            await dualLogInfo(
+              `✅ Clicked send button with selector: ${selector}`,
+              { jobId }
+            );
+
+            // Update progress - Chat message sent
+            if (jobId) {
+              await progressManager.updateJobProgress(
+                jobId,
+                undefined,
+                96.5,
+                "agoda_chat_message_sent",
+                undefined
+              );
+            }
+            break;
+          } catch (error) {
+            continue;
+          }
+        }
+
+        // Wait for the chat response to load
+        await delay(3000);
+      } else {
+        await dualLogError(
+          "Chat input field not found after clicking Need Help",
           { jobId }
         );
-        break;
-      } catch (error) {
-        continue;
       }
-    }
-
-    // Step 3: Click "Change payment method" button
-    await delay(3000);
-    await dualLogInfo("Looking for 'Change payment method' button...", {
-      jobId,
-    });
-    const changePaymentSelectors = [
-      'button[data-element-value="Change payment method"]',
-      'button[data-testid="suggestion-text-button"][data-element-value="Change payment method"]',
-      'button:has-text("Change payment method")',
-    ];
-
-    for (const selector of changePaymentSelectors) {
-      try {
-        await page.waitForSelector(selector, { visible: true, timeout: 10000 });
-        await page.click(selector);
-        await dualLogInfo(
-          `✅ Clicked 'Change payment method' button with selector: ${selector}`,
-          { jobId }
-        );
-        break;
-      } catch (error) {
-        continue;
-      }
+    } catch (error: any) {
+      await dualLogError("Error handling chat input:", error.message, {
+        jobId,
+      });
     }
 
     // Step 4: Click "Submit request" button

@@ -28,7 +28,6 @@ export async function browserSetupLocal(
       });
     } catch (error: any) {
       await dualLogError("Error launching browser:", error);
-
       // Send email notification for browser launch error
       if (jobId) {
         try {
