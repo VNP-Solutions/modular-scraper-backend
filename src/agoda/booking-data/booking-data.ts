@@ -631,6 +631,9 @@ export async function getAgodaBookingData(
         "Debugging page state for download button detection..."
       );
 
+      // Note: Removed viewport manipulation to prevent layout shifts
+      // The viewport is already set by the browser setup
+
       // Get page info for debugging
       const pageInfo = await newPage.evaluate(() => {
         return {
@@ -657,6 +660,19 @@ export async function getAgodaBookingData(
       });
 
       await dualLogInfo("Page debugging info:", pageInfo);
+
+      // Gentle scroll to ensure content is loaded without causing layout shifts
+      await newPage.evaluate(() => {
+        // Only scroll if page has significant height
+        if (document.body.scrollHeight > window.innerHeight) {
+          // Scroll down gently to trigger lazy loading
+          window.scrollTo(0, Math.min(500, document.body.scrollHeight / 2));
+          // Then scroll back to top
+          setTimeout(() => window.scrollTo(0, 0), 100);
+        }
+      });
+
+      await delay(2000);
 
       // Try to wait for the download button using the specific selector with longer timeout
       await newPage.waitForSelector(
@@ -924,12 +940,6 @@ export async function getAgodaBookingData(
     try {
       await dualLogInfo("Attempting download button click...");
 
-      // Preserve current scroll position to prevent layout shifts
-      const scrollPosition = await newPage.evaluate(() => ({
-        scrollX: window.scrollX,
-        scrollY: window.scrollY,
-      }));
-
       // Handle different selector types
       let buttonInfo;
 
@@ -1030,7 +1040,7 @@ export async function getAgodaBookingData(
         throw new Error("Download button is hidden via CSS");
       }
 
-      // Method 1: Ensure button is visible without causing layout shifts
+      // Method 1: Gentle scroll to button to avoid layout shifts
       if (usedSelector === "button") {
         // For text-based detection
         await newPage.evaluate(() => {
@@ -1043,7 +1053,7 @@ export async function getAgodaBookingData(
             );
           });
           if (downloadButton) {
-            // Check if button is in viewport, if not scroll minimally
+            // Check if button is already in viewport
             const rect = downloadButton.getBoundingClientRect();
             const isInViewport =
               rect.top >= 0 && rect.bottom <= window.innerHeight;
@@ -1061,7 +1071,7 @@ export async function getAgodaBookingData(
         await newPage.evaluate((selector) => {
           const button = document.querySelector(selector) as HTMLButtonElement;
           if (button) {
-            // Check if button is in viewport, if not scroll minimally
+            // Check if button is already in viewport
             const rect = button.getBoundingClientRect();
             const isInViewport =
               rect.top >= 0 && rect.bottom <= window.innerHeight;
@@ -1073,25 +1083,23 @@ export async function getAgodaBookingData(
         }, usedSelector);
       }
 
-      await delay(300); // Minimal wait time
+      await delay(500); // Reduced wait time
 
-      // Method 2: Enhanced Puppeteer click for server compatibility
+      // Method 2: Regular Puppeteer click (only for standard selectors)
       if (usedSelector !== "button") {
         await dualLogInfo(
-          `Executing enhanced Puppeteer click with selector: ${usedSelector}`
+          `Executing Puppeteer click with selector: ${usedSelector}`
         );
         try {
           await newPage.click(usedSelector);
-          await delay(1000); // Brief delay for server compatibility
+          await delay(2000); // Give time for click to register
         } catch (clickError) {
           await dualLogInfo("Puppeteer click failed, trying JavaScript click");
         }
       }
 
-      // Method 3: Enhanced JavaScript click for server compatibility
-      await dualLogInfo(
-        "Executing enhanced JavaScript click for server compatibility..."
-      );
+      // Method 3: Enhanced JavaScript click with comprehensive event simulation (from working code)
+      await dualLogInfo("Executing enhanced JavaScript click...");
       if (usedSelector === "button") {
         // For text-based detection
         await newPage.evaluate(() => {
@@ -1105,12 +1113,13 @@ export async function getAgodaBookingData(
           }) as HTMLButtonElement;
 
           if (downloadButton) {
-            // Focus the button first (needed for server compatibility)
+            // Focus the button first
             downloadButton.focus();
 
-            // Enhanced click with basic event simulation (needed for server)
+            // Comprehensive mouse event simulation
             const events = [
               new MouseEvent("mouseover", { bubbles: true, cancelable: true }),
+              new MouseEvent("mouseenter", { bubbles: true, cancelable: true }),
               new MouseEvent("mousedown", { bubbles: true, cancelable: true }),
               new MouseEvent("mouseup", { bubbles: true, cancelable: true }),
               new MouseEvent("click", { bubbles: true, cancelable: true }),
@@ -1122,6 +1131,12 @@ export async function getAgodaBookingData(
 
             // Also try direct click
             downloadButton.click();
+
+            // Try clicking on child elements (span with text)
+            const span = downloadButton.querySelector("span");
+            if (span) {
+              span.click();
+            }
           }
         });
       } else {
@@ -1129,12 +1144,13 @@ export async function getAgodaBookingData(
         await newPage.evaluate((selector) => {
           const button = document.querySelector(selector) as HTMLButtonElement;
           if (button) {
-            // Focus the button first (needed for server compatibility)
+            // Focus the button first
             button.focus();
 
-            // Enhanced click with basic event simulation (needed for server)
+            // Comprehensive mouse event simulation
             const events = [
               new MouseEvent("mouseover", { bubbles: true, cancelable: true }),
+              new MouseEvent("mouseenter", { bubbles: true, cancelable: true }),
               new MouseEvent("mousedown", { bubbles: true, cancelable: true }),
               new MouseEvent("mouseup", { bubbles: true, cancelable: true }),
               new MouseEvent("click", { bubbles: true, cancelable: true }),
@@ -1146,16 +1162,17 @@ export async function getAgodaBookingData(
 
             // Also try direct click
             button.click();
+
+            // Try clicking on child elements (span with text)
+            const span = button.querySelector("span");
+            if (span) {
+              span.click();
+            }
           }
         }, usedSelector);
       }
 
-      await dualLogInfo("Click methods executed");
-
-      // Restore scroll position to prevent layout shifts
-      await newPage.evaluate((position) => {
-        window.scrollTo(position.scrollX, position.scrollY);
-      }, scrollPosition);
+      await dualLogInfo("Multiple click methods executed");
 
       console.log("👆 Clicked the download CSV button");
       await dualLogInfo("CSV download button clicked successfully");
