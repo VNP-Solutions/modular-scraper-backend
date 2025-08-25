@@ -12,7 +12,7 @@ import { Job, JobStatus } from "../models/job.model.js";
 import { jobService } from "../services/job.service.js";
 import { propertyCredentialsService } from "../services/job-credentials.service.js";
 import { bookingTrustScheduler } from "../services/booking-trust-scheduler.service.js";
-import { bookingTrustCron } from "../services/booking-trust-cron.service.js";
+import { CronConfig, ScheduleType, TimeUnit, bookingTrustCron } from "../services/booking-trust-cron.service.js";
 import { emailNotifier } from "../common/email-notifier.js";
 
 // Import route modules
@@ -1078,37 +1078,6 @@ app.get("/api/jobs/:jobId/log", (async (
   }
 }) as any);
 
-// Test endpoint for multi-platform scraper functionality
-app.get("/api/scraping/test-platforms", (async (
-  req: express.Request,
-  res: express.Response
-) => {
-  try {
-    const { mainMultiPlatform } = await import("../main-multi-platform.js");
-
-    res.status(200).json({
-      status: 200,
-      message: "Multi-platform scraper test endpoint",
-      supportedPlatforms: ['expedia', 'booking'],
-      testResults: {
-        expedia: "Ready - Uses existing Expedia scraper with multi-platform interface",
-        booking: "Ready - Uses new Booking.com scraper with Browserless integration"
-      },
-      endpoints: {
-        expedia: "/api/expedia/property-run-job",
-        booking: "/api/booking/run-job"
-      },
-      note: "Both platforms now use the unified multi-platform scraper system"
-    });
-  } catch (err: any) {
-    res.status(500).json({
-      status: 500,
-      message: "Error testing multi-platform scraper",
-      error: err.message,
-    });
-  }
-}) as any);
-
 app.get(
   "/api/worker-pool/status",
   (req: express.Request, res: express.Response) => {
@@ -1134,32 +1103,6 @@ app.get(
 // Booking Trust Scheduler Endpoints
 
 // API to run booking trust scheduler manually
-/**
- * @swagger
- * /api/booking/trust-scheduler/run:
- *   post:
- *     tags:
- *       - Booking Trust Scheduler
- *     summary: Run trust verification scheduler
- *     description: Manually trigger the booking trust verification scheduler to process eligible properties
- *     responses:
- *       200:
- *         description: Trust scheduler started successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                 message:
- *                   type: string
- *                   example: Trust scheduler started
- *       409:
- *         description: Scheduler already running
- *       500:
- *         description: Error starting scheduler
- */
 app.post("/api/booking/trust-scheduler/run", (async (
   req: express.Request,
   res: express.Response
@@ -1182,41 +1125,6 @@ app.post("/api/booking/trust-scheduler/run", (async (
   }
 }) as any);
 
-// API to get booking trust scheduler status
-/**
- * @swagger
- * /api/booking/trust-scheduler/status:
- *   get:
- *     tags:
- *       - Booking Trust Scheduler
- *     summary: Get trust scheduler status
- *     description: Get the current status of the booking trust verification scheduler
- *     responses:
- *       200:
- *         description: Scheduler status retrieved successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 isRunning:
- *                   type: boolean
- *                 stats:
- *                   type: object
- *                   properties:
- *                     totalProperties:
- *                       type: integer
- *                     verifiedCount:
- *                       type: integer
- *                     remainingCount:
- *                       type: integer
- *                     successCount:
- *                       type: integer
- *                     failureCount:
- *                       type: integer
- *       500:
- *         description: Error getting scheduler status
- */
 app.get("/api/booking/trust-scheduler/status", (
   req: express.Request,
   res: express.Response
@@ -1240,42 +1148,6 @@ app.get("/api/booking/trust-scheduler/status", (
 });
 
 // API to manually verify a specific property's trust status
-/**
- * @swagger
- * /api/booking/trust-scheduler/verify/{propertyId}:
- *   post:
- *     tags:
- *       - Booking Trust Scheduler
- *     summary: Verify single property
- *     description: Manually trigger trust verification for a specific property
- *     parameters:
- *       - in: path
- *         name: propertyId
- *         required: true
- *         schema:
- *           type: string
- *         description: The property ID to verify
- *     responses:
- *       200:
- *         description: Property verification completed
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                 propertyId:
- *                   type: string
- *                 result:
- *                   type: object
- *       400:
- *         description: Invalid property ID
- *       404:
- *         description: Property not found
- *       500:
- *         description: Error verifying property
- */
 app.post("/api/booking/trust-scheduler/verify/:propertyId", (async (
   req: express.Request,
   res: express.Response
@@ -1308,46 +1180,6 @@ app.post("/api/booking/trust-scheduler/verify/:propertyId", (async (
 }) as any);
 
 // API to get properties eligible for trust verification
-/**
- * @swagger
- * /api/booking/trust-scheduler/eligible-properties:
- *   get:
- *     tags:
- *       - Booking Trust Scheduler
- *     summary: Get eligible properties
- *     description: Get list of properties eligible for trust verification (having booking credentials)
- *     responses:
- *       200:
- *         description: Eligible properties retrieved successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                 count:
- *                   type: integer
- *                 properties:
- *                   type: array
- *                   items:
- *                     type: object
- *                     properties:
- *                       _id:
- *                         type: string
- *                       property_name:
- *                         type: string
- *                       booking_id:
- *                         type: string
- *                       booking_trusted_status:
- *                         type: string
- *                         enum: [not_trusted, trusted]
- *                       booking_last_login:
- *                         type: string
- *                         format: date-time
- *       500:
- *         description: Error getting eligible properties
- */
 app.get("/api/booking/trust-scheduler/eligible-properties", (async (
   req: express.Request,
   res: express.Response
@@ -1380,57 +1212,143 @@ app.get("/api/booking/trust-scheduler/eligible-properties", (async (
 }) as any);
 
 // Booking Trust Cron Management Endpoints
+app.post("/api/booking/trust-scheduler/cron/configuration", (async (
+  req: express.Request,
+  res: express.Response
+) => {
+  try {
+    const { enabled, schedule, timezone } = req.body;
+    
+    // Validate required fields
+    if (!schedule || !schedule.type || schedule.value === undefined) {
+      return res.status(400).json({
+        status: 400,
+        message: "Schedule with type and value is required"
+      });
+    }
+
+    // Validate schedule type
+    if (!Object.values(ScheduleType).includes(schedule.type)) {
+      return res.status(400).json({
+        status: 400,
+        message: `Invalid schedule type. Must be one of: ${Object.values(ScheduleType).join(', ')}`
+      });
+    }
+
+    // Validate unit for interval type
+    if (schedule.type === ScheduleType.INTERVAL && (!schedule.unit || !Object.values(TimeUnit).includes(schedule.unit))) {
+      return res.status(400).json({
+        status: 400,
+        message: `Invalid unit for interval. Must be one of: ${Object.values(TimeUnit).join(', ')}`
+      });
+    }
+
+    // Validate specific time format
+    if (schedule.type === ScheduleType.SPECIFIC) {
+      if (typeof schedule.value !== 'string') {
+        return res.status(400).json({
+          status: 400,
+          message: "Specific time must be a string in HH:MM format"
+        });
+      }
+      if (!/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(schedule.value)) {
+        return res.status(400).json({
+          status: 400,
+          message: "Invalid time format. Use HH:MM format (e.g., '09:00')"
+        });
+      }
+    }
+
+    const config: CronConfig = {
+      enabled: enabled !== undefined ? enabled : true,
+      schedule,
+      timezone: timezone || "UTC"
+    };
+
+    bookingTrustCron.configure(config);
+    
+    res.status(200).json({
+      status: 200,
+      message: "Cron configuration updated successfully",
+      data: config
+    });
+  } catch (err: any) {
+    res.status(400).json({
+      status: 400,
+      message: "Error updating configuration",
+      error: err.message
+    });
+  }
+}) as any);
+
+// GET /api/booking/trust-scheduler/cron/configuration
+app.get("/api/booking/trust-scheduler/cron/configuration", (async (
+  req: express.Request,
+  res: express.Response
+) => {
+  try {
+    const config = bookingTrustCron.getConfiguration();
+    res.status(200).json({
+      status: 200,
+      message: "Cron configuration retrieved successfully",
+      data: config
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      status: 500,
+      message: "Error retrieving configuration",
+      error: err.message
+    });
+  }
+}) as any);
+
+// POST /api/booking/trust-scheduler/cron/enabled
+app.post("/api/booking/trust-scheduler/cron/enabled", (async (
+  req: express.Request,
+  res: express.Response
+) => {
+  try {
+    const { enabled } = req.body;
+    
+    if (typeof enabled !== 'boolean') {
+      return res.status(400).json({
+        status: 400,
+        message: "Enabled parameter is required and must be a boolean"
+      });
+    }
+
+    const config = bookingTrustCron.getConfiguration();
+    config.enabled = enabled;
+    bookingTrustCron.configure(config);
+    
+    res.status(200).json({
+      status: 200,
+      message: `Cron job ${enabled ? 'enabled' : 'disabled'} successfully`,
+      data: {
+        enabled: config.enabled
+      }
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      status: 500,
+      message: "Error updating cron job status",
+      error: err.message
+    });
+  }
+}) as any);
 
 // API to get booking trust cron status
-/**
- * @swagger
- * /api/booking/trust-scheduler/cron/status:
- *   get:
- *     tags:
- *       - Booking Trust Scheduler
- *     summary: Get cron job status
- *     description: Get the status of the booking trust verification cron job
- *     responses:
- *       200:
- *         description: Cron status retrieved successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 enabled:
- *                   type: boolean
- *                 isRunning:
- *                   type: boolean
- *                 lastRun:
- *                   type: string
- *                   format: date-time
- *                   nullable: true
- *                 nextRun:
- *                   type: string
- *                   format: date-time
- *                   nullable: true
- *                 currentSchedule:
- *                   type: string
- *                   example: "0 3 * * *"
- *       500:
- *         description: Error getting cron status
- */
 app.get("/api/booking/trust-scheduler/cron/status", (
   req: express.Request,
   res: express.Response
 ) => {
   try {
     const cronStatus = bookingTrustCron.getStatus();
-    const schedulerStatus = bookingTrustScheduler.getSchedulerStatus();
     
     res.status(200).json({
       status: 200,
       message: "Trust scheduler cron status retrieved successfully",
-      data: {
-        cron: cronStatus,
-        scheduler: schedulerStatus,
-      },
+      data: cronStatus
     });
   } catch (err: any) {
     console.error("Error in /api/booking/trust-scheduler/cron/status:", err);
@@ -1443,32 +1361,6 @@ app.get("/api/booking/trust-scheduler/cron/status", (
 });
 
 // API to manually trigger cron verification (for testing)
-/**
- * @swagger
- * /api/booking/trust-scheduler/cron/trigger:
- *   post:
- *     tags:
- *       - Booking Trust Scheduler
- *     summary: Trigger cron job manually
- *     description: Manually trigger the booking trust verification cron job
- *     responses:
- *       200:
- *         description: Cron job triggered successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                 message:
- *                   type: string
- *                   example: Cron job triggered successfully
- *       409:
- *         description: Cron job already running
- *       500:
- *         description: Error triggering cron job
- */
 app.post("/api/booking/trust-scheduler/cron/trigger", (async (
   req: express.Request,
   res: express.Response
