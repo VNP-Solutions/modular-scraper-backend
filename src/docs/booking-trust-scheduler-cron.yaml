@@ -62,7 +62,14 @@
     tags:
       - Cron Configuration
     summary: Configure cron job
-    description: Update the configuration of the booking trust verification cron job
+    description: |
+      Update the configuration of the booking trust verification cron job.
+      
+      **Schedule Types:**
+      
+      1. **Interval**: Run every X minutes/hours/days/weeks
+      2. **Cron**: Use standard cron expressions
+      3. **Specific**: Run at specific times daily
     requestBody:
       required: true
       content:
@@ -104,6 +111,35 @@
                 type: string
                 description: Timezone for the cron job (defaults to UTC)
                 example: UTC
+          examples:
+            interval_example:
+              summary: Interval - every 2 hours
+              description: Configure the cron job to run every 2 hours
+              value:
+                enabled: true
+                schedule:
+                  type: interval
+                  value: 2
+                  unit: hours
+                timezone: UTC
+            cron_example:
+              summary: Cron expression - every day at 9 AM
+              description: Use cron expression to run every day at 9 AM
+              value:
+                enabled: true
+                schedule:
+                  type: cron
+                  value: "0 9 * * *"
+                timezone: UTC
+            specific_example:
+              summary: Specific time - 3:30 PM daily
+              description: Run at 3:30 PM every day
+              value:
+                enabled: true
+                schedule:
+                  type: specific
+                  value: "15:30"
+                timezone: UTC
     responses:
       '200':
         description: Configuration updated successfully
