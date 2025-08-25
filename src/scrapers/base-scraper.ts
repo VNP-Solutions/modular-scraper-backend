@@ -60,10 +60,10 @@ export abstract class BaseScraper {
   abstract cleanup(): Promise<void>;
 
   // Common methods that can be shared across platforms
-  protected async takeScreenshot(filename: string): Promise<void> {
+  protected async takeScreenshot(filename: string = 'booking-last-step.png'): Promise<void> {
     if (this.page) {
       await this.page.screenshot({ path: filename as `${string}.png` });
-      console.log(`📸 Screenshot saved: ${filename}`);
+      console.log(`Screenshot saved: ${filename}`);
     }
   }
 

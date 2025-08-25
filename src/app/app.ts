@@ -580,75 +580,18 @@ app.post("/api/expedia/reservation-run-job", (async (
   }
 }) as any);
 
-/**
- * @swagger
- * /api/booking/run-job:
- *   post:
- *     tags:
- *       - Booking Jobs
- *     summary: Start booking scraping job
- *     description: Start a booking scraping job for the specified date range. Portfolio and property information is retrieved from the job record.
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - jobId
- *               - startDate
- *               - endDate
- *             properties:
- *               jobId:
- *                 type: string
- *                 description: MongoDB ObjectId of the job to run
- *                 example: "507f1f77bcf86cd799439011"
- *               startDate:
- *                 type: string
- *                 description: Start date for booking scraping (MM/DD/YYYY format)
- *                 example: "01/01/2024"
- *               endDate:
- *                 type: string
- *                 description: End date for booking scraping (MM/DD/YYYY format)
- *                 example: "01/31/2024"
- *     responses:
- *       200:
- *         description: Booking scraping job completed successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 status:
- *                   type: integer
- *                   example: 200
- *                 message:
- *                   type: string
- *                   example: Booking scraping job started successfully
- *                 jobId:
- *                   type: string
- *                   example: "507f1f77bcf86cd799439011"
- *       400:
- *         description: Missing required parameters
- *       404:
- *         description: Job not found
- *       409:
- *         description: Job not in runnable state
- *       500:
- *         description: Error processing booking job
- */
 app.post("/api/booking/run-job", (async (
   req: express.Request,
   res: express.Response
 ) => {
   try {
-    const { jobId, startDate, endDate } = req.body;
+    const { jobId } = req.body;
 
     // Validate required parameters
-    if (!jobId || !startDate || !endDate) {
+    if (!jobId) {
       return res.status(400).json({
         status: 400,
-        message: "jobId, startDate and endDate are required in request body",
+        message: "jobId required in request body",
       });
     }
 
@@ -707,8 +650,6 @@ app.post("/api/booking/run-job", (async (
       jobId,
       portfolioId,
       propertyId,
-      startDate,
-      endDate,
       bookingId,
       user_email: bookingUsername,
       user_password: bookingPassword,
@@ -770,52 +711,6 @@ app.post("/api/booking/run-job", (async (
   }
 }) as any);
 
-/**
- * @swagger
- * /api/booking/stop-job:
- *   post:
- *     tags:
- *       - Booking Jobs
- *     summary: Stop a running booking job
- *     description: Stop a currently running booking scraping job
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - jobId
- *             properties:
- *               jobId:
- *                 type: string
- *                 description: The ID of the job to stop
- *                 example: "507f1f77bcf86cd799439011"
- *     responses:
- *       200:
- *         description: Job stopped successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 status:
- *                   type: integer
- *                   example: 200
- *                 message:
- *                   type: string
- *                   example: Job stopped successfully
- *                 jobId:
- *                   type: string
- *       400:
- *         description: Job ID is required
- *       404:
- *         description: Job not found
- *       409:
- *         description: Job is not running
- *       500:
- *         description: Error stopping job
- */
 app.post("/api/booking/stop-job", (async (
   req: express.Request,
   res: express.Response
@@ -874,69 +769,15 @@ app.post("/api/booking/stop-job", (async (
   }
 }) as any);
 
-/**
- * @swagger
- * /api/booking/rerun-failed-job:
- *   post:
- *     tags:
- *       - Booking Jobs
- *     summary: Rerun a failed booking job
- *     description: Rerun a previously failed booking scraping job with the same parameters
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - jobId
- *               - startDate
- *               - endDate
- *             properties:
- *               jobId:
- *                 type: string
- *                 description: MongoDB ObjectId of the failed job to rerun
- *                 example: "507f1f77bcf86cd799439011"
- *               startDate:
- *                 type: string
- *                 description: Start date for booking scraping (MM/DD/YYYY format)
- *                 example: "01/01/2024"
- *               endDate:
- *                 type: string
- *                 description: End date for booking scraping (MM/DD/YYYY format)
- *                 example: "01/31/2024"
- *     responses:
- *       200:
- *         description: Failed job rerun successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 status:
- *                   type: integer
- *                   example: 200
- *                 message:
- *                   type: string
- *                   example: Booking job rerun successfully
- *                 jobId:
- *                   type: string
- *       400:
- *         description: Missing required parameters or job not in failed state
- *       404:
- *         description: Job not found
- *       500:
- *         description: Error rerunning job
- */
 app.post("/api/booking/rerun-failed-job", (async (
   req: express.Request,
   res: express.Response
 ) => {
   try {
-    const { jobId, startDate, endDate } = req.body;
+    const { jobId } = req.body;
 
     // Validate required parameters
-    if (!jobId || !startDate || !endDate) {
+    if (!jobId) {
       return res.status(400).json({
         status: 400,
         message: "jobId, startDate and endDate are required in request body",
@@ -1017,8 +858,6 @@ app.post("/api/booking/rerun-failed-job", (async (
       jobId,
       portfolioId,
       propertyId,
-      startDate,
-      endDate,
       bookingId,
       user_email: bookingUsername,
       user_password: bookingPassword,
@@ -1068,14 +907,13 @@ app.post("/api/booking/rerun-failed-job", (async (
 
       // Clean up retry check state
       jobService.clearRetryCheck();
-
       return res.status(500).json({
         status: 500,
         message: "Worker execution failed for booking job rerun",
         error:
           workerError instanceof Error
             ? workerError.message
-            : String(workerError),
+            : workerError,
         jobId,
         retryAttempt: updatedJob.retries_attempted,
       });
