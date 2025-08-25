@@ -631,8 +631,9 @@ export async function getAgodaBookingData(
         "Debugging page state for download button detection..."
       );
 
-      // Note: Removed viewport manipulation to prevent layout shifts
-      // The viewport is already set by the browser setup
+      // Set viewport to ensure consistent rendering
+      await newPage.setViewport({ width: 1920, height: 1080 });
+      await delay(2000);
 
       // Get page info for debugging
       const pageInfo = await newPage.evaluate(() => {
@@ -661,18 +662,14 @@ export async function getAgodaBookingData(
 
       await dualLogInfo("Page debugging info:", pageInfo);
 
-      // Gentle scroll to ensure content is loaded without causing layout shifts
+      // Scroll to ensure all content is loaded
       await newPage.evaluate(() => {
-        // Only scroll if page has significant height
-        if (document.body.scrollHeight > window.innerHeight) {
-          // Scroll down gently to trigger lazy loading
-          window.scrollTo(0, Math.min(500, document.body.scrollHeight / 2));
-          // Then scroll back to top
-          setTimeout(() => window.scrollTo(0, 0), 100);
-        }
+        window.scrollTo(0, 0);
+        window.scrollTo(0, document.body.scrollHeight);
+        window.scrollTo(0, 0);
       });
 
-      await delay(2000);
+      await delay(3000);
 
       // Try to wait for the download button using the specific selector with longer timeout
       await newPage.waitForSelector(
@@ -1040,7 +1037,7 @@ export async function getAgodaBookingData(
         throw new Error("Download button is hidden via CSS");
       }
 
-      // Method 1: Gentle scroll to button to avoid layout shifts
+      // Method 1: Scroll to button and ensure it's in view
       if (usedSelector === "button") {
         // For text-based detection
         await newPage.evaluate(() => {
@@ -1053,17 +1050,10 @@ export async function getAgodaBookingData(
             );
           });
           if (downloadButton) {
-            // Check if button is already in viewport
-            const rect = downloadButton.getBoundingClientRect();
-            const isInViewport =
-              rect.top >= 0 && rect.bottom <= window.innerHeight;
-
-            if (!isInViewport) {
-              downloadButton.scrollIntoView({
-                behavior: "auto",
-                block: "nearest",
-              });
-            }
+            downloadButton.scrollIntoView({
+              behavior: "smooth",
+              block: "center",
+            });
           }
         });
       } else {
@@ -1071,19 +1061,12 @@ export async function getAgodaBookingData(
         await newPage.evaluate((selector) => {
           const button = document.querySelector(selector) as HTMLButtonElement;
           if (button) {
-            // Check if button is already in viewport
-            const rect = button.getBoundingClientRect();
-            const isInViewport =
-              rect.top >= 0 && rect.bottom <= window.innerHeight;
-
-            if (!isInViewport) {
-              button.scrollIntoView({ behavior: "auto", block: "nearest" });
-            }
+            button.scrollIntoView({ behavior: "smooth", block: "center" });
           }
         }, usedSelector);
       }
 
-      await delay(500); // Reduced wait time
+      await delay(1000); // Wait for scroll to complete
 
       // Method 2: Regular Puppeteer click (only for standard selectors)
       if (usedSelector !== "button") {
@@ -1098,7 +1081,7 @@ export async function getAgodaBookingData(
         }
       }
 
-      // Method 3: Enhanced JavaScript click with comprehensive event simulation (from working code)
+      // Method 3: Enhanced JavaScript click with comprehensive event simulation
       await dualLogInfo("Executing enhanced JavaScript click...");
       if (usedSelector === "button") {
         // For text-based detection
