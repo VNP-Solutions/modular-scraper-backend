@@ -685,12 +685,12 @@ class ScrapingWorker {
       portfolioId,
       propertyId,
       platform: 'booking',
-      rerunReason: "Manual rerun of failed/cancelled job",
+      rerunReason: "Manual rerun of failed job",
       retryAttempt: jobService.retryAttempt,
       maxRetries: jobService.maxRetries,
     });
 
-    // 1. Reset job status from Failed/Cancelled to Pending
+    // 1. Reset job status from Failed to Pending
     await dualLogInfo(`Resetting job status for rerun`, {
       jobId,
       fromStatus: originalStatus,

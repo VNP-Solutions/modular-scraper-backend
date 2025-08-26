@@ -37,7 +37,7 @@ const initializeJobQueueUrls = async (): Promise<void> => {
     console.log("Job Queue URL Statistics:", stats);
 
     console.log(
-      "✅ URL status monitoring initialized. URLs are managed by another project."
+      "URL status monitoring initialized. URLs are managed by another project."
     );
   } catch (err) {
     console.error("Error initializing job queue URLs:", err);

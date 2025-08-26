@@ -3,7 +3,7 @@
     tags:
       - Booking Jobs
     summary: Stop booking scraping job
-    description: Stop a running booking scraping job and update job status to Cancelled
+    description: Stop a running booking scraping job and update job status to Failed
     requestBody:
       required: true
       content:
@@ -36,7 +36,7 @@
                   example: "507f1f77bcf86cd799439011"
                 finalStatus:
                   type: string
-                  example: Cancelled
+                  example: Failed
       '400':
         description: Invalid request or job not found
         content:
