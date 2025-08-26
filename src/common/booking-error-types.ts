@@ -23,7 +23,9 @@ export enum BookingErrorType {
   RERUN_INVALID_STATUS = "rerun_invalid_status",
   RERUN_NO_DATA = "rerun_no_data",
   UNKNOWN = "unknown",
-  TWO_FA_ERROR = "two_fa_error"
+  TWO_FA_ERROR = "two_fa_error",
+  SCRAPING_STOPPED = "scraping_stopped",
+  SCRAPING_PAUSED = "scraping_paused"
 }
 
 /**
@@ -78,6 +80,8 @@ export function getBookingErrorDescription(errorType: BookingErrorType): string 
     [BookingErrorType.RERUN_NO_DATA]: `[${PlatformsType.BOOKING}] No data available for rerun`,
     [BookingErrorType.UNKNOWN]: `[${PlatformsType.BOOKING}] Unknown error occurred`,
     [BookingErrorType.TWO_FA_ERROR]: `[${PlatformsType.BOOKING}] 2FA handling failed`,
+    [BookingErrorType.SCRAPING_STOPPED]: `[${PlatformsType.BOOKING}] Scraping was stopped by user request`,
+    [BookingErrorType.SCRAPING_PAUSED]: `[${PlatformsType.BOOKING}] Scraping was paused by user request`,
   };
   
   return descriptions[errorType];

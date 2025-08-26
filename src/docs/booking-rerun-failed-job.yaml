@@ -3,7 +3,7 @@
     tags:
       - Booking Jobs
     summary: Rerun failed booking scraping job
-    description: Re-execute a failed or cancelled booking job with retry tracking and record recovery
+    description: Re-execute a failed booking job with retry tracking and record recovery
     requestBody:
       required: true
       content:
@@ -15,7 +15,7 @@
             properties:
               jobId:
                 type: string
-                description: MongoDB ObjectId of the failed or cancelled job to rerun
+                description: MongoDB ObjectId of the failed job to rerun
                 example: "507f1f77bcf86cd799439011"
     responses:
       '200':
@@ -30,7 +30,7 @@
                   example: 200
                 message:
                   type: string
-                  example: Failed or cancelled booking job rerun completed successfully
+                  example: Failed booking job rerun completed successfully
                 jobId:
                   type: string
                   example: "507f1f77bcf86cd799439011"
@@ -70,7 +70,7 @@
                   example: 400
                 message:
                   type: string
-                  example: Job is not in Failed or Cancelled status. Current status: Completed
+                  example: Job is not in Failed status. Current status: Completed
       '404':
         description: Job not found
         content:

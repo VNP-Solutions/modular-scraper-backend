@@ -491,7 +491,7 @@ class ScrapingWorker {
   }
 
   private async handleBookingRun(jobData: WorkerJobData): Promise<any> {
-    const { jobId, portfolioId, propertyId, startDate, endDate, bookingId, user_email, user_password } = jobData;
+    const { jobId, portfolioId, propertyId, bookingId, user_email, user_password } = jobData;
     
     if (!jobId) {
       throw new Error("jobId is required for booking-run jobs");
@@ -549,17 +549,13 @@ class ScrapingWorker {
       jobId,
       portfolioId,
       propertyId,
-      bookingId: finalBookingId,
-      startDate,
-      endDate,
+      bookingId: finalBookingId
     });
 
     // 5. Start scraping state manager
     scrapingStateManager.startScraping(
       finalBookingId,
       jobId,
-      startDate,
-      endDate
     );
     
     try {
@@ -568,8 +564,6 @@ class ScrapingWorker {
         platform: 'booking',
         propertyId: finalBookingId,
         propertyIdForDb: propertyId,
-        startDate,
-        endDate,
         jobId,
         user_email: finalUserEmail,
         user_password: finalUserPassword
@@ -691,12 +685,12 @@ class ScrapingWorker {
       portfolioId,
       propertyId,
       platform: 'booking',
-      rerunReason: "Manual rerun of failed/cancelled job",
+      rerunReason: "Manual rerun of failed job",
       retryAttempt: jobService.retryAttempt,
       maxRetries: jobService.maxRetries,
     });
 
-    // 1. Reset job status from Failed/Cancelled to Pending
+    // 1. Reset job status from Failed to Pending
     await dualLogInfo(`Resetting job status for rerun`, {
       jobId,
       fromStatus: originalStatus,

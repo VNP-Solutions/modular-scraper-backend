@@ -1,4 +1,4 @@
-"/api/booking/run-job":
+"/api/booking/property-run-job":
   post:
     tags:
       - Booking Jobs

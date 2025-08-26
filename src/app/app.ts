@@ -580,7 +580,7 @@ app.post("/api/expedia/reservation-run-job", (async (
   }
 }) as any);
 
-app.post("/api/booking/run-job", (async (
+app.post("/api/booking/property-run-job", (async (
   req: express.Request,
   res: express.Response
 ) => {
@@ -741,8 +741,8 @@ app.post("/api/booking/stop-job", (async (
       console.log(`Stopping scraping for job ${jobId}`);
     }
 
-    // 3. Update job status to Cancelled
-    const updatedJob = await jobService.updateJobStatus(jobId, JobStatus.Cancelled);
+    // 3. Update job status to Failed
+    const updatedJob = await jobService.updateJobStatus(jobId, JobStatus.Failed);
     if (!updatedJob) {
       return res.status(500).json({
         status: 500,
@@ -750,13 +750,13 @@ app.post("/api/booking/stop-job", (async (
       });
     }
 
-    console.log(`Job ${jobId} has been stopped and marked as Cancelled`);
+    console.log(`Job ${jobId} has been stopped and marked as Failed`);
 
     res.status(200).json({
       status: 200,
       message: "Booking scraping job stopped successfully",
       jobId,
-      finalStatus: JobStatus.Cancelled,
+      finalStatus: JobStatus.Failed,
       wasRunning,
     });
   } catch (err: any) {

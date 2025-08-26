@@ -156,31 +156,3 @@ async function main(
 // Export both functions
 export default main;
 export { mainMultiPlatform, SupportedPlatforms };
-
-// Example usage:
-/*
-// Using the original interface (Expedia)
-await main('12345', '2024-01-01', '2024-01-31', 'job123', 'user@example.com', 'password');
-
-// Using the new multi-platform interface
-await mainMultiPlatform({
-  platform: SupportedPlatforms.BOOKING,
-  propertyId: '67890',
-  startDate: '2024-01-01',
-  endDate: '2024-01-31',
-  jobId: 'job124',
-  user_email: 'admin@example.com',
-  user_password: 'encrypted_password'
-});
-
-// Platform detection from URL
-await mainMultiPlatform({
-  url: 'https://admin.booking.com',
-  propertyId: '67890',
-  startDate: '2024-01-01',
-  endDate: '2024-01-31',
-  jobId: 'job125',
-  user_email: 'admin@example.com',
-  user_password: 'encrypted_password'
-});
-*/
