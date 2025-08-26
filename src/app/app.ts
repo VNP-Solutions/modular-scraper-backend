@@ -580,7 +580,7 @@ app.post("/api/expedia/reservation-run-job", (async (
   }
 }) as any);
 
-app.post("/api/booking/run-job", (async (
+app.post("/api/booking/property-run-job", (async (
   req: express.Request,
   res: express.Response
 ) => {
