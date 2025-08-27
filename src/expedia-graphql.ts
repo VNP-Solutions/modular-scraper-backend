@@ -543,16 +543,20 @@ async function makeGraphQLRequest(
                 const cardInfo = evcCardData.cardInformation;
 
                 // Map EVC charge status values to desired format
-                const mapReasonForCharge = (chargeStatus: string): string => {
-                  switch (chargeStatus?.toLowerCase()) {
+                const mapReasonForCharge = (graphqlReason: string): string => {
+                  switch (graphqlReason?.toLowerCase()) {
                     case "deactivatedduetofullcharge":
-                      return "Charge is full";
+                      return "Charged in full";
+                    case "chargecompleted":
+                      return "Charged in full";
                     case "partiallycharged":
                       return "Partially charged";
                     case "readytocharge":
                       return "Ready to charge";
+                    case "deactivated":
+                      return "Deactivated";
                     default:
-                      return chargeStatus || "";
+                      return graphqlReason || "";
                   }
                 };
 
@@ -617,11 +621,15 @@ async function makeGraphQLRequest(
                 const mapReasonForCharge = (graphqlReason: string): string => {
                   switch (graphqlReason?.toLowerCase()) {
                     case "deactivatedduetofullcharge":
-                      return "Charge is full";
+                      return "Charged in full";
+                    case "chargecompleted":
+                      return "Charged in full";
                     case "partiallycharged":
                       return "Partially charged";
                     case "readytocharge":
                       return "Ready to charge";
+                    case "deactivated":
+                      return "Deactivated";
                     default:
                       return graphqlReason || "";
                   }
