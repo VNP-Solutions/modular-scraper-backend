@@ -402,6 +402,77 @@ export class WorkerPool extends EventEmitter {
     return this.jobQueue.length >= this.config.queueSize;
   }
 
+  public async stopJob(jobId: string): Promise<boolean> {
+    console.log(`Attempting to stop job: ${jobId}`);
+
+    // First, check if job is in queue and remove it
+    const queueIndex = this.jobQueue.findIndex(
+      (queuedJob) => queuedJob.jobData.jobId === jobId
+    );
+    if (queueIndex !== -1) {
+      const removedJob = this.jobQueue.splice(queueIndex, 1)[0];
+      removedJob.reject(new Error(`Job ${jobId} was stopped before execution`));
+      console.log(`Job ${jobId} removed from queue`);
+      return true;
+    }
+
+    // Find worker currently executing this job
+    let targetWorker: ActiveWorker | undefined;
+    let targetWorkerId: string | undefined;
+
+    for (const [workerId, activeWorker] of this.workers) {
+      if (activeWorker.info.currentJobId === jobId) {
+        targetWorker = activeWorker;
+        targetWorkerId = workerId;
+        break;
+      }
+    }
+
+    if (!targetWorker || !targetWorkerId) {
+      console.log(`Job ${jobId} not found in active workers or queue`);
+      return false;
+    }
+
+    try {
+      // Send stop message to worker first (if worker supports it)
+      targetWorker.worker.postMessage({ type: "stop", jobId });
+
+      // Give worker a moment to handle stop gracefully
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+
+      // Terminate the worker and recreate it
+      await targetWorker.worker.terminate();
+      console.log(`Worker ${targetWorkerId} terminated for job ${jobId}`);
+
+      // Resolve the promise with stopped status
+      if (targetWorker.resolve) {
+        targetWorker.resolve({
+          success: false,
+          error: `Job ${jobId} was stopped by user request`,
+          jobId: jobId,
+          data: {
+            status: 500,
+            message: `Job ${jobId} was stopped by user request`,
+            jobId: jobId,
+            finalStatus: "Stopped",
+          },
+        });
+      }
+
+      // Remove the old worker and create a new one
+      this.workers.delete(targetWorkerId);
+      this.createWorker(targetWorkerId);
+
+      console.log(
+        `Job ${jobId} stopped and worker ${targetWorkerId} recreated`
+      );
+      return true;
+    } catch (error) {
+      console.error(`Error stopping job ${jobId}:`, error);
+      return false;
+    }
+  }
+
   public async shutdown(): Promise<void> {
     this.isShuttingDown = true;
     console.log("Shutting down worker pool...");

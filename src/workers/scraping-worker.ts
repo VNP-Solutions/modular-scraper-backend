@@ -87,6 +87,15 @@ class ScrapingWorker {
   private async executeJob(jobData: WorkerJobData): Promise<void> {
     this.currentJobId = jobData.jobId;
 
+    // Debug: Log received job data
+    console.log(
+      `Worker received job data for ${jobData.jobId}:`,
+      JSON.stringify(jobData, null, 2)
+    );
+    console.log(
+      `Worker job type: '${jobData.jobType}' (type: ${typeof jobData.jobType})`
+    );
+
     this.sendMessage({
       type: "job-start",
       jobId: jobData.jobId,
@@ -120,6 +129,9 @@ class ScrapingWorker {
 
         case "agoda-rerun-failed":
           result = await this.handleAgodaRerunFailed(jobData);
+          break;
+
+        case "stop":
           break;
 
         default:
