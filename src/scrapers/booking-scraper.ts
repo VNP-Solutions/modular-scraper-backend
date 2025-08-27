@@ -205,20 +205,7 @@ export class BookingScraper extends BaseScraper {
     
     try {
       // Check if scraping should continue before login
-      await scrapingStateManager.waitWhilePaused();
-      if (!scrapingStateManager.isRunning()) {
-        await dualLogError(
-          getBookingErrorDescription(BookingErrorType.SCRAPING_STOPPED),
-          {
-            errorType: BookingErrorType.SCRAPING_STOPPED,
-            error: new Error('Scraping was stopped before login'),
-            phase: BookingScrapingPhase.LOGIN,
-            platform: 'booking',
-            action: 'login'
-          }
-        );
-        throw new Error('Scraping was stopped before login');
-      }
+      await this.throwIfScrapingShouldStop('login');
       
       if (this.isAlreadyLoggedIn() && !skipAlreadyLogged) {
         await this.logInfo('Already logged in');
@@ -236,20 +223,7 @@ export class BookingScraper extends BaseScraper {
       await this.logInfo('Entering email address');
 
       // Check if scraping should continue before entering email
-      await scrapingStateManager.waitWhilePaused();
-      if (!scrapingStateManager.isRunning()) {
-        await dualLogError(
-          getBookingErrorDescription(BookingErrorType.SCRAPING_STOPPED),
-          {
-            errorType: BookingErrorType.SCRAPING_STOPPED,
-            error: new Error('Scraping was stopped during login'),
-            phase: BookingScrapingPhase.LOGIN,
-            platform: 'booking',
-            action: 'enter_email'
-          }
-        );
-        throw new Error('Scraping was stopped during login');
-      }
+      await this.throwIfScrapingShouldStop('enter_email');
 
       const emailEntered = await this.enterEmail(loginCredentials.email);
       if (!emailEntered) {
@@ -311,20 +285,7 @@ export class BookingScraper extends BaseScraper {
       }
 
       // Check if scraping should continue before entering password
-      await scrapingStateManager.waitWhilePaused();
-      if (!scrapingStateManager.isRunning()) {
-        await dualLogError(
-          getBookingErrorDescription(BookingErrorType.SCRAPING_STOPPED),
-          {
-            errorType: BookingErrorType.SCRAPING_STOPPED,
-            error: new Error('Scraping was stopped during login'),
-            phase: BookingScrapingPhase.LOGIN,
-            platform: 'booking',
-            action: 'enter_password'
-          }
-        );
-        throw new Error('Scraping was stopped during login');
-      }
+      await this.throwIfScrapingShouldStop('enter_password');
 
       // Enter password using the new function
       const passwordEntered = await this.enterPassword(loginCredentials.password);
@@ -723,20 +684,7 @@ export class BookingScraper extends BaseScraper {
 
   async clickViewAllVccsToCharge(): Promise<boolean> {
     // Check if scraping should continue before clicking view all
-    await scrapingStateManager.waitWhilePaused();
-    if (!scrapingStateManager.isRunning()) {
-      await dualLogError(
-        getBookingErrorDescription(BookingErrorType.SCRAPING_STOPPED),
-        {
-          errorType: BookingErrorType.SCRAPING_STOPPED,
-          error: new Error('Scraping was stopped before clicking view all'),
-          phase: BookingScrapingPhase.NAVIGATION,
-          platform: 'booking',
-          action: 'click_view_all_vccs_to_charge'
-        }
-      );
-      throw new Error('Scraping was stopped before clicking view all');
-    }
+    await this.throwIfScrapingShouldStop('click_view_all_vccs_to_charge');
     
     return await SelectorUtils.findAndClick(this.page!, [BOOKING_SELECTORS.vccs.vccsToChargeLink]);
   }
@@ -801,20 +749,7 @@ export class BookingScraper extends BaseScraper {
 
     try {
       // Check if scraping should continue before getting reservation rows
-      await scrapingStateManager.waitWhilePaused();
-      if (!scrapingStateManager.isRunning()) {
-        await dualLogError(
-          getBookingErrorDescription(BookingErrorType.SCRAPING_STOPPED),
-          {
-            errorType: BookingErrorType.SCRAPING_STOPPED,
-            error: new Error('Scraping was stopped before getting reservation rows'),
-            phase: BookingScrapingPhase.NAVIGATION,
-            platform: 'booking',
-            action: 'get_reservation_rows'
-          }
-        );
-        throw new Error('Scraping was stopped before getting reservation rows');
-      }
+      await this.throwIfScrapingShouldStop('get_reservation_rows');
       
       await this.logInfo('Getting reservation rows from current page...');
       
@@ -930,21 +865,7 @@ export class BookingScraper extends BaseScraper {
 
     try {
       // Check if scraping should continue before clicking reservation detail
-      await scrapingStateManager.waitWhilePaused();
-      if (!scrapingStateManager.isRunning()) {
-        await dualLogError(
-          getBookingErrorDescription(BookingErrorType.SCRAPING_STOPPED),
-          {
-            errorType: BookingErrorType.SCRAPING_STOPPED,
-            error: new Error('Scraping was stopped before clicking reservation detail'),
-            phase: BookingScrapingPhase.NAVIGATION,
-            platform: 'booking',
-            action: 'click_reservation_detail',
-            reservationId
-          }
-        );
-        throw new Error('Scraping was stopped before clicking reservation detail');
-      }
+      await this.throwIfScrapingShouldStop('click_reservation_detail', { reservationId });
       
       await this.logInfo(`Attempting to open reservation detail for ID: ${reservationId}`);
 
@@ -1082,22 +1003,8 @@ export class BookingScraper extends BaseScraper {
       // Process each page
       for (let currentPage = 1; currentPage <= maxPagesToProcess; currentPage++) {
         // Check if scraping should continue
-        await scrapingStateManager.waitWhilePaused();
-        if (!scrapingStateManager.isRunning()) {
-          await dualLogError(
-            getBookingErrorDescription(BookingErrorType.SCRAPING_STOPPED),
-            {
-              errorType: BookingErrorType.SCRAPING_STOPPED,
-              error: new Error('Scraping was stopped during page traversal'),
-              phase: BookingScrapingPhase.NAVIGATION,
-              jobId: options.jobId,
-              propertyId: options.propertyId,
-              platform: 'booking',
-              action: 'traverse_all_reservations',
-              currentPage,
-              totalPages: maxPagesToProcess
-            }
-          );
+        const shouldStop = await this.checkScrapingShouldStop('traverse_all_reservations', { currentPage, totalPages: maxPagesToProcess });
+        if (shouldStop) {
           break;
         }
         
@@ -1176,22 +1083,8 @@ export class BookingScraper extends BaseScraper {
 
     for (const reservationId of reservationIds) {
       // Check if scraping should continue before processing each reservation
-      await scrapingStateManager.waitWhilePaused();
-      if (!scrapingStateManager.isRunning()) {
-        await dualLogError(
-          getBookingErrorDescription(BookingErrorType.SCRAPING_STOPPED),
-          {
-            errorType: BookingErrorType.SCRAPING_STOPPED,
-            error: new Error('Scraping was stopped during reservation processing'),
-            phase: BookingScrapingPhase.NAVIGATION,
-            jobId,
-            propertyId,
-            platform: 'booking',
-            action: 'process_reservations',
-            processedCount,
-            errorCount
-          }
-        );
+      const shouldStop = await this.checkScrapingShouldStop('process_reservations', { reservationId });
+      if (shouldStop) {
         break;
       }
       try {
@@ -1269,23 +1162,7 @@ export class BookingScraper extends BaseScraper {
     if (!this.page) throw new Error('Page not initialized');
     try {
       // Check if scraping should continue before navigation
-      await scrapingStateManager.waitWhilePaused();
-      if (!scrapingStateManager.isRunning()) {
-        await dualLogError(
-          getBookingErrorDescription(BookingErrorType.SCRAPING_STOPPED),
-          {
-            errorType: BookingErrorType.SCRAPING_STOPPED,
-            error: new Error('Scraping was stopped before navigation'),
-            phase: BookingScrapingPhase.NAVIGATION,
-            platform: 'booking',
-            action: 'navigate_to_menu_section',
-            mainSection,
-            subSection,
-            expectedUrl
-          }
-        );
-        throw new Error('Scraping was stopped before navigation');
-      }
+      await this.throwIfScrapingShouldStop('navigate_to_menu_section', { mainSection, subSection, expectedUrl });
       
       await this.logInfo(`Navigating to ${subSection} page`);
       const mainMenuClicked = await this.expandMainMenu(mainSection);
@@ -1331,22 +1208,7 @@ export class BookingScraper extends BaseScraper {
       await this.logInfo('Starting complete Booking.com scraping process', this.page?.url());
       
       // Check if scraping should continue before starting
-      await scrapingStateManager.waitWhilePaused();
-      if (!scrapingStateManager.isRunning()) {
-        await dualLogError(
-          getBookingErrorDescription(BookingErrorType.SCRAPING_STOPPED),
-          {
-            errorType: BookingErrorType.SCRAPING_STOPPED,
-            error: new Error('Scraping was stopped before starting data scraping'),
-            phase: BookingScrapingPhase.NAVIGATION,
-            jobId: params.jobId,
-            propertyId: params.propertyId,
-            platform: 'booking',
-            action: 'scrape_data'
-          }
-        );
-        throw new Error('Scraping was stopped before starting data scraping');
-      }
+      await this.throwIfScrapingShouldStop('scrape_data', { jobId: params.jobId, propertyId: params.propertyId });
       
       // Step 1: Navigate to VCCS Management
       const navigationSuccess = await this.navigateToMenuSection('finance', 'vccs_management', 'vccs_management');
@@ -2151,23 +2013,7 @@ export class BookingScraper extends BaseScraper {
   async processReservationDetail(reservationId: string, jobId?: string, propertyId?: string): Promise<boolean> {
     try {
       // Check if scraping should continue before processing reservation detail
-      await scrapingStateManager.waitWhilePaused();
-      if (!scrapingStateManager.isRunning()) {
-        await dualLogError(
-          getBookingErrorDescription(BookingErrorType.SCRAPING_STOPPED),
-          {
-            errorType: BookingErrorType.SCRAPING_STOPPED,
-            error: new Error('Scraping was stopped before processing reservation detail'),
-            phase: BookingScrapingPhase.NAVIGATION,
-            platform: 'booking',
-            action: 'process_reservation_detail',
-            reservationId,
-            jobId,
-            propertyId
-          }
-        );
-        throw new Error('Scraping was stopped before processing reservation detail');
-      }
+      await this.throwIfScrapingShouldStop('process_reservation_detail', { reservationId, jobId, propertyId });
       
       await this.logInfo(`Processing reservation detail: ${reservationId}`);
 
@@ -2239,6 +2085,47 @@ export class BookingScraper extends BaseScraper {
     } catch (error) {
       await this.logError(`Error processing reservation ${reservationId}:`, error);
       return false;
+    }
+  }
+
+  /**
+   * Check if scraping should be stopped based on context
+   * TRUST_VERIFICATION context should not be stopped by general scraping state
+   */
+  private async checkScrapingShouldStop(action?: string, additionalData?: any): Promise<boolean> {
+    // If this is a trust verification context, don't stop the scraping
+    if (this.context === ScraperContext.TRUST_VERIFICATION) {
+      await dualLogInfo('Trust verification context detected');
+      return false;
+    }
+
+    // For regular job context, check the scraping state
+    await scrapingStateManager.waitWhilePaused();
+    if (!scrapingStateManager.isRunning()) {
+      await dualLogError(
+        getBookingErrorDescription(BookingErrorType.SCRAPING_STOPPED),
+        {
+          errorType: BookingErrorType.SCRAPING_STOPPED,
+          error: new Error(`Scraping was stopped during ${action || 'operation'}`),
+          phase: BookingScrapingPhase.LOGIN,
+          platform: 'booking',
+          action: action,
+          ...additionalData
+        }
+      );
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Throw error if scraping should be stopped
+   */
+  private async throwIfScrapingShouldStop(action?: string, additionalData?: any): Promise<void> {
+    const shouldStop = await this.checkScrapingShouldStop(action, additionalData);
+    if (shouldStop) {
+      throw new Error(`Scraping was stopped during ${action || 'operation'}`);
     }
   }
 }
