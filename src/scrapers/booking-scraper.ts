@@ -586,13 +586,31 @@ export class BookingScraper extends BaseScraper {
         await this.logError("Failed to generate live URL:", liveUrlError);
       }
 
+      let captchaSolved = false;
+      
       if (options?.type === 'automatic') {
-        return await this.solveCaptchaAutomatically();
+        captchaSolved = await this.solveCaptchaAutomatically();
       } else if (options?.type === 'browserless_ui') {
-        return await this.solveCaptchaWithUI(this.sessionUrl || options.sessionUrl!, options.timeout || 86400000);
+        captchaSolved = await this.solveCaptchaWithUI(this.sessionUrl || options.sessionUrl!, options.timeout || 86400000);
       } else {
-        return await this.solveCaptchaManually(options?.timeout || 86400000);
+        captchaSolved = await this.solveCaptchaManually(options?.timeout || 86400000);
       }
+      
+      if (!captchaSolved) {
+        await dualLogError(
+          `[${new Date().toISOString()}] ${getBookingErrorDescription(BookingErrorType.CAPTCHA)}`,
+          {
+            errorType: BookingErrorType.CAPTCHA,
+            error: new Error('All CAPTCHA solving methods failed'),
+            phase: BookingScrapingPhase.LOGIN,
+            platform: 'booking',
+            action: 'handle_captcha'
+          }
+        );
+        return false;
+      }
+      
+      return true;
     } catch (error) {
       await dualLogError(
         `[${new Date().toISOString()}] ${getBookingErrorDescription(BookingErrorType.CAPTCHA)}`,
@@ -1506,6 +1524,12 @@ export class BookingScraper extends BaseScraper {
         return false;
       }
 
+      // Check if page is still attached/valid
+      if (this.page.isClosed()) {
+        await this.logInfo('Page is closed, CAPTCHA check cannot continue');
+        return false;
+      }
+
       // Check for password field (sign that login form is accessible)
       const passwordFieldExists = await this.page.$('input[type="password"], input[name="password"], input[placeholder*="password" i]').catch(() => null);
       
@@ -1536,6 +1560,8 @@ export class BookingScraper extends BaseScraper {
     return new Promise(async (resolve) => {
       const startTime = Date.now();
       const checkInterval = 2000; // Check every 2 seconds
+      let consecutiveErrors = 0;
+      const maxConsecutiveErrors = 3; // Stop after 3 consecutive errors
       
       const timer = setTimeout(() => {
         this.logError('Captcha timeout - user did not solve within time limit');
@@ -1543,17 +1569,42 @@ export class BookingScraper extends BaseScraper {
       }, timeout);
       
       const pollCaptchaStatus = async () => {
-        const isSolved = await this.checkCaptchaSolved();
-        
-        if (isSolved) {
-          clearTimeout(timer);
-          resolve(true);
-          return;
-        }
-        
-        // Continue checking if not timed out
-        if (Date.now() - startTime < timeout) {
-          setTimeout(pollCaptchaStatus, checkInterval);
+        try {
+          const isSolved = await this.checkCaptchaSolved();
+          consecutiveErrors = 0; // Reset error counter on success
+          
+          if (isSolved) {
+            clearTimeout(timer);
+            resolve(true);
+            return;
+          }
+          
+          // Continue checking if not timed out
+          if (Date.now() - startTime < timeout) {
+            setTimeout(pollCaptchaStatus, checkInterval);
+          } else {
+            clearTimeout(timer);
+            resolve(false);
+          }
+        } catch (error) {
+          consecutiveErrors++;
+          await this.logError(`CAPTCHA polling error (${consecutiveErrors}/${maxConsecutiveErrors}):`, error);
+          
+          // Stop polling if too many consecutive errors
+          if (consecutiveErrors >= maxConsecutiveErrors) {
+            clearTimeout(timer);
+            await this.logError('Too many consecutive CAPTCHA polling errors, stopping');
+            resolve(false);
+            return;
+          }
+          
+          // Continue polling if not timed out and not too many errors
+          if (Date.now() - startTime < timeout) {
+            setTimeout(pollCaptchaStatus, checkInterval);
+          } else {
+            clearTimeout(timer);
+            resolve(false);
+          }
         }
       };
       
@@ -1571,7 +1622,22 @@ export class BookingScraper extends BaseScraper {
     await this.sendCaptchaEmail();
     
     // Wait for user to solve the CAPTCHA
-    return await this.waitForCaptchaSolution(timeout);
+    const solved = await this.waitForCaptchaSolution(timeout);
+    
+    if (!solved) {
+      await dualLogError(
+        `[${new Date().toISOString()}] ${getBookingErrorDescription(BookingErrorType.CAPTCHA)}`,
+        {
+          errorType: BookingErrorType.CAPTCHA,
+          error: new Error('CAPTCHA solving failed or timed out'),
+          phase: BookingScrapingPhase.LOGIN,
+          platform: 'booking',
+          action: 'solve_captcha_with_ui'
+        }
+      );
+    }
+    
+    return solved;
   }
 
   private async solveCaptchaManually(timeout: number): Promise<boolean> {
@@ -1581,7 +1647,22 @@ export class BookingScraper extends BaseScraper {
     await this.sendCaptchaEmail();
     
     // Wait for user to solve the CAPTCHA
-    return await this.waitForCaptchaSolution(timeout);
+    const solved = await this.waitForCaptchaSolution(timeout);
+    
+    if (!solved) {
+      await dualLogError(
+        `[${new Date().toISOString()}] ${getBookingErrorDescription(BookingErrorType.CAPTCHA)}`,
+        {
+          errorType: BookingErrorType.CAPTCHA,
+          error: new Error('Manual CAPTCHA solving failed or timed out'),
+          phase: BookingScrapingPhase.LOGIN,
+          platform: 'booking',
+          action: 'solve_captcha_manually'
+        }
+      );
+    }
+    
+    return solved;
   }
 
   private async sendCaptchaEmail(): Promise<void> {
