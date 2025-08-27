@@ -74,9 +74,7 @@ export abstract class BaseScraper {
         screenshotFilename = filename;
       } else {
         const jobId = this.jobId || 'trust';
-        const propertyId = this.propertyIdForDb || 'unknown';
-        const timestamp = Date.now();
-        screenshotFilename = `booking_last_step_${propertyId}_${jobId}_${timestamp}.png`;
+        screenshotFilename = `scraping_last_step_${jobId}.png`;
       }
       
       await this.page.screenshot({ path: screenshotFilename as `${string}.png` });
