@@ -2090,7 +2090,7 @@ export class BookingScraper extends BaseScraper {
         if (!amountStr) return 0;
         const cleaned = amountStr.replace(/[^\d.-]/g, '');
         const amount = parseFloat(cleaned);
-        return isNaN(amount) ? 0 : -Math.abs(amount); // Negative for charges
+        return isNaN(amount) ? 0 : Math.abs(amount);
       };
 
       const jobItemData = {
