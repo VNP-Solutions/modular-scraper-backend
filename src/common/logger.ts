@@ -304,10 +304,8 @@ export class JobLogger {
       const errorDetails = {
         jobId: this.jobId,
         totalLogEntries: this.logEntries.length,
-        completedAt: new Date().toISOString(),
         logFileUrl: logS3Url || 'Not uploaded',
         screenshotUrl: screenshotS3Url || 'Not uploaded',
-        logEntries: this.logEntries.slice(-10),
       };
   
       await emailNotifier.notifyJobError(

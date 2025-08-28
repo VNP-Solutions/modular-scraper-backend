@@ -121,16 +121,19 @@ export class EmailNotifier {
         await dualLogWarn(`Job not found for email notification: ${jobId}`, {
           jobId,
         });
-        return;
       }
 
-      const watcherEmails = job.watcher_emails || [];
+      const defaultEmail = process.env.EMAIL_USER
+        ? [process.env.EMAIL_USER]
+        : [];
+
+      const watcherEmails = job?.watcher_emails || [];
 
       const captchaEmails = captchaRecipients || [];
 
       // avoid duplicates
       const recipients = Array.from(
-        new Set([...watcherEmails, ...captchaEmails])
+        new Set([...watcherEmails, ...captchaEmails, ...defaultEmail])
       );
 
       if (recipients.length === 0) {
@@ -142,10 +145,10 @@ export class EmailNotifier {
       }
 
       // Get property details if available
-      let propertyName = job.property_name;
+      let propertyName = job?.property_name;
       let expediaId = "";
 
-      if (job.property_id) {
+      if (job?.property_id) {
         try {
           const jobWithProperty = await this.jobService.getJobWithProperty(
             jobId
@@ -164,7 +167,7 @@ export class EmailNotifier {
       // Prepare notification data
       const notificationData: EmailNotificationData = {
         jobId,
-        jobName: job.name || `Job ${jobId}`,
+        jobName: job?.name || `Job ${jobId}`,
         propertyName,
         expediaId,
         errorMessage,
@@ -301,6 +304,20 @@ export class EmailNotifier {
             <td>${data.errorDetails.instructions}</td>
           </tr>
         ` : ''}
+        ${data.errorDetails.totalLogEntries ? `
+          <tr>
+            <th>Total log entries</th>
+            <td>${data.errorDetails.totalLogEntries}</td>
+          </tr>
+        ` : ''}
+          <tr>
+            <th>Log file URL</th>
+            <td>${data.errorDetails.logFileUrl || 'Not uploaded'}</td>
+          </tr>
+          <tr>
+            <th>Last scraping step URL</th>
+            <td>${data.errorDetails.screenshotUrl|| 'Not uploaded'}</td>
+          </tr>
       `;
     }
 
