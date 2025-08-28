@@ -20,6 +20,7 @@
   "bugs": {
     "url": "https://github.com/yasirnabil534/scrapper-project/issues"
   },
+  "type": "module",
   "homepage": "https://github.com/yasirnabil534/scrapper-project#readme",
   "dependencies": {
     "@aws-sdk/client-s3": "^3.835.0",
