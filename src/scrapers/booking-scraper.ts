@@ -2025,7 +2025,7 @@ export class BookingScraper extends BaseScraper {
   ): Promise<any> {
     try {
       // Validate inputs
-      if (jobId || !this.propertyIdForDb) {
+      if (!jobId || !this.propertyIdForDb) {
         throw new Error('JobId and propertyIdForDb are required');
       }
 
