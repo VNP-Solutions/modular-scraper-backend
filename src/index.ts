@@ -2,10 +2,10 @@ import dotenv from "dotenv";
 import mongoose from "mongoose";
 import open from "open";
 import app from "./app/app.js";
-import loadToken from "./common/load-token.js";
+import { loadAndSetCredentials } from "./common/load-token.js";
 import { workerPool } from "./common/worker-pool.js";
-import { jobQueueUrlService } from "./services/job-queue-url.service.js";
 import { bookingTrustCron } from "./services/booking-trust-cron.service.js";
+import { jobQueueUrlService } from "./services/job-queue-url.service.js";
 dotenv.config();
 
 const port: number = parseInt(process.env.PORT || "3000");
@@ -96,7 +96,9 @@ app.listen(port, async () => {
     // Initialize job queue URLs after database connection
     await initializeJobQueueUrls();
 
-    if (!loadToken(process.env.TOKEN_PATH || "token.json")) {
+    const tokenPath = process.env.TOKEN_PATH || "token.json";
+    const ok = await loadAndSetCredentials(tokenPath);
+    if (!ok) {
       console.log("Opening browser for authentication...");
       open(`http://localhost:${port}/auth`);
     }
@@ -124,13 +126,13 @@ process.on("uncaughtException", async (error) => {
   console.error("Raw error:", error);
   console.error("Error keys:", Object.keys(error));
   console.error("Error values:", Object.values(error));
-  
+
   try {
     console.error("Stringified error:", JSON.stringify(error, null, 2));
   } catch (e) {
     console.error("Failed to stringify error:", e);
   }
-  
+
   console.error("=== END DEBUG ===");
   await gracefulShutdown("uncaughtException");
 });
@@ -141,13 +143,19 @@ process.on("unhandledRejection", async (reason, promise) => {
   console.error("Promise:", promise);
   console.error("Reason type:", typeof reason);
   console.error("Reason:", reason);
-  
-  if (reason && typeof reason === 'object') {
+
+  if (reason && typeof reason === "object") {
     console.error("Reason constructor:", reason.constructor.name);
-    console.error("Reason message:", (reason as any).message || "No message available");
-    console.error("Reason stack:", (reason as any).stack || "No stack available");
+    console.error(
+      "Reason message:",
+      (reason as any).message || "No message available"
+    );
+    console.error(
+      "Reason stack:",
+      (reason as any).stack || "No stack available"
+    );
   }
-  
+
   console.error("=== END DEBUG ===");
   await gracefulShutdown("unhandledRejection");
 });
