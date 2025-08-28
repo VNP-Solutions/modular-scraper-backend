@@ -73,7 +73,7 @@ export abstract class BaseScraper {
       if (filename) {
         screenshotFilename = filename;
       } else {
-        const jobId = this.jobId || 'trust';
+        const jobId = this.jobId || `trust_verify-${this.propertyIdForDb}`;
         screenshotFilename = `scraping_last_step_${jobId}.png`;
       }
       
@@ -94,6 +94,10 @@ export abstract class BaseScraper {
   protected async logError(message: string, error?: any): Promise<void> {
     const timestamp = new Date().toISOString();
     console.error(`[${timestamp}] [${this.platform}] ERROR: ${message}`, error || '');
+  }
+
+  public setPropertyIdForDb(propertyId: string): void {
+    this.propertyIdForDb = propertyId;
   }
 
   // Template method that defines the scraping workflow
