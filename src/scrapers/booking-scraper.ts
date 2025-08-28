@@ -1863,46 +1863,72 @@ export class BookingScraper extends BaseScraper {
   private async clickCardDetailsFromRow(reservationId: string): Promise<boolean> {
     if (!this.page) throw new Error('Page not initialized');
 
-    try {
-      await this.logInfo(`Looking for "View card details" link for reservation ${reservationId}`);
+    const maxRetries = 3;
+    let attempt = 0;
 
-      // Find the reservation row that contains the specific reservation ID
-      const cardDetailsClicked = await this.page.evaluate((resId) => {
-        // Find all reservation rows
-        const rows = Array.from(document.querySelectorAll('tr.bui-table__row'));
-        
-        for (const row of rows) {
-          // Look for the reservation ID link in this row
-          const reservationLink = row.querySelector(`a[href*="res_id=${resId}"]`);
+    while (attempt < maxRetries) {
+      try {
+        attempt++;
+        await this.logInfo(`Looking for "View card details" link for reservation ${reservationId} (attempt ${attempt}/${maxRetries})`);
+
+        await this.page.waitForSelector('tr.bui-table__row', { timeout: 10000 });
+        await this.logInfo(`Fetched table`);
+
+        // Find the reservation row that contains the specific reservation ID
+        const cardDetailsClicked = await this.page.evaluate((resId) => {
+          // Find all reservation rows
+          const rows = Array.from(document.querySelectorAll('tr.bui-table__row'));
           
-          if (reservationLink) {
-            // Found the row with this reservation ID, now look for "View card details" link
-            const cardDetailsLink = row.querySelector('a.pay-hub__view_cc_link');
+          for (const row of rows) {
+            // Look for the reservation ID link in this row
+            const reservationLink = row.querySelector(`a[href*="res_id=${resId}"]`);
             
-            if (cardDetailsLink) {
-              // Click the "View card details" link
-              (cardDetailsLink as HTMLElement).click();
-              return true;
+            if (reservationLink) {
+              // Found the row with this reservation ID, now look for "View card details" link
+              const cardDetailsLink = row.querySelector('a.pay-hub__view_cc_link');
+              
+              if (cardDetailsLink) {
+                // Click the "View card details" link
+                (cardDetailsLink as HTMLElement).click();
+                return true;
+              }
             }
           }
-        }
-        
-        return false;
-      }, reservationId);
+          
+          return false;
+        }, reservationId);
 
-      if (cardDetailsClicked) {
-        await this.logInfo('Successfully clicked "View card details" link');
-        return true;
-      } else {
-        await this.logError(`Could not find "View card details" link for reservation ${reservationId}`);
+        if (cardDetailsClicked) {
+          await this.logInfo('Successfully clicked "View card details" link');
+          return true;
+        } else {
+          await this.logError(`Could not find "View card details" link for reservation ${reservationId}`);
+          await this.takeScreenshot();
+          
+          if (attempt < maxRetries) {
+            await this.logInfo(`Retrying in 2 seconds...`);
+            await delay(2000);
+            
+            await this.page.reload();
+            await this.page.waitForSelector(BOOKING_SELECTORS.vccs.table, { timeout: 30000 });
+          }
+        }
+
+      } catch (error) {
+        await this.logError('Error clicking card details from row:', error);
+
+        if (attempt < maxRetries) {
+          await this.logInfo(`Retrying in 2 seconds...`);
+          await delay(2000);
+        }
+
         await this.takeScreenshot();
         return false;
       }
-
-    } catch (error) {
-      await this.logError('Error clicking card details from row:', error);
-      return false;
     }
+
+    await this.logError(`Failed to click card details after ${maxRetries} attempts for reservation ${reservationId}`);
+    return false;
   }
 
 
