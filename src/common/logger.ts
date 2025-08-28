@@ -3,7 +3,7 @@ import { existsSync, mkdirSync } from "fs";
 import fs from "fs/promises";
 import * as path from "path";
 import dotenv from "dotenv"
-import { emailNotifier } from "./email-notifier";
+import { emailNotifier } from "./email-notifier.js";
 dotenv.config()
 
 export interface LogEntry {
