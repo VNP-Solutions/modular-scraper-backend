@@ -1911,6 +1911,7 @@ export class BookingScraper extends BaseScraper {
     expiry: string;
     cvv: string;
     cardholder: string;
+    amountToChargeOrRefund: string;
   } | null> {
     try {
       const cardData = await page.evaluate(() => {
@@ -1919,11 +1920,13 @@ export class BookingScraper extends BaseScraper {
           expiry: string;
           cvv: string;
           cardholder: string;
+          amountToChargeOrRefund: string;
         } = {
           cardNumber: '',
           expiry: '',
           cvv: '',
-          cardholder: ''
+          cardholder: '',
+          amountToChargeOrRefund: ''
         };
   
         const labelMap: Record<string, keyof typeof result> = {
@@ -1945,8 +1948,17 @@ export class BookingScraper extends BaseScraper {
             }
           }
         });
+
+        // Extract remaining balance
+      const balanceElement = Array.from(document.querySelectorAll('p span'))
+        .find(span => span.previousSibling?.textContent?.includes('remaining balance'));
+    
+      if (balanceElement) {
+        result.amountToChargeOrRefund = balanceElement.textContent?.trim() || '';
+      }
+
+      return result;
   
-        return result;
       });
   
       await this.logInfo('Extracted card details', cardData);
@@ -2059,8 +2071,8 @@ export class BookingScraper extends BaseScraper {
         job_id: jobId,
         property_id: this.propertyIdForDb,
         guest_name: basicData.guestName || 'Unknown Guest',
-        reservation_id: basicData.bookingNumber || '',
-        confirmation_number: basicData.bookingNumber || '', // Use booking number as confirmation
+        reservation_id: basicData.reservationId || 'Unknown',
+        confirmation_number: basicData.bookingNumber || 'Unknown', // Use booking number as confirmation
         check_in_date: parseDate(basicData.checkInDate),
         check_out_date: parseDate(basicData.checkOutDate),
         room_type: basicData.roomType || 'Unknown',
@@ -2070,9 +2082,16 @@ export class BookingScraper extends BaseScraper {
         has_payment_info: !!basicData.totalPayout,
         payment_info: { 
           total_guest_payment: parseAmount(basicData.totalAmount),
-          total_payout: parseAmount(basicData.totalPayout)
+          total_payout: parseAmount(basicData.totalPayout),
+          amount_to_charge_or_refund: parseAmount(cardData.amountToChargeOrRefund) || 0,
+          cancellation_fee: 0 // update later
         },
-        card_info: cardData || undefined,
+        card_info: {
+          expiry_date: cardData.expiry,
+          card_number: cardData.cardNumber,
+          cvv: cardData.cvv,
+          cardholder: cardData.cardholder
+        },
         reservation_status: basicData.reservationStatus,
       };
 
