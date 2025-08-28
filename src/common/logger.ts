@@ -3,6 +3,7 @@ import { existsSync, mkdirSync } from "fs";
 import fs from "fs/promises";
 import * as path from "path";
 import dotenv from "dotenv"
+import { emailNotifier } from "./email-notifier";
 dotenv.config()
 
 export interface LogEntry {
@@ -142,33 +143,45 @@ export class JobLogger {
     await this.log("debug", message, metadata);
   }
 
-  private async uploadToS3(): Promise<string | null> {
+  private async uploadToS3(filePath?: string, fileType: 'log' | 'screenshot' = 'log'): Promise<string | null> {
     try {
-      const fileContent = await fs.readFile(this.logFilePath);
-      const fileName = path.basename(this.logFilePath);
-      const s3Key = `job-logs/${this.jobId}/${fileName}`;
+      const targetPath = filePath || this.logFilePath;
+      const fileContent = await fs.readFile(targetPath);
+      const fileName = path.basename(targetPath);
 
+      let s3FileName: string;
+      if (fileType === 'screenshot') {
+        const timestamp = Date.now();
+        const nameWithoutExt = fileName.replace('.png', '');
+        s3FileName = `${nameWithoutExt}_${timestamp}.png`;
+      } else {
+        s3FileName = fileName;
+      }
+
+      const s3Key = `job-logs/${this.jobId}/${s3FileName}`;
+  
       const command = new PutObjectCommand({
         Bucket: this.s3BucketName,
         Key: s3Key,
         Body: fileContent,
-        ContentType: "text/plain",
+        ContentType: fileType === 'log' ? "text/plain" : "image/png",
         Metadata: {
           jobId: this.jobId,
           uploadedAt: new Date().toISOString(),
+          type: fileType,
         },
       });
-
+  
       await this.s3Client.send(command);
-
+  
       const s3Url = `https://${this.s3BucketName}.s3.${
         process.env.AWS_REGION || "us-east-1"
       }.amazonaws.com/${s3Key}`;
-
-      console.log(`📤 Log file uploaded to S3: ${s3Url}`);
+  
+      console.log(`${fileType} uploaded to S3: ${s3Url}`);
       return s3Url;
     } catch (error) {
-      console.error("Failed to upload log file to S3:", error);
+      console.error(`Failed to upload ${fileType} to S3:`, error);
       return null;
     }
   }
@@ -183,7 +196,7 @@ export class JobLogger {
   }
 
   public async finalize(
-    jobStatus: "success" | "failed" | "partial"
+    jobStatus: "success" | "failed" | "partial",
   ): Promise<string | null> {
     try {
       // Log job completion
@@ -200,13 +213,19 @@ export class JobLogger {
 
       // Upload to S3
       const s3Url = await this.uploadToS3();
+      const screenshotUrl = await this.uploadScreenshotToS3();
+
+      if (jobStatus === "failed") {
+        await this.sendFailureEmail(s3Url, screenshotUrl);
+      }
 
       // Delete local file
       await this.deleteLocalFile();
+      await this.deleteScreenshot();
 
       // Remove instance from memory
       JobLogger.removeInstance(this.jobId);
-
+      console.log(`Job ${this.jobId} finalized. Log: ${s3Url}, Screenshot: ${screenshotUrl || 'none'}`);
       return s3Url;
     } catch (error) {
       console.error("Failed to finalize logger:", error);
@@ -220,6 +239,85 @@ export class JobLogger {
 
   public getLogEntriesCount(): number {
     return this.logEntries.length;
+  }
+
+  private async uploadScreenshotToS3(): Promise<string | null> {
+    try {
+      const screenshotPath = this.getScreenshotPath();
+      
+      // Check if screenshot exists
+      if (!(await this.fileExists(screenshotPath))) {
+        console.log(`No screenshot found at: ${screenshotPath}`);
+        return null;
+      }
+      
+      const s3Url = await this.uploadToS3(screenshotPath, 'screenshot');
+      if (s3Url) {
+        console.log(`Screenshot uploaded: ${this.getScreenshotFilename()} -> ${s3Url}`);
+      }
+      return s3Url;
+    } catch (error) {
+      console.error("Failed to upload screenshot:", error);
+      return null;
+    }
+  }
+
+  private async deleteScreenshot(): Promise<void> {
+    try {
+      const screenshotPath = this.getScreenshotPath();
+      
+      // Check if screenshot exists
+      if (!(await this.fileExists(screenshotPath))) {
+        console.log(`No screenshot to delete at: ${screenshotPath}`);
+        return;
+      }
+      
+      await fs.unlink(screenshotPath);
+      console.log(`Local screenshot deleted: ${screenshotPath}`);
+    } catch (error) {
+      console.error("Failed to delete screenshot:", error);
+    }
+  }
+
+  private getScreenshotFilename(): string {
+    const jobId = this.jobId || 'trust';
+    return `scraping_last_step_${jobId}.png`;
+  }
+  
+  private getScreenshotPath(): string {
+    return path.join(process.cwd(), this.getScreenshotFilename());
+  }
+  
+  private async fileExists(filePath: string): Promise<boolean> {
+    try {
+      await fs.access(filePath);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  public async sendFailureEmail(logS3Url?: string | null, screenshotS3Url?: string | null): Promise<void> {
+    try {
+      const errorMessage = `Job ${this.jobId} failed during execution`;
+      
+      const errorDetails = {
+        jobId: this.jobId,
+        totalLogEntries: this.logEntries.length,
+        logFileUrl: logS3Url || 'Not uploaded',
+        screenshotUrl: screenshotS3Url || 'Not uploaded',
+      };
+  
+      await emailNotifier.notifyJobError(
+        this.jobId,
+        errorMessage,
+        errorDetails
+      );
+  
+      console.log(`Failure notification email sent for job ${this.jobId}`);
+    } catch (error) {
+      console.error(`Failed to send failure email for job ${this.jobId}:`, error);
+    }
   }
 }
 

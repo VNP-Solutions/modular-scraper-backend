@@ -125,10 +125,11 @@ export class BookingTrustSchedulerService {
 
     try {
       // Initialize logging for this verification
-      initializeJobLogging(`trust-verify-${propertyId}`);
+      initializeJobLogging(`trust_verify-${propertyId}`);
 
       // Create booking scraper instance
       const bookingScraper = new BookingScraper(ScraperContext.TRUST_VERIFICATION);
+      bookingScraper.setPropertyIdForDb(propertyId);
       
       const { browser, page } = await bookingScraper.setupBrowser();
       bookingScraper.setBrowserData(page, browser)
