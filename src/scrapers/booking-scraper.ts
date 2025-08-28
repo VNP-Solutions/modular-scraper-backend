@@ -2078,7 +2078,7 @@ export class BookingScraper extends BaseScraper {
         room_type: basicData.roomType || 'Unknown',
         booking_amount: parseAmount(basicData.totalAmount),
         booked_date: parseDate(basicData.receivedDate),
-        has_card_info: !!cardData,
+        has_card_info: !!cardData.cardNumber,
         has_payment_info: !!basicData.totalPayout,
         payment_info: { 
           total_guest_payment: parseAmount(basicData.totalAmount),
