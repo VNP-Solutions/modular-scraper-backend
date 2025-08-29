@@ -1133,8 +1133,6 @@ export class BookingScraper extends BaseScraper {
         errorCount++;
         await this.logInfo(`Error processing reservation ${reservationId}: ${error instanceof Error ? error.message : 'Unknown error'}`);
       }
-
-      this.takeScreenshot();
     }
     return { processed: processedCount, errors: errorCount };
   }
@@ -2220,14 +2218,11 @@ export class BookingScraper extends BaseScraper {
       try {
         const newPage = await Promise.race([newPagePromise, timeoutPromise]);
         this.page = newPage; // switch page
+        await this.takeScreenshot();
       } catch (error) {
         await this.logError('Timeout waiting for new tab to open:', error);
-        await this.takeScreenshot();
         return false;
       }
-
-      await this.takeScreenshot();
-      // const currentLiveUrl = await this.generateLiveUrl();
       
       // Check and handle login on the new page
       const needsLogin = await this.checkIfLoginNeeded(newPage);
