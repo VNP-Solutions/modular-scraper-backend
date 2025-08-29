@@ -43,11 +43,11 @@ const CardInfoSchema = new Schema<CardInfo>(
   {
     card_number: {
       type: String,
-      required: true,
+      required: false,
     },
     expiry_date: {
       type: String,
-      required: true,
+      required: false,
     },
     cvv: {
       type: String,
