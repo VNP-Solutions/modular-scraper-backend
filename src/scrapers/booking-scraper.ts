@@ -1011,8 +1011,7 @@ export class BookingScraper extends BaseScraper {
       }
       
       // Close the new tab and switch back
-      await newPage.close();
-      await this.logInfo(`Closed reservation detail tab`);
+      // await newPage.close();
       return true;
 
     } catch (error) {
