@@ -989,8 +989,7 @@ export class BookingScraper extends BaseScraper {
       }
       
       // Close the new tab and switch back
-      await newPage.close();
-      await this.logInfo(`Closed reservation detail tab`);
+      // await newPage.close();
       return true;
 
     } catch (error) {
@@ -2228,6 +2227,14 @@ export class BookingScraper extends BaseScraper {
       if (needsLogin) {
         // skip already logged in check
         await this.login(this.credentials, undefined, true);
+      }
+
+      // Check on 2fa
+      const twoFASuccess = await this.handle2FA({ page: newPage });
+
+      if (!twoFASuccess) {
+        await this.logInfo('2FA not solved in new tab');
+        return false;
       }
 
       const cardData = await this.extractCardDetailsFromPage(this.page)
