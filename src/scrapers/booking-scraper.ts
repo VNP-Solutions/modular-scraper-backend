@@ -898,12 +898,27 @@ export class BookingScraper extends BaseScraper {
         });
       });
 
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('Timeout waiting for new tab to open')), 30000);
+      });
+
       // Click the reservation link
       await this.logInfo(`Click the reservation link`);
       await SelectorUtils.findAndClick(this.page, BOOKING_SELECTORS.reservations.item(reservationId));
 
       await this.logInfo(`Waiting for new tab loading`);
-      const newPage = await newPagePromise;
+      
+      let newPage = null;
+
+      try {
+        newPage = await Promise.race([newPagePromise, timeoutPromise]);
+        this.page = newPage;
+      } catch (error) {
+        await this.logError('Timeout waiting for new tab to open:', error);
+        await this.takeScreenshot();
+        return false;
+      }
+
       await this.logInfo(`New tab loaded`);
 
       // Check on captcha
@@ -2166,6 +2181,8 @@ export class BookingScraper extends BaseScraper {
       await this.page.waitForSelector(BOOKING_SELECTORS.vccs.table, {
         timeout: 30000
       });
+
+      await this.takeScreenshot();
       
       // Listen for new page creation for card details view
       const newPagePromise = new Promise<Page>((resolve) => {
@@ -2178,14 +2195,27 @@ export class BookingScraper extends BaseScraper {
         });
       });
 
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('Timeout waiting for new tab to open')), 30000);
+      });
+
       const cardDetailsClick = this.clickCardDetailsFromRow(reservationId)
       if (!cardDetailsClick) {
         await this.logError(`Failed to extract data for reservation ${reservationId}`);
       }
 
-      const newPage = await newPagePromise;
-      this.page = newPage; // switch page 
+      let newPage = undefined;
 
+      try {
+        const newPage = await Promise.race([newPagePromise, timeoutPromise]);
+        this.page = newPage; // switch page
+      } catch (error) {
+        await this.logError('Timeout waiting for new tab to open:', error);
+        await this.takeScreenshot();
+        return false;
+      }
+
+      await this.takeScreenshot();
       // const currentLiveUrl = await this.generateLiveUrl();
       
       // Check and handle login on the new page
