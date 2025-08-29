@@ -2010,7 +2010,8 @@ export class BookingScraper extends BaseScraper {
 
   private async extractBasicReservationData(): Promise<any> {
     if (!this.page) throw new Error('Page not initialized');
-
+    await this.delay(5000);
+    
     try {
       const basicData = await this.page.evaluate(() => {
         const result: Record<string, string> = {
@@ -2134,7 +2135,7 @@ export class BookingScraper extends BaseScraper {
           cvv: cardData.cvv,
           cardholder: cardData.cardholder
         },
-        reservation_status: basicData.reservationStatus,
+        reservation_status: basicData.reservationStatus || 'Unknown',
       };
 
       this.logInfo(`JobData to be saved: `, jobItemData);
@@ -2149,7 +2150,7 @@ export class BookingScraper extends BaseScraper {
       } else {
         const savedItem = await jobService.createJobItem(jobItemData);
         
-        await this.logInfo(`Saved reservation ${basicData.bookingNumber} to database`);
+        await this.logInfo(`Saved reservation ${basicData.reservationId} to database`);
         return savedItem;
       }
 
