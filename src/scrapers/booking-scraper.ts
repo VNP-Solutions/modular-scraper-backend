@@ -2296,6 +2296,14 @@ export class BookingScraper extends BaseScraper {
         await this.login(this.credentials, undefined, true);
       }
 
+      // Check on 2fa
+      const twoFASuccess = await this.handle2FA({ page: newPage });
+
+      if (!twoFASuccess) {
+        await this.logInfo('2FA not solved in new tab');
+        return false;
+      }
+
       const cardData = await this.extractCardDetailsFromPage(this.page)
       
       // Close page
