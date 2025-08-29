@@ -1133,7 +1133,7 @@ export class BookingScraper extends BaseScraper {
         errorCount++;
         await this.logInfo(`Error processing reservation ${reservationId}: ${error instanceof Error ? error.message : 'Unknown error'}`);
       }
-      
+
       this.takeScreenshot();
     }
     return { processed: processedCount, errors: errorCount };
@@ -2109,6 +2109,9 @@ export class BookingScraper extends BaseScraper {
         return isNaN(amount) ? 0 : Math.abs(amount);
       };
 
+      // Import jobService dynamically to avoid circular dependencies
+      const { jobService } = await import('../services/job.service.js');
+
       const jobItemData = {
         job_id: jobId,
         property_id: this.propertyIdForDb,
@@ -2139,12 +2142,19 @@ export class BookingScraper extends BaseScraper {
 
       this.logInfo(`JobData to be saved: `, jobItemData);
 
-      // Import jobService dynamically to avoid circular dependencies
-      const { jobService } = await import('../services/job.service.js');
-      const savedItem = await jobService.createJobItem(jobItemData);
-      
-      await this.logInfo(`Saved reservation ${basicData.bookingNumber} to database`);
-      return savedItem;
+      // Check if reservation already exists
+      const existingReservation = await jobService.findJobItemByReservationId(jobId, basicData.reservationId);
+
+      if (existingReservation) {
+        const updatedItem = await jobService.updateJobItem(existingReservation._id.toString(), jobItemData);
+        await this.logInfo(`Updated reservation ${basicData.reservationId} with new data`);
+        return updatedItem;
+      } else {
+        const savedItem = await jobService.createJobItem(jobItemData);
+        
+        await this.logInfo(`Saved reservation ${basicData.bookingNumber} to database`);
+        return savedItem;
+      }
 
     } catch (error) {
       await this.logError(`Failed to save reservation to database:`, error);

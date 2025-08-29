@@ -493,6 +493,48 @@ export class JobService {
   }
 
   /**
+   * Update job item with complete data
+   */
+  async updateJobItem(
+    jobItemId: string,
+    updateData: Partial<CreateJobItemData>
+  ): Promise<IJobItem | null> {
+    try {
+      const objectId = this.validateObjectId(jobItemId, "jobItemId");
+      
+      // Convert string IDs to ObjectIds if present
+      const updatePayload: any = { ...updateData };
+      if (updateData.job_id) {
+        updatePayload.job_id = this.validateObjectId(updateData.job_id, "job_id");
+      }
+      if (updateData.property_id) {
+        updatePayload.property_id = this.validateObjectId(updateData.property_id, "property_id");
+      }
+      
+      updatePayload.updatedAt = new Date();
+      
+      return await JobItem.findByIdAndUpdate(
+        objectId,
+        updatePayload,
+        { new: true }
+      );
+    } catch (error) {
+      console.error(`Error updating job item: ${error}`);
+      return null;
+    }
+  }
+
+  /**
+   * Find job item by reservation ID (alias for getJobItemByReservation)
+   */
+  async findJobItemByReservationId(
+    jobId: string,
+    reservationId: string
+  ): Promise<IJobItem | null> {
+    return this.getJobItemByReservation(jobId, reservationId);
+  }
+
+  /**
    * Create multiple job items in batch
    */
   async createJobItemsBatch(
