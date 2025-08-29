@@ -904,7 +904,29 @@ export class BookingScraper extends BaseScraper {
 
       // Click the reservation link
       await this.logInfo(`Click the reservation link`);
-      await SelectorUtils.findAndClick(this.page, BOOKING_SELECTORS.reservations.item(reservationId));
+      let reservationClicked = await SelectorUtils.findAndClick(this.page, BOOKING_SELECTORS.reservations.item(reservationId));
+
+      if (!reservationClicked) {
+        await this.logInfo('Reservation not found with predefined selectors, attempting page recovery...');
+        
+        // Attempt to recover page state
+        const pageRecovered = await this.recoverPageState();
+        if (pageRecovered) {
+          await this.logInfo('Page recovered, retrying reservation click...');
+          await this.delay(2000);
+          
+          // Retry the click
+          reservationClicked = await SelectorUtils.findAndClick(this.page, BOOKING_SELECTORS.reservations.item(reservationId));
+          
+          if (!reservationClicked) {
+            await this.logError('Reservation click failed even after page recovery');
+            return false;
+          }
+        } else {
+          await this.logError('Failed to recover page state, cannot retry reservation click');
+          return false;
+        }
+      }
 
       await this.logInfo(`Waiting for new tab loading`);
       
@@ -1005,6 +1027,50 @@ export class BookingScraper extends BaseScraper {
           action: 'click_reservation_detail'
         }
       );
+      return false;
+    }
+  }
+
+  private async recoverPageState(): Promise<boolean> {
+    try {
+      await this.logInfo('Attempting to recover page state using browser navigation...');
+  
+      // Check if we're on the VCCS management page
+      const currentUrl = this.page!.url();
+      if (currentUrl.includes('vccs_management')) {
+        await this.logInfo('Already on VCCS management page, clicking "View all" button');
+        const viewAllSuccess = await this.clickViewAllVccsToCharge();
+        if (viewAllSuccess) {
+          await this.logInfo('Successfully recovered to VCCS list page');
+          return true;
+        }
+      }
+  
+      // If not on the right page, try to navigate directly
+      await this.logInfo('Navigating directly to VCCS management page');
+      try {
+        await this.page!.goto('https://admin.booking.com/hotel/hoteladmin/extranet_ng/manage/vccs_management.html', {
+          waitUntil: 'networkidle2',
+          timeout: 30000
+        });
+        
+        await this.delay(2000);
+        
+        // Click "View all" button
+        const viewAllSuccess = await this.clickViewAllVccsToCharge();
+        if (viewAllSuccess) {
+          await this.logInfo('Successfully recovered to VCCS list page via direct navigation');
+          return true;
+        }
+      } catch (directNavError) {
+        await this.logError('Direct navigation failed:', directNavError);
+      }
+  
+      await this.logError('All recovery methods failed');
+      return false;
+  
+    } catch (error) {
+      await this.logError('Page state recovery failed:', error);
       return false;
     }
   }
@@ -1132,6 +1198,8 @@ export class BookingScraper extends BaseScraper {
         errorCount++;
         await this.logInfo(`Error processing reservation ${reservationId}: ${error instanceof Error ? error.message : 'Unknown error'}`);
       }
+
+      await this.delay(3000);
     }
     return { processed: processedCount, errors: errorCount };
   }
