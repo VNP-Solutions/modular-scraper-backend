@@ -899,7 +899,7 @@ export class BookingScraper extends BaseScraper {
       });
 
       const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error('Timeout waiting for new tab to open')), 30000);
+        setTimeout(() => reject(new Error('Timeout waiting for new tab to open')), 60000);
       });
 
       // Click the reservation link
@@ -1133,8 +1133,9 @@ export class BookingScraper extends BaseScraper {
         errorCount++;
         await this.logInfo(`Error processing reservation ${reservationId}: ${error instanceof Error ? error.message : 'Unknown error'}`);
       }
+      
+      this.takeScreenshot();
     }
-
     return { processed: processedCount, errors: errorCount };
   }
 
