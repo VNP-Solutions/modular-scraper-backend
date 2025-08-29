@@ -887,6 +887,8 @@ export class BookingScraper extends BaseScraper {
       
       await this.logInfo(`Attempting to open reservation detail for ID: ${reservationId}`);
 
+      await this.takeScreenshot();
+
       // Listen for new page creation for reservation view
       const newPagePromise = new Promise<Page>((resolve) => {
         this.browser!.once('targetcreated', async (target) => {
@@ -913,9 +915,9 @@ export class BookingScraper extends BaseScraper {
       try {
         newPage = await Promise.race([newPagePromise, timeoutPromise]);
         this.page = newPage;
+        await this.takeScreenshot(); 
       } catch (error) {
         await this.logError('Timeout waiting for new tab to open:', error);
-        await this.takeScreenshot();
         return false;
       }
 
