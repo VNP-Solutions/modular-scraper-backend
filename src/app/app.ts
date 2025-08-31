@@ -244,7 +244,7 @@ app.post("/api/scraping/resume", (async (
         });
       }
 
-      const { expediaId, user_email, user_password } = jobData;
+      const { bookingId, bookingUsername, bookingPassword } = jobData;
 
       // Determine jobType based on scraping_mode
       let jobType: JobType = JobType.PropertyRun;
@@ -254,9 +254,9 @@ app.post("/api/scraping/resume", (async (
         jobId,
         startDate,
         endDate,
-        expediaId,
-        user_email,
-        user_password,
+        bookingId,
+        user_email: bookingUsername,
+        user_password: bookingPassword,
       };
     } else {
       return res.status(400).json({

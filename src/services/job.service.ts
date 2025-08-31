@@ -13,6 +13,7 @@ import {
   PostingType,
 } from "../models/job.model.js";
 import { IProperty, Property } from "../models/property.model.js";
+import { PropertyCredentials } from "../models/Property-credentials.js";
 
 export interface CreateJobData {
   name?: string;
@@ -235,8 +236,8 @@ export class JobService {
         bookingId: property.booking_id,
         portfolioId: job.portfolio_id?.toString(),
         propertyId: job.property_id._id.toString(),
-        bookingUsername: credentials.booking_username,
-        bookingPassword: credentials.booking_password,
+        bookingUsername: credentials?.bookingUsername,
+        bookingPassword: credentials?.bookingPassword,
       };
     } catch (error) {
       console.error(`Error getting booking_id for job ${jobId}:`, error);
