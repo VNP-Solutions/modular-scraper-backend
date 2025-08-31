@@ -4,6 +4,25 @@
       - Scraping Control
     summary: Resume paused scraping job
     description: Resume a previously paused scraping job from where it left off
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+              - jobId
+              - ota_provider
+            properties:
+              jobId:
+                type: string
+                description: MongoDB ObjectId of the stopped job to resume
+                example: "507f1f77bcf86cd799439011"
+              ota_provider:
+                type: string
+                enum: [Expedia, Agoda, Booking]
+                description: OTA provider to use for scraping
+                example: "Booking"
     responses:
       '200':
         description: Scraping resumed successfully
