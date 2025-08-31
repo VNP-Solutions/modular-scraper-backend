@@ -4,6 +4,19 @@
       - Scraping Control
     summary: Stop current scraping job
     description: Completely stop the current scraping job. This cannot be resumed and will require starting a new job.
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+              - jobId
+            properties:
+              jobId:
+                type: string
+                description: MongoDB ObjectId of the job to stop
+                example: "507f1f77bcf86cd799439011"
     responses:
       '200':
         description: Scraping stopped successfully
