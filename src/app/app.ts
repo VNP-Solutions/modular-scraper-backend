@@ -228,16 +228,16 @@ app.post("/api/scraping/resume", (async (
 
     if (normalizedOtaProvider === "Booking") {
       // Get Expedia credentials and data
-      const jobData = await jobService.getExpediaIdFromJob(jobId);
+      const jobData = await jobService.getBookingIdFromJob(jobId);
 
-      if (!jobData || !jobData.expediaId) {
+      if (!jobData || !jobData.bookingId) {
         return res.status(400).json({
           status: 400,
-          message: `Cannot retrieve valid expedia_id for job ${jobId}. Property may not have expedia_id assigned or expedia_id is "0".`,
+          message: `Cannot retrieve valid booking_id for job ${jobId}. Property may not have booking_id assigned or booking_id is "0".`,
         });
       }
 
-      if (!jobData.user_email || !jobData.user_password) {
+      if (!jobData.bookingUsername || !jobData.bookingPassword) {
         return res.status(400).json({
           status: 400,
           message: `Cannot retrieve valid user_email or user_password for job ${jobId}. Property may not have user_email or user_password assigned.`,
