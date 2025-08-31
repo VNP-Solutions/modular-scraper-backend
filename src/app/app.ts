@@ -247,7 +247,7 @@ app.post("/api/scraping/resume", (async (
       const { bookingId, bookingUsername, bookingPassword } = jobData;
 
       // Determine jobType based on scraping_mode
-      let jobType: JobType = JobType.PropertyRun;
+      let jobType: JobType = JobType.BookingRun;
 
       workerJobData = {
         jobType,
