@@ -195,6 +195,8 @@ export class JobService {
     bookingId: string;
     portfolioId?: string;
     propertyId?: string;
+    bookingUsername?: string;
+    bookingPassword?: string;
   } | null> {
     try {
       const job = await this.getJobWithProperty(jobId);
@@ -215,6 +217,10 @@ export class JobService {
         return null;
       }
 
+      const credentials = await PropertyCredentials.findOne({
+        property_id: property._id,
+      });
+
       // Check if booking_id exists and is valid
       if (!property.booking_id || property.booking_id === "0") {
         console.error(`Property ${job.property_id} has no valid booking_id`);
@@ -229,6 +235,8 @@ export class JobService {
         bookingId: property.booking_id,
         portfolioId: job.portfolio_id?.toString(),
         propertyId: job.property_id._id.toString(),
+        bookingUsername: credentials.booking_username,
+        bookingPassword: credentials.booking_password,
       };
     } catch (error) {
       console.error(`Error getting booking_id for job ${jobId}:`, error);
