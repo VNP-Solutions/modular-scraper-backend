@@ -12,6 +12,7 @@ export interface IProperty extends Document {
   _id: Types.ObjectId;
   expedia_id: string; // The actual Expedia property ID used for scraping
   booking_id: string; // The actual Booking property ID used for scraping
+  agoda_id: string; // The actual Agoda property ID used for scraping
   property_name: string;
   address?: string;
   city?: string;
@@ -50,20 +51,14 @@ const PropertySchema = new Schema<IProperty>(
     expedia_id: {
       type: String,
       required: true,
-      unique: true,
-      validate: {
-        validator: isValidId,
-        message: 'Expedia ID cannot be "0" or empty',
-      },
     },
     booking_id: {
       type: String,
       required: false,
-      unique: true,
-      validate: {
-        validator: isValidId,
-        message: 'Booking ID cannot be "0" or empty',
-      },
+    },
+    agoda_id: {
+      type: String,
+      required: false,
     },
     property_name: {
       type: String,

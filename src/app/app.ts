@@ -15,15 +15,6 @@ import { bookingTrustScheduler } from "../services/booking-trust-scheduler.servi
 import { CronConfig, ScheduleType, TimeUnit, bookingTrustCron } from "../services/booking-trust-cron.service.js";
 import { emailNotifier } from "../common/email-notifier.js";
 
-// Import route modules
-import authRoutes from "../routes/shared/auth.routes.js";
-import healthRoutes from "../routes/shared/health.routes.js";
-
-// Expedia-specific routes
-import expediarJobsRoutes from "../routes/expedia/jobs.routes.js";
-import expediarScrapingControlRoutes from "../routes/expedia/scraping-control.routes.js";
-import expediarScrapingRoutes from "../routes/expedia/scraping.routes.js";
-
 const app = express();
 
 app.set("trust proxy", true);
@@ -167,66 +158,271 @@ app.post(
 );
 
 // API to resume scraping
-app.post(
-  "/api/scraping/resume",
-  (req: express.Request, res: express.Response) => {
-    try {
-      const success = scrapingStateManager.resumeScraping();
+app.post("/api/scraping/resume", (async (
+  req: express.Request,
+  res: express.Response
+) => {
+  try {
+    const { jobId, startDate, endDate, ota_provider, scraping_mode } = req.body;
 
-      if (success) {
-        res.status(200).json({
-          status: 200,
-          message: "Scraping resumed successfully",
-          data: scrapingStateManager.getState(),
-        });
-      } else {
-        res.status(400).json({
-          status: 400,
-          message: "Cannot resume scraping - no paused scraping job found",
-        });
-      }
-    } catch (err: any) {
-      console.error("Error resuming scraping:", err);
-      res.status(500).json({
-        status: 500,
-        message: "Error resuming scraping",
-        error: err.message,
+    if (!jobId || !ota_provider) {
+      return res.status(400).json({
+        status: 400,
+        message:
+          "jobId, startDate, endDate, and ota_provider are required in request body",
       });
     }
+
+    // Normalize ota_provider to handle case sensitivity and whitespace
+    const normalizedOtaProvider = ota_provider.toString().trim();
+    console.log(
+      `Resume job - Original ota_provider: '${ota_provider}', Normalized: '${normalizedOtaProvider}'`
+    );
+    console.log(
+      `Resume job - scraping_mode: '${scraping_mode || "undefined"}'`
+    );
+
+    // Check if worker threads are available
+    if (!workerPool.hasAvailableWorkers() && workerPool.isQueueFull()) {
+      return res.status(200).json({
+        status: 200,
+        message: "All server busy, try again",
+        workerStatus: workerPool.getStatus(),
+      });
+    }
+
+    // Check if job exists and is in stopped status
+    const job = await jobService.getJobById(jobId);
+    if (!job) {
+      return res.status(404).json({
+        status: 404,
+        message: `Job with ID ${jobId} not found`,
+      });
+    }
+
+    if (job.job_status !== JobStatus.Stopped) {
+      return res.status(400).json({
+        status: 400,
+        message: `Job is not in Stopped status. Current status: ${job.job_status}`,
+        currentStatus: job.job_status,
+      });
+    }
+
+    // First, update job status to Pending to prepare for resume
+    console.log(`Updating job ${jobId} status from Stopped to Pending`);
+    const updatedJob = await jobService.updateJobStatus(
+      jobId,
+      JobStatus.Pending
+    );
+
+    if (!updatedJob) {
+      return res.status(500).json({
+        status: 500,
+        message: `Failed to update job ${jobId} status to Pending`,
+        jobId: jobId,
+      });
+    }
+
+    // Determine job type based on OTA provider and prepare worker job data
+    let workerJobData: WorkerJobData | undefined;
+
+    if (normalizedOtaProvider === "Booking") {
+      // Get Expedia credentials and data
+      const jobData = await jobService.getExpediaIdFromJob(jobId);
+
+      if (!jobData || !jobData.expediaId) {
+        return res.status(400).json({
+          status: 400,
+          message: `Cannot retrieve valid expedia_id for job ${jobId}. Property may not have expedia_id assigned or expedia_id is "0".`,
+        });
+      }
+
+      if (!jobData.user_email || !jobData.user_password) {
+        return res.status(400).json({
+          status: 400,
+          message: `Cannot retrieve valid user_email or user_password for job ${jobId}. Property may not have user_email or user_password assigned.`,
+        });
+      }
+
+      const { expediaId, user_email, user_password } = jobData;
+
+      // Determine jobType based on scraping_mode
+      let jobType: JobType = JobType.PropertyRun;
+
+      workerJobData = {
+        jobType,
+        jobId,
+        startDate,
+        endDate,
+        expediaId,
+        user_email,
+        user_password,
+      };
+    } else {
+      return res.status(400).json({
+        status: 400,
+        message: `Unsupported OTA provider: ${normalizedOtaProvider}. Supported values are: 'Booking'`,
+      });
+    }
+
+    // Verify workerJobData was properly initialized
+    if (!workerJobData) {
+      console.error(
+        `Failed to initialize workerJobData for job ${jobId} with ota_provider: ${normalizedOtaProvider}`
+      );
+      return res.status(500).json({
+        status: 500,
+        message: `Failed to initialize job data for OTA provider: ${normalizedOtaProvider}`,
+        jobId: jobId,
+      });
+    }
+
+    // Verify jobType is set
+    if (!workerJobData.jobType) {
+      console.error(
+        `workerJobData.jobType is undefined for job ${jobId}. Full object:`,
+        JSON.stringify(workerJobData, null, 2)
+      );
+      return res.status(500).json({
+        status: 500,
+        message: `Job type not properly set for job ${jobId}`,
+        jobId: jobId,
+      });
+    }
+
+    console.log(
+      `Resuming stopped job ${jobId} with ${normalizedOtaProvider} using scraping_mode: ${
+        scraping_mode || "undefined"
+      }`
+    );
+
+    // Debug: Log the complete workerJobData object before sending to worker
+    console.log(
+      `Worker job data for ${jobId}:`,
+      JSON.stringify(workerJobData, null, 2)
+    );
+
+    // Execute job in worker thread
+    try {
+      console.log(`Submitting resumed job ${jobId} to worker pool...`);
+
+      const result = await workerPool.executeJob(workerJobData);
+
+      if (result.success) {
+        return res.status(200).json(result.data);
+      } else {
+        return res.status(500).json({
+          status: 500,
+          message: "Job resume execution failed",
+          error: result.error,
+          jobId: result.jobId,
+        });
+      }
+    } catch (workerError) {
+      console.error(`Worker error for resumed job ${jobId}:`, workerError);
+
+      // Ensure job is marked as failed
+      try {
+        await progressManager.handleJobError(jobId, workerError);
+      } catch (cleanupError) {
+        console.error("Error during cleanup:", cleanupError);
+      }
+
+      return res.status(500).json({
+        status: 500,
+        message: "Worker execution failed for resumed job",
+        error:
+          workerError instanceof Error
+            ? workerError.message
+            : String(workerError),
+        jobId,
+      });
+    }
+  } catch (err: any) {
+    console.error("Error resuming job:", err);
+
+    // Ensure job is marked as failed
+    try {
+      if (req.body.jobId) {
+        await progressManager.handleJobError(req.body.jobId, err);
+      }
+    } catch (cleanupError) {
+      console.error("Error during cleanup:", cleanupError);
+    }
+
+    res.status(500).json({
+      status: 500,
+      message: "Error resuming job",
+      error: err.message,
+    });
   }
-);
+}) as any);
 
 // API to stop scraping
-app.post(
-  "/api/scraping/stop",
-  (req: express.Request, res: express.Response) => {
-    try {
-      const wasRunning = scrapingStateManager.isRunning();
-      scrapingStateManager.stopScraping();
+app.post("/api/scraping/stop", (async (
+  req: express.Request,
+  res: express.Response
+) => {
+  try {
+    const { jobId } = req.body;
 
-      if (wasRunning) {
-        res.status(200).json({
-          status: 200,
-          message: "Scraping stopped successfully",
-          data: scrapingStateManager.getState(),
-        });
-      } else {
-        res.status(200).json({
-          status: 200,
-          message: "No scraping job was running",
-          data: scrapingStateManager.getState(),
-        });
-      }
-    } catch (err: any) {
-      console.error("Error stopping scraping:", err);
-      res.status(500).json({
-        status: 500,
-        message: "Error stopping scraping",
-        error: err.message,
+    if (!jobId) {
+      return res.status(400).json({
+        status: 400,
+        message: "jobId is required in request body",
       });
     }
+
+    // Check if job exists
+    const job = await jobService.getJobById(jobId);
+    if (!job) {
+      return res.status(404).json({
+        status: 404,
+        message: `Job with ID ${jobId} not found`,
+      });
+    }
+
+    // Attempt to stop the job in the worker pool
+    const stopSuccess = await workerPool.stopJob(jobId);
+
+    if (stopSuccess) {
+      // Update job status to Stopped in database
+      const updatedJob = await jobService.updateJobStatus(
+        jobId,
+        JobStatus.Stopped
+      );
+
+      if (updatedJob) {
+        res.status(200).json({
+          status: 200,
+          message: "Job stopped successfully",
+          jobId: jobId,
+          finalStatus: "Stopped",
+        });
+      } else {
+        res.status(500).json({
+          status: 500,
+          message: "Job stopped but failed to update status in database",
+          jobId: jobId,
+        });
+      }
+    } else {
+      // Job might not be currently running
+      res.status(404).json({
+        status: 404,
+        message: "Job not found or not currently running",
+        jobId: jobId,
+      });
+    }
+  } catch (err: any) {
+    console.error("Error stopping job:", err);
+    res.status(500).json({
+      status: 500,
+      message: "Error stopping job",
+      error: err.message,
+    });
   }
-);
+}) as any);
 
 app.post("/api/expedia/rerun-failed-job", (async (
   req: express.Request,
@@ -234,17 +430,6 @@ app.post("/api/expedia/rerun-failed-job", (async (
 ) => {
   try {
     const { startDate, endDate, jobId } = req.body;
-// Route registrations
-// Health and authentication routes (no prefix)
-app.use("/", healthRoutes);
-app.use("/", authRoutes);
-
-// API routes (keeping original endpoints)
-app.use("/api/scraping", expediarScrapingControlRoutes);
-app.use("/api/jobs", expediarJobsRoutes);
-app.use("/api/expedia", expediarScrapingRoutes);
-
-// Global error handle middleware
     // Check if worker threads are available
     if (!workerPool.hasAvailableWorkers() && workerPool.isQueueFull()) {
       return res.status(200).json({
