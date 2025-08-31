@@ -959,13 +959,13 @@ app.post("/api/booking/rerun-failed-job", (async (
   res: express.Response
 ) => {
   try {
-    const { jobId } = req.body;
+    const { jobId, ota_provider } = req.body;
 
     // Validate required parameters
-    if (!jobId) {
+    if (!jobId || !ota_provider) {
       return res.status(400).json({
         status: 400,
-        message: "jobId, startDate and endDate are required in request body",
+        message: "jobId, ota_provider are required in request body",
       });
     }
 

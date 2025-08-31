@@ -12,11 +12,17 @@
             type: object
             required:
               - jobId
+              - ota_provider
             properties:
               jobId:
                 type: string
-                description: MongoDB ObjectId of the failed job to rerun
+                description: MongoDB ObjectId of the failed/partial job to rerun
                 example: "507f1f77bcf86cd799439011"
+              ota_provider:
+                type: string
+                enum: [Expedia, Agoda, Booking]
+                description: OTA provider to use for scraping
+                example: "Booking"
     responses:
       '200':
         description: Failed booking job rerun completed successfully
