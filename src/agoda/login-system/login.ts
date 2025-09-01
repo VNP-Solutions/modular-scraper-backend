@@ -11,6 +11,8 @@ import { timeManager } from "../../common/time-manager.js";
 import { timeoutManager } from "../../common/timeout-manager.js";
 import { getAgodaSignInLink } from "./email-link-helper.js";
 import { getAgodaOtpCode } from "./email-otp-helper.js";
+import { OtpStatus, OtpStatusValue } from "../../models/otp-status.model.js";
+import mongoose from "mongoose";
 
 async function agodaLogin(
   browser: Browser,
@@ -218,10 +220,82 @@ async function agodaLogin(
       // Handle different login flows based on next page result
       if (nextPageResult === "email-link") {
         await dualLogInfo("✅ Direct email link flow detected");
-        await handleDirectLinkFlow(page, jobId);
+        let otpStatus = null;
+        try {
+          const existingOtpStatus = await OtpStatus.find();
+          if (existingOtpStatus && existingOtpStatus.length > 0) {
+            otpStatus = await OtpStatus.findByIdAndUpdate(
+              existingOtpStatus[0]._id.toString(),
+              { status: OtpStatusValue.Occupied },
+              { new: true }
+            );
+          } else {
+            otpStatus = await OtpStatus.create({
+              job_id: jobId ? new mongoose.Types.ObjectId(jobId) : null,
+              status: OtpStatusValue.Occupied,
+            });
+          }
+          await handleDirectLinkFlow(page, jobId);
+
+          await OtpStatus.findByIdAndUpdate(
+            otpStatus?._id.toString(),
+            {
+              status: OtpStatusValue.Released,
+              job_id: null
+            },
+            { new: true }
+          );
+        } catch (directLinkError) {
+          await dualLogError("Error during direct email link flow:", directLinkError);
+          await OtpStatus.findByIdAndUpdate(
+            otpStatus?._id.toString(),
+            {
+              status: OtpStatusValue.Released,
+              job_id: null
+            },
+            { new: true }
+          );
+          throw directLinkError;
+        }
       } else if (nextPageResult === "otp-form") {
         await dualLogInfo("✅ OTP form flow detected");
-        await handleOtpFlow(frame, loadingTimeout, selectorTimeout, jobId);
+        let otpStatus = null;
+        try {
+          const existingOtpStatus = await OtpStatus.find();
+          if (existingOtpStatus && existingOtpStatus.length > 0) {
+            otpStatus = await OtpStatus.findByIdAndUpdate(
+              existingOtpStatus[0]._id.toString(),
+              { status: OtpStatusValue.Occupied },
+              { new: true }
+            );
+          } else {
+            otpStatus = await OtpStatus.create({
+              job_id: jobId ? new mongoose.Types.ObjectId(jobId) : null,
+              status: OtpStatusValue.Occupied,
+            });
+          }
+
+          await handleOtpFlow(frame, loadingTimeout, selectorTimeout, jobId);
+          await OtpStatus.findByIdAndUpdate(
+            otpStatus?._id.toString(),
+            {
+              status: OtpStatusValue.Released,
+              job_id: null
+            },
+            { new: true }
+          );
+        } catch (otpError) {
+          await dualLogError("Error during OTP flow:", otpError);
+          await OtpStatus.findByIdAndUpdate(
+            otpStatus?._id.toString(),
+            {
+              status: OtpStatusValue.Released,
+              job_id: null
+            },
+            { new: true }
+          );
+          throw otpError;
+        }
       } else {
         throw new Error(`Unknown next page result: ${nextPageResult}`);
       }

@@ -20,6 +20,8 @@ import { CardInfo, PaymentInfo } from "./models/job-item.model.js";
 import { JobStatus } from "./models/job.model.js";
 import handleOtpVerification from "./otp-verification/otp-verification.js";
 import { CreateJobItemData, jobService } from "./services/job.service.js";
+import { OtpStatus, OtpStatusValue } from "./models/otp-status.model.js";
+import mongoose from "mongoose";
 
 dotenv.config();
 
@@ -1432,6 +1434,7 @@ async function runScrapingWithRestart(
         await delay(5000); // Short delay after login
 
         // Handle OTP verification ONCE after login
+        let otpStatus = null;
         try {
           await scrapingStateManager.waitWhilePaused();
           if (!scrapingStateManager.isRunning()) {
@@ -1440,11 +1443,46 @@ async function runScrapingWithRestart(
             if (jobId) await finalizeJobLogging("failed");
             return;
           }
+          // Find OtpStatus by job_id
+          const existingOtpStatus = await OtpStatus.find();
 
+          if (!existingOtpStatus || existingOtpStatus.length === 0) {
+            // No document found, create one
+            otpStatus = await OtpStatus.create({
+              job_id: jobId ? new mongoose.Types.ObjectId(jobId) : null,
+              status: OtpStatusValue.Occupied,
+            });
+          } else {
+            // Document exists, update the first one (should only be one)
+            otpStatus = await OtpStatus.findByIdAndUpdate(
+              existingOtpStatus[0]._id.toString(),
+              {
+                status: OtpStatusValue.Occupied,
+                job_id: jobId ? new mongoose.Types.ObjectId(jobId) : null,
+              },
+              { new: true }
+            );
+          }
           await handleOtpVerification(globalBrowser, globalPage, jobId);
           await dualLogInfo("OTP verification completed successfully!");
+          await OtpStatus.findByIdAndUpdate(
+            otpStatus?._id.toString(),
+            {
+              status: OtpStatusValue.Released,
+              job_id: null
+            },
+            { new: true }
+          );
         } catch (otpError: any) {
           await dualLogError("OTP verification failed:", otpError);
+          await OtpStatus.findByIdAndUpdate(
+            otpStatus?._id.toString(),
+            {
+              status: OtpStatusValue.Released,
+              job_id: null
+            },
+            { new: true }
+          );
           // Don't fail the entire process for OTP - it might not be required
           await dualLogInfo(
             "Continuing without OTP verification (it might not be required)"

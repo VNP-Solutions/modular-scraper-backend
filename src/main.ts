@@ -20,6 +20,8 @@ import { JobStatus } from "./models/job.model.js";
 import handleOtpVerification from "./otp-verification/otp-verification.js";
 import { propertySearchAndClickReservation } from "./property-search/property-search.js";
 import { jobService } from "./services/job.service.js";
+import { OtpStatus, OtpStatusValue } from "./models/otp-status.model.js";
+import mongoose from "mongoose";
 
 dotenv.config();
 
@@ -340,6 +342,8 @@ async function runScrapingWithRestart(
           throw loginError;
         }
 
+        let otpStatus = null;
+
         try {
           // Check pause state before OTP verification
           await scrapingStateManager.waitWhilePaused();
@@ -352,10 +356,43 @@ async function runScrapingWithRestart(
             return;
           }
 
+          const existingOtpStatus = await OtpStatus.find();
+          if (existingOtpStatus && existingOtpStatus.length > 0) {
+            otpStatus = await OtpStatus.findByIdAndUpdate(
+              existingOtpStatus[0]._id.toString(),
+              {
+                status: OtpStatusValue.Occupied,
+                job_id: jobId ? new mongoose.Types.ObjectId(jobId) : null,
+              },
+              { new: true }
+            );
+          } else {
+            otpStatus = await OtpStatus.create({
+              job_id: jobId ? new mongoose.Types.ObjectId(jobId) : null,
+              status: OtpStatusValue.Occupied,
+            });
+          }
+
           await handleOtpVerification(browser, page, jobId);
           await dualLogInfo("OTP verification completed successfully!");
+          await OtpStatus.findByIdAndUpdate(
+            otpStatus?._id.toString(),
+            {
+              status: OtpStatusValue.Released,
+              job_id: null
+            },
+            { new: true }
+          );
         } catch (error: any) {
           await dualLogError("OTP verification failed:", error);
+          await OtpStatus.findByIdAndUpdate(
+            otpStatus?._id.toString(),
+            {
+              status: OtpStatusValue.Released,
+              job_id: null
+            },
+            { new: true }
+          );
           // Close browser when done with this attempt
           if (browser) {
             await browser.close();
