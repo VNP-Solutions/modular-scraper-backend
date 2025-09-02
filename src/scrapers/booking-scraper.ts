@@ -18,6 +18,7 @@ import { delay } from "../common/delay.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import { cookieStorageService } from "../services/cookie-storage.service.js";
 import { PlatformsType } from "../common/booking-error-types.js";
+import { jobService } from "../services/job.service.js";
 
 export enum ScraperContext {
   JOB = 'job',
@@ -2139,9 +2140,6 @@ export class BookingScraper extends BaseScraper {
         const amount = parseFloat(cleaned);
         return isNaN(amount) ? 0 : Math.abs(amount);
       };
-
-      // Import jobService dynamically to avoid circular dependencies
-      const { jobService } = await import('../services/job.service.js');
 
       const jobItemData = {
         job_id: jobId,
