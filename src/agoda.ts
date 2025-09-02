@@ -46,7 +46,10 @@ async function agoda(
     if (existingOtpStatus && existingOtpStatus.length > 0) {
       otpStatus = await OtpStatus.findByIdAndUpdate(
         existingOtpStatus[0]._id.toString(),
-        { status: OtpStatusValue.Occupied },
+        {
+          status: OtpStatusValue.Occupied,
+          job_id: jobId ? new mongoose.Types.ObjectId(jobId) : null,
+        },
         { new: true }
       );
     } else {
