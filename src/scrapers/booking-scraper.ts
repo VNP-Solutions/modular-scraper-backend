@@ -1,5 +1,4 @@
 import puppeteer, { Browser, Page } from "puppeteer";
-import fs from 'fs';
 import readline from 'readline';
 import fetch from 'node-fetch';
 import { BaseScraper, LoginCredentials, CaptchaHandlerOptions, TwoFactorAuthOptions, ScrapingJobParams, ScrapingResult } from "./base-scraper.js";
@@ -17,17 +16,17 @@ import {
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
 import { delay } from "../common/delay.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
+import { cookieStorageService } from "../services/cookie-storage.service.js";
+import { PlatformsType } from "../common/booking-error-types.js";
 
 export enum ScraperContext {
   JOB = 'job',
   TRUST_VERIFICATION = 'trust-verification'
 }
 export class BookingScraper extends BaseScraper {
-  private cookiesFile = 'booking-admin-cookies.json';
   private browserlessToken: string;
   private sessionUrl?: string;
   protected currentPropertyName?: string;
-  protected currentPropertyId?: string;
   private context?: ScraperContext;
 
   constructor(context?: ScraperContext) {
@@ -39,6 +38,15 @@ export class BookingScraper extends BaseScraper {
   public setBrowserData(page: Page, browser: Browser): void {
     this.page = page;
     this.browser = browser;
+  }
+
+
+
+  public async hasValidCookies(): Promise<boolean> {
+    if (!this.propertyIdForDb) {
+      return false;
+    }
+    return await cookieStorageService.hasValidCookies(this.propertyIdForDb, PlatformsType.BOOKING);
   }
 
   async setupBrowser(jobId?: string): Promise<{ browser: Browser; page: Page }> {
@@ -94,11 +102,15 @@ export class BookingScraper extends BaseScraper {
 
       await this.generateLiveUrl(page);
 
-      // Load saved cookies if they exist
-      if (fs.existsSync(this.cookiesFile)) {
-        const cookies = JSON.parse(fs.readFileSync(this.cookiesFile, 'utf8'));
-        await page.setCookie(...cookies);
-        await this.logInfo(`Loaded ${cookies.length} saved cookies`);
+      // Load saved cookies if they exist for the current property
+      if (this.propertyIdForDb) {
+        const cookies = await cookieStorageService.loadCookies(this.propertyIdForDb, PlatformsType.BOOKING);
+        if (cookies) {
+          await page.setCookie(...cookies);
+          await this.logInfo(`Loaded ${cookies.length} cookies from storage for property ${this.propertyIdForDb}`);
+        } else {
+          await this.logInfo('No saved cookies found for this property');
+        }
       }
 
       // Navigate to login page
@@ -159,8 +171,19 @@ export class BookingScraper extends BaseScraper {
 
     await this.logInfo('Login successful');
     const cookies = await this.page.cookies();
-    fs.writeFileSync(this.cookiesFile, JSON.stringify(cookies, null, 2));
-    await this.logInfo(`Saved ${cookies.length} cookies for future sessions`);
+    
+    // Save cookies to storage if we have a property ID
+    if (this.propertyIdForDb) {
+      const success = await cookieStorageService.saveCookies(this.propertyIdForDb, PlatformsType.BOOKING, cookies);
+      if (success) {
+        await this.logInfo(`Saved ${cookies.length} cookies to storage for property ${this.propertyIdForDb}`);
+      } else {
+        await this.logError('Failed to save cookies to storage');
+      }
+    } else {
+      await this.logInfo('No property ID available, cookies not saved to storage');
+    }
+    
     await this.takeScreenshot();
     
     await this.handlePropertySearch(propertyId);
@@ -174,8 +197,19 @@ export class BookingScraper extends BaseScraper {
     
     await this.logInfo('2FA completed successfully');
     const cookies = await this.page.cookies();
-    fs.writeFileSync(this.cookiesFile, JSON.stringify(cookies, null, 2));
-    await this.logInfo(`Saved ${cookies.length} cookies after 2FA`);
+    
+    // Save cookies to storage if we have a property ID
+    if (this.propertyIdForDb) {
+      const success = await cookieStorageService.saveCookies(this.propertyIdForDb, PlatformsType.BOOKING, cookies);
+      if (success) {
+        await this.logInfo(`Saved ${cookies.length} cookies to storage after 2FA for property ${this.propertyIdForDb}`);
+      } else {
+        await this.logError('Failed to save cookies to storage after 2FA');
+      }
+    } else {
+      await this.logInfo('No property ID available, cookies not saved to storage after 2FA');
+    }
+    
     await this.takeScreenshot();
     
     await this.handlePropertySearch(propertyId);
