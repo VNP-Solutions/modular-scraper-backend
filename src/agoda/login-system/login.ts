@@ -22,7 +22,8 @@ async function agodaLogin(
   jobId?: string
 ): Promise<void> {
   let shouldCloseBrowser = false;
-  let otpStatus: any = await OtpStatus.find();
+  const existingOtpStatus = await OtpStatus.find();
+  let otpStatus: any = existingOtpStatus[0] || null;
 
   try {
     // Get timeout configuration for this job
@@ -33,7 +34,6 @@ async function agodaLogin(
       timeSession: timeManager.getSessionInfo(),
     });
 
-    const existingOtpStatus = await OtpStatus.find();
 
     // Update progress - login process started
     if (jobId) {
