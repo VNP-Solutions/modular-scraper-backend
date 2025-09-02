@@ -22,7 +22,7 @@ async function agodaLogin(
   jobId?: string
 ): Promise<void> {
   let shouldCloseBrowser = false;
-  let otpStatus: any = null;
+  let otpStatus: any = await OtpStatus.find();
 
   try {
     // Get timeout configuration for this job
