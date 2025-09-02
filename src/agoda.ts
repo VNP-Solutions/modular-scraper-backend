@@ -15,6 +15,8 @@ import { scrapingStateManager } from "./common/scraping-state.js";
 import { timeManager } from "./common/time-manager.js";
 import { JobStatus } from "./models/job.model.js";
 import { jobService } from "./services/job.service.js";
+import { OtpStatus, OtpStatusValue } from "./models/otp-status.model.js";
+import mongoose from "mongoose";
 
 dotenv.config();
 
@@ -30,6 +32,7 @@ async function agoda(
 
   // Initialize time management session
   await timeManager.startSession(jobId);
+  let otpStatus: any = null;
 
   try {
     await dualLogInfo("Starting Agoda automation process", {
@@ -39,6 +42,19 @@ async function agoda(
       jobId,
       timeSession: timeManager.getSessionInfo(),
     });
+    const existingOtpStatus = await OtpStatus.find();
+    if (existingOtpStatus && existingOtpStatus.length > 0) {
+      otpStatus = await OtpStatus.findByIdAndUpdate(
+        existingOtpStatus[0]._id.toString(),
+        { status: OtpStatusValue.Occupied },
+        { new: true }
+      );
+    } else {
+      otpStatus = await OtpStatus.create({
+        job_id: jobId ? new mongoose.Types.ObjectId(jobId) : null,
+        status: OtpStatusValue.Occupied,
+      });
+    }
 
     // Initialize job progress tracking if jobId is provided
     if (jobId && startDate && endDate) {
@@ -137,6 +153,7 @@ async function agoda(
     // Agoda login process
     await agodaLogin(browser, page, agodaUsername, agodaPassword, jobId);
     await dualLogInfo("Agoda login completed successfully");
+    otpStatus = null;
 
     // Update progress - login complete
     if (jobId) {
@@ -182,6 +199,15 @@ async function agoda(
     return bookingData;
   } catch (error: any) {
     await dualLogError("Error in Agoda automation:", error);
+
+    if (otpStatus) {
+
+      await OtpStatus.findByIdAndUpdate(
+        otpStatus?._id.toString(),
+        { status: OtpStatusValue.Released, job_id: null },
+        { new: true }
+      );
+    }
 
     // End time session on error
     await timeManager.endSession();
