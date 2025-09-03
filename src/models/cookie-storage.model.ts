@@ -1,5 +1,5 @@
 import mongoose, { Document, Schema, Types } from "mongoose";
-import { PlatformsType } from "../common/booking-error-types";
+import { PlatformsType } from "../common/booking-error-types.js";
 
 // Interface for the CookieStorage document
 export interface ICookieStorage extends Document {
