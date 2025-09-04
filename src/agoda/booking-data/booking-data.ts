@@ -758,15 +758,31 @@ export async function getAgodaBookingData(
       jobId,
     });
 
-    // Set up download path with platform-specific considerations
-    const downloadPath = path.resolve(process.cwd(), "downloads");
+    // Set up download path with job-specific folder for better isolation
+    const baseDownloadPath = path.resolve(process.cwd(), "downloads");
+    const downloadPath = jobId
+      ? path.join(baseDownloadPath, jobId)
+      : baseDownloadPath;
+
+    // Create job-specific download folder if it doesn't exist
     if (!fs.existsSync(downloadPath)) {
       fs.mkdirSync(downloadPath, { recursive: true });
+      if (jobId) {
+        await dualLogInfo(
+          `Created job-specific download folder: ${downloadPath}`,
+          { jobId }
+        );
+      }
     }
 
     await dualLogInfo(
       `Download configuration - Platform: ${process.platform}, Path: ${downloadPath}`,
-      { jobId, platform: process.platform, downloadPath }
+      {
+        jobId,
+        platform: process.platform,
+        downloadPath,
+        isJobSpecific: !!jobId,
+      }
     );
 
     // Configure download behavior using CDP session with macOS-specific settings
@@ -1252,8 +1268,12 @@ export async function getAgodaBookingData(
           ".temp", // General temporary files
         ];
 
-        // Check each file synchronously since we can't use await in find()
-        let csvFile: string | undefined;
+        // Check each file and collect valid candidates with their stats
+        const validCandidates: Array<{
+          file: string;
+          stats: fs.Stats;
+          fullPath: string;
+        }> = [];
 
         for (const file of files) {
           // Must end with .csv
@@ -1280,8 +1300,7 @@ export async function getAgodaBookingData(
             await dualLogInfo(
               `Found valid CSV candidate: ${file} (${stats.size} bytes)`
             );
-            csvFile = file;
-            break; // Found a valid file
+            validCandidates.push({ file, stats, fullPath });
           } catch (statError) {
             await dualLogInfo(
               `Error checking file stats for ${file}: ${statError}`
@@ -1290,9 +1309,41 @@ export async function getAgodaBookingData(
           }
         }
 
+        // Select the best candidate (newest file by modification time)
+        let csvFile: string | undefined;
+        if (validCandidates.length > 0) {
+          // Sort by modification time (newest first)
+          validCandidates.sort(
+            (a, b) => b.stats.mtime.getTime() - a.stats.mtime.getTime()
+          );
+
+          const selectedCandidate = validCandidates[0];
+          csvFile = selectedCandidate.file;
+
+          await dualLogInfo(
+            `Selected newest CSV file: ${csvFile} (modified: ${selectedCandidate.stats.mtime.toISOString()})`,
+            {
+              jobId,
+              totalCandidates: validCandidates.length,
+              allCandidates: validCandidates.map((c) => ({
+                file: c.file,
+                size: c.stats.size,
+                modified: c.stats.mtime.toISOString(),
+              })),
+            }
+          );
+        }
+
         if (csvFile) {
           csvFilePath = path.join(downloadPath, csvFile);
-          await dualLogInfo(`✅ CSV file confirmed: ${csvFile}`);
+          await dualLogInfo(
+            `✅ CSV file confirmed: ${csvFile} in job-specific folder`,
+            {
+              jobId,
+              fileName: csvFile,
+              fullPath: csvFilePath,
+            }
+          );
           break;
         }
       } catch (readDirError: any) {

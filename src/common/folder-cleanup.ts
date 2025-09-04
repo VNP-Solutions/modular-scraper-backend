@@ -155,7 +155,8 @@ async function performFolderCleanup(
 
 /**
  * Clean downloads folder - removes CSV files matching agodaId pattern
- * Pattern: {agodaId}_*.csv
+ * Supports both job-specific folders and main downloads folder
+ * Pattern: {agodaId}_*.csv or {propertyName}-{agodaId}.csv
  */
 async function cleanDownloadsFolder(
   options: FolderCleanupOptions
@@ -171,9 +172,9 @@ async function cleanDownloadsFolder(
   };
 
   try {
-    const downloadsDir = path.resolve(process.cwd(), "downloads");
+    const baseDownloadsDir = path.resolve(process.cwd(), "downloads");
 
-    if (!fs.existsSync(downloadsDir)) {
+    if (!fs.existsSync(baseDownloadsDir)) {
       await dualLogInfo(
         "Downloads directory does not exist, skipping cleanup",
         {
@@ -183,10 +184,90 @@ async function cleanDownloadsFolder(
       return result;
     }
 
+    // Clean ONLY job-specific folder if jobId is provided (for concurrent job safety)
+    if (options.jobId) {
+      const jobDownloadsDir = path.join(baseDownloadsDir, options.jobId);
+      if (fs.existsSync(jobDownloadsDir)) {
+        await dualLogInfo(
+          `Cleaning job-specific downloads folder: ${jobDownloadsDir}`,
+          { jobId: options.jobId }
+        );
+
+        const jobFolderResult = await cleanDownloadsFolderContent(
+          jobDownloadsDir,
+          options
+        );
+        result.cleanedCount += jobFolderResult.cleanedCount;
+        result.errors.push(...jobFolderResult.errors);
+        result.totalProcessed += jobFolderResult.totalProcessed;
+
+        // Remove the entire job folder after cleanup (safe for concurrent jobs)
+        try {
+          fs.rmSync(jobDownloadsDir, { recursive: true, force: true });
+          await dualLogInfo(`✅ Removed job folder: ${jobDownloadsDir}`, {
+            jobId: options.jobId,
+          });
+        } catch (removeDirError: any) {
+          await dualLogError(
+            `Warning: Could not remove job folder: ${removeDirError.message}`,
+            removeDirError,
+            { jobId: options.jobId }
+          );
+        }
+      } else {
+        await dualLogInfo(
+          `Job-specific downloads folder does not exist: ${jobDownloadsDir}`,
+          { jobId: options.jobId }
+        );
+      }
+    } else {
+      // Only clean main downloads folder if no jobId (legacy mode)
+      await dualLogInfo(
+        "No jobId provided - cleaning main downloads folder (legacy mode)",
+        { jobId: options.jobId }
+      );
+
+      const mainFolderResult = await cleanDownloadsFolderContent(
+        baseDownloadsDir,
+        options
+      );
+      result.cleanedCount += mainFolderResult.cleanedCount;
+      result.errors.push(...mainFolderResult.errors);
+      result.totalProcessed += mainFolderResult.totalProcessed;
+    }
+
+    return result;
+  } catch (error: any) {
+    result.errors.push(`Downloads folder cleanup error: ${error.message}`);
+    throw error;
+  }
+}
+
+/**
+ * Clean contents of a specific downloads folder
+ */
+async function cleanDownloadsFolderContent(
+  downloadsDir: string,
+  options: FolderCleanupOptions
+): Promise<{ cleanedCount: number; errors: string[]; totalProcessed: number }> {
+  const result: {
+    cleanedCount: number;
+    errors: string[];
+    totalProcessed: number;
+  } = {
+    cleanedCount: 0,
+    errors: [],
+    totalProcessed: 0,
+  };
+
+  try {
     const files = fs.readdirSync(downloadsDir);
-    await dualLogInfo(`Found ${files.length} files in downloads directory`, {
-      jobId: options.jobId,
-    });
+    await dualLogInfo(
+      `Found ${files.length} files in downloads directory: ${downloadsDir}`,
+      {
+        jobId: options.jobId,
+      }
+    );
 
     for (const file of files) {
       result.totalProcessed++;
@@ -199,13 +280,20 @@ async function cleanDownloadsFolder(
         continue;
       }
 
-      // If agodaId is provided, only clean files matching the pattern
+      // If agodaId is provided, only clean files matching either pattern:
+      // 1. Old pattern: {agodaId}_*.csv (e.g., "2456448_Agoda_Performance_...")
+      // 2. New pattern: {propertyName}-{agodaId}.csv (e.g., "ac-hotel-arlington-national-landing-2456448.csv")
       if (options.agodaId) {
-        const agodaPattern = new RegExp(
+        const oldAgodaPattern = new RegExp(
           `^${escapeRegExp(options.agodaId)}_.*\\.csv$`,
           "i"
         );
-        if (!agodaPattern.test(file)) {
+        const newAgodaPattern = new RegExp(
+          `.*-${escapeRegExp(options.agodaId)}\\.csv$`,
+          "i"
+        );
+
+        if (!oldAgodaPattern.test(file) && !newAgodaPattern.test(file)) {
           continue;
         }
       }

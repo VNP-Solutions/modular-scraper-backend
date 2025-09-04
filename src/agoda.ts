@@ -1,4 +1,5 @@
 import dotenv from "dotenv";
+import mongoose from "mongoose";
 import { Browser } from "puppeteer";
 import { getAgodaBookingData } from "./agoda/booking-data/booking-data.js";
 import agodaLogin from "./agoda/login-system/login.js";
@@ -14,9 +15,8 @@ import { progressManager } from "./common/progress-manager.js";
 import { scrapingStateManager } from "./common/scraping-state.js";
 import { timeManager } from "./common/time-manager.js";
 import { JobStatus } from "./models/job.model.js";
-import { jobService } from "./services/job.service.js";
 import { OtpStatus, OtpStatusValue } from "./models/otp-status.model.js";
-import mongoose from "mongoose";
+import { jobService } from "./services/job.service.js";
 
 dotenv.config();
 
@@ -191,6 +191,46 @@ async function agoda(
       await progressManager.markJobCompleted(jobId);
     }
 
+    // Cleanup downloads folder on successful completion (regardless of record count)
+    try {
+      await dualLogInfo("Starting folder cleanup after successful completion", {
+        jobId,
+        agodaId,
+        recordCount: bookingData.length,
+        timeSession: timeManager.getSessionInfo(),
+      });
+
+      // Try to auto-detect cleanup parameters if not provided
+      const cleanupParams = await autoDetectCleanupParams(jobId);
+      const finalAgodaId = agodaId || cleanupParams.agodaId;
+      const finalPropertyName = cleanupParams.propertyName;
+
+      const cleanupResult = await cleanupFoldersOnError(
+        finalAgodaId,
+        finalPropertyName,
+        jobId
+      );
+
+      await dualLogInfo(
+        "Folder cleanup completed after successful completion",
+        {
+          jobId,
+          downloadsCleanedCount: cleanupResult.downloadsCleanedCount,
+          importCleanedCount: cleanupResult.importCleanedCount,
+          totalFilesProcessed: cleanupResult.totalFilesProcessed,
+          errors: cleanupResult.errors.length,
+          timeSession: timeManager.getSessionInfo(),
+        }
+      );
+    } catch (cleanupError: any) {
+      await dualLogError(
+        "Error during folder cleanup after successful completion (continuing):",
+        cleanupError.message,
+        { jobId }
+      );
+      // Don't throw cleanup error - continue with successful completion
+    }
+
     // End time session on successful completion
     await timeManager.endSession();
 
@@ -204,7 +244,6 @@ async function agoda(
     await dualLogError("Error in Agoda automation:", error);
 
     if (otpStatus) {
-
       await OtpStatus.findByIdAndUpdate(
         otpStatus?._id.toString(),
         { status: OtpStatusValue.Released, job_id: null },

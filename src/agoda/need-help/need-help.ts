@@ -646,35 +646,35 @@ export async function automateNeedHelpProcess(
     }
 
     // Step 9: Click final submit button
-    await dualLogInfo("Clicking final submit button...", { jobId });
-    try {
-      const finalSubmitSelectors = [
-        'button[data-testid="submit-button"]',
-        'button[type="submit"]',
-        'button:has-text("Submit")',
-      ];
+    // await dualLogInfo("Clicking final submit button...", { jobId });
+    // try {
+    //   const finalSubmitSelectors = [
+    //     'button[data-testid="submit-button"]',
+    //     'button[type="submit"]',
+    //     'button:has-text("Submit")',
+    //   ];
 
-      for (const selector of finalSubmitSelectors) {
-        try {
-          await page.waitForSelector(selector, {
-            visible: true,
-            timeout: 10000,
-          });
-          await page.click(selector);
-          await dualLogInfo(
-            `✅ Clicked final submit button with selector: ${selector}`,
-            { jobId }
-          );
-          break;
-        } catch (error) {
-          continue;
-        }
-      }
-    } catch (error: any) {
-      await dualLogError("Error clicking final submit button:", error.message, {
-        jobId,
-      });
-    }
+    //   for (const selector of finalSubmitSelectors) {
+    //     try {
+    //       await page.waitForSelector(selector, {
+    //         visible: true,
+    //         timeout: 10000,
+    //       });
+    //       await page.click(selector);
+    //       await dualLogInfo(
+    //         `✅ Clicked final submit button with selector: ${selector}`,
+    //         { jobId }
+    //       );
+    //       break;
+    //     } catch (error) {
+    //       continue;
+    //     }
+    //   }
+    // } catch (error: any) {
+    //   await dualLogError("Error clicking final submit button:", error.message, {
+    //     jobId,
+    //   });
+    // }
 
     await delay(2000); // Give time for form submission to process
 
@@ -781,15 +781,48 @@ async function cleanupCsvFiles(
       timeSession: timeManager.getSessionInfo(),
     });
 
-    // Clean up downloads folder - look for agodaId_*.csv pattern
-    if (agodaId) {
+    // Clean up job-specific downloads folder (safe for concurrent jobs)
+    if (jobId) {
+      const baseDownloadsDir = path.resolve(process.cwd(), "downloads");
+      const jobDownloadsDir = path.join(baseDownloadsDir, jobId);
+
+      if (fs.existsSync(jobDownloadsDir)) {
+        try {
+          // Remove the entire job-specific folder
+          fs.rmSync(jobDownloadsDir, { recursive: true, force: true });
+          await dualLogInfo(
+            `✅ Removed job downloads folder: ${jobDownloadsDir}`,
+            { jobId }
+          );
+        } catch (error) {
+          await dualLogError(
+            `Failed to remove job downloads folder: ${jobDownloadsDir}`,
+            error,
+            { jobId }
+          );
+        }
+      } else {
+        await dualLogInfo(
+          `Job downloads folder does not exist: ${jobDownloadsDir}`,
+          { jobId }
+        );
+      }
+    } else if (agodaId) {
+      // Fallback to legacy cleanup if no jobId but agodaId is available
       const downloadsDir = path.resolve(process.cwd(), "downloads");
       if (fs.existsSync(downloadsDir)) {
         const downloadFiles = fs.readdirSync(downloadsDir);
-        const downloadCsvPattern = new RegExp(`^${agodaId}_.*\\.csv$`, "i");
+        // Support both patterns:
+        // 1. Old pattern: {agodaId}_*.csv (e.g., "2456448_Agoda_Performance_...")
+        // 2. New pattern: {propertyName}-{agodaId}.csv (e.g., "ac-hotel-arlington-national-landing-2456448.csv")
+        const oldDownloadCsvPattern = new RegExp(`^${agodaId}_.*\\.csv$`, "i");
+        const newDownloadCsvPattern = new RegExp(`.*-${agodaId}\\.csv$`, "i");
 
         for (const file of downloadFiles) {
-          if (downloadCsvPattern.test(file)) {
+          if (
+            oldDownloadCsvPattern.test(file) ||
+            newDownloadCsvPattern.test(file)
+          ) {
             const filePath = path.join(downloadsDir, file);
             try {
               fs.unlinkSync(filePath);
