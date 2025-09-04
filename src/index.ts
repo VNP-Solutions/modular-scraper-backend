@@ -3,7 +3,7 @@ import mongoose from "mongoose";
 import open from "open";
 import app from "./app/app.js";
 import { loadAndSetCredentials } from "./common/load-token.js";
-import { workerPool } from "./common/worker-pool.js";
+import { otpAwareWorkerPool } from "./common/otp-aware-worker-pool.js";
 dotenv.config();
 
 const port: number = parseInt(process.env.PORT || "3000");
@@ -41,8 +41,8 @@ const gracefulShutdown = async (signal: string): Promise<void> => {
 
   try {
     // Shutdown worker pool first
-    console.log("Shutting down worker pool...");
-    await workerPool.shutdown();
+    console.log("Shutting down OTP-aware worker pool...");
+    await otpAwareWorkerPool.shutdown();
 
     // Disconnect from database
     console.log("Disconnecting from MongoDB...");
@@ -73,8 +73,8 @@ app.listen(port, async () => {
     }
     console.log(`Server is listening on port ${port}`);
     console.log(
-      `Worker pool initialized with ${
-        workerPool.getStatus().totalWorkers
+      `OTP-aware worker pool initialized with ${
+        otpAwareWorkerPool.getStatus().totalWorkers
       } workers`
     );
   } catch (err) {

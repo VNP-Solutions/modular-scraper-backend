@@ -5,14 +5,13 @@ import {
   cleanupFoldersOnError,
 } from "../../common/folder-cleanup.js";
 import { dualLogError, dualLogInfo } from "../../common/log-helper.js";
+import { otpCompletionNotifier } from "../../common/otp-completion-notifier.js";
 import { progressManager } from "../../common/progress-manager.js";
 import { scrapingStateManager } from "../../common/scraping-state.js";
 import { timeManager } from "../../common/time-manager.js";
 import { timeoutManager } from "../../common/timeout-manager.js";
 import { getAgodaSignInLink } from "./email-link-helper.js";
 import { getAgodaOtpCode } from "./email-otp-helper.js";
-import { OtpStatus, OtpStatusValue } from "../../models/otp-status.model.js";
-import mongoose from "mongoose";
 
 async function agodaLogin(
   browser: Browser,
@@ -22,8 +21,6 @@ async function agodaLogin(
   jobId?: string
 ): Promise<void> {
   let shouldCloseBrowser = false;
-  const existingOtpStatus = await OtpStatus.find();
-  let otpStatus: any = existingOtpStatus[0] || null;
 
   try {
     // Get timeout configuration for this job
@@ -33,7 +30,6 @@ async function agodaLogin(
       jobId,
       timeSession: timeManager.getSessionInfo(),
     });
-
 
     // Update progress - login process started
     if (jobId) {
@@ -226,36 +222,25 @@ async function agodaLogin(
         try {
           await handleDirectLinkFlow(page, jobId);
 
-          if (otpStatus) {
-            await OtpStatus.findByIdAndUpdate(
-              otpStatus?._id.toString(),
-              {
-                status: OtpStatusValue.Released,
-                job_id: null
-              },
-              { new: true }
-            );
-            otpStatus = null;
+          // Notify worker that OTP work is completed so other jobs can proceed
+          if (jobId) {
+            otpCompletionNotifier.notifyOtpCompleted(jobId);
           }
         } catch (directLinkError) {
-          await dualLogError("Error during direct email link flow:", directLinkError);
+          await dualLogError(
+            "Error during direct email link flow:",
+            directLinkError
+          );
           throw directLinkError;
         }
       } else if (nextPageResult === "otp-form") {
         await dualLogInfo("✅ OTP form flow detected");
         try {
-
           await handleOtpFlow(frame, loadingTimeout, selectorTimeout, jobId);
-          if (otpStatus) {
-            await OtpStatus.findByIdAndUpdate(
-              otpStatus?._id.toString(),
-              {
-                status: OtpStatusValue.Released,
-                job_id: null
-              },
-              { new: true }
-            );
-            otpStatus = null;
+
+          // Notify worker that OTP work is completed so other jobs can proceed
+          if (jobId) {
+            otpCompletionNotifier.notifyOtpCompleted(jobId);
           }
         } catch (otpError) {
           await dualLogError("Error during OTP flow:", otpError);
@@ -280,29 +265,19 @@ async function agodaLogin(
     } catch (pageError) {
       await dualLogError("Error during page interaction:", pageError);
       shouldCloseBrowser = true;
-      if (otpStatus) {
-        await OtpStatus.findByIdAndUpdate(
-          otpStatus?._id.toString(),
-          {
-            status: OtpStatusValue.Released,
-            job_id: null
-          },
-          { new: true }
-        );
+
+      // Notify that OTP work is completed (on error) so other jobs can proceed
+      if (jobId) {
+        otpCompletionNotifier.notifyOtpCompleted(jobId);
       }
       throw pageError;
     }
   } catch (error) {
     await dualLogError("Critical error during Agoda login process:", error);
-    if (otpStatus) {
-      await OtpStatus.findByIdAndUpdate(
-        otpStatus?._id.toString(),
-        {
-          status: OtpStatusValue.Released,
-          job_id: null
-        },
-        { new: true }
-      );
+
+    // Notify that OTP work is completed (on error) so other jobs can proceed
+    if (jobId) {
+      otpCompletionNotifier.notifyOtpCompleted(jobId);
     }
     // Cleanup folders on login error
     try {

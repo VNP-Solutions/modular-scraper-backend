@@ -1,5 +1,4 @@
 import dotenv from "dotenv";
-import mongoose from "mongoose";
 import { Browser } from "puppeteer";
 import { getAgodaBookingData } from "./agoda/booking-data/booking-data.js";
 import agodaLogin from "./agoda/login-system/login.js";
@@ -11,11 +10,11 @@ import {
   cleanupFoldersOnError,
 } from "./common/folder-cleanup.js";
 import { dualLogError, dualLogInfo } from "./common/log-helper.js";
+import { otpCompletionNotifier } from "./common/otp-completion-notifier.js";
 import { progressManager } from "./common/progress-manager.js";
 import { scrapingStateManager } from "./common/scraping-state.js";
 import { timeManager } from "./common/time-manager.js";
 import { JobStatus } from "./models/job.model.js";
-import { OtpStatus, OtpStatusValue } from "./models/otp-status.model.js";
 import { jobService } from "./services/job.service.js";
 
 dotenv.config();
@@ -32,7 +31,6 @@ async function agoda(
 
   // Initialize time management session
   await timeManager.startSession(jobId);
-  let otpStatus: any = null;
 
   try {
     await dualLogInfo("Starting Agoda automation process", {
@@ -42,22 +40,6 @@ async function agoda(
       jobId,
       timeSession: timeManager.getSessionInfo(),
     });
-    const existingOtpStatus = await OtpStatus.find();
-    if (existingOtpStatus && existingOtpStatus.length > 0) {
-      otpStatus = await OtpStatus.findByIdAndUpdate(
-        existingOtpStatus[0]._id.toString(),
-        {
-          status: OtpStatusValue.Occupied,
-          job_id: jobId ? new mongoose.Types.ObjectId(jobId) : null,
-        },
-        { new: true }
-      );
-    } else {
-      otpStatus = await OtpStatus.create({
-        job_id: jobId ? new mongoose.Types.ObjectId(jobId) : null,
-        status: OtpStatusValue.Occupied,
-      });
-    }
 
     // Initialize job progress tracking if jobId is provided
     if (jobId && startDate && endDate) {
@@ -153,10 +135,9 @@ async function agoda(
       jobId,
     });
 
-    // Agoda login process
+    // Agoda login process (which includes OTP verification)
     await agodaLogin(browser, page, agodaUsername, agodaPassword, jobId);
     await dualLogInfo("Agoda login completed successfully");
-    otpStatus = null;
 
     // Update progress - login complete
     if (jobId) {
@@ -243,12 +224,9 @@ async function agoda(
   } catch (error: any) {
     await dualLogError("Error in Agoda automation:", error);
 
-    if (otpStatus) {
-      await OtpStatus.findByIdAndUpdate(
-        otpStatus?._id.toString(),
-        { status: OtpStatusValue.Released, job_id: null },
-        { new: true }
-      );
+    // Notify that OTP work is completed (on error) so other jobs can proceed
+    if (jobId) {
+      otpCompletionNotifier.notifyOtpCompleted(jobId);
     }
 
     // End time session on error

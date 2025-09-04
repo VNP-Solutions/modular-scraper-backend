@@ -10,6 +10,7 @@ import {
   finalizeJobLogging,
   initializeJobLogging,
 } from "./common/log-helper.js";
+import { otpCompletionNotifier } from "./common/otp-completion-notifier.js";
 import { progressManager } from "./common/progress-manager.js";
 import { scrapingStateManager } from "./common/scraping-state.js";
 import { timeManager } from "./common/time-manager.js";
@@ -20,8 +21,6 @@ import { JobStatus } from "./models/job.model.js";
 import handleOtpVerification from "./otp-verification/otp-verification.js";
 import { propertySearchAndClickReservation } from "./property-search/property-search.js";
 import { jobService } from "./services/job.service.js";
-import { OtpStatus, OtpStatusValue } from "./models/otp-status.model.js";
-import mongoose from "mongoose";
 
 dotenv.config();
 
@@ -268,26 +267,7 @@ async function runScrapingWithRestart(
     attemptCount++;
     let browser = null;
 
-    let otpStatus = null;
     try {
-
-      const existingOtpStatus = await OtpStatus.find();
-      if (existingOtpStatus && existingOtpStatus.length > 0) {
-        otpStatus = await OtpStatus.findByIdAndUpdate(
-          existingOtpStatus[0]._id.toString(),
-          {
-            status: OtpStatusValue.Occupied,
-            job_id: jobId ? new mongoose.Types.ObjectId(jobId) : null,
-          },
-          { new: true }
-        );
-      } else {
-        otpStatus = await OtpStatus.create({
-          job_id: jobId ? new mongoose.Types.ObjectId(jobId) : null,
-          status: OtpStatusValue.Occupied,
-        });
-      }
-
       await dualLogInfo(`Starting scraping attempt ${attemptCount}`, {
         currentStartDate,
         endDate,
@@ -373,29 +353,20 @@ async function runScrapingWithRestart(
             return;
           }
 
-
           await handleOtpVerification(browser, page, jobId);
           await dualLogInfo("OTP verification completed successfully!");
-          await OtpStatus.findByIdAndUpdate(
-            otpStatus?._id.toString(),
-            {
-              status: OtpStatusValue.Released,
-              job_id: null
-            },
-            { new: true }
-          );
-          otpStatus = null;
+
+          // Notify worker that OTP work is completed so other jobs can proceed
+          if (jobId) {
+            otpCompletionNotifier.notifyOtpCompleted(jobId);
+          }
         } catch (error: any) {
           await dualLogError("OTP verification failed:", error);
-          await OtpStatus.findByIdAndUpdate(
-            otpStatus?._id.toString(),
-            {
-              status: OtpStatusValue.Released,
-              job_id: null
-            },
-            { new: true }
-          );
-          otpStatus = null;
+
+          // Notify that OTP work is completed (even on failure) so other jobs can proceed
+          if (jobId) {
+            otpCompletionNotifier.notifyOtpCompleted(jobId);
+          }
           // Close browser when done with this attempt
           if (browser) {
             await browser.close();
@@ -548,12 +519,9 @@ async function runScrapingWithRestart(
     } catch (error) {
       await dualLogError(`Scraping attempt ${attemptCount} failed:`, error);
 
-      if (otpStatus) {
-        await OtpStatus.findByIdAndUpdate(
-          otpStatus?._id.toString(),
-          { status: OtpStatusValue.Released, job_id: null },
-          { new: true }
-        );
+      // Notify that OTP work is completed (on error) so other jobs can proceed
+      if (jobId) {
+        otpCompletionNotifier.notifyOtpCompleted(jobId);
       }
 
       // Close browser on error
