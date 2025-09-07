@@ -2,12 +2,14 @@ import { EventEmitter } from "events";
 import mongoose from "mongoose";
 import {
   IOtpStatus,
+  OtpPlatform,
   OtpStatus,
   OtpStatusValue,
 } from "../models/otp-status.model.js";
 
 export interface OtpStatusInfo {
   status: OtpStatusValue;
+  platform: OtpPlatform | null;
   jobId: string | null;
   lastUpdated: Date;
 }
@@ -44,17 +46,20 @@ export class OtpStatusManager extends EventEmitter {
         // Create initial OTP status as Released
         const newDoc = await OtpStatus.create({
           status: OtpStatusValue.Released,
+          platform: null,
           job_id: null,
         });
 
         this.currentStatus = {
           status: newDoc.status,
+          platform: null,
           jobId: null,
           lastUpdated: newDoc.updatedAt,
         };
       } else {
         this.currentStatus = {
           status: otpStatusDoc.status,
+          platform: otpStatusDoc.platform || null,
           jobId: otpStatusDoc.job_id?.toString() || null,
           lastUpdated: otpStatusDoc.updatedAt,
         };
@@ -83,9 +88,12 @@ export class OtpStatusManager extends EventEmitter {
   }
 
   /**
-   * Reserve OTP for a specific job
+   * Reserve OTP for a specific job with platform
    */
-  public async reserveOtp(jobId: string): Promise<boolean> {
+  public async reserveOtp(
+    jobId: string,
+    platform: OtpPlatform
+  ): Promise<boolean> {
     if (!this.isInitialized) {
       await this.initialize();
     }
@@ -96,6 +104,7 @@ export class OtpStatusManager extends EventEmitter {
         { status: OtpStatusValue.Released }, // Only update if currently Released
         {
           status: OtpStatusValue.Occupied,
+          platform: platform,
           job_id: new mongoose.Types.ObjectId(jobId),
         },
         { new: true }
@@ -105,17 +114,18 @@ export class OtpStatusManager extends EventEmitter {
         // Successfully reserved
         this.currentStatus = {
           status: OtpStatusValue.Occupied,
+          platform: platform,
           jobId: jobId,
           lastUpdated: result.updatedAt,
         };
 
-        console.log(`OTP reserved for job ${jobId}`);
-        this.emit("otpReserved", jobId);
+        console.log(`OTP reserved for job ${jobId} on platform ${platform}`);
+        this.emit("otpReserved", jobId, platform);
         return true;
       } else {
         // OTP is already occupied
         console.log(
-          `Failed to reserve OTP for job ${jobId} - already occupied`
+          `Failed to reserve OTP for job ${jobId} on platform ${platform} - already occupied`
         );
         return false;
       }
@@ -151,6 +161,7 @@ export class OtpStatusManager extends EventEmitter {
         // Successfully released
         this.currentStatus = {
           status: OtpStatusValue.Released,
+          platform: null,
           jobId: null,
           lastUpdated: result.updatedAt,
         };
@@ -191,6 +202,7 @@ export class OtpStatusManager extends EventEmitter {
       if (result) {
         this.currentStatus = {
           status: OtpStatusValue.Released,
+          platform: null,
           jobId: null,
           lastUpdated: result.updatedAt,
         };
@@ -254,6 +266,7 @@ export class OtpStatusManager extends EventEmitter {
         const oldStatus = this.currentStatus?.status;
         this.currentStatus = {
           status: otpStatusDoc.status,
+          platform: otpStatusDoc.platform || null,
           jobId: otpStatusDoc.job_id?.toString() || null,
           lastUpdated: otpStatusDoc.updatedAt,
         };
@@ -263,7 +276,11 @@ export class OtpStatusManager extends EventEmitter {
           if (this.currentStatus.status === OtpStatusValue.Released) {
             this.emit("otpReleased", this.currentStatus.jobId);
           } else {
-            this.emit("otpReserved", this.currentStatus.jobId);
+            this.emit(
+              "otpReserved",
+              this.currentStatus.jobId,
+              this.currentStatus.platform
+            );
           }
         }
       }

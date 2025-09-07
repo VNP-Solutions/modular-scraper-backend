@@ -2,6 +2,7 @@ import { EventEmitter } from "events";
 import path from "path";
 import { fileURLToPath } from "url";
 import { Worker } from "worker_threads";
+import { OtpPlatform } from "../models/otp-status.model.js";
 import { otpStatusManager, OtpStatusManager } from "./otp-status-manager.js";
 import {
   WorkerInfo,
@@ -409,6 +410,26 @@ export class OtpAwareWorkerPool extends EventEmitter {
     );
   }
 
+  private getJobPlatform(jobData: WorkerJobData): OtpPlatform {
+    // Determine platform based on job type
+    if (
+      [
+        "property-run",
+        "graphql-run",
+        "rerun-failed",
+        "reservation-run",
+      ].includes(jobData.jobType)
+    ) {
+      return OtpPlatform.Expedia;
+    } else if (
+      ["agoda-property-run", "agoda-rerun-failed"].includes(jobData.jobType)
+    ) {
+      return OtpPlatform.Agoda;
+    }
+    // Default to Expedia for unknown job types
+    return OtpPlatform.Expedia;
+  }
+
   private async tryAssignJob(queuedJob: QueuedJob): Promise<void> {
     // Check worker availability
     const availableWorker = this.getAvailableWorker();
@@ -434,8 +455,10 @@ export class OtpAwareWorkerPool extends EventEmitter {
     // Both worker and OTP (if needed) are available
     if (queuedJob.requiresOtp) {
       // Reserve OTP before assigning job
+      const platform = this.getJobPlatform(queuedJob.jobData);
       const otpReserved = await this.otpManager.reserveOtp(
-        queuedJob.jobData.jobId
+        queuedJob.jobData.jobId,
+        platform
       );
       if (!otpReserved) {
         // Failed to reserve OTP (race condition), add to queue
@@ -544,8 +567,10 @@ export class OtpAwareWorkerPool extends EventEmitter {
     this.processQueue();
   }
 
-  private onOtpReserved(jobId: string | null): void {
-    console.log(`OTP reserved event received for job ${jobId}`);
+  private onOtpReserved(jobId: string | null, platform?: OtpPlatform): void {
+    console.log(
+      `OTP reserved event received for job ${jobId} on platform ${platform}`
+    );
   }
 
   public getStatus(): WorkerPoolStatus {
