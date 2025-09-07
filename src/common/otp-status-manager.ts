@@ -166,12 +166,12 @@ export class OtpStatusManager extends EventEmitter {
           lastUpdated: result.updatedAt,
         };
 
-        console.log(`OTP released by job ${jobId}`);
+        console.log(`\x1b[32mOTP released by job ${jobId}\x1b[0m`);
         this.emit("otpReleased", jobId);
         return true;
       } else {
         console.log(
-          `Failed to release OTP for job ${jobId} - not currently owner`
+          `\x1b[33mFailed to release OTP for job ${jobId} - not currently owner\x1b[0m`
         );
         return false;
       }

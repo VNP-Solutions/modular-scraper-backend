@@ -151,7 +151,7 @@ export class OtpAwareWorkerPool extends EventEmitter {
     switch (message.type) {
       case "job-start":
         console.log(
-          `OTP-aware worker ${workerId} started job ${message.jobId}`
+          `\x1b[32mOTP-aware worker ${workerId} started job ${message.jobId}\x1b[0m`
         );
         this.emit("jobStart", {
           workerId,
@@ -167,7 +167,7 @@ export class OtpAwareWorkerPool extends EventEmitter {
         }
 
         console.log(
-          `OTP-aware worker ${workerId} progress for job ${message.jobId}:`,
+          `\x1b[32mOTP-aware worker ${workerId} progress for job ${message.jobId}:\x1b[0m`,
           message.data
         );
         this.emit("jobProgress", {
@@ -437,7 +437,7 @@ export class OtpAwareWorkerPool extends EventEmitter {
       // No workers available, add to queue
       this.jobQueue.push(queuedJob);
       console.log(
-        `Job ${queuedJob.jobData.jobId} queued (no workers). Queue size: ${this.jobQueue.length}`
+        `\x1b[33mJob ${queuedJob.jobData.jobId} queued (no workers). Queue size: ${this.jobQueue.length}\x1b[0m`
       );
       return;
     }
@@ -447,7 +447,7 @@ export class OtpAwareWorkerPool extends EventEmitter {
       // OTP not available, add to queue
       this.jobQueue.push(queuedJob);
       console.log(
-        `Job ${queuedJob.jobData.jobId} queued (OTP occupied). Queue size: ${this.jobQueue.length}`
+        `\x1b[33mJob ${queuedJob.jobData.jobId} queued (OTP occupied). Queue size: ${this.jobQueue.length}\x1b[0m`
       );
       return;
     }
@@ -511,7 +511,7 @@ export class OtpAwareWorkerPool extends EventEmitter {
     try {
       activeWorker.worker.postMessage(jobData);
       console.log(
-        `Job ${jobData.jobId} assigned to OTP-aware worker ${workerId}`
+        `\x1b[32mJob ${jobData.jobId} assigned to OTP-aware worker ${workerId}\x1b[0m`
       );
     } catch (error) {
       console.error(
