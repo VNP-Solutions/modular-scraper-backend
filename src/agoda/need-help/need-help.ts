@@ -839,25 +839,48 @@ async function cleanupCsvFiles(
       }
     }
 
-    // Clean up import folder - look for property-name-agoda-id.csv pattern
+    // Clean up import folder - look for EXACT property-name-agoda-id.csv pattern (job-specific)
     const importDir = path.resolve(process.cwd(), "import");
     if (fs.existsSync(importDir)) {
       const importFiles = fs.readdirSync(importDir);
 
       for (const file of importFiles) {
         if (file.endsWith(".csv") && !file.includes(".gitkeep")) {
-          // Check if it's a property-agoda-id.csv format
-          if (agodaId && file.includes(agodaId)) {
-            const filePath = path.join(importDir, file);
-            try {
-              fs.unlinkSync(filePath);
-              await dualLogInfo(`✅ Deleted import file: ${file}`, { jobId });
-            } catch (error) {
-              await dualLogError(
-                `Failed to delete import file: ${file}`,
-                error,
-                { jobId }
-              );
+          // Only delete files that match EXACT pattern: {propertyName}-{agodaId}.csv
+          // This prevents deleting other concurrent jobs' files
+          if (agodaId && propertyName) {
+            const expectedFileName = `${propertyName
+              .toLowerCase()
+              .replace(/[^\w\s-]/g, "")
+              .replace(/\s+/g, "-")}-${agodaId}.csv`;
+            if (file.toLowerCase() === expectedFileName.toLowerCase()) {
+              const filePath = path.join(importDir, file);
+              try {
+                fs.unlinkSync(filePath);
+                await dualLogInfo(`✅ Deleted import file: ${file}`, { jobId });
+              } catch (error) {
+                await dualLogError(
+                  `Failed to delete import file: ${file}`,
+                  error,
+                  { jobId }
+                );
+              }
+            }
+          } else if (agodaId && !propertyName) {
+            // Fallback: only if file contains agodaId AND ends with it (more specific)
+            const agodaPattern = new RegExp(`.*-${agodaId}\\.csv$`, "i");
+            if (agodaPattern.test(file)) {
+              const filePath = path.join(importDir, file);
+              try {
+                fs.unlinkSync(filePath);
+                await dualLogInfo(`✅ Deleted import file: ${file}`, { jobId });
+              } catch (error) {
+                await dualLogError(
+                  `Failed to delete import file: ${file}`,
+                  error,
+                  { jobId }
+                );
+              }
             }
           }
         }
