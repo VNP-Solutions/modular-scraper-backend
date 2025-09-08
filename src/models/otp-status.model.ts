@@ -5,9 +5,15 @@ export enum OtpStatusValue {
   Released = "Released",
 }
 
+export enum OtpPlatform {
+  Expedia = "expedia",
+  Agoda = "agoda",
+}
+
 export interface IOtpStatus extends Document {
   _id: Types.ObjectId;
   status: OtpStatusValue;
+  platform?: OtpPlatform;
   job_id?: Types.ObjectId;
   createdAt: Date;
   updatedAt: Date;
@@ -20,10 +26,15 @@ const OtpStatusSchema = new Schema<IOtpStatus>(
       enum: Object.values(OtpStatusValue),
       required: true,
     },
+    platform: {
+      type: String,
+      enum: Object.values(OtpPlatform),
+      required: false,
+    },
     job_id: {
       type: Schema.Types.ObjectId,
       ref: "Job",
-      required: true,
+      required: false,
     },
   },
   {

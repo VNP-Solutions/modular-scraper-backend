@@ -1,6 +1,7 @@
 import dotenv from "dotenv";
 import mongoose from "mongoose";
 import { parentPort } from "worker_threads";
+import { otpCompletionNotifier } from "../common/otp-completion-notifier.js";
 import { WorkerJobData, WorkerMessage } from "../common/worker-types.js";
 
 // Import the main functions
@@ -29,6 +30,7 @@ class ScrapingWorker {
 
   constructor() {
     this.setupEventHandlers();
+    this.setupOtpCompletionListener();
     this.initializeDatabase();
   }
 
@@ -76,6 +78,28 @@ class ScrapingWorker {
       console.error("Worker: MongoDB connection error:", error);
       throw error;
     }
+  }
+
+  private setupOtpCompletionListener(): void {
+    // Listen for OTP completion notifications
+    otpCompletionNotifier.onOtpCompleted((jobId: string) => {
+      // Only send notification if this worker is handling the job
+      if (this.currentJobId === jobId) {
+        console.log(
+          `Worker received OTP completion notification for job ${jobId}`
+        );
+        this.sendMessage({
+          type: "job-progress",
+          jobId: jobId,
+          data: {
+            otpCompleted: true,
+            message: "OTP verification completed, releasing OTP for other jobs",
+            timestamp: new Date(),
+          },
+          timestamp: new Date(),
+        });
+      }
+    });
   }
 
   private sendMessage(message: WorkerMessage): void {
@@ -927,6 +951,9 @@ class ScrapingWorker {
     console.log("Worker: Shutting down...");
 
     try {
+      // Clean up OTP completion listener
+      otpCompletionNotifier.removeAllListeners();
+
       // Stop any current scraping
       scrapingStateManager.stopScraping();
 
