@@ -1,6 +1,7 @@
 import bodyParser from "body-parser";
 import cors from "cors";
 import express from "express";
+import { emailNotifier } from "../common/email-notifier.js";
 import createError from "../common/error.js";
 import { progressManager } from "../common/progress-manager.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
@@ -8,12 +9,17 @@ import { workerPool } from "../common/worker-pool.js";
 import { JobType, WorkerJobData } from "../common/worker-types.js";
 import { specs, swaggerUi } from "../config/swagger.js";
 import { getAccess, getOauth2Callback } from "../get-access/access.js";
-import { Job, JobStatus } from "../models/job.model.js";
-import { jobService } from "../services/job.service.js";
-import { propertyCredentialsService } from "../services/job-credentials.service.js";
+import { JobStatus } from "../models/job.model.js";
+import {
+  CronConfig,
+  ScheduleType,
+  TimeUnit,
+  bookingTrustCron,
+} from "../services/booking-trust-cron.service.js";
 import { bookingTrustScheduler } from "../services/booking-trust-scheduler.service.js";
-import { CronConfig, ScheduleType, TimeUnit, bookingTrustCron } from "../services/booking-trust-cron.service.js";
-import { emailNotifier } from "../common/email-notifier.js";
+import { TwoCaptchaSolver } from "../services/captcha-solver.js";
+import { propertyCredentialsService } from "../services/job-credentials.service.js";
+import { jobService } from "../services/job.service.js";
 
 const app = express();
 
@@ -59,7 +65,6 @@ app.get("/", (req, res, next) => {
   }
 });
 
-
 app.get("/auth", getAccess as any);
 
 app.get("/oauth2callback", getOauth2Callback as any);
@@ -68,41 +73,101 @@ app.get("/oauth2callback", getOauth2Callback as any);
 app.get("/test-captcha-email", async (req, res) => {
   try {
     const testData = {
-      jobId: 'test-captcha-job-123',
-      jobName: 'Booking.com CAPTCHA Test',
-      propertyName: 'Test Hotel Property',
-      expediaId: 'TEST123',
-      errorMessage: 'CAPTCHA detected during Booking.com login - Manual intervention required',
+      jobId: "test-captcha-job-123",
+      jobName: "Booking.com CAPTCHA Test",
+      propertyName: "Test Hotel Property",
+      expediaId: "TEST123",
+      errorMessage:
+        "CAPTCHA detected during Booking.com login - Manual intervention required",
       errorDetails: {
-        sessionUrl: 'https://chrome.browserless.io/session/test-session-id',
-        currentUrl: 'https://admin.booking.com/signin',
+        sessionUrl: "https://chrome.browserless.io/session/test-session-id",
+        currentUrl: "https://admin.booking.com/signin",
         timestamp: new Date().toISOString(),
-        instructions: 'Please visit the session URL to solve the CAPTCHA. The system will automatically detect when solved.',
+        instructions:
+          "Please visit the session URL to solve the CAPTCHA. The system will automatically detect when solved.",
       },
       timestamp: new Date(),
-      stage: 'Login - CAPTCHA Challenge',
+      stage: "Login - CAPTCHA Challenge",
     };
 
-    const recipients = process.env.CAPTCHA_RECIPIENTS 
-      ? process.env.CAPTCHA_RECIPIENTS.split(',').map(email => email.trim())
-      : ['admin@vnpsolutions.com', 'developer@vnpsolutions.com'];
-    
+    const recipients = process.env.CAPTCHA_RECIPIENTS
+      ? process.env.CAPTCHA_RECIPIENTS.split(",").map((email) => email.trim())
+      : ["admin@vnpsolutions.com", "developer@vnpsolutions.com"];
+
     await emailNotifier.sendErrorEmail(recipients, testData);
-    
+
     res.json({
       success: true,
-      message: 'CAPTCHA test email sent successfully!',
+      message: "CAPTCHA test email sent successfully!",
       recipients: recipients,
-      mailhogUrl: 'http://localhost:8025'
+      mailhogUrl: "http://localhost:8025",
     });
-  } catch (error:any) {
-    console.error('Email test error:', error);
+  } catch (error: any) {
+    console.error("Email test error:", error);
     res.status(500).json({
       success: false,
-      error: error.message
+      error: error.message,
     });
   }
 });
+
+// Test endpoint for 2captcha integration
+app.post("/test-2captcha", (async (
+  req: express.Request,
+  res: express.Response
+) => {
+  try {
+    const { sitekey, pageUrl, type = "recaptcha", iv, context } = req.body;
+
+    if (!process.env.TWOCAPTCHA_API_KEY) {
+      return res.status(400).json({
+        success: false,
+        error: "2captcha API key not configured",
+      });
+    }
+
+    const solver = new TwoCaptchaSolver(process.env.TWOCAPTCHA_API_KEY);
+    const balance = await solver.getBalance();
+
+    if (balance < 0.01) {
+      return res.status(400).json({
+        success: false,
+        error: "Insufficient 2captcha balance",
+        balance,
+      });
+    }
+
+    let result;
+    if (type === "recaptcha" && sitekey && pageUrl) {
+      result = await solver.solveRecaptchaV2(sitekey, pageUrl);
+    } else if (type === "hcaptcha" && sitekey && pageUrl) {
+      result = await solver.solveHCaptcha(sitekey, pageUrl);
+    } else if (type === "aws-waf" && sitekey && pageUrl && iv && context) {
+      result = await solver.solveAWSWAFCaptcha(sitekey, pageUrl, iv, context);
+    } else {
+      return res.status(400).json({
+        success: false,
+        error:
+          "Invalid parameters. Need sitekey and pageUrl for recaptcha/hcaptcha, or sitekey, pageUrl, iv, and context for aws-waf",
+      });
+    }
+
+    res.json({
+      success: result.success,
+      solution: result.success
+        ? result.solution?.substring(0, 50) + "..."
+        : undefined,
+      error: result.error,
+      cost: result.cost,
+      balance,
+    });
+  } catch (error: any) {
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+}) as any);
 
 // API to get scraping status
 app.get(
@@ -125,7 +190,6 @@ app.get(
     }
   }
 );
-
 
 // API to pause scraping
 app.post(
@@ -556,7 +620,6 @@ app.post("/api/expedia/rerun-failed-job", (async (
   }
 }) as any);
 
-
 app.post("/api/expedia/property-run-job", (async (
   req: express.Request,
   res: express.Response
@@ -693,7 +756,6 @@ app.post("/api/expedia/property-run-job", (async (
   }
 }) as any);
 
-
 app.post("/api/expedia/reservation-run-job", (async (
   req: express.Request,
   res: express.Response
@@ -799,9 +861,12 @@ app.post("/api/booking/property-run-job", (async (
     }
 
     // 2. Get booking_id from job's property
-    console.log(`Getting booking_id and job details for booking job ${jobId}...`);
+    console.log(
+      `Getting booking_id and job details for booking job ${jobId}...`
+    );
     const jobData = await jobService.getBookingIdFromJob(jobId);
-    const bookingCredentials = await propertyCredentialsService.getBookingCredentialsFromJob(jobId);
+    const bookingCredentials =
+      await propertyCredentialsService.getBookingCredentialsFromJob(jobId);
 
     if (!jobData || !jobData.bookingId) {
       return res.status(400).json({
@@ -810,7 +875,10 @@ app.post("/api/booking/property-run-job", (async (
       });
     }
 
-    if (!bookingCredentials?.bookingUsername || !bookingCredentials?.bookingPassword) {
+    if (
+      !bookingCredentials?.bookingUsername ||
+      !bookingCredentials?.bookingPassword
+    ) {
       return res.status(400).json({
         status: 400,
         message: `Cannot retrieve valid bookingUsername or bookingPassword for job ${jobId}. Property may not have booking credentials assigned.`,
@@ -927,7 +995,10 @@ app.post("/api/booking/stop-job", (async (
     }
 
     // 3. Update job status to Failed
-    const updatedJob = await jobService.updateJobStatus(jobId, JobStatus.Failed);
+    const updatedJob = await jobService.updateJobStatus(
+      jobId,
+      JobStatus.Failed
+    );
     if (!updatedJob) {
       return res.status(500).json({
         status: 500,
@@ -1007,7 +1078,8 @@ app.post("/api/booking/rerun-failed-job", (async (
     // 3. Get booking_id and credentials from job's property
     console.log(`Getting booking_id for failed job rerun ${jobId}...`);
     const jobData = await jobService.getBookingIdFromJob(jobId);
-    const bookingCredentials = await propertyCredentialsService.getBookingCredentialsFromJob(jobId);
+    const bookingCredentials =
+      await propertyCredentialsService.getBookingCredentialsFromJob(jobId);
 
     if (!jobData || !jobData.bookingId) {
       return res.status(400).json({
@@ -1016,7 +1088,10 @@ app.post("/api/booking/rerun-failed-job", (async (
       });
     }
 
-    if (!bookingCredentials?.bookingUsername || !bookingCredentials?.bookingPassword) {
+    if (
+      !bookingCredentials?.bookingUsername ||
+      !bookingCredentials?.bookingPassword
+    ) {
       return res.status(400).json({
         status: 400,
         message: `Cannot retrieve valid booking credentials for job ${jobId}. Property may not have booking username or password assigned.`,
@@ -1081,7 +1156,10 @@ app.post("/api/booking/rerun-failed-job", (async (
         });
       }
     } catch (workerError) {
-      console.error(`Worker error for booking rerun job ${jobId}:`, workerError);
+      console.error(
+        `Worker error for booking rerun job ${jobId}:`,
+        workerError
+      );
 
       // Ensure job is marked as failed
       try {
@@ -1095,10 +1173,7 @@ app.post("/api/booking/rerun-failed-job", (async (
       return res.status(500).json({
         status: 500,
         message: "Worker execution failed for booking job rerun",
-        error:
-          workerError instanceof Error
-            ? workerError.message
-            : workerError,
+        error: workerError instanceof Error ? workerError.message : workerError,
         jobId,
         retryAttempt: updatedJob.retries_attempted,
       });
@@ -1165,7 +1240,6 @@ app.get("/api/jobs/:jobId/progress", (async (
     });
   }
 }) as any);
-
 
 app.get("/api/jobs/:jobId/items", (async (
   req: express.Request,
@@ -1294,7 +1368,7 @@ app.post("/api/booking/trust-scheduler/run", (async (
 ) => {
   try {
     const stats = await bookingTrustScheduler.runTrustScheduler();
-    
+
     res.status(200).json({
       status: 200,
       message: "Booking trust scheduler completed successfully",
@@ -1310,27 +1384,27 @@ app.post("/api/booking/trust-scheduler/run", (async (
   }
 }) as any);
 
-app.get("/api/booking/trust-scheduler/status", (
-  req: express.Request,
-  res: express.Response
-) => {
-  try {
-    const status = bookingTrustScheduler.getSchedulerStatus();
-    
-    res.status(200).json({
-      status: 200,
-      message: "Trust scheduler status retrieved successfully",
-      data: status,
-    });
-  } catch (err: any) {
-    console.error("Error in /api/booking/trust-scheduler/status:", err);
-    res.status(500).json({
-      status: 500,
-      message: "Error retrieving trust scheduler status",
-      error: err.message,
-    });
+app.get(
+  "/api/booking/trust-scheduler/status",
+  (req: express.Request, res: express.Response) => {
+    try {
+      const status = bookingTrustScheduler.getSchedulerStatus();
+
+      res.status(200).json({
+        status: 200,
+        message: "Trust scheduler status retrieved successfully",
+        data: status,
+      });
+    } catch (err: any) {
+      console.error("Error in /api/booking/trust-scheduler/status:", err);
+      res.status(500).json({
+        status: 500,
+        message: "Error retrieving trust scheduler status",
+        error: err.message,
+      });
+    }
   }
-});
+);
 
 // API to manually verify a specific property's trust status
 app.post("/api/booking/trust-scheduler/verify/:propertyId", (async (
@@ -1339,23 +1413,28 @@ app.post("/api/booking/trust-scheduler/verify/:propertyId", (async (
 ) => {
   try {
     const { propertyId } = req.params;
-    
+
     if (!propertyId) {
       return res.status(400).json({
         status: 400,
         message: "Property ID is required",
       });
     }
-    
-    const result = await bookingTrustScheduler.verifySpecificProperty(propertyId);
-    
+
+    const result = await bookingTrustScheduler.verifySpecificProperty(
+      propertyId
+    );
+
     res.status(200).json({
       status: 200,
       message: "Property trust verification completed",
       result,
     });
   } catch (err: any) {
-    console.error(`Error in /api/booking/trust-scheduler/verify/${req.params.propertyId}:`, err);
+    console.error(
+      `Error in /api/booking/trust-scheduler/verify/${req.params.propertyId}:`,
+      err
+    );
     res.status(500).json({
       status: 500,
       message: "Error verifying property trust status",
@@ -1370,14 +1449,15 @@ app.get("/api/booking/trust-scheduler/eligible-properties", (async (
   res: express.Response
 ) => {
   try {
-    const properties = await bookingTrustScheduler.getPropertiesForTrustVerification();
-    
+    const properties =
+      await bookingTrustScheduler.getPropertiesForTrustVerification();
+
     res.status(200).json({
       status: 200,
       message: "Eligible properties retrieved successfully",
       data: {
         totalProperties: properties.length,
-        properties: properties.map(p => ({
+        properties: properties.map((p) => ({
           id: p._id,
           property_name: p.property_name,
           booking_id: p.booking_id,
@@ -1387,7 +1467,10 @@ app.get("/api/booking/trust-scheduler/eligible-properties", (async (
       },
     });
   } catch (err: any) {
-    console.error("Error in /api/booking/trust-scheduler/eligible-properties:", err);
+    console.error(
+      "Error in /api/booking/trust-scheduler/eligible-properties:",
+      err
+    );
     res.status(500).json({
       status: 500,
       message: "Error retrieving eligible properties",
@@ -1403,12 +1486,12 @@ app.post("/api/booking/trust-scheduler/cron/configuration", (async (
 ) => {
   try {
     const { enabled, schedule, timezone } = req.body;
-    
+
     // Validate required fields
     if (!schedule || !schedule.type || schedule.value === undefined) {
       return res.status(400).json({
         status: 400,
-        message: "Schedule with type and value is required"
+        message: "Schedule with type and value is required",
       });
     }
 
@@ -1416,30 +1499,37 @@ app.post("/api/booking/trust-scheduler/cron/configuration", (async (
     if (!Object.values(ScheduleType).includes(schedule.type)) {
       return res.status(400).json({
         status: 400,
-        message: `Invalid schedule type. Must be one of: ${Object.values(ScheduleType).join(', ')}`
+        message: `Invalid schedule type. Must be one of: ${Object.values(
+          ScheduleType
+        ).join(", ")}`,
       });
     }
 
     // Validate unit for interval type
-    if (schedule.type === ScheduleType.INTERVAL && (!schedule.unit || !Object.values(TimeUnit).includes(schedule.unit))) {
+    if (
+      schedule.type === ScheduleType.INTERVAL &&
+      (!schedule.unit || !Object.values(TimeUnit).includes(schedule.unit))
+    ) {
       return res.status(400).json({
         status: 400,
-        message: `Invalid unit for interval. Must be one of: ${Object.values(TimeUnit).join(', ')}`
+        message: `Invalid unit for interval. Must be one of: ${Object.values(
+          TimeUnit
+        ).join(", ")}`,
       });
     }
 
     // Validate specific time format
     if (schedule.type === ScheduleType.SPECIFIC) {
-      if (typeof schedule.value !== 'string') {
+      if (typeof schedule.value !== "string") {
         return res.status(400).json({
           status: 400,
-          message: "Specific time must be a string in HH:MM format"
+          message: "Specific time must be a string in HH:MM format",
         });
       }
       if (!/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(schedule.value)) {
         return res.status(400).json({
           status: 400,
-          message: "Invalid time format. Use HH:MM format (e.g., '09:00')"
+          message: "Invalid time format. Use HH:MM format (e.g., '09:00')",
         });
       }
     }
@@ -1447,21 +1537,21 @@ app.post("/api/booking/trust-scheduler/cron/configuration", (async (
     const config: CronConfig = {
       enabled: enabled !== undefined ? enabled : true,
       schedule,
-      timezone: timezone || "UTC"
+      timezone: timezone || "UTC",
     };
 
     bookingTrustCron.configure(config);
-    
+
     res.status(200).json({
       status: 200,
       message: "Cron configuration updated successfully",
-      data: config
+      data: config,
     });
   } catch (err: any) {
     res.status(400).json({
       status: 400,
       message: "Error updating configuration",
-      error: err.message
+      error: err.message,
     });
   }
 }) as any);
@@ -1476,13 +1566,13 @@ app.get("/api/booking/trust-scheduler/cron/configuration", (async (
     res.status(200).json({
       status: 200,
       message: "Cron configuration retrieved successfully",
-      data: config
+      data: config,
     });
   } catch (err: any) {
     res.status(500).json({
       status: 500,
       message: "Error retrieving configuration",
-      error: err.message
+      error: err.message,
     });
   }
 }) as any);
@@ -1494,56 +1584,56 @@ app.post("/api/booking/trust-scheduler/cron/enabled", (async (
 ) => {
   try {
     const { enabled } = req.body;
-    
-    if (typeof enabled !== 'boolean') {
+
+    if (typeof enabled !== "boolean") {
       return res.status(400).json({
         status: 400,
-        message: "Enabled parameter is required and must be a boolean"
+        message: "Enabled parameter is required and must be a boolean",
       });
     }
 
     const config = bookingTrustCron.getConfiguration();
     config.enabled = enabled;
     bookingTrustCron.configure(config);
-    
+
     res.status(200).json({
       status: 200,
-      message: `Cron job ${enabled ? 'enabled' : 'disabled'} successfully`,
+      message: `Cron job ${enabled ? "enabled" : "disabled"} successfully`,
       data: {
-        enabled: config.enabled
-      }
+        enabled: config.enabled,
+      },
     });
   } catch (err: any) {
     res.status(500).json({
       status: 500,
       message: "Error updating cron job status",
-      error: err.message
+      error: err.message,
     });
   }
 }) as any);
 
 // API to get booking trust cron status
-app.get("/api/booking/trust-scheduler/cron/status", (
-  req: express.Request,
-  res: express.Response
-) => {
-  try {
-    const cronStatus = bookingTrustCron.getStatus();
-    
-    res.status(200).json({
-      status: 200,
-      message: "Trust scheduler cron status retrieved successfully",
-      data: cronStatus
-    });
-  } catch (err: any) {
-    console.error("Error in /api/booking/trust-scheduler/cron/status:", err);
-    res.status(500).json({
-      status: 500,
-      message: "Error retrieving cron service status",
-      error: err.message,
-    });
+app.get(
+  "/api/booking/trust-scheduler/cron/status",
+  (req: express.Request, res: express.Response) => {
+    try {
+      const cronStatus = bookingTrustCron.getStatus();
+
+      res.status(200).json({
+        status: 200,
+        message: "Trust scheduler cron status retrieved successfully",
+        data: cronStatus,
+      });
+    } catch (err: any) {
+      console.error("Error in /api/booking/trust-scheduler/cron/status:", err);
+      res.status(500).json({
+        status: 500,
+        message: "Error retrieving cron service status",
+        error: err.message,
+      });
+    }
   }
-});
+);
 
 // API to manually trigger cron verification (for testing)
 app.post("/api/booking/trust-scheduler/cron/trigger", (async (
@@ -1552,7 +1642,7 @@ app.post("/api/booking/trust-scheduler/cron/trigger", (async (
 ) => {
   try {
     await bookingTrustCron.runManual();
-    
+
     res.status(200).json({
       status: 200,
       message: "Manual booking trust verification triggered successfully",

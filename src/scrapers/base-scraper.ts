@@ -1,11 +1,11 @@
 import { Browser, Page } from "puppeteer";
-import { scrapingStateManager } from "../common/scraping-state.js";
-import { dualLogError, dualLogInfo } from "../common/log-helper.js";
-import { 
-  BookingErrorType, 
-  BookingScrapingPhase, 
-  getBookingErrorDescription 
+import {
+  BookingErrorType,
+  BookingScrapingPhase,
+  getBookingErrorDescription,
 } from "../common/booking-error-types.js";
+import { dualLogError, dualLogInfo } from "../common/log-helper.js";
+import { scrapingStateManager } from "../common/scraping-state.js";
 
 export interface LoginCredentials {
   email: string;
@@ -13,10 +13,13 @@ export interface LoginCredentials {
 }
 
 export interface CaptchaHandlerOptions {
-  type: 'manual' | 'automatic' | 'browserless_ui';
+  type: "manual" | "automatic" | "browserless_ui" | "2captcha";
   timeout?: number;
   sessionUrl?: string;
   page?: Page;
+  apiKey?: string;
+  sitekey?: string;
+  invisible?: boolean;
 }
 
 export interface TwoFactorAuthOptions {
@@ -58,8 +61,13 @@ export abstract class BaseScraper {
   }
 
   // Abstract methods that each platform must implement
-  abstract setupBrowser(jobId?: string): Promise<{ browser: Browser; page: Page }>;
-  abstract login(credentials: LoginCredentials, propertyId?: string): Promise<void>;
+  abstract setupBrowser(
+    jobId?: string
+  ): Promise<{ browser: Browser; page: Page }>;
+  abstract login(
+    credentials: LoginCredentials,
+    propertyId?: string
+  ): Promise<void>;
   abstract handleCaptcha(options?: CaptchaHandlerOptions): Promise<boolean>;
   abstract handle2FA(options?: TwoFactorAuthOptions): Promise<boolean>;
   abstract searchProperty(propertyId: string): Promise<boolean>;
@@ -76,24 +84,29 @@ export abstract class BaseScraper {
         const jobId = this.jobId || `trust_verify-${this.propertyIdForDb}`;
         screenshotFilename = `scraping_last_step_${jobId}.png`;
       }
-      
-      await this.page.screenshot({ path: screenshotFilename as `${string}.png` });
+
+      await this.page.screenshot({
+        path: screenshotFilename as `${string}.png`,
+      });
       console.log(`Screenshot saved: ${screenshotFilename}`);
     }
   }
 
   protected async delay(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms));
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   protected async logInfo(message: string, data?: any): Promise<void> {
     const timestamp = new Date().toISOString();
-    console.log(`[${timestamp}] [${this.platform}] ${message}`, data || '');
+    console.log(`[${timestamp}] [${this.platform}] ${message}`, data || "");
   }
 
   protected async logError(message: string, error?: any): Promise<void> {
     const timestamp = new Date().toISOString();
-    console.error(`[${timestamp}] [${this.platform}] ERROR: ${message}`, error || '');
+    console.error(
+      `[${timestamp}] [${this.platform}] ERROR: ${message}`,
+      error || ""
+    );
   }
 
   public setPropertyIdForDb(propertyId: string): void {
@@ -105,12 +118,12 @@ export abstract class BaseScraper {
     try {
       this.jobId = params.jobId;
       this.propertyIdForDb = params.propertyIdForDb;
-      
-      await dualLogInfo('Starting scraping process', {
-        platform: this.platform, 
+
+      await dualLogInfo("Starting scraping process", {
+        platform: this.platform,
         jobId: params.jobId,
         propertyId: params.propertyId,
-        action: 'execute_scraping'
+        action: "execute_scraping",
       });
 
       // Check if scraping should continue before starting
@@ -120,15 +133,15 @@ export abstract class BaseScraper {
           getBookingErrorDescription(BookingErrorType.SCRAPING_STOPPED),
           {
             errorType: BookingErrorType.SCRAPING_STOPPED,
-            error: new Error('Scraping was stopped before starting'),
+            error: new Error("Scraping was stopped before starting"),
             phase: BookingScrapingPhase.NAVIGATION,
             jobId: params.jobId,
             propertyId: params.propertyId,
             platform: this.platform,
-            action: 'execute_scraping'
+            action: "execute_scraping",
           }
         );
-        throw new Error('Scraping was stopped before starting');
+        throw new Error("Scraping was stopped before starting");
       }
 
       // Step 1: Setup browser
@@ -139,7 +152,7 @@ export abstract class BaseScraper {
       // Step 2: Login if credentials provided
       if (params.credentials) {
         this.credentials = params.credentials;
-        
+
         // Check if scraping should continue before login
         await scrapingStateManager.waitWhilePaused();
         if (!scrapingStateManager.isRunning()) {
@@ -147,46 +160,46 @@ export abstract class BaseScraper {
             getBookingErrorDescription(BookingErrorType.SCRAPING_STOPPED),
             {
               errorType: BookingErrorType.SCRAPING_STOPPED,
-              error: new Error('Scraping was stopped before login'),
+              error: new Error("Scraping was stopped before login"),
               phase: BookingScrapingPhase.LOGIN,
               jobId: params.jobId,
               propertyId: params.propertyId,
               platform: this.platform,
-              action: 'login'
+              action: "login",
             }
           );
-          throw new Error('Scraping was stopped before login');
+          throw new Error("Scraping was stopped before login");
         }
-        
-        await dualLogInfo('Performing login', {
+
+        await dualLogInfo("Performing login", {
           platform: this.platform,
           jobId: params.jobId,
           propertyId: params.propertyId,
-          action: 'login'
+          action: "login",
         });
         await this.login(params.credentials, params.propertyId);
-        
+
         // Handle captcha if needed
         const captchaHandled = await this.handleCaptcha();
         if (!captchaHandled) {
-          await this.logError('Captcha handling failed');
+          await this.logError("Captcha handling failed");
         }
 
         // Handle 2FA if needed
         const twoFAHandled = await this.handle2FA();
         if (!twoFAHandled) {
-          await this.logInfo('2FA not required or skipped');
+          await this.logInfo("2FA not required or skipped");
         }
       }
 
       // Step 3: Scrape data
-      await dualLogInfo('Starting data scraping', {
+      await dualLogInfo("Starting data scraping", {
         platform: this.platform,
         jobId: params.jobId,
         propertyId: params.propertyId,
-        action: 'scrape_data'
+        action: "scrape_data",
       });
-      
+
       // Check if scraping should continue before data scraping
       await scrapingStateManager.waitWhilePaused();
       if (!scrapingStateManager.isRunning()) {
@@ -194,59 +207,62 @@ export abstract class BaseScraper {
           getBookingErrorDescription(BookingErrorType.SCRAPING_STOPPED),
           {
             errorType: BookingErrorType.SCRAPING_STOPPED,
-            error: new Error('Scraping was stopped before data scraping'),
+            error: new Error("Scraping was stopped before data scraping"),
             phase: BookingScrapingPhase.NAVIGATION,
             jobId: params.jobId,
             propertyId: params.propertyId,
             platform: this.platform,
-            action: 'scrape_data'
+            action: "scrape_data",
           }
         );
-        throw new Error('Scraping was stopped before data scraping');
+        throw new Error("Scraping was stopped before data scraping");
       }
-      
+
       const result = await this.scrapeData(params);
 
-      await dualLogInfo('Scraping completed successfully', {
+      await dualLogInfo("Scraping completed successfully", {
         platform: this.platform,
         jobId: params.jobId,
         propertyId: params.propertyId,
-        action: 'execute_scraping',
-        success: true
+        action: "execute_scraping",
+        success: true,
       });
       return result;
-
     } catch (error) {
-      await dualLogError('Scraping failed', error, {
+      await dualLogError("Scraping failed", error, {
         platform: this.platform,
         jobId: params.jobId,
         propertyId: params.propertyId,
-        action: 'execute_scraping'
+        action: "execute_scraping",
       });
       await this.takeScreenshot(`${this.platform}-error-${Date.now()}.png`);
-      
+
       // Ensure scraping state manager is stopped on any error
       try {
         scrapingStateManager.stopScraping();
-        await dualLogInfo('Scraping state manager stopped due to error', {
+        await dualLogInfo("Scraping state manager stopped due to error", {
           platform: this.platform,
           jobId: params.jobId,
           propertyId: params.propertyId,
-          action: 'stop_scraping_state'
+          action: "stop_scraping_state",
         });
       } catch (stateError) {
-        await dualLogError('Failed to stop scraping state manager', stateError, {
-          platform: this.platform,
-          jobId: params.jobId,
-          propertyId: params.propertyId,
-          action: 'stop_scraping_state_error'
-        });
+        await dualLogError(
+          "Failed to stop scraping state manager",
+          stateError,
+          {
+            platform: this.platform,
+            jobId: params.jobId,
+            propertyId: params.propertyId,
+            action: "stop_scraping_state_error",
+          }
+        );
       }
-      
+
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Unknown error',
-        screenshots: [`${this.platform}-error-${Date.now()}.png`]
+        error: error instanceof Error ? error.message : "Unknown error",
+        screenshots: [`${this.platform}-error-${Date.now()}.png`],
       };
     } finally {
       // Cleanup
