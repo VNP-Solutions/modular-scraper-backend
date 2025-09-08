@@ -329,6 +329,7 @@ async function cleanDownloadsFolderContent(
 
 /**
  * Clean import folder - removes CSV files matching property-agoda-id pattern
+ * Supports both job-specific folders and main import folder
  * Pattern: {propertyName}-{agodaId}.csv or any CSV containing agodaId
  */
 async function cleanImportFolder(
@@ -345,14 +346,43 @@ async function cleanImportFolder(
   };
 
   try {
-    const importDir = path.resolve(process.cwd(), "import");
+    const baseImportDir = path.resolve(process.cwd(), "import");
 
-    if (!fs.existsSync(importDir)) {
+    if (!fs.existsSync(baseImportDir)) {
       await dualLogInfo("Import directory does not exist, skipping cleanup", {
         jobId: options.jobId,
       });
       return result;
     }
+
+    // Clean job-specific folder first if jobId is provided
+    if (options.jobId) {
+      const jobImportDir = path.join(baseImportDir, options.jobId);
+      if (fs.existsSync(jobImportDir)) {
+        try {
+          // Remove entire job-specific import folder
+          fs.rmSync(jobImportDir, { recursive: true, force: true });
+          await dualLogInfo(
+            `✅ Deleted job-specific import folder: ${jobImportDir}`,
+            { jobId: options.jobId }
+          );
+          result.cleanedCount = 1; // Count as 1 folder cleaned
+          return result;
+        } catch (error: any) {
+          result.errors.push(
+            `Failed to delete job folder ${jobImportDir}: ${error.message}`
+          );
+          await dualLogError(
+            `Failed to delete job-specific import folder: ${jobImportDir}`,
+            error.message,
+            { jobId: options.jobId }
+          );
+        }
+      }
+    }
+
+    // Fallback to main import folder cleanup (legacy mode)
+    const importDir = baseImportDir;
 
     const files = fs.readdirSync(importDir);
     await dualLogInfo(`Found ${files.length} files in import directory`, {

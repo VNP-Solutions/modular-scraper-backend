@@ -368,13 +368,21 @@ async function exportBookingDataToCsv(
     const sanitizedPropertyName = sanitizeFilename(propertyName);
     const filename = `${sanitizedPropertyName}-${actualAgodaId}.csv`;
 
-    // Ensure import directory exists
-    const importDir = path.resolve(process.cwd(), "import");
+    // Create job-specific import directory for better isolation
+    const baseImportDir = path.resolve(process.cwd(), "import");
+    const importDir = jobId ? path.join(baseImportDir, jobId) : baseImportDir;
+
     if (!fs.existsSync(importDir)) {
       fs.mkdirSync(importDir, { recursive: true });
+      if (jobId) {
+        await dualLogInfo(`Created job-specific import folder: ${importDir}`, {
+          jobId,
+          importDir,
+        });
+      }
     }
 
-    // Write CSV file
+    // Write CSV file to job-specific folder
     const filePath = path.join(importDir, filename);
     fs.writeFileSync(filePath, csvContent, "utf8");
 
