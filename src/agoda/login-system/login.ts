@@ -177,6 +177,17 @@ async function agodaLogin(
       await continueButton.click();
       await dualLogInfo("Continue button clicked successfully!");
 
+      // Take screenshot immediately after continue button click to capture whatever page appears
+      // This is crucial for debugging when the flow doesn't go to expected OTP or email page
+      if (jobId) {
+        await captureAndUploadAgodaScreenshot(
+          page,
+          jobId,
+          "immediately-after-continue-click",
+          "agoda"
+        );
+      }
+
       // Update progress - continue button clicked
       if (jobId) {
         await progressManager.updateJobProgress(
@@ -216,6 +227,17 @@ async function agodaLogin(
       ]);
 
       await dualLogInfo(`Next page result: ${nextPageResult}`);
+
+      // Take screenshot of whatever page is currently showing after email submission
+      // This will capture unexpected pages if the flow doesn't go as expected
+      if (jobId) {
+        await captureAndUploadAgodaScreenshot(
+          page,
+          jobId,
+          `after-email-submit-page-${nextPageResult}`,
+          "agoda"
+        );
+      }
 
       // Handle different login flows based on next page result
       if (nextPageResult === "email-link") {
@@ -296,6 +318,15 @@ async function agodaLogin(
           throw otpError;
         }
       } else {
+        // Take screenshot of unexpected page before throwing error
+        if (jobId) {
+          await captureAndUploadAgodaScreenshot(
+            page,
+            jobId,
+            `unexpected-page-${nextPageResult}`,
+            "agoda"
+          );
+        }
         throw new Error(`Unknown next page result: ${nextPageResult}`);
       }
 
