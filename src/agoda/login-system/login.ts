@@ -202,29 +202,66 @@ async function agodaLogin(
       // Wait for either "check your email" message or OTP form
       await dualLogInfo("Waiting for next page (email link or OTP form)...");
 
-      // Use Promise.race to wait for either outcome
-      const nextPageResult = await Promise.race([
-        // Option 1: Check your email message (for direct link)
-        frame
-          .waitForSelector('div[data-cy="check-your-email"]', {
-            timeout: loadingTimeout,
-          })
-          .then(() => "email-link"),
+      // Start continuous screenshot capture every 3 seconds
+      let screenshotCounter = 0;
+      let screenshotInterval: NodeJS.Timeout | null = null;
 
-        // Option 2: OTP form appears
-        frame
-          .waitForSelector('div[data-cy="unified-auth-otp-form"]', {
-            timeout: loadingTimeout,
-          })
-          .then(() => "otp-form"),
+      if (jobId) {
+        screenshotInterval = setInterval(async () => {
+          screenshotCounter++;
+          try {
+            await captureAndUploadAgodaScreenshot(
+              page,
+              jobId,
+              `waiting-for-selector-${screenshotCounter}`,
+              "agoda"
+            );
+            await dualLogInfo(
+              `📸 Continuous screenshot ${screenshotCounter} taken while waiting for selector`
+            );
+          } catch (screenshotError) {
+            await dualLogError(
+              `Error taking continuous screenshot ${screenshotCounter}:`,
+              screenshotError
+            );
+          }
+        }, 3000); // Every 3 seconds
+      }
 
-        // Option 3: OTP heading appears
-        frame
-          .waitForSelector('h2:has-text("Sign in with OTP")', {
-            timeout: loadingTimeout,
-          })
-          .then(() => "otp-form"),
-      ]);
+      let nextPageResult: string;
+      try {
+        // Use Promise.race to wait for either outcome
+        nextPageResult = await Promise.race([
+          // Option 1: Check your email message (for direct link)
+          frame
+            .waitForSelector('div[data-cy="check-your-email"]', {
+              timeout: loadingTimeout,
+            })
+            .then(() => "email-link"),
+
+          // Option 2: OTP form appears
+          frame
+            .waitForSelector('div[data-cy="unified-auth-otp-form"]', {
+              timeout: loadingTimeout,
+            })
+            .then(() => "otp-form"),
+
+          // Option 3: OTP heading appears
+          frame
+            .waitForSelector('h2:has-text("Sign in with OTP")', {
+              timeout: loadingTimeout,
+            })
+            .then(() => "otp-form"),
+        ]);
+      } finally {
+        // Stop continuous screenshots when selector is found or timeout occurs
+        if (screenshotInterval) {
+          clearInterval(screenshotInterval);
+          await dualLogInfo(
+            `🛑 Stopped continuous screenshots after ${screenshotCounter} screenshots`
+          );
+        }
+      }
 
       await dualLogInfo(`Next page result: ${nextPageResult}`);
 
@@ -439,7 +476,43 @@ async function handleDirectLinkFlow(page: Page, jobId?: string): Promise<void> {
     );
   }
 
-  await new Promise((resolve) => setTimeout(resolve, 30000));
+  // Start continuous screenshot capture every 3 seconds during email wait
+  let emailScreenshotCounter = 0;
+  let emailScreenshotInterval: NodeJS.Timeout | null = null;
+
+  if (jobId) {
+    emailScreenshotInterval = setInterval(async () => {
+      emailScreenshotCounter++;
+      try {
+        await captureAndUploadAgodaScreenshot(
+          page,
+          jobId,
+          `waiting-for-email-link-${emailScreenshotCounter}`,
+          "agoda"
+        );
+        await dualLogInfo(
+          `📸 Email wait screenshot ${emailScreenshotCounter} taken`
+        );
+      } catch (screenshotError) {
+        await dualLogError(
+          `Error taking email wait screenshot ${emailScreenshotCounter}:`,
+          screenshotError
+        );
+      }
+    }, 3000); // Every 3 seconds
+  }
+
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 30000));
+  } finally {
+    // Stop continuous screenshots after 30 second wait
+    if (emailScreenshotInterval) {
+      clearInterval(emailScreenshotInterval);
+      await dualLogInfo(
+        `🛑 Stopped email wait screenshots after ${emailScreenshotCounter} screenshots`
+      );
+    }
+  }
 
   await dualLogInfo("Now fetching sign-in link from email...");
 
@@ -537,7 +610,43 @@ async function handleOtpFlow(
     );
   }
 
-  await new Promise((resolve) => setTimeout(resolve, 30000));
+  // Start continuous screenshot capture every 3 seconds during OTP wait
+  let otpScreenshotCounter = 0;
+  let otpScreenshotInterval: NodeJS.Timeout | null = null;
+
+  if (jobId) {
+    otpScreenshotInterval = setInterval(async () => {
+      otpScreenshotCounter++;
+      try {
+        await captureAndUploadAgodaScreenshot(
+          page,
+          jobId,
+          `waiting-for-otp-email-${otpScreenshotCounter}`,
+          "agoda"
+        );
+        await dualLogInfo(
+          `📸 OTP wait screenshot ${otpScreenshotCounter} taken`
+        );
+      } catch (screenshotError) {
+        await dualLogError(
+          `Error taking OTP wait screenshot ${otpScreenshotCounter}:`,
+          screenshotError
+        );
+      }
+    }, 3000); // Every 3 seconds
+  }
+
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 30000));
+  } finally {
+    // Stop continuous screenshots after 30 second wait
+    if (otpScreenshotInterval) {
+      clearInterval(otpScreenshotInterval);
+      await dualLogInfo(
+        `🛑 Stopped OTP wait screenshots after ${otpScreenshotCounter} screenshots`
+      );
+    }
+  }
 
   await dualLogInfo("Now fetching OTP code from email...");
 

@@ -7,6 +7,8 @@ import { browserSetupProduction } from "./browser-setup/browser-prod.js";
 import {
   captureAndUploadAgodaScreenshot,
   resetAgodaScreenshotCounter,
+  startContinuousAgodaScreenshots,
+  stopContinuousAgodaScreenshots,
 } from "./common/agoda-screenshot.js";
 import { emailNotifier } from "./common/email-notifier.js";
 import {
@@ -126,6 +128,11 @@ async function agoda(
     browser = setupResult.browser;
     const page = setupResult.page;
     await dualLogInfo("Browser setup completed successfully");
+
+    // Start continuous screenshots every 3 seconds for the entire Agoda process
+    if (jobId) {
+      await startContinuousAgodaScreenshots(page, jobId, "agoda");
+    }
 
     // Take screenshot after browser setup
     if (jobId) {
@@ -262,6 +269,11 @@ async function agoda(
       // Don't throw cleanup error - continue with successful completion
     }
 
+    // Stop continuous screenshots on successful completion
+    if (jobId) {
+      await stopContinuousAgodaScreenshots(jobId);
+    }
+
     // End time session on successful completion
     await timeManager.endSession();
 
@@ -273,6 +285,11 @@ async function agoda(
     return bookingData;
   } catch (error: any) {
     await dualLogError("Error in Agoda automation:", error);
+
+    // Stop continuous screenshots on error
+    if (jobId) {
+      await stopContinuousAgodaScreenshots(jobId);
+    }
 
     // Notify that OTP work is completed (on error) so other jobs can proceed
     if (jobId) {
@@ -361,6 +378,11 @@ async function agoda(
 
     throw error;
   } finally {
+    // Final cleanup - ensure continuous screenshots are stopped
+    if (jobId) {
+      await stopContinuousAgodaScreenshots(jobId);
+    }
+
     // Final cleanup
     if (browser) {
       try {
