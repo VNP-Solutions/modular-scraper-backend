@@ -1,4 +1,5 @@
 import { Browser, Page } from "puppeteer";
+import { captureAndUploadAgodaScreenshot } from "../../common/agoda-screenshot.js";
 import { delay } from "../../common/delay.js";
 import {
   autoDetectCleanupParams,
@@ -219,8 +220,29 @@ async function agodaLogin(
       // Handle different login flows based on next page result
       if (nextPageResult === "email-link") {
         await dualLogInfo("✅ Direct email link flow detected");
+
+        // Take screenshot before email link flow
+        if (jobId) {
+          await captureAndUploadAgodaScreenshot(
+            page,
+            jobId,
+            "before-email-link-flow",
+            "agoda"
+          );
+        }
+
         try {
           await handleDirectLinkFlow(page, jobId);
+
+          // Take screenshot after email link flow
+          if (jobId) {
+            await captureAndUploadAgodaScreenshot(
+              page,
+              jobId,
+              "after-email-link-flow",
+              "agoda"
+            );
+          }
 
           // Notify worker that OTP work is completed so other jobs can proceed
           if (jobId) {
@@ -235,8 +257,35 @@ async function agodaLogin(
         }
       } else if (nextPageResult === "otp-form") {
         await dualLogInfo("✅ OTP form flow detected");
+
+        // Take screenshot before OTP flow
+        if (jobId) {
+          await captureAndUploadAgodaScreenshot(
+            page,
+            jobId,
+            "before-otp-flow",
+            "agoda"
+          );
+        }
+
         try {
-          await handleOtpFlow(frame, loadingTimeout, selectorTimeout, jobId);
+          await handleOtpFlow(
+            page,
+            frame,
+            loadingTimeout,
+            selectorTimeout,
+            jobId
+          );
+
+          // Take screenshot after OTP flow
+          if (jobId) {
+            await captureAndUploadAgodaScreenshot(
+              page,
+              jobId,
+              "after-otp-flow",
+              "agoda"
+            );
+          }
 
           // Notify worker that OTP work is completed so other jobs can proceed
           if (jobId) {
@@ -410,6 +459,16 @@ async function handleDirectLinkFlow(page: Page, jobId?: string): Promise<void> {
     timeout: 50000,
   });
 
+  // Take screenshot after navigating to sign-in link
+  if (jobId) {
+    await captureAndUploadAgodaScreenshot(
+      page,
+      jobId,
+      "after-signin-link-navigation",
+      "agoda"
+    );
+  }
+
   // Wait 10 seconds after navigating to the sign-in link
   await dualLogInfo("Waiting 10 seconds after navigating to sign-in link...");
   await delay(10000);
@@ -419,6 +478,7 @@ async function handleDirectLinkFlow(page: Page, jobId?: string): Promise<void> {
  * Handle OTP form flow (new functionality)
  */
 async function handleOtpFlow(
+  page: Page,
   frame: any,
   loadingTimeout: number,
   selectorTimeout: number,
@@ -520,6 +580,16 @@ async function handleOtpFlow(
   }
 
   await dualLogInfo("All OTP digits filled successfully");
+
+  // Take screenshot after filling OTP
+  if (jobId) {
+    await captureAndUploadAgodaScreenshot(
+      page,
+      jobId,
+      "after-otp-filled",
+      "agoda"
+    );
+  }
 
   // Wait for continue button to become enabled
   await dualLogInfo("Waiting for OTP continue button to be enabled...");

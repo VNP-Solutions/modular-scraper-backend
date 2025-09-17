@@ -4,6 +4,10 @@ import { getAgodaBookingData } from "./agoda/booking-data/booking-data.js";
 import agodaLogin from "./agoda/login-system/login.js";
 import { browserSetupLocal } from "./browser-setup/browser-local.js";
 import { browserSetupProduction } from "./browser-setup/browser-prod.js";
+import {
+  captureAndUploadAgodaScreenshot,
+  resetAgodaScreenshotCounter,
+} from "./common/agoda-screenshot.js";
 import { emailNotifier } from "./common/email-notifier.js";
 import {
   autoDetectCleanupParams,
@@ -31,6 +35,11 @@ async function agoda(
 
   // Initialize time management session
   await timeManager.startSession(jobId);
+
+  // Reset screenshot counter for new job
+  if (jobId) {
+    resetAgodaScreenshotCounter();
+  }
 
   try {
     await dualLogInfo("Starting Agoda automation process", {
@@ -118,6 +127,16 @@ async function agoda(
     const page = setupResult.page;
     await dualLogInfo("Browser setup completed successfully");
 
+    // Take screenshot after browser setup
+    if (jobId) {
+      await captureAndUploadAgodaScreenshot(
+        page,
+        jobId,
+        "browser-setup-complete",
+        "agoda"
+      );
+    }
+
     // Update progress - browser setup complete
     if (jobId) {
       await progressManager.updateJobProgress(
@@ -139,6 +158,16 @@ async function agoda(
     await agodaLogin(browser, page, agodaUsername, agodaPassword, jobId);
     await dualLogInfo("Agoda login completed successfully");
 
+    // Take screenshot after login completion
+    if (jobId) {
+      await captureAndUploadAgodaScreenshot(
+        page,
+        jobId,
+        "login-complete",
+        "agoda"
+      );
+    }
+
     // Update progress - login complete
     if (jobId) {
       await progressManager.updateJobProgress(
@@ -158,6 +187,17 @@ async function agoda(
 
     // Get booking data after successful login
     await dualLogInfo("Starting booking data retrieval");
+
+    // Take screenshot before booking data retrieval
+    if (jobId) {
+      await captureAndUploadAgodaScreenshot(
+        page,
+        jobId,
+        "before-booking-data-retrieval",
+        "agoda"
+      );
+    }
+
     const bookingData = await getAgodaBookingData(
       browser,
       page,
@@ -166,6 +206,16 @@ async function agoda(
       endDate,
       jobId
     );
+
+    // Take screenshot after booking data retrieval
+    if (jobId) {
+      await captureAndUploadAgodaScreenshot(
+        page,
+        jobId,
+        "after-booking-data-retrieval",
+        "agoda"
+      );
+    }
 
     // Mark job as completed
     if (jobId) {

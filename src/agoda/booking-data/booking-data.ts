@@ -2,6 +2,7 @@ import fs from "fs";
 import Papa from "papaparse";
 import path from "path";
 import { Browser, Page } from "puppeteer";
+import { captureAndUploadAgodaScreenshot } from "../../common/agoda-screenshot.js";
 import { delay } from "../../common/delay.js";
 import {
   autoDetectCleanupParams,
@@ -509,6 +510,16 @@ export async function getAgodaBookingData(
       // Wait for the page to load completely
       await delay(5000);
 
+      // Take screenshot after navigating to booking data page
+      if (jobId) {
+        await captureAndUploadAgodaScreenshot(
+          newPage,
+          jobId,
+          `booking-data-page-attempt-${navigationAttempts + 1}`,
+          "agoda"
+        );
+      }
+
       // Check for "Reservations" text on the page
       try {
         await dualLogInfo("Checking for 'Reservations' text on the page...");
@@ -961,6 +972,16 @@ export async function getAgodaBookingData(
     try {
       await dualLogInfo("Attempting download button click...");
 
+      // Take screenshot before clicking download button
+      if (jobId) {
+        await captureAndUploadAgodaScreenshot(
+          newPage,
+          jobId,
+          "before-csv-download-click",
+          "agoda"
+        );
+      }
+
       // Handle different selector types
       let buttonInfo;
 
@@ -1183,6 +1204,16 @@ export async function getAgodaBookingData(
 
       console.log("👆 Clicked the download CSV button");
       await dualLogInfo("CSV download button clicked successfully");
+
+      // Take screenshot after clicking download button
+      if (jobId) {
+        await captureAndUploadAgodaScreenshot(
+          newPage,
+          jobId,
+          "after-csv-download-click",
+          "agoda"
+        );
+      }
     } catch (error: any) {
       await dualLogError("Error clicking CSV download button:", error);
       throw new Error("Failed to click CSV download button");
