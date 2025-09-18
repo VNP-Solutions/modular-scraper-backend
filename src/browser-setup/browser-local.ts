@@ -8,6 +8,7 @@ import {
   dualLogWarn,
 } from "../common/log-helper.js";
 import { timeoutManager } from "../common/timeout-manager.js";
+import { configs } from "../config/index.js";
 dotenv.config();
 
 export async function browserSetupLocal(
@@ -22,7 +23,7 @@ export async function browserSetupLocal(
   try {
     try {
       browser = await puppeteer.launch({
-        headless: true,
+        headless: configs.headless_browser,
         defaultViewport: null,
         args: BROWSER_CONFIG.LAUNCH_ARGS,
       });
