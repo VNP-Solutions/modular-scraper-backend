@@ -1,15 +1,17 @@
 import fs from "fs";
 import path from "path";
 import { Page } from "puppeteer";
-import {
-  autoDetectCleanupParams,
-  cleanupFoldersOnError,
-} from "../../common/folder-cleanup.js";
+import { cleanupOnError } from "../utils/error-cleanup.js";
 import { dualLogError, dualLogInfo } from "../../common/log-helper.js";
 import { progressManager } from "../../common/progress-manager.js";
 import { scrapingStateManager } from "../../common/scraping-state.js";
 import { timeManager } from "../../common/time-manager.js";
 import { JobService } from "../../services/job.service.js";
+import { submitFinalCsv } from "./submit-final-csv.js";
+import {
+  getStandardFilePaths,
+  validateFileForProcessing,
+} from "../utils/file-naming.js";
 
 // Initialize job service
 const jobService = new JobService();
@@ -39,60 +41,46 @@ async function delay(ms: number): Promise<void> {
 }
 
 /**
- * Find CSV file in import folder (supports job-specific folders)
+ * Find CSV file using standardized naming (jobId only)
  */
 async function findCsvFileInImport(jobId?: string): Promise<string | null> {
   try {
-    const baseImportDir = path.resolve(process.cwd(), "import");
-
-    // Try job-specific folder first if jobId is provided
-    if (jobId) {
-      const jobImportDir = path.join(baseImportDir, jobId);
-      if (fs.existsSync(jobImportDir)) {
-        const jobFiles = fs.readdirSync(jobImportDir);
-        const jobCsvFile = jobFiles.find(
-          (file) =>
-            file.endsWith(".csv") &&
-            !file.includes(".gitkeep") &&
-            file.includes("-") // Should contain property name and agoda id
-        );
-
-        if (jobCsvFile) {
-          const jobFilePath = path.join(jobImportDir, jobCsvFile);
-          await dualLogInfo(
-            `Found CSV file in job-specific folder: ${jobFilePath}`,
-            { jobId }
-          );
-          return jobFilePath;
-        }
-      }
-    }
-
-    // Fallback to main import folder for legacy support
-    if (!fs.existsSync(baseImportDir)) {
-      await dualLogError("Import directory not found");
+    if (!jobId) {
+      await dualLogError("JobId is required for standardized file naming");
       return null;
     }
 
-    const files = fs.readdirSync(baseImportDir);
-    const csvFile = files.find(
-      (file) =>
-        file.endsWith(".csv") &&
-        !file.includes(".gitkeep") &&
-        file.includes("-") // Should contain property name and agoda id
-    );
+    // Use standardized file paths
+    const standardPaths = getStandardFilePaths(jobId);
+    const { exportFilePath } = standardPaths;
 
-    if (csvFile) {
-      const filePath = path.join(baseImportDir, csvFile);
-      await dualLogInfo(`Found CSV file in main import folder: ${filePath}`, {
+    // Check if standardized file exists
+    if (fs.existsSync(exportFilePath)) {
+      await dualLogInfo(`Found standardized CSV file: ${exportFilePath}`, {
         jobId,
       });
-      return filePath;
+
+      // Validate the file before returning
+      await validateFileForProcessing(
+        exportFilePath,
+        jobId,
+        "Need Help file upload"
+      );
+
+      return exportFilePath;
     }
 
+    await dualLogError(`Standardized CSV file not found: ${exportFilePath}`, {
+      jobId,
+      expectedPath: exportFilePath,
+    });
     return null;
   } catch (error) {
-    await dualLogError("Error finding CSV file in import folder:", error);
+    await dualLogError(
+      "Error finding CSV file with standardized naming:",
+      error,
+      { jobId }
+    );
     return null;
   }
 }
@@ -674,40 +662,13 @@ export async function automateNeedHelpProcess(
     }
 
     // Step 9: Click final submit button
-    await dualLogInfo("Clicking final submit button...", { jobId });
-    try {
-      const finalSubmitSelectors = [
-        'button[data-testid="submit-button"]',
-        'button[type="submit"]',
-        'button:has-text("Submit")',
-      ];
-
-      for (const selector of finalSubmitSelectors) {
-        try {
-          await page.waitForSelector(selector, {
-            visible: true,
-            timeout: 10000,
-          });
-          await page.click(selector);
-          await dualLogInfo(
-            `✅ Clicked final submit button with selector: ${selector}`,
-            { jobId }
-          );
-          break;
-        } catch (error) {
-          continue;
-        }
-      }
-    } catch (error: any) {
-      await dualLogError("Error clicking final submit button:", error.message, {
-        jobId,
-      });
+    // Only for production environment
+    if (process.env.AGODA_SUBMISSION === "true") {
+      await submitFinalCsv(page, jobId);
     }
 
-    await delay(2000); // Give time for form submission to process
-
-    // Update progress - Need Help process completed
     if (jobId) {
+      // Update progress - Need Help process completed
       await progressManager.updateJobProgress(
         jobId,
         undefined,
@@ -743,37 +704,39 @@ export async function automateNeedHelpProcess(
       }
     );
 
-    // Cleanup folders on Need Help error
+    // Standardized cleanup on Need Help error
     try {
-      await dualLogInfo("Starting folder cleanup due to Need Help error", {
-        jobId,
-        agodaId,
-        propertyName,
-        timeSession: timeManager.getSessionInfo(),
-      });
-
-      // Try to auto-detect cleanup parameters if not provided
-      const cleanupParams = await autoDetectCleanupParams(jobId);
-      const finalAgodaId = agodaId || cleanupParams.agodaId;
-      const finalPropertyName = propertyName || cleanupParams.propertyName;
-
-      const cleanupResult = await cleanupFoldersOnError(
-        finalAgodaId,
-        finalPropertyName,
-        jobId
+      await dualLogInfo(
+        "Starting standardized cleanup due to Need Help error",
+        {
+          jobId,
+          agodaId,
+          propertyName,
+          timeSession: timeManager.getSessionInfo(),
+        }
       );
 
-      await dualLogInfo("Folder cleanup completed after Need Help error", {
-        jobId,
-        downloadsCleanedCount: cleanupResult.downloadsCleanedCount,
-        importCleanedCount: cleanupResult.importCleanedCount,
-        totalFilesProcessed: cleanupResult.totalFilesProcessed,
-        errors: cleanupResult.errors.length,
-        timeSession: timeManager.getSessionInfo(),
+      const cleanupResult = await cleanupOnError(jobId, {
+        agodaId,
+        propertyName,
+        operation: "agoda_need_help_error",
       });
+
+      await dualLogInfo(
+        "Standardized cleanup completed after Need Help error",
+        {
+          jobId,
+          downloadFilesCleanedCount: cleanupResult.downloadFilesCleanedCount,
+          exportFilesCleanedCount: cleanupResult.exportFilesCleanedCount,
+          foldersRemovedCount: cleanupResult.foldersRemovedCount,
+          totalFilesProcessed: cleanupResult.totalFilesProcessed,
+          errors: cleanupResult.errors.length,
+          timeSession: timeManager.getSessionInfo(),
+        }
+      );
     } catch (cleanupError: any) {
       await dualLogError(
-        "Error during folder cleanup (continuing with error handling):",
+        "Error during standardized cleanup (continuing with error handling):",
         cleanupError.message,
         { jobId }
       );
@@ -952,49 +915,52 @@ async function cleanupCsvFiles(
 }
 
 /**
- * Get Agoda ID and Property Name from various sources
+ * Get Agoda ID and Property Name from job service (for standardized naming)
+ * With standardized naming using jobId only, we get this info from the database
  */
 async function extractCleanupInfo(
   csvFilePath?: string,
   jobId?: string
 ): Promise<{ agodaId?: string; propertyName?: string }> {
   try {
+    if (jobId) {
+      // Get agoda ID from job service
+      const agodaIdResult = await jobService.getAgodaIdFromJob(jobId);
+      const agodaId = agodaIdResult?.agodaId;
+
+      if (agodaId) {
+        await dualLogInfo(`Retrieved agodaId from job service: ${agodaId}`, {
+          jobId,
+        });
+        return { agodaId };
+      }
+    }
+
+    // Legacy fallback: try to extract from old file format if no jobId
     if (csvFilePath) {
       const fileName = path.basename(csvFilePath, ".csv");
 
-      // Try to extract from import file format: property-name-agoda-id.csv
+      // Check if it's the new standardized format (just jobId)
+      if (fileName === jobId) {
+        await dualLogInfo(`File uses standardized naming format: ${fileName}`, {
+          jobId,
+        });
+        return await extractCleanupInfo(undefined, jobId);
+      }
+
+      // Try to extract from old import file format: property-name-agoda-id.csv
       const parts = fileName.split("-");
       if (parts.length >= 2) {
-        const agodaId = parts[parts.length - 1]; // Last part should be agoda ID
-        const propertyName = parts.slice(0, -1).join("-"); // Everything before last part
-
+        const agodaId = parts[parts.length - 1];
+        const propertyName = parts.slice(0, -1).join("-");
         return { agodaId, propertyName };
       }
     }
 
-    // Alternative: try to find any CSV in import folder and extract info
-    const importDir = path.resolve(process.cwd(), "import");
-    if (fs.existsSync(importDir)) {
-      const files = fs.readdirSync(importDir);
-      const csvFile = files.find(
-        (file) =>
-          file.endsWith(".csv") &&
-          !file.includes(".gitkeep") &&
-          file.includes("-")
-      );
-
-      if (csvFile) {
-        const fileName = path.basename(csvFile, ".csv");
-        const parts = fileName.split("-");
-        if (parts.length >= 2) {
-          const agodaId = parts[parts.length - 1];
-          const propertyName = parts.slice(0, -1).join("-");
-
-          return { agodaId, propertyName };
-        }
-      }
-    }
-
+    await dualLogInfo(
+      "No cleanup info could be extracted, this may be expected for new standardized naming",
+      { jobId, csvFilePath }
+    );
     return {};
   } catch (error) {
     await dualLogError("Error extracting cleanup info:", error, { jobId });
@@ -1092,22 +1058,18 @@ export async function automateNeedHelpWithCleanup(
         }
       );
 
-      // Try to auto-detect cleanup parameters if not provided
-      const cleanupParams = await autoDetectCleanupParams(options.jobId);
-      const finalAgodaId = options.agodaId || cleanupParams.agodaId;
-      const finalPropertyName =
-        options.propertyName || cleanupParams.propertyName;
+      // Use standardized emergency cleanup
+      const cleanupResult = await cleanupOnError(options.jobId, {
+        agodaId: options.agodaId,
+        propertyName: options.propertyName,
+        operation: "agoda_need_help_emergency_cleanup",
+      });
 
-      const cleanupResult = await cleanupFoldersOnError(
-        finalAgodaId,
-        finalPropertyName,
-        options.jobId
-      );
-
-      await dualLogInfo("Emergency folder cleanup completed", {
+      await dualLogInfo("Emergency standardized cleanup completed", {
         jobId: options.jobId,
-        downloadsCleanedCount: cleanupResult.downloadsCleanedCount,
-        importCleanedCount: cleanupResult.importCleanedCount,
+        downloadFilesCleanedCount: cleanupResult.downloadFilesCleanedCount,
+        exportFilesCleanedCount: cleanupResult.exportFilesCleanedCount,
+        foldersRemovedCount: cleanupResult.foldersRemovedCount,
         totalFilesProcessed: cleanupResult.totalFilesProcessed,
         errors: cleanupResult.errors.length,
         timeSession: timeManager.getSessionInfo(),
