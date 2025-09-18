@@ -27,8 +27,9 @@ export class ScreenshotHelper {
     const errorDir = path.join(baseDir, "error");
 
     // Create directories if they don't exist
-    await fs.promises.mkdir(successDir, { recursive: true });
-    await fs.promises.mkdir(errorDir, { recursive: true });
+    // TEMPORARILY DISABLED - Folder creation commented out
+    // await fs.promises.mkdir(successDir, { recursive: true });
+    // await fs.promises.mkdir(errorDir, { recursive: true });
 
     return { successDir, errorDir };
   }
@@ -63,12 +64,13 @@ export class ScreenshotHelper {
       const screenshotPath = path.join(successDir, filename);
 
       // Take screenshot with default options
-      await page.screenshot({
-        path: screenshotPath as `${string}.png`,
-        fullPage: options.fullPage ?? true,
-        type: "png",
-        quality: options.quality,
-      });
+      // TEMPORARILY DISABLED - Screenshot saving commented out
+      // await page.screenshot({
+      //   path: screenshotPath as `${string}.png`,
+      //   fullPage: options.fullPage ?? true,
+      //   type: "png",
+      //   quality: options.quality,
+      // });
 
       await dualLogInfo(`Success screenshot taken: ${stepName}`, {
         jobId,
@@ -121,12 +123,13 @@ export class ScreenshotHelper {
       const screenshotPath = path.join(errorDir, filename);
 
       // Take screenshot with default options
-      await page.screenshot({
-        path: screenshotPath as `${string}.png`,
-        fullPage: options.fullPage ?? true,
-        type: "png",
-        quality: options.quality,
-      });
+      // TEMPORARILY DISABLED - Screenshot saving commented out
+      // await page.screenshot({
+      //   path: screenshotPath as `${string}.png`,
+      //   fullPage: options.fullPage ?? true,
+      //   type: "png",
+      //   quality: options.quality,
+      // });
 
       await dualLogInfo(`Error screenshot taken: ${errorContext}`, {
         jobId,
@@ -186,12 +189,13 @@ export class ScreenshotHelper {
       const screenshotPath = path.join(targetDir, finalFilename);
 
       // Take screenshot
-      await page.screenshot({
-        path: screenshotPath as `${string}.png`,
-        fullPage: options.fullPage ?? true,
-        type: "png",
-        quality: options.quality,
-      });
+      // TEMPORARILY DISABLED - Screenshot saving commented out
+      // await page.screenshot({
+      //   path: screenshotPath as `${string}.png`,
+      //   fullPage: options.fullPage ?? true,
+      //   type: "png",
+      //   quality: options.quality,
+      // });
 
       await dualLogInfo(`Custom screenshot taken: ${filename}`, {
         jobId,
