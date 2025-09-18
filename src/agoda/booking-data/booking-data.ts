@@ -15,6 +15,13 @@ import { timeoutManager } from "../../common/timeout-manager.js";
 import { PaymentInfo } from "../../models/job-item.model.js";
 import { JobService } from "../../services/job.service.js";
 import { automateNeedHelpWithCleanup } from "../need-help/need-help.js";
+import {
+  getStandardFilePaths,
+  checkAndDeleteExistingFile,
+  ensureDirectoryExists,
+  standardizeDownloadedFile,
+  validateFileForProcessing,
+} from "../utils/file-naming.js";
 
 // Initialize job service
 const jobService = new JobService();
@@ -364,27 +371,25 @@ async function exportBookingDataToCsv(
     const agodaIdResult = await jobService.getAgodaIdFromJob(jobId);
     const actualAgodaId = agodaIdResult?.agodaId;
 
-    // Create filename: property-name-agoda-id.csv
-    const sanitizedPropertyName = sanitizeFilename(propertyName);
-    const filename = `${sanitizedPropertyName}-${actualAgodaId}.csv`;
+    // Use standardized file naming (jobId only)
+    const standardPaths = getStandardFilePaths(jobId);
+    const { exportFilePath, exportDir } = standardPaths;
 
-    // Create job-specific import directory for better isolation
-    const baseImportDir = path.resolve(process.cwd(), "import");
-    const importDir = jobId ? path.join(baseImportDir, jobId) : baseImportDir;
+    // Ensure directory exists
+    ensureDirectoryExists(exportDir);
+    await dualLogInfo(`Ensured export directory exists: ${exportDir}`, {
+      jobId,
+    });
 
-    if (!fs.existsSync(importDir)) {
-      fs.mkdirSync(importDir, { recursive: true });
-      if (jobId) {
-        await dualLogInfo(`Created job-specific import folder: ${importDir}`, {
-          jobId,
-          importDir,
-        });
-      }
-    }
+    // Check and delete existing file if it exists
+    await checkAndDeleteExistingFile(exportFilePath, jobId);
 
-    // Write CSV file to job-specific folder
-    const filePath = path.join(importDir, filename);
+    const filePath = exportFilePath;
+    const filename = path.basename(filePath);
     fs.writeFileSync(filePath, csvContent, "utf8");
+
+    // Validate the exported file
+    await validateFileForProcessing(filePath, jobId, "CSV export verification");
 
     await dualLogInfo(
       `✅ CSV export completed: ${filename} (${exportRecords.length} records)`,
@@ -766,22 +771,23 @@ export async function getAgodaBookingData(
       jobId,
     });
 
-    // Set up download path with job-specific folder for better isolation
-    const baseDownloadPath = path.resolve(process.cwd(), "downloads");
-    const downloadPath = jobId
-      ? path.join(baseDownloadPath, jobId)
-      : baseDownloadPath;
-
-    // Create job-specific download folder if it doesn't exist
-    if (!fs.existsSync(downloadPath)) {
-      fs.mkdirSync(downloadPath, { recursive: true });
-      if (jobId) {
-        await dualLogInfo(
-          `Created job-specific download folder: ${downloadPath}`,
-          { jobId }
-        );
-      }
+    // Use standardized file paths for download
+    if (!jobId) {
+      throw new Error("JobId is required for standardized file naming");
     }
+
+    const standardPaths = getStandardFilePaths(jobId);
+    const { downloadFilePath, downloadDir } = standardPaths;
+    const downloadPath = downloadDir;
+
+    // Ensure download directory exists
+    ensureDirectoryExists(downloadPath);
+    await dualLogInfo(`Ensured download directory exists: ${downloadPath}`, {
+      jobId,
+    });
+
+    // Check and delete existing download file if it exists
+    await checkAndDeleteExistingFile(downloadFilePath, jobId);
 
     await dualLogInfo(
       `Download configuration - Platform: ${process.platform}, Path: ${downloadPath}`,
@@ -1251,120 +1257,46 @@ export async function getAgodaBookingData(
       jobId,
     });
 
-    // Find the downloaded CSV file with cross-platform support
-    let csvFilePath: string | null = null;
-    const maxWaitTime = 60000; // Increased to 60 seconds for slower connections
+    // Wait for download completion and standardize file naming
+    const maxWaitTime = 60000; // 60 seconds timeout
     const startTime = Date.now();
+    let csvFilePath: string | null = null;
 
-    await dualLogInfo("Scanning for downloaded CSV file...", { downloadPath });
+    await dualLogInfo(
+      "Waiting for CSV download completion and standardization...",
+      { downloadPath }
+    );
 
+    // Wait for download to complete and then standardize the filename
     while (Date.now() - startTime < maxWaitTime) {
       try {
-        const files = fs.readdirSync(downloadPath);
-        await dualLogInfo(
-          `Found ${files.length} files in download directory: ${files.join(
-            ", "
-          )}`
+        // Use standardizeDownloadedFile to find and rename the downloaded file
+        const standardFileName = path.basename(downloadFilePath);
+        const standardizedPath = await standardizeDownloadedFile(
+          downloadPath,
+          jobId,
+          standardFileName
         );
 
-        // Platform-specific temporary file extensions to exclude
-        const tempExtensions = [
-          ".crdownload", // Chrome on Windows/Linux
-          ".download", // Safari on macOS
-          ".partial", // Firefox on Windows
-          ".tmp", // General temporary files
-          ".temp", // General temporary files
-        ];
-
-        // Check each file and collect valid candidates with their stats
-        const validCandidates: Array<{
-          file: string;
-          stats: fs.Stats;
-          fullPath: string;
-        }> = [];
-
-        for (const file of files) {
-          // Must end with .csv
-          if (!file.endsWith(".csv")) continue;
-
-          // Must not have any temporary extension patterns
-          const hasTemporaryExtension = tempExtensions.some(
-            (ext) => file.includes(ext) || file.endsWith(ext)
-          );
-
-          if (hasTemporaryExtension) {
-            await dualLogInfo(`Skipping temporary file: ${file}`);
-            continue;
-          }
-
-          // Check if file exists and has content (avoid 0-byte files)
-          const fullPath = path.join(downloadPath, file);
-          try {
-            const stats = fs.statSync(fullPath);
-            if (stats.size === 0) {
-              await dualLogInfo(`Skipping empty file: ${file}`);
-              continue;
-            }
-            await dualLogInfo(
-              `Found valid CSV candidate: ${file} (${stats.size} bytes)`
-            );
-            validCandidates.push({ file, stats, fullPath });
-          } catch (statError) {
-            await dualLogInfo(
-              `Error checking file stats for ${file}: ${statError}`
-            );
-            continue;
-          }
-        }
-
-        // Select the best candidate (newest file by modification time)
-        let csvFile: string | undefined;
-        if (validCandidates.length > 0) {
-          // Sort by modification time (newest first)
-          validCandidates.sort(
-            (a, b) => b.stats.mtime.getTime() - a.stats.mtime.getTime()
-          );
-
-          const selectedCandidate = validCandidates[0];
-          csvFile = selectedCandidate.file;
-
+        if (standardizedPath && fs.existsSync(standardizedPath)) {
+          csvFilePath = standardizedPath;
           await dualLogInfo(
-            `Selected newest CSV file: ${csvFile} (modified: ${selectedCandidate.stats.mtime.toISOString()})`,
-            {
-              jobId,
-              totalCandidates: validCandidates.length,
-              allCandidates: validCandidates.map((c) => ({
-                file: c.file,
-                size: c.stats.size,
-                modified: c.stats.mtime.toISOString(),
-              })),
-            }
-          );
-        }
-
-        if (csvFile) {
-          csvFilePath = path.join(downloadPath, csvFile);
-          await dualLogInfo(
-            `✅ CSV file confirmed: ${csvFile} in job-specific folder`,
-            {
-              jobId,
-              fileName: csvFile,
-              fullPath: csvFilePath,
-            }
+            `✅ Downloaded file standardized to: ${path.basename(csvFilePath)}`,
+            { jobId, filePath: csvFilePath }
           );
           break;
         }
-      } catch (readDirError: any) {
+      } catch (standardizeError: any) {
         await dualLogError(
-          `Error reading download directory: ${readDirError.message}`
+          `Error during file standardization: ${standardizeError.message}`,
+          { jobId }
         );
       }
 
-      await delay(2000); // Increased delay for better stability
+      await delay(2000);
     }
 
     if (!csvFilePath || !fs.existsSync(csvFilePath)) {
-      // Enhanced error reporting for debugging
       const finalFiles = fs.readdirSync(downloadPath);
       await dualLogError(
         `❌ CSV download failed after ${maxWaitTime / 1000}s timeout`,
@@ -1407,6 +1339,9 @@ export async function getAgodaBookingData(
       timeSession: timeManager.getSessionInfo(),
       jobId,
     });
+
+    // Validate file before processing
+    await validateFileForProcessing(csvFilePath, jobId, "CSV processing");
 
     // Read and parse the CSV file
     await dualLogInfo("Reading and parsing CSV file...");

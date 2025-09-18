@@ -1,6 +1,9 @@
 import { Page } from "puppeteer";
-import { dualLogError, dualLogInfo } from "../../common/log-helper";
-import { delay } from "./need-help";
+import { dualLogError, dualLogInfo } from "../../common/log-helper.js";
+
+async function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 export async function submitFinalCsv(page: Page, jobId: string | undefined) {
   await dualLogInfo("Clicking final submit button...", { jobId });
