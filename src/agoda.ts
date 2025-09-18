@@ -5,10 +5,7 @@ import agodaLogin from "./agoda/login-system/login.js";
 import { browserSetupLocal } from "./browser-setup/browser-local.js";
 import { browserSetupProduction } from "./browser-setup/browser-prod.js";
 import { emailNotifier } from "./common/email-notifier.js";
-import {
-  autoDetectCleanupParams,
-  cleanupFoldersOnError,
-} from "./common/folder-cleanup.js";
+import { cleanupOnError } from "./agoda/utils/error-cleanup.js";
 import { dualLogError, dualLogInfo } from "./common/log-helper.js";
 import { otpCompletionNotifier } from "./common/otp-completion-notifier.js";
 import { progressManager } from "./common/progress-manager.js";
@@ -244,10 +241,10 @@ async function agoda(
       timeSession: timeManager.getSessionInfo(),
     });
 
-    // Cleanup folders on error
+    // Standardized cleanup on error
     try {
       await dualLogInfo(
-        "Starting folder cleanup due to Agoda automation error",
+        "Starting standardized cleanup due to Agoda automation error",
         {
           jobId,
           agodaId,
@@ -255,28 +252,23 @@ async function agoda(
         }
       );
 
-      // Try to auto-detect cleanup parameters if not provided
-      const cleanupParams = await autoDetectCleanupParams(jobId);
-      const finalAgodaId = agodaId || cleanupParams.agodaId;
-      const finalPropertyName = cleanupParams.propertyName;
+      const cleanupResult = await cleanupOnError(jobId, {
+        agodaId,
+        operation: "agoda_automation_error",
+      });
 
-      const cleanupResult = await cleanupFoldersOnError(
-        finalAgodaId,
-        finalPropertyName,
-        jobId
-      );
-
-      await dualLogInfo("Folder cleanup completed", {
+      await dualLogInfo("Standardized cleanup completed", {
         jobId,
-        downloadsCleanedCount: cleanupResult.downloadsCleanedCount,
-        importCleanedCount: cleanupResult.importCleanedCount,
+        downloadFilesCleanedCount: cleanupResult.downloadFilesCleanedCount,
+        exportFilesCleanedCount: cleanupResult.exportFilesCleanedCount,
+        foldersRemovedCount: cleanupResult.foldersRemovedCount,
         totalFilesProcessed: cleanupResult.totalFilesProcessed,
         errors: cleanupResult.errors.length,
         timeSession: timeManager.getSessionInfo(),
       });
     } catch (cleanupError: any) {
       await dualLogError(
-        "Error during folder cleanup (continuing with error handling):",
+        "Error during standardized cleanup (continuing with error handling):",
         cleanupError.message,
         { jobId }
       );

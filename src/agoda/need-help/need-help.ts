@@ -1,10 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { Page } from "puppeteer";
-import {
-  autoDetectCleanupParams,
-  cleanupFoldersOnError,
-} from "../../common/folder-cleanup.js";
+import { cleanupOnError } from "../utils/error-cleanup.js";
 import { dualLogError, dualLogInfo } from "../../common/log-helper.js";
 import { progressManager } from "../../common/progress-manager.js";
 import { scrapingStateManager } from "../../common/scraping-state.js";
@@ -707,37 +704,39 @@ export async function automateNeedHelpProcess(
       }
     );
 
-    // Cleanup folders on Need Help error
+    // Standardized cleanup on Need Help error
     try {
-      await dualLogInfo("Starting folder cleanup due to Need Help error", {
-        jobId,
-        agodaId,
-        propertyName,
-        timeSession: timeManager.getSessionInfo(),
-      });
-
-      // Try to auto-detect cleanup parameters if not provided
-      const cleanupParams = await autoDetectCleanupParams(jobId);
-      const finalAgodaId = agodaId || cleanupParams.agodaId;
-      const finalPropertyName = propertyName || cleanupParams.propertyName;
-
-      const cleanupResult = await cleanupFoldersOnError(
-        finalAgodaId,
-        finalPropertyName,
-        jobId
+      await dualLogInfo(
+        "Starting standardized cleanup due to Need Help error",
+        {
+          jobId,
+          agodaId,
+          propertyName,
+          timeSession: timeManager.getSessionInfo(),
+        }
       );
 
-      await dualLogInfo("Folder cleanup completed after Need Help error", {
-        jobId,
-        downloadsCleanedCount: cleanupResult.downloadsCleanedCount,
-        importCleanedCount: cleanupResult.importCleanedCount,
-        totalFilesProcessed: cleanupResult.totalFilesProcessed,
-        errors: cleanupResult.errors.length,
-        timeSession: timeManager.getSessionInfo(),
+      const cleanupResult = await cleanupOnError(jobId, {
+        agodaId,
+        propertyName,
+        operation: "agoda_need_help_error",
       });
+
+      await dualLogInfo(
+        "Standardized cleanup completed after Need Help error",
+        {
+          jobId,
+          downloadFilesCleanedCount: cleanupResult.downloadFilesCleanedCount,
+          exportFilesCleanedCount: cleanupResult.exportFilesCleanedCount,
+          foldersRemovedCount: cleanupResult.foldersRemovedCount,
+          totalFilesProcessed: cleanupResult.totalFilesProcessed,
+          errors: cleanupResult.errors.length,
+          timeSession: timeManager.getSessionInfo(),
+        }
+      );
     } catch (cleanupError: any) {
       await dualLogError(
-        "Error during folder cleanup (continuing with error handling):",
+        "Error during standardized cleanup (continuing with error handling):",
         cleanupError.message,
         { jobId }
       );
@@ -1059,22 +1058,18 @@ export async function automateNeedHelpWithCleanup(
         }
       );
 
-      // Try to auto-detect cleanup parameters if not provided
-      const cleanupParams = await autoDetectCleanupParams(options.jobId);
-      const finalAgodaId = options.agodaId || cleanupParams.agodaId;
-      const finalPropertyName =
-        options.propertyName || cleanupParams.propertyName;
+      // Use standardized emergency cleanup
+      const cleanupResult = await cleanupOnError(options.jobId, {
+        agodaId: options.agodaId,
+        propertyName: options.propertyName,
+        operation: "agoda_need_help_emergency_cleanup",
+      });
 
-      const cleanupResult = await cleanupFoldersOnError(
-        finalAgodaId,
-        finalPropertyName,
-        options.jobId
-      );
-
-      await dualLogInfo("Emergency folder cleanup completed", {
+      await dualLogInfo("Emergency standardized cleanup completed", {
         jobId: options.jobId,
-        downloadsCleanedCount: cleanupResult.downloadsCleanedCount,
-        importCleanedCount: cleanupResult.importCleanedCount,
+        downloadFilesCleanedCount: cleanupResult.downloadFilesCleanedCount,
+        exportFilesCleanedCount: cleanupResult.exportFilesCleanedCount,
+        foldersRemovedCount: cleanupResult.foldersRemovedCount,
         totalFilesProcessed: cleanupResult.totalFilesProcessed,
         errors: cleanupResult.errors.length,
         timeSession: timeManager.getSessionInfo(),

@@ -1,9 +1,6 @@
 import { Browser, Page } from "puppeteer";
 import { delay } from "../../common/delay.js";
-import {
-  autoDetectCleanupParams,
-  cleanupFoldersOnError,
-} from "../../common/folder-cleanup.js";
+import { cleanupOnError } from "../utils/error-cleanup.js";
 import { dualLogError, dualLogInfo } from "../../common/log-helper.js";
 import { otpCompletionNotifier } from "../../common/otp-completion-notifier.js";
 import { progressManager } from "../../common/progress-manager.js";
@@ -279,33 +276,29 @@ async function agodaLogin(
     if (jobId) {
       otpCompletionNotifier.notifyOtpCompleted(jobId);
     }
-    // Cleanup folders on login error
+    // Standardized cleanup on login error
     try {
-      await dualLogInfo("Starting folder cleanup due to login error", {
+      await dualLogInfo("Starting standardized cleanup due to login error", {
         jobId,
         timeSession: timeManager.getSessionInfo(),
       });
 
-      // Try to auto-detect cleanup parameters
-      const cleanupParams = await autoDetectCleanupParams(jobId);
+      const cleanupResult = await cleanupOnError(jobId, {
+        operation: "agoda_login_error",
+      });
 
-      const cleanupResult = await cleanupFoldersOnError(
-        cleanupParams.agodaId,
-        cleanupParams.propertyName,
-        jobId
-      );
-
-      await dualLogInfo("Folder cleanup completed after login error", {
+      await dualLogInfo("Standardized cleanup completed after login error", {
         jobId,
-        downloadsCleanedCount: cleanupResult.downloadsCleanedCount,
-        importCleanedCount: cleanupResult.importCleanedCount,
+        downloadFilesCleanedCount: cleanupResult.downloadFilesCleanedCount,
+        exportFilesCleanedCount: cleanupResult.exportFilesCleanedCount,
+        foldersRemovedCount: cleanupResult.foldersRemovedCount,
         totalFilesProcessed: cleanupResult.totalFilesProcessed,
         errors: cleanupResult.errors.length,
         timeSession: timeManager.getSessionInfo(),
       });
     } catch (cleanupError: any) {
       await dualLogError(
-        "Error during folder cleanup (continuing with error handling):",
+        "Error during standardized cleanup (continuing with error handling):",
         cleanupError.message,
         { jobId }
       );

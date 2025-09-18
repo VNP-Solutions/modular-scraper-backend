@@ -3,10 +3,7 @@ import Papa from "papaparse";
 import path from "path";
 import { Browser, Page } from "puppeteer";
 import { delay } from "../../common/delay.js";
-import {
-  autoDetectCleanupParams,
-  cleanupFoldersOnError,
-} from "../../common/folder-cleanup.js";
+import { cleanupOnError } from "../utils/error-cleanup.js";
 import { dualLogError, dualLogInfo } from "../../common/log-helper.js";
 import { progressManager } from "../../common/progress-manager.js";
 import { scrapingStateManager } from "../../common/scraping-state.js";
@@ -1576,36 +1573,37 @@ export async function getAgodaBookingData(
       await dualLogError("Error during error cleanup:", cleanupError);
     }
 
-    // Cleanup folders on booking data error
+    // Standardized cleanup on booking data error
     try {
-      await dualLogInfo("Starting folder cleanup due to booking data error", {
-        jobId,
-        agodaId,
-        timeSession: timeManager.getSessionInfo(),
-      });
-
-      // Try to auto-detect cleanup parameters if not provided
-      const cleanupParams = await autoDetectCleanupParams(jobId);
-      const finalAgodaId = agodaId || cleanupParams.agodaId;
-      const finalPropertyName = cleanupParams.propertyName;
-
-      const cleanupResult = await cleanupFoldersOnError(
-        finalAgodaId,
-        finalPropertyName,
-        jobId
+      await dualLogInfo(
+        "Starting standardized cleanup due to booking data error",
+        {
+          jobId,
+          agodaId,
+          timeSession: timeManager.getSessionInfo(),
+        }
       );
 
-      await dualLogInfo("Folder cleanup completed after booking data error", {
-        jobId,
-        downloadsCleanedCount: cleanupResult.downloadsCleanedCount,
-        importCleanedCount: cleanupResult.importCleanedCount,
-        totalFilesProcessed: cleanupResult.totalFilesProcessed,
-        errors: cleanupResult.errors.length,
-        timeSession: timeManager.getSessionInfo(),
+      const cleanupResult = await cleanupOnError(jobId, {
+        agodaId,
+        operation: "agoda_booking_data_error",
       });
+
+      await dualLogInfo(
+        "Standardized cleanup completed after booking data error",
+        {
+          jobId,
+          downloadFilesCleanedCount: cleanupResult.downloadFilesCleanedCount,
+          exportFilesCleanedCount: cleanupResult.exportFilesCleanedCount,
+          foldersRemovedCount: cleanupResult.foldersRemovedCount,
+          totalFilesProcessed: cleanupResult.totalFilesProcessed,
+          errors: cleanupResult.errors.length,
+          timeSession: timeManager.getSessionInfo(),
+        }
+      );
     } catch (cleanupError: any) {
       await dualLogError(
-        "Error during folder cleanup (continuing with error handling):",
+        "Error during standardized cleanup (continuing with error handling):",
         cleanupError.message,
         { jobId }
       );
