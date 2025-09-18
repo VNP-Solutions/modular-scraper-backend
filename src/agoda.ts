@@ -11,6 +11,10 @@ import { otpCompletionNotifier } from "./common/otp-completion-notifier.js";
 import { progressManager } from "./common/progress-manager.js";
 import { scrapingStateManager } from "./common/scraping-state.js";
 import { timeManager } from "./common/time-manager.js";
+import {
+  takeSuccessScreenshot,
+  takeErrorScreenshot,
+} from "./common/screenshot-helper.js";
 import { JobStatus } from "./models/job.model.js";
 import { jobService } from "./services/job.service.js";
 
@@ -115,6 +119,11 @@ async function agoda(
     const page = setupResult.page;
     await dualLogInfo("Browser setup completed successfully");
 
+    // Take screenshot after successful browser setup
+    if (jobId && page) {
+      await takeSuccessScreenshot(page, jobId, "browser_setup_completed");
+    }
+
     // Update progress - browser setup complete
     if (jobId) {
       await progressManager.updateJobProgress(
@@ -135,6 +144,11 @@ async function agoda(
     // Agoda login process (which includes OTP verification)
     await agodaLogin(browser, page, agodaUsername, agodaPassword, jobId);
     await dualLogInfo("Agoda login completed successfully");
+
+    // Take screenshot after successful login
+    if (jobId && page) {
+      await takeSuccessScreenshot(page, jobId, "login_completed");
+    }
 
     // Update progress - login complete
     if (jobId) {
@@ -164,37 +178,40 @@ async function agoda(
       jobId
     );
 
+    // Take screenshot after successful booking data retrieval
+    if (jobId && page) {
+      await takeSuccessScreenshot(page, jobId, "booking_data_completed");
+    }
+
     // Mark job as completed
     if (jobId) {
       await progressManager.markJobCompleted(jobId);
     }
 
-    // Cleanup downloads folder on successful completion (regardless of record count)
+    // Standardized cleanup on successful completion
     try {
-      await dualLogInfo("Starting folder cleanup after successful completion", {
-        jobId,
-        agodaId,
-        recordCount: bookingData.length,
-        timeSession: timeManager.getSessionInfo(),
-      });
-
-      // Try to auto-detect cleanup parameters if not provided
-      const cleanupParams = await autoDetectCleanupParams(jobId);
-      const finalAgodaId = agodaId || cleanupParams.agodaId;
-      const finalPropertyName = cleanupParams.propertyName;
-
-      const cleanupResult = await cleanupFoldersOnError(
-        finalAgodaId,
-        finalPropertyName,
-        jobId
-      );
-
       await dualLogInfo(
-        "Folder cleanup completed after successful completion",
+        "Starting standardized cleanup after successful completion",
         {
           jobId,
-          downloadsCleanedCount: cleanupResult.downloadsCleanedCount,
-          importCleanedCount: cleanupResult.importCleanedCount,
+          agodaId,
+          recordCount: bookingData.length,
+          timeSession: timeManager.getSessionInfo(),
+        }
+      );
+
+      const cleanupResult = await cleanupOnError(jobId, {
+        agodaId,
+        operation: "agoda_automation_success_cleanup",
+      });
+
+      await dualLogInfo(
+        "Standardized cleanup completed after successful completion",
+        {
+          jobId,
+          downloadFilesCleanedCount: cleanupResult.downloadFilesCleanedCount,
+          exportFilesCleanedCount: cleanupResult.exportFilesCleanedCount,
+          foldersRemovedCount: cleanupResult.foldersRemovedCount,
           totalFilesProcessed: cleanupResult.totalFilesProcessed,
           errors: cleanupResult.errors.length,
           timeSession: timeManager.getSessionInfo(),
@@ -202,7 +219,7 @@ async function agoda(
       );
     } catch (cleanupError: any) {
       await dualLogError(
-        "Error during folder cleanup after successful completion (continuing):",
+        "Error during standardized cleanup after successful completion (continuing):",
         cleanupError.message,
         { jobId }
       );
@@ -212,6 +229,11 @@ async function agoda(
     // End time session on successful completion
     await timeManager.endSession();
 
+    // Take final success screenshot
+    if (jobId && page) {
+      await takeSuccessScreenshot(page, jobId, "job_completed_successfully");
+    }
+
     await dualLogInfo("Agoda automation process completed successfully", {
       recordCount: bookingData.length,
       jobId,
@@ -220,6 +242,23 @@ async function agoda(
     return bookingData;
   } catch (error: any) {
     await dualLogError("Error in Agoda automation:", error);
+
+    // Take error screenshot when error occurs
+    if (jobId && browser) {
+      try {
+        const pages = await browser.pages();
+        const activePage = pages.find((p) => !p.isClosed()) || pages[0];
+        if (activePage) {
+          await takeErrorScreenshot(
+            activePage,
+            jobId,
+            "agoda_automation_error"
+          );
+        }
+      } catch (screenshotError) {
+        await dualLogError("Failed to take error screenshot:", screenshotError);
+      }
+    }
 
     // Notify that OTP work is completed (on error) so other jobs can proceed
     if (jobId) {

@@ -7,6 +7,10 @@ import { cleanupOnError } from "../utils/error-cleanup.js";
 import { dualLogError, dualLogInfo } from "../../common/log-helper.js";
 import { progressManager } from "../../common/progress-manager.js";
 import { scrapingStateManager } from "../../common/scraping-state.js";
+import {
+  takeSuccessScreenshot,
+  takeErrorScreenshot,
+} from "../../common/screenshot-helper.js";
 import { timeManager } from "../../common/time-manager.js";
 import { timeoutManager } from "../../common/timeout-manager.js";
 import { PaymentInfo } from "../../models/job-item.model.js";
@@ -614,6 +618,11 @@ export async function getAgodaBookingData(
       "Successfully navigated to booking data page and confirmed Reservations section"
     );
 
+    // Take screenshot after successful navigation to booking data page
+    if (jobId) {
+      await takeSuccessScreenshot(newPage, jobId, "booking_page_loaded");
+    }
+
     // Update progress
     if (jobId) {
       await progressManager.updateJobProgress(
@@ -691,8 +700,18 @@ export async function getAgodaBookingData(
       );
 
       await dualLogInfo("CSV download button found");
+
+      // Take screenshot after download button is found
+      if (jobId) {
+        await takeSuccessScreenshot(newPage, jobId, "download_button_found");
+      }
     } catch (error: any) {
       await dualLogError("Error waiting for CSV download button:", error);
+
+      // Take error screenshot when download button is not found
+      if (jobId) {
+        await takeErrorScreenshot(newPage, jobId, "download_button_not_found");
+      }
 
       // Additional debugging when button is not found
       try {
@@ -1186,8 +1205,23 @@ export async function getAgodaBookingData(
 
       console.log("👆 Clicked the download CSV button");
       await dualLogInfo("CSV download button clicked successfully");
+
+      // Take screenshot after successfully clicking download button
+      if (jobId) {
+        await takeSuccessScreenshot(newPage, jobId, "download_button_clicked");
+      }
     } catch (error: any) {
       await dualLogError("Error clicking CSV download button:", error);
+
+      // Take error screenshot when button click fails
+      if (jobId) {
+        await takeErrorScreenshot(
+          newPage,
+          jobId,
+          "download_button_click_failed"
+        );
+      }
+
       throw new Error("Failed to click CSV download button");
     }
 
@@ -1319,6 +1353,11 @@ export async function getAgodaBookingData(
     const fileStats = fs.statSync(csvFilePath);
     const fileSizeKB = Math.round(fileStats.size / 1024);
     await dualLogInfo(`CSV file size: ${fileSizeKB} KB`);
+
+    // Take screenshot after CSV file is successfully downloaded
+    if (jobId) {
+      await takeSuccessScreenshot(newPage, jobId, "csv_download_completed");
+    }
 
     // Update progress - CSV file downloaded and ready for processing
     if (jobId) {
@@ -1513,6 +1552,15 @@ export async function getAgodaBookingData(
             );
           }
 
+          // Take screenshot after data is successfully saved
+          if (jobId) {
+            await takeSuccessScreenshot(
+              newPage,
+              jobId,
+              "data_processing_completed"
+            );
+          }
+
           // Update final progress
           await progressManager.updateJobProgress(
             jobId,
@@ -1552,6 +1600,22 @@ export async function getAgodaBookingData(
     return formattedRecords;
   } catch (error: any) {
     await dualLogError(`Error retrieving Agoda booking data:`, error);
+
+    // Take error screenshot when booking data retrieval fails
+    if (jobId && newPage) {
+      try {
+        await takeErrorScreenshot(
+          newPage,
+          jobId,
+          "booking_data_retrieval_error"
+        );
+      } catch (screenshotError) {
+        await dualLogError(
+          "Failed to take booking data retrieval error screenshot:",
+          screenshotError
+        );
+      }
+    }
 
     // Log error details with time session info
     await dualLogInfo("Error occurred during Agoda booking data retrieval", {

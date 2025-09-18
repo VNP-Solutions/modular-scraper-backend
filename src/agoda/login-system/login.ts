@@ -5,6 +5,10 @@ import { dualLogError, dualLogInfo } from "../../common/log-helper.js";
 import { otpCompletionNotifier } from "../../common/otp-completion-notifier.js";
 import { progressManager } from "../../common/progress-manager.js";
 import { scrapingStateManager } from "../../common/scraping-state.js";
+import {
+  takeSuccessScreenshot,
+  takeErrorScreenshot,
+} from "../../common/screenshot-helper.js";
 import { timeManager } from "../../common/time-manager.js";
 import { timeoutManager } from "../../common/timeout-manager.js";
 import { getAgodaSignInLink } from "./email-link-helper.js";
@@ -69,6 +73,11 @@ async function agodaLogin(
 
       await dualLogInfo("Iframe content accessible");
 
+      // Take screenshot after iframe access
+      if (jobId) {
+        await takeSuccessScreenshot(page, jobId, "iframe_accessed");
+      }
+
       // Update progress - iframe accessed
       if (jobId) {
         await progressManager.updateJobProgress(
@@ -129,6 +138,11 @@ async function agodaLogin(
 
       await dualLogInfo(`Successfully entered email: ${agodaUsername}`);
 
+      // Take screenshot after email entry
+      if (jobId) {
+        await takeSuccessScreenshot(page, jobId, "email_entered");
+      }
+
       // Update progress - email entered
       if (jobId) {
         await progressManager.updateJobProgress(
@@ -172,6 +186,11 @@ async function agodaLogin(
       // Click the continue button
       await continueButton.click();
       await dualLogInfo("Continue button clicked successfully!");
+
+      // Take screenshot after continue button clicked
+      if (jobId) {
+        await takeSuccessScreenshot(page, jobId, "continue_button_clicked");
+      }
 
       // Update progress - continue button clicked
       if (jobId) {
@@ -233,7 +252,13 @@ async function agodaLogin(
       } else if (nextPageResult === "otp-form") {
         await dualLogInfo("✅ OTP form flow detected");
         try {
-          await handleOtpFlow(frame, loadingTimeout, selectorTimeout, jobId);
+          await handleOtpFlow(
+            frame,
+            loadingTimeout,
+            selectorTimeout,
+            page,
+            jobId
+          );
 
           // Notify worker that OTP work is completed so other jobs can proceed
           if (jobId) {
@@ -241,6 +266,20 @@ async function agodaLogin(
           }
         } catch (otpError) {
           await dualLogError("Error during OTP flow:", otpError);
+
+          // Take error screenshot for OTP flow error
+          if (jobId) {
+            try {
+              // Use the main page instead of trying to access from frame
+              await takeErrorScreenshot(page, jobId, "otp_flow_error");
+            } catch (screenshotError) {
+              await dualLogError(
+                "Failed to take OTP flow error screenshot:",
+                screenshotError
+              );
+            }
+          }
+
           throw otpError;
         }
       } else {
@@ -263,6 +302,18 @@ async function agodaLogin(
       await dualLogError("Error during page interaction:", pageError);
       shouldCloseBrowser = true;
 
+      // Take error screenshot for page interaction error
+      if (jobId) {
+        try {
+          await takeErrorScreenshot(page, jobId, "page_interaction_error");
+        } catch (screenshotError) {
+          await dualLogError(
+            "Failed to take page interaction error screenshot:",
+            screenshotError
+          );
+        }
+      }
+
       // Notify that OTP work is completed (on error) so other jobs can proceed
       if (jobId) {
         otpCompletionNotifier.notifyOtpCompleted(jobId);
@@ -271,6 +322,22 @@ async function agodaLogin(
     }
   } catch (error) {
     await dualLogError("Critical error during Agoda login process:", error);
+
+    // Take error screenshot for critical login error
+    if (jobId && browser) {
+      try {
+        const pages = await browser.pages();
+        const activePage = pages.find((p) => !p.isClosed()) || pages[0];
+        if (activePage) {
+          await takeErrorScreenshot(activePage, jobId, "critical_login_error");
+        }
+      } catch (screenshotError) {
+        await dualLogError(
+          "Failed to take critical login error screenshot:",
+          screenshotError
+        );
+      }
+    }
 
     // Notify that OTP work is completed (on error) so other jobs can proceed
     if (jobId) {
@@ -415,6 +482,7 @@ async function handleOtpFlow(
   frame: any,
   loadingTimeout: number,
   selectorTimeout: number,
+  page: Page,
   jobId?: string
 ): Promise<void> {
   await dualLogInfo("🔐 Processing OTP form...");
@@ -514,6 +582,19 @@ async function handleOtpFlow(
 
   await dualLogInfo("All OTP digits filled successfully");
 
+  // Take screenshot after OTP digits are filled (using main page)
+  if (jobId) {
+    try {
+      // Use the main page instead of trying to access from frame
+      await takeSuccessScreenshot(page, jobId, "otp_digits_filled");
+    } catch (screenshotError) {
+      await dualLogError(
+        "Failed to take OTP digits filled screenshot:",
+        screenshotError
+      );
+    }
+  }
+
   // Wait for continue button to become enabled
   await dualLogInfo("Waiting for OTP continue button to be enabled...");
   await frame.waitForFunction(
@@ -538,6 +619,19 @@ async function handleOtpFlow(
 
   await otpContinueButton.click();
   await dualLogInfo("OTP continue button clicked successfully!");
+
+  // Take screenshot after OTP continue button clicked
+  if (jobId) {
+    try {
+      // Use the main page instead of trying to access from frame
+      await takeSuccessScreenshot(page, jobId, "otp_verification_completed");
+    } catch (screenshotError) {
+      await dualLogError(
+        "Failed to take OTP verification completed screenshot:",
+        screenshotError
+      );
+    }
+  }
 
   // Wait for successful login (page should redirect)
   await dualLogInfo("Waiting for login completion...");
