@@ -129,7 +129,11 @@ export class BookingScraper extends BaseScraper {
       await this.logInfo("Connected to Browserless session successfully");
 
       // Set viewport and timeouts
-      await page.setViewport({ width: 2560, height: 1440 });
+      // await page.setViewport({ width: 2560, height: 1440 });
+      await page.setViewport({
+        width: 1905,
+        height: 945,
+      });
       await page.setDefaultNavigationTimeout(loadingTimeout);
       await page.setDefaultTimeout(selectorTimeout);
 
