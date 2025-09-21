@@ -26,7 +26,10 @@ import { jobService } from "../services/job.service.js";
 import { SelectorUtils } from "../common/selector-utils.js";
 import { timeoutManager } from "../common/timeout-manager.js";
 import handleBookingOtpVerification from "../otp-verification/booking-otp-verification.js";
-import { TwoCaptchaSolver } from "../services/captcha-solver.js";
+import {
+  CaptchaService,
+  CaptchaSolveResult,
+} from "../services/captcha-service.js";
 import {
   BaseScraper,
   CaptchaHandlerOptions,
@@ -45,7 +48,7 @@ export class BookingScraper extends BaseScraper {
   private sessionUrl?: string;
   protected currentPropertyName?: string;
   private context?: ScraperContext;
-  private captchaSolver?: TwoCaptchaSolver;
+  private captchaService: CaptchaService;
 
   constructor(context?: ScraperContext) {
     super("booking", "https://admin.booking.com");
@@ -53,18 +56,16 @@ export class BookingScraper extends BaseScraper {
       process.env.BROWSERLESS_TOKEN ||
       "2SXlnLjeZpwR2tV6ab1698bfe680a3959c2c681f06939ee3b";
 
-    // Initialize 2captcha solver if enabled
-    const apiKey = process.env.TWOCAPTCHA_API_KEY;
-    const enabled = process.env.ENABLE_2CAPTCHA === "true";
-
-    if (enabled && apiKey) {
-      this.captchaSolver = new TwoCaptchaSolver(
-        apiKey,
-        parseInt(process.env.TWOCAPTCHA_TIMEOUT || "300000"),
-        parseInt(process.env.TWOCAPTCHA_POLLING_INTERVAL || "5000")
-      );
-    }
     this.context = context;
+
+    // Initialize captcha service with configuration
+    this.captchaService = new CaptchaService({
+      openaiApiKey: process.env.OPENAI_API_KEY,
+      maxRetries: parseInt(process.env.CAPTCHA_MAX_RETRIES || "3"),
+      timeout: parseInt(process.env.CAPTCHA_TIMEOUT || "120000"),
+      enableOpenAIVision: process.env.ENABLE_OPENAI_VISION !== "false",
+      enableBasicAuto: process.env.ENABLE_BASIC_AUTO !== "false",
+    });
   }
 
   public setBrowserData(page: Page, browser: Browser): void {
@@ -310,10 +311,6 @@ export class BookingScraper extends BaseScraper {
       await this.logInfo("Starting login process");
 
       await this.handleCaptcha({
-        type:
-          process.env.ENABLE_2CAPTCHA === "true"
-            ? "2captcha"
-            : "browserless_ui",
         sessionUrl: this.sessionUrl,
       });
 
@@ -340,10 +337,6 @@ export class BookingScraper extends BaseScraper {
 
       // Check for captcha after email submission
       await this.handleCaptcha({
-        type:
-          process.env.ENABLE_2CAPTCHA === "true"
-            ? "2captcha"
-            : "browserless_ui",
         sessionUrl: this.sessionUrl,
       });
 
@@ -407,10 +400,6 @@ export class BookingScraper extends BaseScraper {
 
       // Check for captcha after login submission
       await this.handleCaptcha({
-        type:
-          process.env.ENABLE_2CAPTCHA === "true"
-            ? "2captcha"
-            : "browserless_ui",
         sessionUrl: this.sessionUrl,
       });
 
@@ -719,34 +708,72 @@ export class BookingScraper extends BaseScraper {
       }
 
       let captchaSolved = false;
+      const maxRetries = parseInt(process.env.CAPTCHA_MAX_RETRIES || "3");
 
-      // Try 2captcha first if enabled and available
-      if (
-        options?.type === "2captcha" ||
-        (this.captchaSolver && process.env.ENABLE_2CAPTCHA === "true")
-      ) {
-        captchaSolved = await this.solveCaptchaWith2Captcha();
-
-        if (captchaSolved) {
-          await this.logInfo("Captcha solved successfully with 2captcha");
-          return true;
-        } else {
-          await this.logInfo("2captcha failed, falling back to other methods");
-        }
-      }
-
-      // Fallback to existing methods
+      // Solve captcha using available methods with retry logic
       if (options?.type === "automatic") {
-        captchaSolved = await this.solveCaptchaAutomatically();
+        // Try automatic solving with retries
+        for (
+          let attempt = 1;
+          attempt <= maxRetries && !captchaSolved;
+          attempt++
+        ) {
+          await this.logInfo(
+            `🔄 Automatic captcha solving attempt ${attempt}/${maxRetries}`
+          );
+          captchaSolved = await this.solveCaptchaAutomatically();
+
+          if (!captchaSolved && attempt < maxRetries) {
+            await this.logInfo(
+              `⏳ Waiting before retry attempt ${attempt + 1}`
+            );
+            await this.delay(5000); // Wait 5 seconds between retries
+          }
+        }
+
+        // If automatic solving failed after all retries, fallback to manual
+        if (!captchaSolved) {
+          await this.logInfo(
+            `❌ Automatic captcha solving failed after ${maxRetries} attempts, falling back to manual solving`
+          );
+          captchaSolved = await this.solveCaptchaManually(
+            options?.timeout || 86400000
+          );
+        }
       } else if (options?.type === "browserless_ui") {
         captchaSolved = await this.solveCaptchaWithUI(
           this.sessionUrl || options.sessionUrl!,
           options.timeout || 86400000
         );
       } else {
-        captchaSolved = await this.solveCaptchaManually(
-          options?.timeout || 86400000
-        );
+        // Default to trying automatic first, then manual fallback
+        for (
+          let attempt = 1;
+          attempt <= maxRetries && !captchaSolved;
+          attempt++
+        ) {
+          await this.logInfo(
+            `🔄 Automatic captcha solving attempt ${attempt}/${maxRetries}`
+          );
+          captchaSolved = await this.solveCaptchaAutomatically();
+
+          if (!captchaSolved && attempt < maxRetries) {
+            await this.logInfo(
+              `⏳ Waiting before retry attempt ${attempt + 1}`
+            );
+            await this.delay(5000);
+          }
+        }
+
+        // Fallback to manual solving if automatic failed
+        if (!captchaSolved) {
+          await this.logInfo(
+            `❌ Automatic captcha solving failed after ${maxRetries} attempts, falling back to manual solving`
+          );
+          captchaSolved = await this.solveCaptchaManually(
+            options?.timeout || 86400000
+          );
+        }
       }
 
       if (!captchaSolved) {
@@ -1155,10 +1182,6 @@ export class BookingScraper extends BaseScraper {
 
       // Check on captcha
       let captchaHandled = await this.handleCaptcha({
-        type:
-          process.env.ENABLE_2CAPTCHA === "true"
-            ? "2captcha"
-            : "browserless_ui",
         sessionUrl: this.sessionUrl,
         page: newPage,
       });
@@ -1180,10 +1203,6 @@ export class BookingScraper extends BaseScraper {
 
       // Check on captcha
       captchaHandled = await this.handleCaptcha({
-        type:
-          process.env.ENABLE_2CAPTCHA === "true"
-            ? "2captcha"
-            : "browserless_ui",
         sessionUrl: this.sessionUrl,
         page: newPage,
       });
@@ -1792,91 +1811,48 @@ export class BookingScraper extends BaseScraper {
     if (!this.page) return false;
 
     try {
-      await this.logInfo("Attempting automatic captcha solution");
+      await this.logInfo("🚀 Starting advanced automatic captcha solution");
 
-      // Wait for captcha images to load
-      await this.page.waitForSelector("img", { timeout: 10000 });
-      await this.delay(2000);
+      // Use the new captcha service with multiple solving methods
+      const result: CaptchaSolveResult = await this.captchaService.solveCaptcha(
+        this.page,
+        this.logInfo.bind(this)
+      );
 
-      // Get all images and click on potential clock images
-      const images = await this.page.$$("img");
-      await this.logInfo(`Found ${images.length} images to analyze`);
+      if (result.success) {
+        await this.logInfo(
+          `✅ Captcha solved successfully using ${result.method} method`
+        );
 
-      let clocksFound = 0;
-      for (let i = 0; i < images.length; i++) {
-        try {
-          const imgElement = images[i];
-          const box = await imgElement.boundingBox();
-          if (box && box.width > 50 && box.height > 50) {
-            await this.logInfo(`Clicking image ${i + 1}`);
-            await imgElement.click();
-            clocksFound++;
-            await this.delay(500);
-          }
-        } catch (e) {
-          // Skip images that can't be clicked
+        // Log additional details if available
+        if (result.analysis) {
+          await this.logInfo("📊 Captcha analysis details", {
+            type: result.analysis.captchaType,
+            positionsFound: Array.isArray(result.analysis.positions)
+              ? result.analysis.positions.length
+              : 0,
+            instruction: result.analysis.instruction,
+          });
         }
-      }
 
-      await this.logInfo(`Clicked ${clocksFound} potential clock images`);
-
-      // Look for and click Confirm button
-      const confirmSelectors = [
-        'button:contains("Confirm")',
-        'input[value="Confirm"]',
-        'button[type="submit"]',
-      ];
-
-      for (const selector of confirmSelectors) {
-        try {
-          if (selector.includes("contains")) {
-            const elements = await this.page.evaluate(() => {
-              const buttons = Array.from(document.querySelectorAll("button"));
-              return buttons.find((btn) =>
-                btn.textContent?.includes("Confirm")
-              );
-            });
-            if (elements) {
-              await this.logInfo("Clicking Confirm button");
-              await this.page.evaluate(() => {
-                const buttons = Array.from(document.querySelectorAll("button"));
-                const confirmBtn = buttons.find((btn) =>
-                  btn.textContent?.includes("Confirm")
-                );
-                if (confirmBtn) confirmBtn.click();
-              });
-              break;
-            }
-          } else {
-            const confirmBtn = await this.page.$(selector);
-            if (confirmBtn) {
-              await this.logInfo(`Clicking Confirm: ${selector}`);
-              await confirmBtn.click();
-              break;
-            }
-          }
-        } catch (e) {
-          // Try next selector
+        if (result.clickResult) {
+          await this.logInfo(
+            `🖱️ Click results: ${result.clickResult.successfulClicks}/${result.clickResult.totalElements} successful`
+          );
         }
-      }
 
-      await this.delay(3000);
-
-      // Check if captcha is solved
-      const pageContent = await this.page.content();
-      const stillHasCaptcha =
-        pageContent.includes("Let's make sure you're human") ||
-        pageContent.includes("Choose all the clocks");
-
-      if (!stillHasCaptcha) {
-        await this.logInfo("Captcha appears to be solved automatically");
         return true;
       } else {
-        await this.logInfo("Automatic captcha solution may have failed");
+        await this.logInfo(
+          `❌ Advanced captcha solving failed with ${result.method} method`
+        );
+        if (result.error) {
+          await this.logInfo(`Error details: ${result.error}`);
+        }
         return false;
       }
     } catch (error) {
-      await this.logError("Automatic captcha solution failed", error);
+      await this.logError("Advanced automatic captcha solution failed", error);
       return false;
     }
   }
@@ -2100,65 +2076,6 @@ export class BookingScraper extends BaseScraper {
       }
     } catch (error) {
       await this.logError("Failed to send CAPTCHA notification email:", error);
-    }
-  }
-
-  /**
-   * Solve captcha using 2captcha service
-   */
-  private async solveCaptchaWith2Captcha(): Promise<boolean> {
-    if (!this.captchaSolver || !this.page) {
-      await this.logError(
-        "2captcha solver not initialized or page not available"
-      );
-      return false;
-    }
-
-    try {
-      await this.logInfo("Attempting to solve captcha with 2captcha service");
-
-      // Check balance first
-      const balance = await this.captchaSolver.getBalance();
-      if (balance < 0.01) {
-        await this.logError("Insufficient 2captcha balance");
-        return false;
-      }
-
-      // Auto-detect and solve captcha
-      const result = await this.captchaSolver.autoSolveCaptcha(this.page);
-
-      if (result.success) {
-        await this.logInfo(
-          `Captcha solved with 2captcha. Cost: $${result.cost}`
-        );
-
-        // Wait a bit for the solution to be processed
-        await this.delay(3000);
-
-        // Try to submit the form or continue
-        await this.submitCaptchaForm();
-
-        // Verify the captcha was actually solved
-        await this.delay(5000);
-        const pageContent = await this.page.content();
-        const stillHasCaptcha = CAPTCHA_PATTERNS.some((pattern) =>
-          pattern.test(pageContent)
-        );
-
-        if (!stillHasCaptcha) {
-          await this.logInfo("Captcha successfully solved and verified");
-          return true;
-        } else {
-          await this.logInfo("Captcha solution may not have been accepted");
-          return false;
-        }
-      } else {
-        await this.logError("2captcha solving failed:", result.error);
-        return false;
-      }
-    } catch (error) {
-      await this.logError("Error in 2captcha solving process:", error);
-      return false;
     }
   }
 

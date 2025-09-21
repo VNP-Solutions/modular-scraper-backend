@@ -24,7 +24,6 @@
   "homepage": "https://github.com/yasirnabil534/scrapper-project#readme",
   "dependencies": {
     "@aws-sdk/client-s3": "^3.835.0",
-    "2captcha-ts": "^2.4.1",
     "body-parser": "^2.2.0",
     "cors": "^2.8.5",
     "dotenv": "^16.5.0",
@@ -36,6 +35,7 @@
     "node-cron": "^3.0.3",
     "node-fetch": "^3.3.2",
     "nodemailer": "^6.9.8",
+    "openai": "^4.104.0",
     "open": "^10.1.2",
     "puppeteer": "^24.15.0",
     "puppeteer-core": "^24.10.2",
