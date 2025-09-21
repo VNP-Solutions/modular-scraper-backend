@@ -13,7 +13,7 @@ export interface LoginCredentials {
 }
 
 export interface CaptchaHandlerOptions {
-  type: "manual" | "automatic" | "browserless_ui" | "2captcha";
+  type?: "manual" | "automatic" | "browserless_ui";
   timeout?: number;
   sessionUrl?: string;
   page?: Page;

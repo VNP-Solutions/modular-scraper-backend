@@ -17,7 +17,6 @@ import {
   bookingTrustCron,
 } from "../services/booking-trust-cron.service.js";
 import { bookingTrustScheduler } from "../services/booking-trust-scheduler.service.js";
-import { TwoCaptchaSolver } from "../services/captcha-solver.js";
 import { propertyCredentialsService } from "../services/job-credentials.service.js";
 import { jobService } from "../services/job.service.js";
 
@@ -110,64 +109,6 @@ app.get("/test-captcha-email", async (req, res) => {
     });
   }
 });
-
-// Test endpoint for 2captcha integration
-app.post("/test-2captcha", (async (
-  req: express.Request,
-  res: express.Response
-) => {
-  try {
-    const { sitekey, pageUrl, type = "recaptcha", iv, context } = req.body;
-
-    if (!process.env.TWOCAPTCHA_API_KEY) {
-      return res.status(400).json({
-        success: false,
-        error: "2captcha API key not configured",
-      });
-    }
-
-    const solver = new TwoCaptchaSolver(process.env.TWOCAPTCHA_API_KEY);
-    const balance = await solver.getBalance();
-
-    if (balance < 0.01) {
-      return res.status(400).json({
-        success: false,
-        error: "Insufficient 2captcha balance",
-        balance,
-      });
-    }
-
-    let result;
-    if (type === "recaptcha" && sitekey && pageUrl) {
-      result = await solver.solveRecaptchaV2(sitekey, pageUrl);
-    } else if (type === "hcaptcha" && sitekey && pageUrl) {
-      result = await solver.solveHCaptcha(sitekey, pageUrl);
-    } else if (type === "aws-waf" && sitekey && pageUrl && iv && context) {
-      result = await solver.solveAWSWAFCaptcha(sitekey, pageUrl, iv, context);
-    } else {
-      return res.status(400).json({
-        success: false,
-        error:
-          "Invalid parameters. Need sitekey and pageUrl for recaptcha/hcaptcha, or sitekey, pageUrl, iv, and context for aws-waf",
-      });
-    }
-
-    res.json({
-      success: result.success,
-      solution: result.success
-        ? result.solution?.substring(0, 50) + "..."
-        : undefined,
-      error: result.error,
-      cost: result.cost,
-      balance,
-    });
-  } catch (error: any) {
-    res.status(500).json({
-      success: false,
-      error: error instanceof Error ? error.message : "Unknown error",
-    });
-  }
-}) as any);
 
 // API to get scraping status
 app.get(

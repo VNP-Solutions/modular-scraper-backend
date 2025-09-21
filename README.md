@@ -4,7 +4,16 @@ A Node.js backend application for automated web scraping with time-based browser
 
 ## Features
 
-### ✨ New: Email Error Notifications
+### 🚀 New: Advanced Captcha Solving System
+
+- **OpenAI Vision Integration**: AI-powered captcha analysis and solving using GPT-4 Vision
+- **Multi-Method Approach**: Automatic fallback between OpenAI Vision → Basic Auto → Manual Email
+- **Configurable Retries**: Customizable retry attempts with intelligent delay between attempts
+- **Smart Detection**: Enhanced captcha pattern recognition and element identification
+- **Comprehensive Logging**: Detailed logs of captcha solving attempts and results
+- **Fallback Safety**: Manual email notifications when all automatic methods fail
+
+### ✨ Email Error Notifications
 
 - **Automatic Error Alerts**: Sends email notifications when jobs encounter errors
 - **Multiple Recipients**: Support for single or multiple email addresses per job
@@ -51,6 +60,22 @@ BROWSER_TIME_LIMIT=1h
 # Number of days to process in each chunk (default: 2)
 CHUNK_SIZE=2
 
+# Advanced Captcha Solving Configuration
+# OpenAI Vision API (Primary Method - Recommended)
+OPENAI_API_KEY=sk-proj-your-openai-api-key-here
+ENABLE_OPENAI_VISION=true
+
+# Basic Automatic Solving (Fallback)
+ENABLE_BASIC_AUTO=true
+
+# Retry and Timeout Settings
+CAPTCHA_MAX_RETRIES=3
+CAPTCHA_TIMEOUT=120000
+CAPTCHA_RETRY_DELAY=5000
+
+# Manual Captcha Email Recipients
+CAPTCHA_RECIPIENTS=admin@company.com,support@company.com
+
 # Email Notification Configuration
 # Email service provider (gmail, outlook, yahoo, or use custom SMTP)
 EMAIL_SERVICE=gmail
@@ -77,16 +102,14 @@ The system automatically sends error notifications to email addresses specified 
 // Example job with email notifications
 const job = {
   // ... other job fields
-  watcher_emails: [
-    "manager@company.com",
-    "developer@company.com"
-  ]
+  watcher_emails: ["manager@company.com", "developer@company.com"],
 };
 ```
 
 ### Email Error Coverage
 
 Email notifications are sent for:
+
 - Login/authentication failures
 - Browser crashes and timeouts
 - Data extraction errors
@@ -296,11 +319,12 @@ npm run build:start
 ### Testing Email Notifications
 
 ```javascript
-import { emailNotifier } from './src/common/email-notifier.js';
+import { emailNotifier } from "./src/common/email-notifier.js";
 
 // Test email configuration
-await emailNotifier.sendTestEmail('test@example.com');
+await emailNotifier.sendTestEmail("test@example.com");
 ```
+
 # Modular Scraper Backend
 
 A Node.js backend application for automated web scraping with worker thread parallelization, time-based browser management and resume functionality.
@@ -668,7 +692,6 @@ Use process managers like PM2 for production:
 ```
 
 Note: Use `fork` mode, not `cluster` mode, as worker threads provide the parallelization.
-
 
 ## Contributing
 
