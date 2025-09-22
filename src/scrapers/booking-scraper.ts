@@ -65,6 +65,7 @@ export class BookingScraper extends BaseScraper {
       timeout: parseInt(process.env.CAPTCHA_TIMEOUT || "120000"),
       enableOpenAIVision: process.env.ENABLE_OPENAI_VISION !== "false",
       enableBasicAuto: process.env.ENABLE_BASIC_AUTO !== "false",
+      jobId: this.jobId,
     });
   }
 
@@ -1693,6 +1694,16 @@ export class BookingScraper extends BaseScraper {
 
   async cleanup(): Promise<void> {
     try {
+      // Clean up screenshots for this job
+      const jobId = this.jobId || `trust_verify-${this.propertyIdForDb}`;
+      if (jobId) {
+        await this.logInfo(`🗑️ Cleaning up screenshots for job: ${jobId}`);
+        await this.captchaService.cleanupJobScreenshots(
+          jobId,
+          "manual cleanup"
+        );
+      }
+
       if (this.browser) {
         await this.browser.close();
         await this.logInfo("Browser closed successfully");
