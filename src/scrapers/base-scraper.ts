@@ -6,6 +6,7 @@ import {
 } from "../common/booking-error-types.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
+import { screenshotManager } from "../common/screenshot-manager.js";
 
 export interface LoginCredentials {
   email: string;
@@ -78,17 +79,30 @@ export abstract class BaseScraper {
   protected async takeScreenshot(filename?: string): Promise<void> {
     if (this.page) {
       let screenshotFilename: string;
+      const jobId = this.jobId || `trust_verify-${this.propertyIdForDb}`;
+
+      // Set job ID in screenshot manager
+      screenshotManager.setJobId(jobId);
+
       if (filename) {
         screenshotFilename = filename;
       } else {
-        const jobId = this.jobId || `trust_verify-${this.propertyIdForDb}`;
-        screenshotFilename = `scraping_last_step_${jobId}.png`;
+        screenshotFilename = screenshotManager.generateStepScreenshotName(
+          "last_step",
+          jobId
+        );
       }
 
-      await this.page.screenshot({
-        path: screenshotFilename as `${string}.png`,
-      });
-      console.log(`Screenshot saved: ${screenshotFilename}`);
+      try {
+        const screenshotPath = await screenshotManager.saveScreenshot(
+          this.page,
+          screenshotFilename,
+          jobId
+        );
+        console.log(`Screenshot saved: ${screenshotPath}`);
+      } catch (error) {
+        console.error(`Failed to save screenshot: ${error}`);
+      }
     }
   }
 
@@ -118,6 +132,36 @@ export abstract class BaseScraper {
     try {
       this.jobId = params.jobId;
       this.propertyIdForDb = params.propertyIdForDb;
+
+      // Update job ID in screenshot manager and captcha service if available
+      if (this.jobId) {
+        screenshotManager.setJobId(this.jobId);
+
+        // Clean up any existing screenshots from previous runs of this job
+        try {
+          await screenshotManager.cleanupJobScreenshots(
+            this.jobId,
+            "job start cleanup"
+          );
+          await dualLogInfo(
+            "Cleaned up existing screenshots from previous job runs",
+            {
+              jobId: this.jobId,
+              platform: this.platform,
+            }
+          );
+        } catch (cleanupError) {
+          await dualLogError(
+            "Failed to cleanup existing screenshots at job start",
+            cleanupError
+          );
+        }
+
+        // Update captcha service job ID if it exists (for booking scraper)
+        if ((this as any).captchaService) {
+          (this as any).captchaService.setJobId(this.jobId);
+        }
+      }
 
       await dualLogInfo("Starting scraping process", {
         platform: this.platform,
@@ -227,6 +271,29 @@ export abstract class BaseScraper {
         action: "execute_scraping",
         success: true,
       });
+
+      // Clean up screenshots on successful completion if captcha service is available
+      try {
+        if (this.jobId && (this as any).captchaService) {
+          await (this as any).captchaService.cleanupJobScreenshots(
+            this.jobId,
+            "job success"
+          );
+          await dualLogInfo(
+            "Screenshots cleaned up after successful completion",
+            {
+              jobId: this.jobId,
+              platform: this.platform,
+            }
+          );
+        }
+      } catch (cleanupError) {
+        await dualLogError(
+          "Failed to cleanup screenshots after success",
+          cleanupError
+        );
+      }
+
       return result;
     } catch (error) {
       await dualLogError("Scraping failed", error, {
@@ -236,6 +303,25 @@ export abstract class BaseScraper {
         action: "execute_scraping",
       });
       await this.takeScreenshot(`${this.platform}-error-${Date.now()}.png`);
+
+      // Clean up screenshots on error if captcha service is available
+      try {
+        if (this.jobId && (this as any).captchaService) {
+          await (this as any).captchaService.cleanupJobScreenshots(
+            this.jobId,
+            "job error"
+          );
+          await dualLogInfo("Screenshots cleaned up after error", {
+            jobId: this.jobId,
+            platform: this.platform,
+          });
+        }
+      } catch (cleanupError) {
+        await dualLogError(
+          "Failed to cleanup screenshots after error",
+          cleanupError
+        );
+      }
 
       // Ensure scraping state manager is stopped on any error
       try {

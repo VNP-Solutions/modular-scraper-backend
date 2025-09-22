@@ -1,7 +1,7 @@
 import fs from "fs";
 import OpenAI from "openai";
-import path from "path";
 import { Page } from "puppeteer";
+import { screenshotManager } from "../common/screenshot-manager.js";
 
 export interface CaptchaAnalysis {
   instruction: string;
@@ -30,6 +30,7 @@ export interface CaptchaServiceConfig {
   timeout?: number;
   enableOpenAIVision?: boolean;
   enableBasicAuto?: boolean;
+  jobId?: string;
 }
 
 export class CaptchaService {
@@ -43,13 +44,37 @@ export class CaptchaService {
       timeout: config.timeout || 120000,
       enableOpenAIVision: config.enableOpenAIVision !== false,
       enableBasicAuto: config.enableBasicAuto !== false,
+      jobId: config.jobId || "",
     };
+
+    // Set job ID in screenshot manager if provided
+    if (this.config.jobId) {
+      screenshotManager.setJobId(this.config.jobId);
+    }
 
     // Initialize OpenAI if API key is provided
     if (this.config.openaiApiKey && this.config.enableOpenAIVision) {
       this.openai = new OpenAI({ apiKey: this.config.openaiApiKey });
       console.log("✅ OpenAI Vision initialized for captcha solving");
     }
+  }
+
+  /**
+   * Set the job ID for screenshot organization
+   */
+  setJobId(jobId: string): void {
+    this.config.jobId = jobId;
+    screenshotManager.setJobId(jobId);
+  }
+
+  /**
+   * Clean up screenshots for a specific job
+   */
+  async cleanupJobScreenshots(jobId?: string, reason?: string): Promise<void> {
+    await screenshotManager.cleanupJobScreenshots(
+      jobId || this.config.jobId,
+      reason
+    );
   }
 
   /**
@@ -114,17 +139,22 @@ export class CaptchaService {
         height: 945,
       });
 
-      // Take screenshot for analysis
+      // Take screenshot for analysis using screenshot manager
       await logInfo("📸 Taking screenshot for OpenAI Vision analysis");
-      const screenshotPath = path.join(
-        process.cwd(),
-        "temp_captcha_screenshot.png"
+      const screenshotFilename =
+        screenshotManager.generateCaptchaScreenshotName(
+          "openai_vision",
+          "analysis"
+        );
+      const screenshotPath = await screenshotManager.saveScreenshot(
+        page,
+        screenshotFilename,
+        this.config.jobId,
+        {
+          fullPage: false,
+          type: "png",
+        }
       );
-      await page.screenshot({
-        path: screenshotPath as `${string}.png`,
-        fullPage: false,
-        type: "png",
-      });
 
       // Read screenshot as base64
       const screenshotBuffer = fs.readFileSync(screenshotPath);
@@ -135,10 +165,6 @@ export class CaptchaService {
       const analysis = await this.analyzeWithOpenAI(base64Screenshot);
 
       if (!analysis) {
-        // Clean up temp file
-        try {
-          fs.unlinkSync(screenshotPath);
-        } catch {}
         return {
           success: false,
           method: "openai-vision",
@@ -175,11 +201,6 @@ export class CaptchaService {
 
       // Try to submit the captcha
       await this.submitCaptcha(page, logInfo);
-
-      // Clean up temp file
-      try {
-        fs.unlinkSync(screenshotPath);
-      } catch {}
 
       // Check if captcha was solved by looking for navigation or absence of captcha elements
       const solved = await this.checkIfCaptchaSolved(page, logInfo);
