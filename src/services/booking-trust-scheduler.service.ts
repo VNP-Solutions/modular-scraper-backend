@@ -5,6 +5,7 @@ import { initializeJobLogging, finalizeJobLogging } from "../common/log-helper.j
 import { BOOKING_SELECTORS } from "../common/booking-selectors.js";
 import { BookingErrorType, BookingScrapingPhase } from "../common/booking-error-types.js";
 import { decryptPassword } from "../common/encription.js";
+import { PropertyCredentials } from "../models/Property-credentials.js";
 
 interface TrustVerificationResult {
   propertyId: string;
@@ -419,7 +420,15 @@ export class BookingTrustSchedulerService {
       throw new Error(`Property ${propertyId} has no valid booking_id`);
     }
 
-    if (!property.user_email || !property.user_password) {
+    const credentials = await PropertyCredentials.findOne({
+      property_id: property._id,
+    });
+
+    if (!credentials) {
+      throw new Error(`Property ${propertyId} has no booking credentials`);
+    }
+
+    if (!credentials.bookingUsername || !credentials.bookingPassword) {
       throw new Error(`Property ${propertyId} has no booking credentials`);
     }
 
