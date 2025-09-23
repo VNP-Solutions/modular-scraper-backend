@@ -4,6 +4,9 @@ export enum JobType {
   ReservationRun = "reservation-run",
   BookingRun = "booking-run",
   BookingRerunFailed = "booking-rerun-failed",
+  GraphqlRun = "graphql-run",
+  AgodaPropertyRun = "agoda-property-run",
+  AgodaRerunFailed = "agoda-rerun-failed",
 }
 
 export enum WorkerMessageType {
@@ -14,7 +17,7 @@ export enum WorkerMessageType {
   JobLog = "job-log",
 }
 export interface WorkerJobData {
-  jobType: JobType;
+  jobType: string;
   jobId: string;
   portfolioId?: string;
   propertyId?: string;
@@ -22,10 +25,12 @@ export interface WorkerJobData {
   endDate?: string;
   expediaId?: string;
   bookingId?: string;
+  agodaId?: string;
   user_email?: string;
   user_password?: string;
   reservations?: any[];
   originalStatus?: string;
+  [key: string]: any; // Allow additional properties
 }
 
 export interface WorkerMessage {

@@ -3,9 +3,9 @@ import cors from "cors";
 import express from "express";
 import { emailNotifier } from "../common/email-notifier.js";
 import createError from "../common/error.js";
+import { otpAwareWorkerPool } from "../common/otp-aware-worker-pool.js";
 import { progressManager } from "../common/progress-manager.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
-import { workerPool } from "../common/worker-pool.js";
 import { JobType, WorkerJobData } from "../common/worker-types.js";
 import { specs, swaggerUi } from "../config/swagger.js";
 import { getAccess, getOauth2Callback } from "../get-access/access.js";
@@ -188,11 +188,14 @@ app.post("/api/scraping/resume", (async (
     );
 
     // Check if worker threads are available
-    if (!workerPool.hasAvailableWorkers() && workerPool.isQueueFull()) {
+    if (
+      !otpAwareWorkerPool.hasAvailableWorkers() &&
+      otpAwareWorkerPool.isQueueFull()
+    ) {
       return res.status(200).json({
         status: 200,
         message: "All server busy, try again",
-        workerStatus: workerPool.getStatus(),
+        workerStatus: otpAwareWorkerPool.getStatus(),
       });
     }
 
@@ -311,7 +314,7 @@ app.post("/api/scraping/resume", (async (
     try {
       console.log(`Submitting resumed job ${jobId} to worker pool...`);
 
-      const result = await workerPool.executeJob(workerJobData);
+      const result = await otpAwareWorkerPool.executeJob(workerJobData);
 
       if (result.success) {
         return res.status(200).json(result.data);
@@ -388,7 +391,7 @@ app.post("/api/scraping/stop", (async (
     }
 
     // Attempt to stop the job in the worker pool
-    const stopSuccess = await workerPool.stopJob(jobId);
+    const stopSuccess = await otpAwareWorkerPool.stopJob(jobId);
 
     if (stopSuccess) {
       // Update job status to Stopped in database
@@ -436,11 +439,14 @@ app.post("/api/expedia/rerun-failed-job", (async (
   try {
     const { startDate, endDate, jobId } = req.body;
     // Check if worker threads are available
-    if (!workerPool.hasAvailableWorkers() && workerPool.isQueueFull()) {
+    if (
+      !otpAwareWorkerPool.hasAvailableWorkers() &&
+      otpAwareWorkerPool.isQueueFull()
+    ) {
       return res.status(200).json({
         status: 200,
         message: "All server busy, try again",
-        workerStatus: workerPool.getStatus(),
+        workerStatus: otpAwareWorkerPool.getStatus(),
       });
     }
 
@@ -509,7 +515,7 @@ app.post("/api/expedia/rerun-failed-job", (async (
     try {
       console.log(`Submitting rerun job ${jobId} to worker pool...`);
 
-      const result = await workerPool.executeJob(workerJobData);
+      const result = await otpAwareWorkerPool.executeJob(workerJobData);
 
       if (result.success) {
         return res.status(200).json(result.data);
@@ -582,11 +588,14 @@ app.post("/api/expedia/property-run-job", (async (
     }
 
     // Check if worker threads are available
-    if (!workerPool.hasAvailableWorkers() && workerPool.isQueueFull()) {
+    if (
+      !otpAwareWorkerPool.hasAvailableWorkers() &&
+      otpAwareWorkerPool.isQueueFull()
+    ) {
       return res.status(200).json({
         status: 200,
         message: "All server busy, try again",
-        workerStatus: workerPool.getStatus(),
+        workerStatus: otpAwareWorkerPool.getStatus(),
       });
     }
 
@@ -645,7 +654,7 @@ app.post("/api/expedia/property-run-job", (async (
     try {
       console.log(`Submitting job ${jobId} to worker pool...`);
 
-      const result = await workerPool.executeJob(workerJobData);
+      const result = await otpAwareWorkerPool.executeJob(workerJobData);
 
       if (result.success) {
         return res.status(200).json(result.data);
@@ -711,11 +720,14 @@ app.post("/api/expedia/reservation-run-job", (async (
     }
 
     // Check if worker threads are available
-    if (!workerPool.hasAvailableWorkers() && workerPool.isQueueFull()) {
+    if (
+      !otpAwareWorkerPool.hasAvailableWorkers() &&
+      otpAwareWorkerPool.isQueueFull()
+    ) {
       return res.status(200).json({
         status: 200,
         message: "All server busy, try again",
-        workerStatus: workerPool.getStatus(),
+        workerStatus: otpAwareWorkerPool.getStatus(),
       });
     }
 
@@ -732,7 +744,7 @@ app.post("/api/expedia/reservation-run-job", (async (
     try {
       console.log(`Submitting reservation job ${jobId} to worker pool...`);
 
-      const result = await workerPool.executeJob(workerJobData);
+      const result = await otpAwareWorkerPool.executeJob(workerJobData);
 
       if (result.success) {
         return res.status(200).json(result.data);
@@ -853,7 +865,7 @@ app.post("/api/booking/property-run-job", (async (
     try {
       console.log(`Submitting booking job ${jobId} to worker pool...`);
 
-      const result = await workerPool.executeJob(workerJobData);
+      const result = await otpAwareWorkerPool.executeJob(workerJobData);
 
       if (result.success) {
         return res.status(200).json(result.data);
@@ -982,11 +994,14 @@ app.post("/api/booking/rerun-failed-job", (async (
     }
 
     // Check if worker threads are available
-    if (!workerPool.hasAvailableWorkers() && workerPool.isQueueFull()) {
+    if (
+      !otpAwareWorkerPool.hasAvailableWorkers() &&
+      otpAwareWorkerPool.isQueueFull()
+    ) {
       return res.status(200).json({
         status: 200,
         message: "All server busy, try again",
-        workerStatus: workerPool.getStatus(),
+        workerStatus: otpAwareWorkerPool.getStatus(),
       });
     }
 
@@ -1069,7 +1084,7 @@ app.post("/api/booking/rerun-failed-job", (async (
     try {
       console.log(`Submitting booking rerun job ${jobId} to worker pool...`);
 
-      const result = await workerPool.executeJob(workerJobData);
+      const result = await otpAwareWorkerPool.executeJob(workerJobData);
 
       if (result.success) {
         // Get final progress after rerun
@@ -1282,12 +1297,14 @@ app.get(
   "/api/worker-pool/status",
   (req: express.Request, res: express.Response) => {
     try {
-      const workerPoolStatus = workerPool.getStatus();
+      const otpAwareWorkerPoolStatus = otpAwareWorkerPool.getStatus();
+      const otpStatus = otpAwareWorkerPool.getOtpStatus();
 
       res.status(200).json({
         status: 200,
         message: "Worker pool status retrieved successfully",
-        workerPool: workerPoolStatus,
+        otpAwareWorkerPool: otpAwareWorkerPoolStatus,
+        otpStatus: otpStatus,
       });
     } catch (err: any) {
       console.error("Error getting worker pool status:", err);
@@ -1299,6 +1316,26 @@ app.get(
     }
   }
 );
+
+// Get OTP status only
+app.get("/api/otp/status", (req: express.Request, res: express.Response) => {
+  try {
+    const otpStatus = otpAwareWorkerPool.getOtpStatus();
+
+    res.status(200).json({
+      status: 200,
+      message: "OTP status retrieved successfully",
+      otpStatus: otpStatus,
+    });
+  } catch (err: any) {
+    console.error("Error getting OTP status:", err);
+    res.status(500).json({
+      status: 500,
+      message: "Error retrieving OTP status",
+      error: err.message,
+    });
+  }
+});
 
 // Booking Trust Scheduler Endpoints
 
