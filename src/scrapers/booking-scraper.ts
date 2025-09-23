@@ -732,7 +732,7 @@ export class BookingScraper extends BaseScraper {
             await this.logInfo(
               `⏳ Waiting before retry attempt ${attempt + 1}`
             );
-            await this.delay(5000); // Wait 5 seconds between retries
+            await this.delay(2000); // Wait 2 seconds between retries
           }
         }
 
@@ -766,7 +766,7 @@ export class BookingScraper extends BaseScraper {
             await this.logInfo(
               `⏳ Waiting before retry attempt ${attempt + 1}`
             );
-            await this.delay(5000);
+            await this.delay(2000);
           }
         }
 
@@ -1858,6 +1858,14 @@ export class BookingScraper extends BaseScraper {
 
         return true;
       } else {
+        // Check if no captcha was detected
+        if (result.analysis?.captchaType === "no_captcha") {
+          await this.logInfo(
+            "🚫 No captcha detected on this page, continuing without captcha solving"
+          );
+          return true; // Return true since no captcha solving is needed
+        }
+
         await this.logInfo(
           `❌ Advanced captcha solving failed with ${result.method} method`
         );
