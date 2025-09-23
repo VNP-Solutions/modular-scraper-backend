@@ -3,7 +3,7 @@ import mongoose from "mongoose";
 import open from "open";
 import app from "./app/app.js";
 import { loadAndSetCredentials } from "./common/load-token.js";
-import { workerPool } from "./common/worker-pool.js";
+import { otpAwareWorkerPool } from "./common/otp-aware-worker-pool.js";
 import { bookingTrustCron } from "./services/booking-trust-cron.service.js";
 import { jobQueueUrlService } from "./services/job-queue-url.service.js";
 dotenv.config();
@@ -66,7 +66,7 @@ const gracefulShutdown = async (signal: string): Promise<void> => {
 
     // Shutdown worker pool first
     console.log("Shutting down worker pool...");
-    await workerPool.shutdown();
+    await otpAwareWorkerPool.shutdown();
 
     // Disconnect from database
     console.log("Disconnecting from MongoDB...");
@@ -105,7 +105,7 @@ app.listen(port, async () => {
     console.log(`Server is listening on port ${port}`);
     console.log(
       `Worker pool initialized with ${
-        workerPool.getStatus().totalWorkers
+        otpAwareWorkerPool.getStatus().totalWorkers
       } workers`
     );
     console.log("Booking trust verification scheduler started");
