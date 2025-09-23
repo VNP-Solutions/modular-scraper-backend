@@ -6,6 +6,9 @@ import {
   OtpStatus,
   OtpStatusValue,
 } from "../models/otp-status.model.js";
+import dotenv from "dotenv";
+
+dotenv.config();
 
 export interface OtpStatusInfo {
   status: OtpStatusValue;
@@ -40,26 +43,28 @@ export class OtpStatusManager extends EventEmitter {
 
     try {
       // Get or create the OTP status document
-      const otpStatusDoc = await OtpStatus.findOne().lean();
+      const otpStatusDoc = await OtpStatus.findOne({
+        platform: process.env.OTP_PLATFORM,
+      }).lean();
 
       if (!otpStatusDoc) {
         // Create initial OTP status as Released
         const newDoc = await OtpStatus.create({
           status: OtpStatusValue.Released,
-          platform: null,
+          platform: process.env.OTP_PLATFORM,
           job_id: null,
         });
 
         this.currentStatus = {
           status: newDoc.status,
-          platform: null,
+          platform: OtpPlatform.Booking,
           jobId: null,
           lastUpdated: newDoc.updatedAt,
         };
       } else {
         this.currentStatus = {
           status: otpStatusDoc.status,
-          platform: otpStatusDoc.platform || null,
+          platform: otpStatusDoc.platform || OtpPlatform.Booking,
           jobId: otpStatusDoc.job_id?.toString() || null,
           lastUpdated: otpStatusDoc.updatedAt,
         };
@@ -99,9 +104,10 @@ export class OtpStatusManager extends EventEmitter {
     }
 
     try {
+      platform = OtpPlatform.Booking;
       // Attempt to reserve OTP atomically
       const result = await OtpStatus.findOneAndUpdate(
-        { status: OtpStatusValue.Released }, // Only update if currently Released
+        { status: OtpStatusValue.Released, platform: platform }, // Only update if currently Released
         {
           status: OtpStatusValue.Occupied,
           platform: platform,
@@ -161,7 +167,7 @@ export class OtpStatusManager extends EventEmitter {
         // Successfully released
         this.currentStatus = {
           status: OtpStatusValue.Released,
-          platform: null,
+          platform: OtpPlatform.Booking,
           jobId: null,
           lastUpdated: result.updatedAt,
         };
@@ -191,7 +197,9 @@ export class OtpStatusManager extends EventEmitter {
 
     try {
       const result = await OtpStatus.findOneAndUpdate(
-        {}, // Match any document
+        {
+          platform: OtpPlatform.Booking,
+        }, // Match any document
         {
           status: OtpStatusValue.Released,
           job_id: null,
@@ -202,7 +210,7 @@ export class OtpStatusManager extends EventEmitter {
       if (result) {
         this.currentStatus = {
           status: OtpStatusValue.Released,
-          platform: null,
+          platform: OtpPlatform.Booking,
           jobId: null,
           lastUpdated: result.updatedAt,
         };
@@ -266,7 +274,7 @@ export class OtpStatusManager extends EventEmitter {
         const oldStatus = this.currentStatus?.status;
         this.currentStatus = {
           status: otpStatusDoc.status,
-          platform: otpStatusDoc.platform || null,
+          platform: otpStatusDoc.platform || OtpPlatform.Booking,
           jobId: otpStatusDoc.job_id?.toString() || null,
           lastUpdated: otpStatusDoc.updatedAt,
         };

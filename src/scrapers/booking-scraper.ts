@@ -35,6 +35,7 @@ import {
   ScrapingResult,
   TwoFactorAuthOptions,
 } from "./base-scraper.js";
+import { otpStatusManager } from "../common/otp-status-manager.js";
 
 export enum ScraperContext {
   JOB = "job",
@@ -1543,6 +1544,9 @@ export class BookingScraper extends BaseScraper {
 
   async scrapeData(params: ScrapingJobParams): Promise<ScrapingResult> {
     try {
+
+      // Release OTP for booking.com
+      await otpStatusManager.forceReleaseOtp();
       await this.logInfo(
         "Starting complete Booking.com scraping process",
         this.page?.url()
