@@ -432,6 +432,8 @@ export class BookingTrustSchedulerService {
       throw new Error(`Property ${propertyId} has no booking credentials`);
     }
 
+    property.credentials = [credentials];
+
     return await this.verifyPropertyTrust(property);
   }
 }
