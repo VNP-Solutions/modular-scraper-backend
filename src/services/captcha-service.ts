@@ -94,6 +94,15 @@ export class CaptchaService {
         await logInfo("✅ Captcha solved successfully with OpenAI Vision");
         return openaiResult;
       }
+
+      // If OpenAI detected no captcha, don't try other methods
+      if (openaiResult.analysis?.captchaType === "no_captcha") {
+        await logInfo(
+          "🚫 No captcha detected by OpenAI Vision, skipping other methods"
+        );
+        return openaiResult;
+      }
+
       await logInfo("❌ OpenAI Vision method failed, trying next method");
     }
 
@@ -172,6 +181,27 @@ export class CaptchaService {
         };
       }
 
+      // Check if this is actually a captcha page
+      const isCaptchaPage = this.detectCaptchaFromAnalysis(analysis);
+      if (!isCaptchaPage) {
+        await logInfo(
+          "🚫 No captcha detected on this page, skipping captcha solving"
+        );
+        return {
+          success: true, // Return success since no captcha solving is needed
+          method: "openai-vision",
+          analysis: {
+            instruction: analysis.instruction || "No captcha detected",
+            positions: analysis.positions || [],
+            rawResponse: analysis.rawResponse,
+            captchaType: "no_captcha",
+          },
+          error: "No captcha present on page",
+        };
+      }
+
+      await logInfo("✅ Captcha detected, proceeding with solving");
+
       let positionsCount = 0;
       try {
         if (Array.isArray(analysis.positions)) {
@@ -196,11 +226,14 @@ export class CaptchaService {
         logInfo
       );
 
-      // Wait a moment for any animations/processing
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      // Wait briefly for any animations/processing
+      await new Promise((resolve) => setTimeout(resolve, 1000));
 
       // Try to submit the captcha
       await this.submitCaptcha(page, logInfo);
+
+      // Quick wait for submission processing
+      await new Promise((resolve) => setTimeout(resolve, 500));
 
       // Check if captcha was solved by looking for navigation or absence of captcha elements
       const solved = await this.checkIfCaptchaSolved(page, logInfo);
@@ -234,6 +267,63 @@ export class CaptchaService {
   }
 
   /**
+   * Detect if the page actually contains a captcha based on OpenAI analysis
+   */
+  private detectCaptchaFromAnalysis(analysis: any): boolean {
+    if (!analysis || !analysis.instruction) {
+      return false;
+    }
+
+    const instruction = analysis.instruction.toLowerCase();
+    const positions = analysis.positions;
+
+    // Check if instruction contains captcha-like patterns
+    const captchaPatterns = [
+      /choose all the/i,
+      /choose all/i,
+      /select all the/i,
+      /click on all/i,
+      /identify all/i,
+      /find all/i,
+    ];
+
+    const hasCaptchaInstruction = captchaPatterns.some((pattern) =>
+      pattern.test(instruction)
+    );
+
+    // Check if positions array has valid values
+    let hasValidPositions = false;
+    try {
+      let positionsArray = positions;
+      if (typeof positions === "string") {
+        positionsArray = JSON.parse(positions);
+      }
+
+      if (Array.isArray(positionsArray) && positionsArray.length > 0) {
+        // Check if positions contain valid numbers (1-9 for grid captcha)
+        hasValidPositions = positionsArray.every(
+          (pos) => typeof pos === "number" && pos >= 1 && pos <= 9
+        );
+      }
+    } catch (e) {
+      hasValidPositions = false;
+    }
+
+    // It's a captcha if both conditions are met
+    const isCaptcha = hasCaptchaInstruction && hasValidPositions;
+
+    console.log("🔍 Captcha Detection Analysis:", {
+      instruction: instruction,
+      hasCaptchaInstruction,
+      positions: positions,
+      hasValidPositions,
+      isCaptcha,
+    });
+
+    return isCaptcha;
+  }
+
+  /**
    * Analyze captcha using OpenAI Vision API - Exact implementation from openai-booking
    */
   private async analyzeWithOpenAI(base64Screenshot: string): Promise<any> {
@@ -241,33 +331,42 @@ export class CaptchaService {
       console.log("🤖 Starting captcha analysis with OpenAI Vision...");
       console.log("🔄 Sending screenshot to OpenAI Vision API...");
 
-      // Analyze the screenshot with OpenAI Vision - EXACT implementation from openai-booking
-      const response = await this.openai!.chat.completions.create({
-        model: "gpt-5", // Use GPT-4o (latest available model with vision capabilities)
-        messages: [
-          {
-            role: "system",
-            content:
-              "You are an expert at analyzing CAPTCHA images. You must provide accurate, precise responses in the exact JSON format requested. Focus on identifying the instruction text and determining which numbered positions (1-9) should be selected based on the grid layout.",
-          },
-          {
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: `From this image, there are 9 different picture in three rows. Top left corner is 1 and right of that is 2, then 3, like this the last one from bottom right corner is 9. You will give me a json like this: { "instruction": "Instruction from Image", "positions": "[1, 3, 4, 5, 6]" }`,
-              },
-              {
-                type: "image_url",
-                image_url: {
-                  url: `data:image/png;base64,${base64Screenshot}`,
-                  detail: "high",
+      // Analyze the screenshot with OpenAI Vision with timeout
+      const response = (await Promise.race([
+        this.openai!.chat.completions.create({
+          model: "gpt-4o", // Use GPT-4o (latest available model with vision capabilities)
+          messages: [
+            {
+              role: "system",
+              content:
+                "You are an expert at analyzing CAPTCHA images. You must provide accurate, precise responses in the exact JSON format requested. Focus on identifying the instruction text and determining which numbered positions (1-9) should be selected based on the grid layout.",
+            },
+            {
+              role: "user",
+              content: [
+                {
+                  type: "text",
+                  text: `From this image, there are 9 different picture in three rows. Top left corner is 1 and right of that is 2, then 3, like this the last one from bottom right corner is 9. You will give me a json like this: { "instruction": "Instruction from Image", "positions": "[1, 3, 4, 5, 6]" }`,
                 },
-              },
-            ],
-          },
-        ],
-      });
+                {
+                  type: "image_url",
+                  image_url: {
+                    url: `data:image/png;base64,${base64Screenshot}`,
+                    detail: "high",
+                  },
+                },
+              ],
+            },
+          ],
+        }),
+        // Add timeout to prevent hanging
+        new Promise((_, reject) =>
+          setTimeout(
+            () => reject(new Error("OpenAI API timeout after 15 seconds")),
+            15000
+          )
+        ),
+      ])) as any;
 
       const analysisResult = response.choices[0]?.message?.content;
       if (!analysisResult) {
@@ -432,7 +531,7 @@ export class CaptchaService {
         );
 
         // Wait a moment so you can see the indicator
-        await new Promise((resolve) => setTimeout(resolve, 500));
+        await new Promise((resolve) => setTimeout(resolve, 200));
 
         // Click on the coordinates
         await page.mouse.click(coords.x, coords.y, { delay: 50 });
@@ -449,8 +548,8 @@ export class CaptchaService {
 
         successfulClicks++;
 
-        // Human-like delay between clicks
-        const delay = Math.floor(Math.random() * 500);
+        // Quick delay between clicks
+        const delay = Math.floor(Math.random() * 200) + 100; // 100-300ms
         await logInfo(`   ⏱️ Waiting ${Math.round(delay)}ms before next click`);
         await new Promise((resolve) => setTimeout(resolve, delay));
       } catch (clickError) {
@@ -511,7 +610,7 @@ export class CaptchaService {
       );
 
       // Wait a moment to show the indicator
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await new Promise((resolve) => setTimeout(resolve, 300));
 
       // Click the OK button
       await page.mouse.click(okButtonCoords.x, okButtonCoords.y, { delay: 50 });
@@ -529,8 +628,8 @@ export class CaptchaService {
       successfulClicks++; // Count OK button as successful click
 
       // Wait for page response after OK button
-      await logInfo("   ⏱️ Waiting 5000ms for page response after OK button");
-      await new Promise((resolve) => setTimeout(resolve, 5000));
+      await logInfo("   ⏱️ Waiting 1500ms for page response after OK button");
+      await new Promise((resolve) => setTimeout(resolve, 1500));
     } catch (okButtonError) {
       const errorMessage =
         okButtonError instanceof Error
@@ -553,8 +652,8 @@ export class CaptchaService {
       await logInfo("🔧 Attempting basic automatic captcha solution");
 
       // Wait for captcha images to load
-      await page.waitForSelector("img", { timeout: 10000 });
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      await page.waitForSelector("img", { timeout: 5000 });
+      await new Promise((resolve) => setTimeout(resolve, 1000));
 
       // Get all images and click on potential clock images
       const images = await page.$$("img");
@@ -569,7 +668,7 @@ export class CaptchaService {
             await logInfo(`Clicking image ${i + 1}`);
             await imgElement.click();
             clocksFound++;
-            await new Promise((resolve) => setTimeout(resolve, 500));
+            await new Promise((resolve) => setTimeout(resolve, 200));
           }
         } catch (e) {
           // Skip images that can't be clicked
@@ -676,24 +775,14 @@ export class CaptchaService {
   ): Promise<boolean> {
     try {
       // Wait a moment for any page changes
-      await new Promise((resolve) => setTimeout(resolve, 3000));
+      await new Promise((resolve) => setTimeout(resolve, 1000));
 
       // Check if we're still on the same page or if captcha elements are gone
       const pageContent = await page.content();
       const currentUrl = page.url();
 
       // Common captcha patterns to check for absence
-      const captchaPatterns = [
-        /let'?s (make sure|confirm) you'?re? human/i,
-        /choose all the clocks/i,
-        /choose all the curtains/i,
-        /choose all the/i,
-        /you are not a bot/i,
-        /confirm.*clocks/i,
-        /captcha/i,
-        /verify.*human/i,
-        /security check/i,
-      ];
+      const captchaPatterns = [/let'?s (make sure|confirm) you'?re? human/i];
 
       const hasCaptchaContent = captchaPatterns.some((pattern) =>
         pattern.test(pageContent)
