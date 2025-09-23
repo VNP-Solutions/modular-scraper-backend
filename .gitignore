@@ -148,6 +148,7 @@ Thumbs.db
 # Temporary files
 tmp/
 temp/
+screenshots/
 
 # Docker files (per code review feedback) - REMOVED: We need Dockerfiles in monorepo
 # Dockerfile*
