@@ -179,7 +179,7 @@ export class OtpStatusManager extends EventEmitter {
         console.log(
           `\x1b[33mFailed to release OTP for job ${jobId} - not currently owner\x1b[0m`
         );
-        return false;
+        return true;
       }
     } catch (error) {
       console.error(`Error releasing OTP for job ${jobId}:`, error);

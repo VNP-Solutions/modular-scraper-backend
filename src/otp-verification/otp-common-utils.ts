@@ -22,7 +22,7 @@ export async function initializeStateManager(): Promise<void> {
 
 export async function getTimeoutConfig(jobId?: string): Promise<{ selectorTimeout: number; loadingTimeout: number }> {
   const selectorTimeout = jobId ? await timeoutManager.getSelectorTimeout(jobId) : 30000;
-  const loadingTimeout = jobId ? await timeoutManager.getLoadingTimeout(jobId) : 120000;
+  const loadingTimeout = jobId ? await timeoutManager.getLoadingTimeout(jobId) : 180000;
   
   return { selectorTimeout, loadingTimeout };
 }
@@ -85,11 +85,12 @@ export async function submitOtpForm(page: Page, submitSelectors: string[] = [
 
 export async function waitForNavigation(page: Page, loadingTimeout: number): Promise<void> {
   await page.waitForNavigation({
-    waitUntil: "networkidle0",
+    waitUntil: "domcontentloaded",
     timeout: loadingTimeout,
-  }).catch(() => {
-    dualLogInfo("Navigation timeout after form submission");
-  });
+  })
+  // .catch(() => {
+  //   dualLogInfo("Navigation timeout after form submission");
+  // });
 }
 
 export async function closeBrowserOnError(browser: Browser): Promise<void> {
