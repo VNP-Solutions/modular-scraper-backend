@@ -1153,6 +1153,7 @@ export class BookingScraper extends BaseScraper {
           if (target.type() === "page") {
             const newPage = await target.page();
             await newPage!.bringToFront();
+            
             resolve(newPage!);
           }
         });
@@ -1161,7 +1162,7 @@ export class BookingScraper extends BaseScraper {
       const timeoutPromise = new Promise<never>((_, reject) => {
         setTimeout(
           () => reject(new Error("Timeout waiting for new tab to open")),
-          60000
+          120000
         );
       });
 
@@ -1423,6 +1424,7 @@ export class BookingScraper extends BaseScraper {
         { reservationId }
       );
       if (shouldStop) {
+        console.log('Process should Stop');
         break;
       }
       try {
