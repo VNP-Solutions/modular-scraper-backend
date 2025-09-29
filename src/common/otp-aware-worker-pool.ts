@@ -63,7 +63,10 @@ export class OtpAwareWorkerPool extends EventEmitter {
       await this.otpManager.initialize();
 
       // Set up OTP event listeners
-      this.otpManager.on("otpReleased", this.onOtpReleased.bind(this));
+      this.otpManager.on(
+        "otpReleased",
+        async () => await this.onOtpReleased.bind(this)
+      );
       this.otpManager.on("otpReserved", this.onOtpReserved.bind(this));
 
       // Initialize workers
@@ -117,8 +120,8 @@ export class OtpAwareWorkerPool extends EventEmitter {
       };
 
       // Handle worker messages
-      worker.on("message", (message: WorkerMessage) => {
-        this.handleWorkerMessage(workerId, message);
+      worker.on("message", async (message: WorkerMessage) => {
+        await this.handleWorkerMessage(workerId, message);
       });
 
       // Handle worker errors
@@ -142,7 +145,10 @@ export class OtpAwareWorkerPool extends EventEmitter {
     }
   }
 
-  private handleWorkerMessage(workerId: string, message: WorkerMessage): void {
+  private async handleWorkerMessage(
+    workerId: string,
+    message: WorkerMessage
+  ): Promise<void> {
     const activeWorker = this.workers.get(workerId);
     if (!activeWorker) return;
 
@@ -181,7 +187,7 @@ export class OtpAwareWorkerPool extends EventEmitter {
         console.log(
           `OTP-aware worker ${workerId} completed job ${message.jobId}`
         );
-        this.handleJobComplete(workerId, message);
+        await this.handleJobComplete(workerId, message);
         break;
 
       case "job-error":
@@ -222,7 +228,10 @@ export class OtpAwareWorkerPool extends EventEmitter {
     }
   }
 
-  private handleJobComplete(workerId: string, message: WorkerMessage): void {
+  private async handleJobComplete(
+    workerId: string,
+    message: WorkerMessage
+  ): Promise<void> {
     const activeWorker = this.workers.get(workerId);
     if (!activeWorker) return;
 
@@ -253,7 +262,7 @@ export class OtpAwareWorkerPool extends EventEmitter {
     });
 
     // Process next job in queue
-    this.processQueue();
+    await this.processQueue();
   }
 
   private async handleJobError(
@@ -295,7 +304,7 @@ export class OtpAwareWorkerPool extends EventEmitter {
     });
 
     // Process next job in queue
-    this.processQueue();
+    await this.processQueue();
   }
 
   private async handleWorkerError(
@@ -380,8 +389,7 @@ export class OtpAwareWorkerPool extends EventEmitter {
   }
 
   public async executeJob(jobData: WorkerJobData): Promise<WorkerResponse> {
-    return new Promise<WorkerResponse>((resolve, reject) => {
-      // Check if queue is full
+    return new Promise<WorkerResponse>(async (resolve, reject) => {
       if (this.jobQueue.length >= this.config.queueSize) {
         reject(new Error("Job queue is full"));
         return;
@@ -398,8 +406,11 @@ export class OtpAwareWorkerPool extends EventEmitter {
         requiresOtp,
       };
 
-      // Try to assign job immediately
-      this.tryAssignJob(queuedJob);
+      try {
+        await this.tryAssignJob(queuedJob);
+      } catch (err) {
+        reject(err);
+      }
     });
   }
 
@@ -450,7 +461,8 @@ export class OtpAwareWorkerPool extends EventEmitter {
     }
 
     // If job requires OTP, check OTP availability
-    if (queuedJob.requiresOtp && !this.otpManager.isOtpAvailable()) {
+    const isOtpAvailable = await this.otpManager.isOtpAvailable();
+    if (queuedJob.requiresOtp && !isOtpAvailable) {
       // OTP not available, add to queue
       this.jobQueue.push(queuedJob);
       console.log(
@@ -536,7 +548,7 @@ export class OtpAwareWorkerPool extends EventEmitter {
     }
   }
 
-  private processQueue(): void {
+  private async processQueue(): Promise<void> {
     if (this.isProcessingQueue || this.jobQueue.length === 0) {
       return;
     }
@@ -549,8 +561,8 @@ export class OtpAwareWorkerPool extends EventEmitter {
 
       // Check if requirements are met
       const availableWorker = this.getAvailableWorker();
-      const otpAvailable =
-        !queuedJob.requiresOtp || this.otpManager.isOtpAvailable();
+      const isOtpAvailable = await this.otpManager.isOtpAvailable();
+      const otpAvailable = !queuedJob.requiresOtp || isOtpAvailable;
 
       if (availableWorker && otpAvailable) {
         // Remove job from queue
@@ -561,7 +573,7 @@ export class OtpAwareWorkerPool extends EventEmitter {
         );
 
         // Try to assign the job
-        this.tryAssignJob(queuedJob);
+        await this.tryAssignJob(queuedJob);
         break; // Process one job at a time
       }
     }
@@ -569,9 +581,9 @@ export class OtpAwareWorkerPool extends EventEmitter {
     this.isProcessingQueue = false;
   }
 
-  private onOtpReleased(): void {
+  private async onOtpReleased(): Promise<void> {
     console.log("OTP released event received, processing queue...");
-    this.processQueue();
+    await this.processQueue();
   }
 
   private onOtpReserved(jobId: string | null, platform?: OtpPlatform): void {

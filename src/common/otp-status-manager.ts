@@ -17,8 +17,10 @@ export interface OtpStatusInfo {
   lastUpdated: Date;
 }
 
+let instance: OtpStatusManager | null = null;
+
 export class OtpStatusManager extends EventEmitter {
-  private static instance: OtpStatusManager | null = null;
+  // private static instance: OtpStatusManager | null = null;
   private currentStatus: OtpStatusInfo | null = null;
   private isInitialized = false;
 
@@ -27,10 +29,10 @@ export class OtpStatusManager extends EventEmitter {
   }
 
   public static getInstance(): OtpStatusManager {
-    if (!OtpStatusManager.instance) {
-      OtpStatusManager.instance = new OtpStatusManager();
+    if (!instance) {
+      instance = new OtpStatusManager();
     }
-    return OtpStatusManager.instance;
+    return instance;
   }
 
   /**
@@ -88,8 +90,12 @@ export class OtpStatusManager extends EventEmitter {
   /**
    * Check if OTP is currently available (Released status)
    */
-  public isOtpAvailable(): boolean {
-    return this.currentStatus?.status === OtpStatusValue.Released;
+  public async isOtpAvailable(): Promise<boolean> {
+    const otpStatusDoc = await OtpStatus.findOne({
+      status: OtpStatusValue.Released,
+      platform: OtpPlatform.Booking,
+    }).lean();
+    return otpStatusDoc !== null;
   }
 
   /**
@@ -153,8 +159,8 @@ export class OtpStatusManager extends EventEmitter {
       // Only release if the current job is the one that reserved it
       const result = await OtpStatus.findOneAndUpdate(
         {
-          status: OtpStatusValue.Occupied,
-          job_id: new mongoose.Types.ObjectId(jobId),
+          // status: OtpStatusValue.Occupied,
+          platform: OtpPlatform.Booking,
         },
         {
           status: OtpStatusValue.Released,
@@ -232,7 +238,8 @@ export class OtpStatusManager extends EventEmitter {
   public async waitForOtpAvailable(
     timeoutMs: number = 60000
   ): Promise<boolean> {
-    if (this.isOtpAvailable()) {
+    const isOtpAvailable = await this.isOtpAvailable();
+    if (isOtpAvailable) {
       return true;
     }
 
