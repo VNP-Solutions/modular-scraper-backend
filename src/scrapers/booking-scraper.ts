@@ -32,7 +32,7 @@ export class BookingScraper extends BaseScraper {
 
   constructor(context?: ScraperContext) {
     super('booking', 'https://admin.booking.com');
-    this.browserlessToken = process.env.BROWSERLESS_TOKEN || '2SXlnLjeZpwR2tV6ab1698bfe680a3959c2c681f06939ee3b';
+    this.browserlessToken = process.env.BROWSERLESS_TOKEN || '';
     this.context = context;
   }
 
@@ -54,6 +54,13 @@ export class BookingScraper extends BaseScraper {
     try {
       await this.logInfo('Setting up Booking.com browser with Browserless session');
 
+      // Check environment - use local browser for local/development
+      const environment = process.env.ENVIRONMENT || "browserless";
+      if (environment === "local" || environment === "development") {
+        await this.logInfo('Environment set to local/development, using local browser');
+        return await this.setupLocalBrowser(jobId);
+      }
+
       // Get timeout configuration
       const loadingTimeout = jobId ? await timeoutManager.getLoadingTimeout(jobId) : 120000;
       const selectorTimeout = jobId ? await timeoutManager.getSelectorTimeout(jobId) : 30000;
@@ -65,25 +72,7 @@ export class BookingScraper extends BaseScraper {
       } else {
         await this.logInfo("Failed to create Browserless session, falling back to local browser");
         // Fallback to local browser
-        const browser = await puppeteer.launch({
-          headless: false,
-          defaultViewport: null,
-          args: [
-            "--start-maximized",
-            "--no-sandbox",
-            "--disable-setuid-sandbox",
-            "--disable-web-security",
-            "--disable-features=IsolateOrigins,site-per-process",
-            "--disable-blink-features=AutomationControlled",
-            "--disable-extensions",
-          ],
-        });
-        const page = await browser.newPage();
-        await page.setUserAgent(
-          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-        );
-        await this.logInfo("Local browser setup completed as fallback");
-        return { browser, page };
+        return await this.setupLocalBrowser(jobId);
       }
 
       // Connect to the created Browserless session
@@ -135,6 +124,79 @@ export class BookingScraper extends BaseScraper {
       return { browser, page };
     } catch (error) {
       await this.logError('Browser setup failed', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Setup local browser for Booking.com scraping
+   * Used for local development and as fallback when browserless fails
+   */
+  private async setupLocalBrowser(jobId?: string): Promise<{ browser: Browser; page: Page }> {
+    try {
+      await this.logInfo('Setting up local browser for Booking.com');
+
+      // Get timeout configuration
+      const loadingTimeout = jobId ? await timeoutManager.getLoadingTimeout(jobId) : 120000;
+      const selectorTimeout = jobId ? await timeoutManager.getSelectorTimeout(jobId) : 30000;
+
+      // Launch local browser
+      const browser = await puppeteer.launch({
+        headless: false,
+        defaultViewport: null,
+        args: [
+          "--start-maximized",
+          "--no-sandbox",
+          "--disable-setuid-sandbox",
+          "--disable-web-security",
+          "--disable-features=IsolateOrigins,site-per-process",
+          "--disable-blink-features=AutomationControlled",
+          "--disable-extensions",
+        ],
+      });
+
+      const page = await browser.newPage();
+      await page.setUserAgent(
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+      );
+
+      // Set timeouts
+      await page.setDefaultNavigationTimeout(loadingTimeout);
+      await page.setDefaultTimeout(selectorTimeout);
+
+      // Load saved cookies if they exist for the current property
+      if (this.propertyIdForDb) {
+        const cookies = await cookieStorageService.loadCookies(this.propertyIdForDb, PlatformsType.BOOKING);
+        if (cookies) {
+          await page.setCookie(...cookies);
+          await this.logInfo(`Loaded ${cookies.length} cookies from storage for property ${this.propertyIdForDb}`);
+        } else {
+          await this.logInfo('No saved cookies found for this property');
+        }
+      }
+
+      // Navigate to login page
+      await this.logInfo('Navigating to Booking.com admin portal');
+      try {
+        await page.goto(this.baseUrl, {
+          waitUntil: 'networkidle2',
+          timeout: loadingTimeout
+        });
+      } catch (navError) {
+        await this.logInfo('Navigation slow, trying with domcontentloaded');
+        await page.goto(this.baseUrl, {
+          waitUntil: 'domcontentloaded',
+          timeout: 60000
+        });
+        await this.delay(5000);
+      }
+
+      await this.takeScreenshot();
+      await this.logInfo('Local browser setup completed successfully');
+      
+      return { browser, page };
+    } catch (error) {
+      await this.logError('Local browser setup failed', error);
       throw error;
     }
   }
