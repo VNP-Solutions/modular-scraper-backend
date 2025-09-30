@@ -63,10 +63,7 @@ export class OtpAwareWorkerPool extends EventEmitter {
       await this.otpManager.initialize();
 
       // Set up OTP event listeners
-      this.otpManager.on(
-        "otpReleased",
-        async () => await this.onOtpReleased.bind(this)
-      );
+      this.otpManager.on("otpReleased", this.onOtpReleased.bind(this));
       this.otpManager.on("otpReserved", this.onOtpReserved.bind(this));
 
       // Initialize workers
@@ -208,6 +205,14 @@ export class OtpAwareWorkerPool extends EventEmitter {
           jobId: message.jobId,
           data: message.data,
         });
+        break;
+
+      case "otp-release":
+        console.log(
+          `\x1b[32m[OTP-RELEASE] Worker ${workerId} requested OTP release for job ${message.jobId}\x1b[0m`
+        );
+        // Release OTP on main thread
+        await this.otpManager.forceReleaseOtp();
         break;
     }
   }
@@ -461,18 +466,17 @@ export class OtpAwareWorkerPool extends EventEmitter {
     }
 
     // If job requires OTP, check OTP availability
-    const isOtpAvailable = await this.otpManager.isOtpAvailable();
-    if (queuedJob.requiresOtp && !isOtpAvailable) {
-      // OTP not available, add to queue
-      this.jobQueue.push(queuedJob);
-      console.log(
-        `\x1b[33mJob ${queuedJob.jobData.jobId} queued (OTP occupied). Queue size: ${this.jobQueue.length}\x1b[0m`
-      );
-      return;
-    }
-
-    // Both worker and OTP (if needed) are available
     if (queuedJob.requiresOtp) {
+      const isOtpAvailable = await this.otpManager.isOtpAvailable();
+      if (!isOtpAvailable) {
+        // OTP not available, add to queue
+        this.jobQueue.push(queuedJob);
+        console.log(
+          `\x1b[33mJob ${queuedJob.jobData.jobId} queued (OTP occupied). Queue size: ${this.jobQueue.length}\x1b[0m`
+        );
+        return;
+      }
+
       // Reserve OTP before assigning job
       const platform = this.getJobPlatform(queuedJob.jobData);
       const otpReserved = await this.otpManager.reserveOtp(
@@ -488,6 +492,15 @@ export class OtpAwareWorkerPool extends EventEmitter {
         return;
       }
     }
+
+    // Both worker and OTP (if needed) are available - assign job immediately
+    console.log(
+      `\x1b[32mJob ${
+        queuedJob.jobData.jobId
+      } can start immediately (worker: ${availableWorker}, OTP: ${
+        queuedJob.requiresOtp ? "reserved" : "not needed"
+      })\x1b[0m`
+    );
 
     // Assign job to worker
     this.assignJobToWorker(
@@ -555,21 +568,26 @@ export class OtpAwareWorkerPool extends EventEmitter {
 
     this.isProcessingQueue = true;
 
-    // Find the next job that can be processed
+    // Find the first job that can be processed
     for (let i = 0; i < this.jobQueue.length; i++) {
       const queuedJob = this.jobQueue[i];
 
       // Check if requirements are met
       const availableWorker = this.getAvailableWorker();
+      if (!availableWorker) {
+        // No workers available, stop processing
+        break;
+      }
+
       const isOtpAvailable = await this.otpManager.isOtpAvailable();
       const otpAvailable = !queuedJob.requiresOtp || isOtpAvailable;
 
-      if (availableWorker && otpAvailable) {
+      if (otpAvailable) {
         // Remove job from queue
         this.jobQueue.splice(i, 1);
 
         console.log(
-          `Processing queued job ${queuedJob.jobData.jobId}. Queue size: ${this.jobQueue.length}`
+          `\x1b[36mProcessing queued job ${queuedJob.jobData.jobId}. Queue size: ${this.jobQueue.length}\x1b[0m`
         );
 
         // Try to assign the job

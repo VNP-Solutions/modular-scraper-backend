@@ -241,7 +241,7 @@ app.post("/api/scraping/resume", (async (
       if (!jobData || !jobData.bookingId) {
         return res.status(400).json({
           status: 400,
-          message: `Cannot retrieve valid booking_id for job ${jobId}. Property may not have booking_id assigned or booking_id is "0".`,
+          message: `Cannot retrieve valid booking_id for job ${jobId}. Property may not have booking_id assigned or booking_id is 0.`,
         });
       }
 
@@ -1648,5 +1648,41 @@ app.use((err: any, req: any, res: any, next: any) => {
     message: errMessage,
   });
 });
+
+// Simple worker pool status endpoint
+app.get(
+  "/api/worker-pool/simple-status",
+  (req: express.Request, res: express.Response) => {
+    try {
+      const status = otpAwareWorkerPool.getStatus();
+      const otpStatus = otpAwareWorkerPool.getOtpStatus();
+
+      res.status(200).json({
+        status: "OK",
+        timestamp: new Date().toISOString(),
+        workers: {
+          total: status.totalWorkers,
+          available: status.availableWorkers,
+          busy: status.busyWorkers,
+        },
+        queue: {
+          size: status.queuedJobs,
+          canAcceptNewJobs: !otpAwareWorkerPool.isQueueFull(),
+        },
+        otp: otpStatus,
+        message:
+          status.availableWorkers > 0
+            ? "Ready for new jobs"
+            : "All workers busy",
+      });
+    } catch (error) {
+      res.status(500).json({
+        status: "ERROR",
+        timestamp: new Date().toISOString(),
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+);
 
 export default app;

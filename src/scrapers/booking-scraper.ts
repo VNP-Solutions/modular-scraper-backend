@@ -1,12 +1,12 @@
-import fs from "fs";
 import fetch from "node-fetch";
 import puppeteer, { Browser, Page } from "puppeteer";
-import readline from 'readline';
-import { 
-  BookingErrorType, 
-  BookingScrapingPhase, 
-  shouldRetryBookingError, 
-  getBookingErrorDescription 
+import readline from "readline";
+import {
+  BookingErrorType,
+  BookingScrapingPhase,
+  getBookingErrorDescription,
+  PlatformsType,
+  shouldRetryBookingError,
 } from "../common/booking-error-types.js";
 import {
   BOOKING_LOGIN_EXCLUDE_URLS,
@@ -20,9 +20,6 @@ import { delay } from "../common/delay.js";
 import { emailNotifier } from "../common/email-notifier.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
-import { cookieStorageService } from "../services/cookie-storage.service.js";
-import { PlatformsType } from "../common/booking-error-types.js";
-import { jobService } from "../services/job.service.js";
 import { SelectorUtils } from "../common/selector-utils.js";
 import { timeoutManager } from "../common/timeout-manager.js";
 import handleBookingOtpVerification from "../otp-verification/booking-otp-verification.js";
@@ -30,6 +27,8 @@ import {
   CaptchaService,
   CaptchaSolveResult,
 } from "../services/captcha-service.js";
+import { cookieStorageService } from "../services/cookie-storage.service.js";
+import { jobService } from "../services/job.service.js";
 import {
   BaseScraper,
   CaptchaHandlerOptions,
@@ -38,7 +37,6 @@ import {
   ScrapingResult,
   TwoFactorAuthOptions,
 } from "./base-scraper.js";
-import { otpStatusManager } from "../common/otp-status-manager.js";
 
 export enum ScraperContext {
   JOB = "job",
@@ -75,13 +73,14 @@ export class BookingScraper extends BaseScraper {
     this.browser = browser;
   }
 
-
-
   public async hasValidCookies(): Promise<boolean> {
     if (!this.propertyIdForDb) {
       return false;
     }
-    return await cookieStorageService.hasValidCookies(this.propertyIdForDb, PlatformsType.BOOKING);
+    return await cookieStorageService.hasValidCookies(
+      this.propertyIdForDb,
+      PlatformsType.BOOKING
+    );
   }
 
   async setupBrowser(
@@ -153,12 +152,17 @@ export class BookingScraper extends BaseScraper {
 
       // Load saved cookies if they exist for the current property
       if (this.propertyIdForDb) {
-        const cookies = await cookieStorageService.loadCookies(this.propertyIdForDb, PlatformsType.BOOKING);
+        const cookies = await cookieStorageService.loadCookies(
+          this.propertyIdForDb,
+          PlatformsType.BOOKING
+        );
         if (cookies) {
           await page.setCookie(...cookies);
-          await this.logInfo(`Loaded ${cookies.length} cookies from storage for property ${this.propertyIdForDb}`);
+          await this.logInfo(
+            `Loaded ${cookies.length} cookies from storage for property ${this.propertyIdForDb}`
+          );
         } else {
-          await this.logInfo('No saved cookies found for this property');
+          await this.logInfo("No saved cookies found for this property");
         }
       }
 
@@ -228,19 +232,27 @@ export class BookingScraper extends BaseScraper {
 
     await this.logInfo("Login successful");
     const cookies = await this.page.cookies();
-    
+
     // Save cookies to storage if we have a property ID
     if (this.propertyIdForDb) {
-      const success = await cookieStorageService.saveCookies(this.propertyIdForDb, PlatformsType.BOOKING, cookies);
+      const success = await cookieStorageService.saveCookies(
+        this.propertyIdForDb,
+        PlatformsType.BOOKING,
+        cookies
+      );
       if (success) {
-        await this.logInfo(`Saved ${cookies.length} cookies to storage for property ${this.propertyIdForDb}`);
+        await this.logInfo(
+          `Saved ${cookies.length} cookies to storage for property ${this.propertyIdForDb}`
+        );
       } else {
-        await this.logError('Failed to save cookies to storage');
+        await this.logError("Failed to save cookies to storage");
       }
     } else {
-      await this.logInfo('No property ID available, cookies not saved to storage');
+      await this.logInfo(
+        "No property ID available, cookies not saved to storage"
+      );
     }
-    
+
     await this.takeScreenshot();
 
     await this.handlePropertySearch(propertyId);
@@ -254,19 +266,27 @@ export class BookingScraper extends BaseScraper {
 
     await this.logInfo("2FA completed successfully");
     const cookies = await this.page.cookies();
-    
+
     // Save cookies to storage if we have a property ID
     if (this.propertyIdForDb) {
-      const success = await cookieStorageService.saveCookies(this.propertyIdForDb, PlatformsType.BOOKING, cookies);
+      const success = await cookieStorageService.saveCookies(
+        this.propertyIdForDb,
+        PlatformsType.BOOKING,
+        cookies
+      );
       if (success) {
-        await this.logInfo(`Saved ${cookies.length} cookies to storage after 2FA for property ${this.propertyIdForDb}`);
+        await this.logInfo(
+          `Saved ${cookies.length} cookies to storage after 2FA for property ${this.propertyIdForDb}`
+        );
       } else {
-        await this.logError('Failed to save cookies to storage after 2FA');
+        await this.logError("Failed to save cookies to storage after 2FA");
       }
     } else {
-      await this.logInfo('No property ID available, cookies not saved to storage after 2FA');
+      await this.logInfo(
+        "No property ID available, cookies not saved to storage after 2FA"
+      );
     }
-    
+
     await this.takeScreenshot();
 
     await this.handlePropertySearch(propertyId);
@@ -1153,7 +1173,7 @@ export class BookingScraper extends BaseScraper {
           if (target.type() === "page") {
             const newPage = await target.page();
             await newPage!.bringToFront();
-            
+
             resolve(newPage!);
           }
         });
@@ -1424,7 +1444,7 @@ export class BookingScraper extends BaseScraper {
         { reservationId }
       );
       if (shouldStop) {
-        console.log('Process should Stop');
+        console.log("Process should Stop");
         break;
       }
       try {
@@ -1582,9 +1602,17 @@ export class BookingScraper extends BaseScraper {
 
   async scrapeData(params: ScrapingJobParams): Promise<ScrapingResult> {
     try {
-
-      // Release OTP for booking.com
-      await otpStatusManager.forceReleaseOtp();
+      // Release OTP for booking.com - notify main thread
+      const releaseOtp = (global as any).releaseOtpFromWorker;
+      if (releaseOtp) {
+        releaseOtp(params.jobId);
+      } else {
+        // Fallback for non-worker environments
+        const { otpStatusManager } = await import(
+          "../common/otp-status-manager.js"
+        );
+        await otpStatusManager.forceReleaseOtp();
+      }
       await this.logInfo(
         "Starting complete Booking.com scraping process",
         this.page?.url()

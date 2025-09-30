@@ -12,8 +12,8 @@ import {
   OTAProvider,
   PostingType,
 } from "../models/job.model.js";
-import { IProperty, Property } from "../models/property.model.js";
 import { PropertyCredentials } from "../models/Property-credentials.js";
+import { IProperty, Property } from "../models/property.model.js";
 
 export interface CreateJobData {
   name?: string;
@@ -58,7 +58,11 @@ export interface CreateJobItemData {
 
 export class JobService {
   private currentJobId: string | null = null;
-  private currentRetryCheck: { canRetry: boolean; job?: IJob; reason?: string } | null = null;
+  private currentRetryCheck: {
+    canRetry: boolean;
+    job?: IJob;
+    reason?: string;
+  } | null = null;
 
   /**
    * Set the current job ID for retry checking
@@ -115,10 +119,10 @@ export class JobService {
     return new Types.ObjectId(id);
   }
 
-   /**
+  /**
    * Clear the current retry check state
    */
-   clearRetryCheck(): void {
+  clearRetryCheck(): void {
     this.currentJobId = null;
     this.currentRetryCheck = null;
   }
@@ -142,8 +146,8 @@ export class JobService {
    * Get expedia_id from job's property
    */
   async getExpediaIdFromJob(jobId: string): Promise<{
-      user_email: string;
-      user_password: string;
+    user_email: string;
+    user_password: string;
     expediaId: string;
   } | null> {
     try {
@@ -176,13 +180,11 @@ export class JobService {
         return null;
       }
 
-      console.log(
-        `Found expedia_id: ${property.expedia_id} for job: ${jobId}`
-      );
+      console.log(`Found expedia_id: ${property.expedia_id} for job: ${jobId}`);
       return {
         expediaId: property.expedia_id,
-        user_email: property.user_email || '',
-        user_password: property.user_password || '',
+        user_email: property.user_email || "",
+        user_password: property.user_password || "",
       };
     } catch (error) {
       console.error(`Error getting expedia_id for job ${jobId}:`, error);
@@ -193,7 +195,7 @@ export class JobService {
    * Get booking_id from job's property
    */
   async getBookingIdFromJob(jobId: string): Promise<{
-    bookingId: string;
+    bookingId: number;
     portfolioId?: string;
     propertyId?: string;
     bookingUsername?: string;
@@ -223,14 +225,12 @@ export class JobService {
       });
 
       // Check if booking_id exists and is valid
-      if (!property.booking_id || property.booking_id === "0") {
+      if (!property.booking_id || property.booking_id === 0) {
         console.error(`Property ${job.property_id} has no valid booking_id`);
         return null;
       }
 
-      console.log(
-        `Found booking_id: ${property.booking_id} for job: ${jobId}`
-      );
+      console.log(`Found booking_id: ${property.booking_id} for job: ${jobId}`);
 
       return {
         bookingId: property.booking_id,
@@ -366,27 +366,32 @@ export class JobService {
   /**
    * Check if job can be retried (not exceeded max retries)
    */
-  async canRetryJob(jobId: string): Promise<{ canRetry: boolean; job?: IJob; reason?: string }> {
+  async canRetryJob(
+    jobId: string
+  ): Promise<{ canRetry: boolean; job?: IJob; reason?: string }> {
     try {
       const job = await this.getJobById(jobId);
-      
+
       if (!job) {
         return { canRetry: false, reason: "Job not found" };
       }
 
-      if (job.job_status !== JobStatus.Failed && job.job_status !== JobStatus.Cancelled) {
-        return { 
-          canRetry: false, 
-          job, 
-          reason: `Job is not in Failed or Cancelled status. Current status: ${job.job_status}` 
+      if (
+        job.job_status !== JobStatus.Failed &&
+        job.job_status !== JobStatus.Cancelled
+      ) {
+        return {
+          canRetry: false,
+          job,
+          reason: `Job is not in Failed or Cancelled status. Current status: ${job.job_status}`,
         };
       }
 
       if (job.retries_attempted >= job.max_retries) {
-        return { 
-          canRetry: false, 
-          job, 
-          reason: `Maximum retries exceeded (${job.retries_attempted}/${job.max_retries})` 
+        return {
+          canRetry: false,
+          job,
+          reason: `Maximum retries exceeded (${job.retries_attempted}/${job.max_retries})`,
         };
       }
 
@@ -510,23 +515,27 @@ export class JobService {
   ): Promise<IJobItem | null> {
     try {
       const objectId = this.validateObjectId(jobItemId, "jobItemId");
-      
+
       // Convert string IDs to ObjectIds if present
       const updatePayload: any = { ...updateData };
       if (updateData.job_id) {
-        updatePayload.job_id = this.validateObjectId(updateData.job_id, "job_id");
+        updatePayload.job_id = this.validateObjectId(
+          updateData.job_id,
+          "job_id"
+        );
       }
       if (updateData.property_id) {
-        updatePayload.property_id = this.validateObjectId(updateData.property_id, "property_id");
+        updatePayload.property_id = this.validateObjectId(
+          updateData.property_id,
+          "property_id"
+        );
       }
-      
+
       updatePayload.updatedAt = new Date();
-      
-      return await JobItem.findByIdAndUpdate(
-        objectId,
-        updatePayload,
-        { new: true }
-      );
+
+      return await JobItem.findByIdAndUpdate(objectId, updatePayload, {
+        new: true,
+      });
     } catch (error) {
       console.error(`Error updating job item: ${error}`);
       return null;

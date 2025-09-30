@@ -11,7 +11,7 @@ export enum BookingTrustedStatus {
 export interface IProperty extends Document {
   _id: Types.ObjectId;
   expedia_id: string; // The actual Expedia property ID used for scraping
-  booking_id: string; // The actual Booking property ID used for scraping
+  booking_id: number; // The actual Booking property ID used for scraping
   agoda_id: string; // The actual Agoda property ID used for scraping
   property_name: string;
   address?: string;
@@ -36,14 +36,13 @@ export interface IProperty extends Document {
   credentials?: IPropertyCredentials[];
 }
 
-function isValidId(value: string): boolean {
+function isValidId(value: string | number): boolean {
   if (!value) return false;
-  if (value === '0') return false;
-  if (value.trim() === '') return false;
+  if (value === 0 || value === "0") return false;
+  if (typeof value === "string" && value.trim() === "") return false;
 
   return true;
 }
-
 
 // Mongoose Schema for Property
 const PropertySchema = new Schema<IProperty>(
@@ -53,7 +52,7 @@ const PropertySchema = new Schema<IProperty>(
       required: true,
     },
     booking_id: {
-      type: String,
+      type: Number,
       required: false,
     },
     agoda_id: {
@@ -134,7 +133,7 @@ const PropertySchema = new Schema<IProperty>(
     timestamps: true,
     collection: "properties",
     toJSON: { virtuals: true },
-    toObject: { virtuals: true }
+    toObject: { virtuals: true },
   }
 );
 
@@ -147,11 +146,11 @@ PropertySchema.index({ booking_trusted_status: 1, booking_last_login: 1 });
 PropertySchema.index({ booking_id: 1, booking_trusted_status: 1 });
 
 // Virtual for credentials
-PropertySchema.virtual('credentials', {
-  ref: 'PropertyCredentials',
-  localField: '_id',
-  foreignField: 'property_id',
-  justOne: false
+PropertySchema.virtual("credentials", {
+  ref: "PropertyCredentials",
+  localField: "_id",
+  foreignField: "property_id",
+  justOne: false,
 });
 
 export const Property = mongoose.model<IProperty>("Property", PropertySchema);

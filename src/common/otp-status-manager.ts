@@ -1,3 +1,4 @@
+import dotenv from "dotenv";
 import { EventEmitter } from "events";
 import mongoose from "mongoose";
 import {
@@ -6,7 +7,6 @@ import {
   OtpStatus,
   OtpStatusValue,
 } from "../models/otp-status.model.js";
-import dotenv from "dotenv";
 
 dotenv.config();
 
@@ -221,7 +221,9 @@ export class OtpStatusManager extends EventEmitter {
           lastUpdated: result.updatedAt,
         };
 
-        console.log("OTP force released");
+        console.log(
+          `\x1b[32m[OTP] OTP force released - emitting 'otpReleased' event\x1b[0m`
+        );
         this.emit("otpReleased", null);
         return true;
       }

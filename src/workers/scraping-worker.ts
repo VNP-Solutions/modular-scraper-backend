@@ -1,9 +1,19 @@
 import dotenv from "dotenv";
 import mongoose from "mongoose";
 import { parentPort } from "worker_threads";
-import { JobType, WorkerJobData, WorkerMessage, WorkerMessageType } from "../common/worker-types.js";
+import {
+  JobType,
+  WorkerJobData,
+  WorkerMessage,
+  WorkerMessageType,
+} from "../common/worker-types.js";
 
 // Import the main functions
+import {
+  BookingErrorType,
+  getBookingErrorDescription,
+  shouldRetryBookingError,
+} from "../common/booking-error-types.js";
 import {
   dualLogError,
   dualLogInfo,
@@ -12,19 +22,23 @@ import {
 } from "../common/log-helper.js";
 import { progressManager } from "../common/progress-manager.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
-import main from "../main.js";
-import reservation from "../reservation/reservation.js";
-import { jobService } from "../services/job.service.js";
-import { propertyCredentialsService } from "../services/job-credentials.service.js";
 import { mainMultiPlatform } from "../main-multi-platform.js";
 import { JobStatus } from "../models/job.model.js";
-import { 
-  BookingErrorType, 
-  BookingScrapingPhase, 
-  shouldRetryBookingError,
-  getBookingErrorDescription 
-} from "../common/booking-error-types.js";
-import { delay } from "../common/delay.js";
+import reservation from "../reservation/reservation.js";
+import { propertyCredentialsService } from "../services/job-credentials.service.js";
+import { jobService } from "../services/job.service.js";
+
+// Global function to release OTP from worker
+(global as any).releaseOtpFromWorker = (jobId: string) => {
+  if (parentPort) {
+    parentPort.postMessage({
+      type: "otp-release",
+      jobId,
+      data: { message: "OTP released from worker" },
+      timestamp: new Date(),
+    });
+  }
+};
 
 // Load environment variables
 dotenv.config();
@@ -108,7 +122,7 @@ class ScrapingWorker {
           result = await this.handlePropertyRun(jobData);
           break;
 
-        case  JobType.RerunFailed:
+        case JobType.RerunFailed:
           result = await this.handleRerunFailed(jobData);
           break;
 
@@ -226,13 +240,13 @@ class ScrapingWorker {
     try {
       // 6. Run the multi-platform scraping function for Expedia
       await mainMultiPlatform({
-        platform: 'expedia',
+        platform: "expedia",
         propertyId: finalExpediaId,
         startDate,
         endDate,
         jobId,
         user_email: finalUserEmail,
-        user_password: finalUserPassword
+        user_password: finalUserPassword,
       });
 
       // 7. Get final job statistics
@@ -360,13 +374,13 @@ class ScrapingWorker {
     try {
       // 8. Run the multi-platform scraping function for Expedia
       await mainMultiPlatform({
-        platform: 'expedia',
+        platform: "expedia",
         propertyId: expediaId,
         startDate,
         endDate,
         jobId,
         user_email: user_email,
-        user_password: user_password
+        user_password: user_password,
       });
 
       // 9. Get final job statistics
@@ -491,8 +505,15 @@ class ScrapingWorker {
   }
 
   private async handleBookingRun(jobData: WorkerJobData): Promise<any> {
-    const { jobId, portfolioId, propertyId, bookingId, user_email, user_password } = jobData;
-    
+    const {
+      jobId,
+      portfolioId,
+      propertyId,
+      bookingId,
+      user_email,
+      user_password,
+    } = jobData;
+
     if (!jobId) {
       throw new Error("jobId is required for booking-run jobs");
     }
@@ -518,15 +539,19 @@ class ScrapingWorker {
     if (!finalBookingId || !finalUserEmail || !finalUserPassword) {
       console.log(`Getting job data for booking job ${jobId}...`);
       const jobData = await jobService.getBookingIdFromJob(jobId);
-      const bookingCredentials = await propertyCredentialsService.getBookingCredentialsFromJob(jobId);
+      const bookingCredentials =
+        await propertyCredentialsService.getBookingCredentialsFromJob(jobId);
 
       if (!jobData || !jobData.bookingId) {
         throw new Error(
-          `Cannot retrieve valid booking_id for job ${jobId}. Property may not have booking_id assigned or booking_id is "0".`
+          `Cannot retrieve valid booking_id for job ${jobId}. Property may not have booking_id assigned or booking_id is 0.`
         );
       }
 
-      if (!bookingCredentials?.bookingUsername || !bookingCredentials?.bookingPassword) {
+      if (
+        !bookingCredentials?.bookingUsername ||
+        !bookingCredentials?.bookingPassword
+      ) {
         throw new Error(
           `Cannot retrieve valid booking credentials for job ${jobId}. Property may not have booking username or password assigned.`
         );
@@ -537,7 +562,9 @@ class ScrapingWorker {
       finalUserPassword = bookingCredentials.bookingPassword;
     }
 
-    console.log(`Worker: Using booking_id: ${finalBookingId} for booking scraping`);
+    console.log(
+      `Worker: Using booking_id: ${finalBookingId} for booking scraping`
+    );
 
     // 3. Update job status to Running
     console.log(`Worker: Starting booking job ${jobId}...`);
@@ -549,24 +576,21 @@ class ScrapingWorker {
       jobId,
       portfolioId,
       propertyId,
-      bookingId: finalBookingId
+      bookingId: finalBookingId,
     });
 
     // 5. Start scraping state manager
-    scrapingStateManager.startScraping(
-      finalBookingId,
-      jobId,
-    );
-    
+    scrapingStateManager.startScraping(finalBookingId.toString(), jobId);
+
     try {
       // 6. Run the multi-platform scraping function for Booking.com
       await mainMultiPlatform({
-        platform: 'booking',
-        propertyId: finalBookingId,
+        platform: "booking",
+        propertyId: finalBookingId.toString(),
         propertyIdForDb: propertyId,
         jobId,
         user_email: finalUserEmail,
-        user_password: finalUserPassword
+        user_password: finalUserPassword,
       });
 
       // 7. Get final job statistics
@@ -600,16 +624,16 @@ class ScrapingWorker {
         : null;
 
       console.log(`Worker: Booking job ${jobId} completed successfully`);
-      
-      await dualLogInfo('Booking scraping completed successfully', {
+
+      await dualLogInfo("Booking scraping completed successfully", {
         jobId,
         portfolioId,
         propertyId,
-        platform: 'booking',
+        platform: "booking",
         finalStatus,
-        progress
+        progress,
       });
-      
+
       return {
         status: 200,
         message: `Booking scraping ${finalStatus.toLowerCase()} successfully`,
@@ -620,16 +644,15 @@ class ScrapingWorker {
         progress: progress,
         finalStatus: finalStatus,
         logInfo: logInfo,
-        trackingStatus: finalStatus
+        trackingStatus: finalStatus,
       };
-      
     } catch (error) {
       // Mark job as failed on scraping error
       await dualLogError(`Worker: Booking job ${jobId} failed`, error, {
         jobId,
         portfolioId,
         propertyId,
-        platform: 'booking'
+        platform: "booking",
       });
       await progressManager.handleJobError(jobId, error);
       scrapingStateManager.stopScraping();
@@ -642,20 +665,16 @@ class ScrapingWorker {
 
       await jobService.setJobIdForRetryCheck(jobId);
 
-      await dualLogError(
-        "Booking scraping job failed",
-        error,
-        {
-          errorType: BookingErrorType.UNKNOWN,
-          platform: 'booking',
-          propertyId,
-          portfolioId,
-          errorDescription: getBookingErrorDescription(BookingErrorType.UNKNOWN),
-          retryAttempt: jobService.retryAttempt,
-          maxRetries: jobService.maxRetries,
-        }
-      );
-      
+      await dualLogError("Booking scraping job failed", error, {
+        errorType: BookingErrorType.UNKNOWN,
+        platform: "booking",
+        propertyId,
+        portfolioId,
+        errorDescription: getBookingErrorDescription(BookingErrorType.UNKNOWN),
+        retryAttempt: jobService.retryAttempt,
+        maxRetries: jobService.maxRetries,
+      });
+
       throw error;
     }
   }
@@ -669,9 +688,11 @@ class ScrapingWorker {
         new Error("jobId is required for booking-rerun-failed jobs"),
         {
           errorType: BookingErrorType.RERUN_INVALID_STATUS,
-          platform: 'booking',
+          platform: "booking",
           originalStatus,
-          errorDescription: getBookingErrorDescription(BookingErrorType.RERUN_INVALID_STATUS)
+          errorDescription: getBookingErrorDescription(
+            BookingErrorType.RERUN_INVALID_STATUS
+          ),
         }
       );
       throw new Error("jobId is required for booking-rerun-failed jobs");
@@ -684,7 +705,7 @@ class ScrapingWorker {
       originalStatus,
       portfolioId,
       propertyId,
-      platform: 'booking',
+      platform: "booking",
       rerunReason: "Manual rerun of failed job",
       retryAttempt: jobService.retryAttempt,
       maxRetries: jobService.maxRetries,
@@ -695,21 +716,21 @@ class ScrapingWorker {
       jobId,
       fromStatus: originalStatus,
       toStatus: JobStatus.Pending,
-      platform: 'booking'
+      platform: "booking",
     });
-    
+
     await jobService.updateJobStatus(jobId, JobStatus.Pending);
 
     // 2. Initialize job logging for tracking
     initializeJobLogging(jobId);
-    
+
     await dualLogInfo(`Booking job rerun initialized`, {
       jobId,
       originalStatus,
       portfolioId,
       propertyId,
-      platform: 'booking',
-      rerunAttempt: 1
+      platform: "booking",
+      rerunAttempt: 1,
     });
 
     try {
@@ -723,7 +744,7 @@ class ScrapingWorker {
         originalStatus,
         portfolioId,
         propertyId,
-        platform: 'booking',
+        platform: "booking",
         finalStatus: result.trackingStatus,
         rerunSuccess: true,
         retryAttempt: jobService.retryAttempt,
@@ -737,30 +758,27 @@ class ScrapingWorker {
         originalStatus,
         isRerun: true,
         rerunSuccess: true,
-        rerunAttempt: 1
+        rerunAttempt: 1,
       };
-      
     } catch (error) {
-      await dualLogError(
-        "Booking job rerun failed",
-        error,
-        {
-          errorType: BookingErrorType.RERUN_FAILED,
-          platform: 'booking',
-          originalStatus,
-          jobId,
-          portfolioId,
-          propertyId,
-          errorDescription: getBookingErrorDescription(BookingErrorType.RERUN_FAILED),
-          retryAttempt: jobService.retryAttempt,
-          maxRetries: jobService.maxRetries,
-        }
-      );
+      await dualLogError("Booking job rerun failed", error, {
+        errorType: BookingErrorType.RERUN_FAILED,
+        platform: "booking",
+        originalStatus,
+        jobId,
+        portfolioId,
+        propertyId,
+        errorDescription: getBookingErrorDescription(
+          BookingErrorType.RERUN_FAILED
+        ),
+        retryAttempt: jobService.retryAttempt,
+        maxRetries: jobService.maxRetries,
+      });
 
       await dualLogInfo(`Booking job rerun failure details`, {
         jobId,
         originalStatus,
-        platform: 'booking',
+        platform: "booking",
         errorMessage: error instanceof Error ? error.message : String(error),
         failurePhase: "rerun_execution",
         shouldRetry: shouldRetryBookingError(BookingErrorType.RERUN_FAILED),

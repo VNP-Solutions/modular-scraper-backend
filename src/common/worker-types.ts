@@ -15,6 +15,7 @@ export enum WorkerMessageType {
   JobComplete = "job-complete",
   JobError = "job-error",
   JobLog = "job-log",
+  OtpRelease = "otp-release",
 }
 export interface WorkerJobData {
   jobType: string;
@@ -24,7 +25,7 @@ export interface WorkerJobData {
   startDate?: string;
   endDate?: string;
   expediaId?: string;
-  bookingId?: string;
+  bookingId?: number;
   agodaId?: string;
   user_email?: string;
   user_password?: string;

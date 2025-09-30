@@ -346,7 +346,7 @@ export class CaptchaService {
               content: [
                 {
                   type: "text",
-                  text: `From this image, there are 9 different picture in three rows. Top left corner is 1 and right of that is 2, then 3, like this the last one from bottom right corner is 9. You will analyze which picture is what first. Then, after analyzing every picture, you will match with the instruction, and generate result. You will give me a json like this: { "instruction": "Instruction from Image", "positions": "[1, 3, 4, 5, 6]" }`,
+                  text: `From this image, there are 9 different picture in three rows. Top left corner is 1 and right of that is 2, then 3, like this the last one from bottom right corner is 9. You will analyze which picture is what, then make a list of all the pictures. Then, after analyzing every picture, you will match with the instruction, and generate result. You will give me a json like this: { "instruction": "Instruction from Image", "positions": "[1, 3, 4, 5, 6]", list: { "1": "Hat", "2": "Bucket", "3": "Bag", "4": "Bag", "5": "Hat", "6": "Bed", "7": "Hat", "8": "Curtain", "9": "Clock" } }`,
                 },
                 {
                   type: "image_url",
