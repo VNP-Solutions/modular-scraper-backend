@@ -1031,9 +1031,10 @@ export class BookingScraper extends BaseScraper {
       // Get all reservation IDs from the current page
       const reservationIds = await this.page.evaluate((selectors) => {
         const rows = document.querySelectorAll(selectors.reservationRow);
-        const ids: string[] = [];
+        const ids: any[] = [];
 
         rows.forEach((row) => {
+          const rowData: any = {};
           const idElement = row.querySelector(selectors.reservationId);
           if (idElement) {
             const href = idElement.getAttribute("href");
@@ -1041,11 +1042,27 @@ export class BookingScraper extends BaseScraper {
               // Extract reservation ID from href
               const match = href.match(/res_id=(\d+)/);
               if (match) {
-                ids.push(match[1]);
+                rowData.id=match[1];
               }
             }
           }
+          const amountElement = row.querySelector(selectors.reservationAmount);
+          if (amountElement){
+            const amount = amountElement.textContent?.trim();
+            if (amount){
+              rowData.amount=amount;              
+            }
+          }
+          const chargeBeforeElement = row.querySelector(selectors.reservationChargeBefore);
+          if (chargeBeforeElement){
+            const chargeBefore = chargeBeforeElement.textContent?.trim();
+            if (chargeBefore){
+              rowData.chargeBefore=chargeBefore;
+            }
+          }
+          ids.push(rowData);
         });
+
 
         return ids;
       }, BOOKING_SELECTORS.reservations);
@@ -1151,7 +1168,7 @@ export class BookingScraper extends BaseScraper {
   }
 
   async clickReservationDetail(
-    reservationId: string,
+    reservation: any,
     jobId?: string,
     propertyId?: string
   ): Promise<boolean> {
@@ -1160,11 +1177,11 @@ export class BookingScraper extends BaseScraper {
     try {
       // Check if scraping should continue before clicking reservation detail
       await this.throwIfScrapingShouldStop("click_reservation_detail", {
-        reservationId,
+        reservationId: reservation.id,
       });
 
       await this.logInfo(
-        `Attempting to open reservation detail for ID: ${reservationId}`
+        `Attempting to open reservation detail for ID: ${reservation.id}`
       );
 
       // Listen for new page creation for reservation view
@@ -1190,7 +1207,7 @@ export class BookingScraper extends BaseScraper {
       await this.logInfo(`Click the reservation link`);
       await SelectorUtils.findAndClick(
         this.page,
-        BOOKING_SELECTORS.reservations.item(reservationId)
+        BOOKING_SELECTORS.reservations.item(reservation.id)
       );
 
       await this.logInfo(`Waiting for new tab loading`);
@@ -1270,13 +1287,13 @@ export class BookingScraper extends BaseScraper {
 
       try {
         const success = await this.processReservationDetail(
-          reservationId,
+          reservation,
           jobId,
           propertyId
         );
         if (!success) {
           await this.logInfo(
-            `Failed to process reservation detail for ${reservationId}`
+            `Failed to process reservation detail for ${reservation.id}`
           );
         }
       } finally {
@@ -1297,7 +1314,7 @@ export class BookingScraper extends BaseScraper {
           error: error,
           phase: BookingScrapingPhase.NAVIGATION,
           platform: "booking",
-          reservationId: reservationId,
+          reservationId: reservation.id,
           action: "click_reservation_detail",
         }
       );
@@ -1422,6 +1439,8 @@ export class BookingScraper extends BaseScraper {
       }
     }
 
+    //pore
+
     return await this.processReservations(
       reservationIds,
       options.jobId,
@@ -1430,18 +1449,18 @@ export class BookingScraper extends BaseScraper {
   }
 
   private async processReservations(
-    reservationIds: string[],
+    reservationIds: any[],
     jobId?: string,
     propertyId?: string
   ): Promise<{ processed: number; errors: number }> {
     let processedCount = 0;
     let errorCount = 0;
 
-    for (const reservationId of reservationIds) {
+    for (const reservation of reservationIds) {
       // Check if scraping should continue before processing each reservation
       const shouldStop = await this.checkScrapingShouldStop(
         "process_reservations",
-        { reservationId }
+        { reservationId: reservation.id }
       );
       if (shouldStop) {
         console.log("Process should Stop");
@@ -1449,23 +1468,23 @@ export class BookingScraper extends BaseScraper {
       }
       try {
         const success = await this.clickReservationDetail(
-          reservationId,
+          reservation,
           jobId,
           propertyId
         );
         if (success) {
           processedCount++;
           await this.logInfo(
-            `Successfully processed reservation ${reservationId} (${processedCount} total)`
+            `Successfully processed reservation ${reservation.id} (${processedCount} total)`
           );
         } else {
           errorCount++;
-          await this.logInfo(`Failed to process reservation ${reservationId}`);
+          await this.logInfo(`Failed to process reservation ${reservation.id}`);
         }
       } catch (error) {
         errorCount++;
         await this.logInfo(
-          `Error processing reservation ${reservationId}: ${
+          `Error processing reservation ${reservation.id}: ${
             error instanceof Error ? error.message : "Unknown error"
           }`
         );
@@ -2644,8 +2663,9 @@ export class BookingScraper extends BaseScraper {
           total_guest_payment: parseAmount(basicData.totalAmount),
           total_payout: parseAmount(basicData.totalPayout),
           amount_to_charge_or_refund:
-            parseAmount(cardData.amountToChargeOrRefund) || 0,
+          parseAmount(basicData.amount) || 0,
           cancellation_fee: 0, // update later
+          charge_before: basicData.chargeBefore,
         },
         card_info: {
           expiry_date: cardData.expiry,
@@ -2688,19 +2708,19 @@ export class BookingScraper extends BaseScraper {
   }
 
   async processReservationDetail(
-    reservationId: string,
+    reservation: any,
     jobId?: string,
     propertyId?: string
   ): Promise<boolean> {
     try {
       // Check if scraping should continue before processing reservation detail
       await this.throwIfScrapingShouldStop("process_reservation_detail", {
-        reservationId,
+        reservationId: reservation.id,
         jobId,
         propertyId,
       });
 
-      await this.logInfo(`Processing reservation detail: ${reservationId}`);
+      await this.logInfo(`Processing reservation detail: ${reservation.id}`);
 
       // Extract reservation basic data
       if (!this.page) throw new Error("Page not initialized");
@@ -2709,6 +2729,9 @@ export class BookingScraper extends BaseScraper {
       if (!basicData) {
         await this.logError("Failed to extract basic reservation data");
       }
+
+      basicData.amount = reservation.amount;
+      basicData.chargeBefore = reservation.chargeBefore;
 
       await this.logInfo("Basic reservation data extracted successfully");
 
@@ -2749,10 +2772,10 @@ export class BookingScraper extends BaseScraper {
         );
       });
 
-      const cardDetailsClick = this.clickCardDetailsFromRow(reservationId);
+      const cardDetailsClick = this.clickCardDetailsFromRow(reservation.id);
       if (!cardDetailsClick) {
         await this.logError(
-          `Failed to extract data for reservation ${reservationId}`
+          `Failed to extract data for reservation ${reservation.id}`
         );
       }
 
@@ -2794,11 +2817,11 @@ export class BookingScraper extends BaseScraper {
         await this.saveReservationToDatabase(jobId, basicData, cardData);
       }
 
-      await this.logInfo(`Successfully processed reservation ${reservationId}`);
+      await this.logInfo(`Successfully processed reservation ${reservation.id}`);
       return true;
     } catch (error) {
       await this.logError(
-        `Error processing reservation ${reservationId}:`,
+        `Error processing reservation ${reservation.id}:`,
         error
       );
       return false;

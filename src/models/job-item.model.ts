@@ -13,6 +13,7 @@ export interface PaymentInfo {
   cancellation_fee?: number;
   total_payout: number;
   amount_to_charge_or_refund?: number; // Reverted back to number type
+  charge_before?: string;
 }
 
 // Interface for the JobItem document
@@ -78,6 +79,10 @@ const PaymentInfoSchema = new Schema<PaymentInfo>(
     amount_to_charge_or_refund: {
       type: Number,
       required: true,
+    },
+    charge_before: {
+      type: String,
+      required: false,
     },
   },
   { _id: false }

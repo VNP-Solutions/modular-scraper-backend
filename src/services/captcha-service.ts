@@ -334,12 +334,12 @@ export class CaptchaService {
       // Analyze the screenshot with OpenAI Vision with timeout
       const response = (await Promise.race([
         this.openai!.chat.completions.create({
-          model: "gpt-4o", // Use GPT-4o (latest available model with vision capabilities)
+          model: "gpt-4.1", // Use GPT-4o (latest available model with vision capabilities)
           messages: [
             {
               role: "system",
               content:
-                "You are an expert at analyzing CAPTCHA images. You must provide accurate, precise responses in the exact JSON format requested. Focus on identifying the instruction text and determining which numbered positions (1-9) should be selected based on the grid layout.",
+                "You are an expert at analyzing CAPTCHA images. You must provide accurate, precise responses in the exact JSON format requested, or 50 kitten will be in danger.",
             },
             {
               role: "user",
@@ -362,8 +362,8 @@ export class CaptchaService {
         // Add timeout to prevent hanging
         new Promise((_, reject) =>
           setTimeout(
-            () => reject(new Error("OpenAI API timeout after 15 seconds")),
-            15000
+            () => reject(new Error("OpenAI API timeout after 20 seconds")),
+            20000
           )
         ),
       ])) as any;
