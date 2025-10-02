@@ -29,6 +29,7 @@ import {
 } from "../services/captcha-service.js";
 import { cookieStorageService } from "../services/cookie-storage.service.js";
 import { jobService } from "../services/job.service.js";
+import { vccsManagementService } from "../services/vccs-management.service.js";
 import {
   BaseScraper,
   CaptchaHandlerOptions,
@@ -1042,27 +1043,28 @@ export class BookingScraper extends BaseScraper {
               // Extract reservation ID from href
               const match = href.match(/res_id=(\d+)/);
               if (match) {
-                rowData.id=match[1];
+                rowData.id = match[1];
               }
             }
           }
           const amountElement = row.querySelector(selectors.reservationAmount);
-          if (amountElement){
+          if (amountElement) {
             const amount = amountElement.textContent?.trim();
-            if (amount){
-              rowData.amount=amount;              
+            if (amount) {
+              rowData.amount = amount;
             }
           }
-          const chargeBeforeElement = row.querySelector(selectors.reservationChargeBefore);
-          if (chargeBeforeElement){
+          const chargeBeforeElement = row.querySelector(
+            selectors.reservationChargeBefore
+          );
+          if (chargeBeforeElement) {
             const chargeBefore = chargeBeforeElement.textContent?.trim();
-            if (chargeBefore){
-              rowData.chargeBefore=chargeBefore;
+            if (chargeBefore) {
+              rowData.chargeBefore = chargeBefore;
             }
           }
           ids.push(rowData);
         });
-
 
         return ids;
       }, BOOKING_SELECTORS.reservations);
@@ -1669,29 +1671,12 @@ export class BookingScraper extends BaseScraper {
       await this.logInfo("Successfully navigated to VCCS to charge page");
       this.takeScreenshot();
 
-      // Step 3: Traverse all reservations
-      await this.logInfo("Starting reservation traversal...");
-
-      // Optional params
-      const traversalOptions = {
-        jobId: params.jobId,
-        propertyId: params.propertyId,
-      };
-
-      await this.logInfo(
-        `Starting reservation traversal with options:`,
-        traversalOptions
+      // Step 3: Use new VCCS API-based approach
+      await this.logInfo("Starting VCCS API-based processing...");
+      const vccsResult = await this.processVccsWithApi(
+        params.jobId,
+        params.propertyId
       );
-
-      const traversalResult = await this.traverseAllReservations(
-        traversalOptions
-      );
-
-      await this.logInfo("Traversal Results:");
-      await this.logInfo(
-        `Successfully processed: ${traversalResult.processed} reservations`
-      );
-      await this.logInfo(`Errors encountered: ${traversalResult.errors}`);
 
       // Step 4: Take final screenshot
       await this.takeScreenshot();
@@ -1706,10 +1691,10 @@ export class BookingScraper extends BaseScraper {
           vccsManagement: navigationSuccess,
           viewAllButton: viewAllSuccess,
         },
-        traversal: {
-          processed: traversalResult.processed,
-          errors: traversalResult.errors,
-          options: traversalOptions,
+        vccsProcessing: {
+          processed: vccsResult?.processed || 0,
+          errors: vccsResult?.errors || 0,
+          total: vccsResult?.results?.length || 0,
         },
       };
 
@@ -1742,6 +1727,132 @@ export class BookingScraper extends BaseScraper {
         error: error instanceof Error ? error.message : "Scraping failed",
         screenshots: [`booking-scraping-error-${Date.now()}.png`],
       };
+    }
+  }
+
+  /**
+   * Process VCCS using API calls instead of browser automation
+   */
+  async processVccsWithApi(
+    jobId?: string,
+    propertyId?: string
+  ): Promise<{
+    processed: number;
+    errors: number;
+    results: any[];
+  } | null> {
+    if (!this.page) {
+      await this.logError("Page not initialized for VCCS API processing");
+      return null;
+    }
+
+    try {
+      await this.logInfo("Starting VCCS API-based processing");
+
+      // Get current URL and extract parameters
+      const currentUrl = this.page.url();
+      await this.logInfo(`Current VCCS page URL: ${currentUrl}`);
+
+      const urlParams = vccsManagementService.extractUrlParams(currentUrl);
+      if (!urlParams) {
+        throw new Error("Failed to extract URL parameters from VCCS page");
+      }
+
+      await this.logInfo("Extracted URL parameters", urlParams);
+
+      // Extract cookies and headers from the current page
+      const { cookies, headers, hotel_account_id } =
+        await vccsManagementService.extractCookiesAndHeaders(this.page);
+
+      if (!cookies) {
+        throw new Error("Failed to extract cookies from page");
+      }
+
+      await this.logInfo("Extracted cookies and headers for API calls");
+
+      // Add extracted hotel_account_id to urlParams
+      const urlParamsWithAccountId = {
+        ...urlParams,
+        hotel_account_id,
+      };
+
+      // Get VCCS data from API
+      const vccsData = await vccsManagementService.getVccsData(
+        urlParamsWithAccountId,
+        cookies,
+        headers
+      );
+
+      if (!vccsData || !vccsData.success) {
+        throw new Error("Failed to get VCCS data from API");
+      }
+
+      await this.logInfo("Retrieved VCCS data from API", {
+        totalVccs: vccsData.data.vccs.length,
+        totalAmount: vccsData.data.total_amount.amount_formatted,
+      });
+
+      // Process all VCCS reservations
+      const processingResult =
+        await vccsManagementService.processAllVccsReservations(
+          vccsData,
+          urlParams,
+          cookies,
+          headers,
+          jobId,
+          propertyId
+        );
+
+      await this.logInfo("VCCS processing completed", {
+        processed: processingResult.processed,
+        errors: processingResult.errors,
+        total: processingResult.results.length,
+      });
+
+      return processingResult;
+    } catch (error) {
+      await this.logError("VCCS API processing failed", error);
+      return null;
+    }
+  }
+
+  /**
+   * Fallback method: Process VCCS using browser automation
+   */
+  async processVccsWithBrowserAutomation(
+    jobId?: string,
+    propertyId?: string
+  ): Promise<{
+    processed: number;
+    errors: number;
+    results: any[];
+  } | null> {
+    try {
+      await this.logInfo("Starting VCCS browser automation fallback");
+
+      // Use the original browser automation method
+      const result = await this.traverseAllReservations({
+        jobId,
+        propertyId,
+      });
+
+      await this.logInfo("VCCS browser automation completed", {
+        processed: result?.processed || 0,
+        errors: result?.errors || 0,
+      });
+
+      // Convert to expected format
+      return {
+        processed: result?.processed || 0,
+        errors: result?.errors || 0,
+        results: [], // Browser automation doesn't return individual results
+      };
+    } catch (error) {
+      await this.logError(
+        "VCCS browser automation fallback also failed",
+        error
+      );
+      return null;
     }
   }
 
@@ -2662,8 +2773,7 @@ export class BookingScraper extends BaseScraper {
         payment_info: {
           total_guest_payment: parseAmount(basicData.totalAmount),
           total_payout: parseAmount(basicData.totalPayout),
-          amount_to_charge_or_refund:
-          parseAmount(basicData.amount) || 0,
+          amount_to_charge_or_refund: parseAmount(basicData.amount) || 0,
           cancellation_fee: 0, // update later
           charge_before: basicData.chargeBefore,
         },
@@ -2817,7 +2927,9 @@ export class BookingScraper extends BaseScraper {
         await this.saveReservationToDatabase(jobId, basicData, cardData);
       }
 
-      await this.logInfo(`Successfully processed reservation ${reservation.id}`);
+      await this.logInfo(
+        `Successfully processed reservation ${reservation.id}`
+      );
       return true;
     } catch (error) {
       await this.logError(
