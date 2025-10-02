@@ -1,0 +1,755 @@
+import fetch from "node-fetch";
+import { dualLogError, dualLogInfo } from "../common/log-helper.js";
+import { jobService } from "./job.service.js";
+
+export interface VccsUrlParams {
+  hotel_id: string;
+  ses: string;
+  lang: string;
+  route: string;
+  hotel_account_id?: string;
+}
+
+export interface VccsApiResponse {
+  data: {
+    pagination: {
+      current_page_size: number;
+      current_page_number: number;
+      total_count: number;
+      is_last_page: number;
+    };
+    total_amount: {
+      amount_formatted: string;
+      currency: string;
+      amount: number;
+    };
+    vccs: Array<{
+      hres_id: string;
+      booking_legal_entity_name: string;
+      current_amount: {
+        amount: string;
+        currency: string;
+        formatted: string;
+      };
+      expiry_date: string;
+    }>;
+  };
+  params: {
+    errors: any[];
+    details: any;
+  };
+  success: number;
+}
+
+export interface CardDetailsResponse {
+  cardNumber: string;
+  expiry: string;
+  cvv: string;
+  cardholder: string;
+  amountToChargeOrRefund: string;
+  reasonForCharge?: string;
+}
+
+export class VccsManagementService {
+  private baseUrl = "https://admin.booking.com";
+  private apiBaseUrl = "https://admin.booking.com/fresa/extranet/payments";
+  private cardDetailsBaseUrl =
+    "https://secure-admin.booking.com/booking_cc_details.html";
+
+  /**
+   * Extract URL parameters from the current VCCS management page URL
+   */
+  extractUrlParams(url: string): VccsUrlParams | null {
+    try {
+      const urlObj = new URL(url);
+      const params = urlObj.searchParams;
+
+      const hotel_id = params.get("hotel_id");
+      const ses = params.get("ses");
+      const lang = params.get("lang");
+      const route = params.get("route") || "vccs_to_charge"; // Default to vccs_to_charge if not present
+
+      if (!hotel_id || !ses || !lang) {
+        dualLogError("Missing required URL parameters", {
+          hotel_id,
+          ses,
+          lang,
+          route,
+          url,
+        });
+        return null;
+      }
+
+      const urlParams = {
+        hotel_id,
+        ses,
+        lang,
+        route,
+      };
+
+      dualLogInfo("Successfully extracted URL parameters", {
+        urlParams,
+        originalUrl: url,
+      });
+
+      return urlParams;
+    } catch (error) {
+      dualLogError("Failed to extract URL parameters", { error, url });
+      return null;
+    }
+  }
+
+  /**
+   * Get VCCS data from the API
+   */
+  async getVccsData(
+    params: VccsUrlParams,
+    cookies: string,
+    headers: Record<string, string> = {}
+  ): Promise<VccsApiResponse | null> {
+    try {
+      const apiUrl = `${this.apiBaseUrl}/vccs_to_charge`;
+      const queryParams = new URLSearchParams({
+        hotel_account_id: params.hotel_account_id || "21604744", // Use extracted or fallback
+        hotel_id: params.hotel_id,
+        ses: params.ses,
+        lang: params.lang,
+        limit: "100",
+        page: "1",
+      });
+
+      const fullUrl = `${apiUrl}?${queryParams.toString()}`;
+
+      // Log all cookies being sent
+      console.log("=== COOKIES BEING SENT TO API ===");
+      console.log("Cookie string length:", cookies.length);
+      console.log("Cookie string:", cookies);
+      console.log("=== END COOKIES ===");
+
+      // Log all headers being sent
+      console.log("=== HEADERS BEING SENT TO API ===");
+      console.log("Headers:", JSON.stringify(headers, null, 2));
+      console.log("=== END HEADERS ===");
+
+      dualLogInfo("Making VCCS API request", {
+        url: fullUrl,
+        hasCookies: !!cookies,
+        cookieLength: cookies.length,
+        hasPageviewId: !!headers["x-booking-pageview-id"],
+      });
+
+      // Add human-like delay before making API request
+      await new Promise((resolve) =>
+        setTimeout(resolve, 500 + Math.random() * 1000)
+      );
+
+      const response = await fetch(fullUrl, {
+        method: "GET",
+        headers: {
+          accept: "application/json, text/plain, */*",
+          "accept-language": "en-GB,en-US;q=0.9,en;q=0.8",
+          ect: "3g",
+          priority: "u=1, i",
+          referer: `${this.baseUrl}/hotel/hoteladmin/extranet_ng/manage/vccs_management.html?lang=${params.lang}&hotel_id=${params.hotel_id}&ses=${params.ses}`,
+          "sec-ch-ua":
+            '"Chromium";v="140", "Not=A?Brand";v="24", "Google Chrome";v="140"',
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": '"macOS"',
+          "sec-fetch-dest": "empty",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-site": "same-origin",
+          "user-agent":
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
+          "x-booking-client-info":
+            "function(){return vn.a.tracked&&vn.a.tracked()}",
+          "x-booking-info":
+            "function(){return document&&document.getElementById('req_info')?document.getElementById('req_info').innerHTML:''}",
+          "x-booking-language-code": "en-us",
+          "x-booking-pageview-id": headers["x-booking-pageview-id"] || "",
+          "x-booking-sitetype-id": "31",
+          cookie: cookies,
+          ...headers,
+        },
+      });
+
+      if (!response.ok) {
+        const responseText = await response
+          .text()
+          .catch(() => "Could not read response");
+        dualLogError("VCCS API request failed", {
+          status: response.status,
+          statusText: response.statusText,
+          url: fullUrl,
+          responseHeaders: Object.fromEntries(response.headers.entries()),
+          responseBody: responseText.substring(0, 500), // First 500 chars
+        });
+        return null;
+      }
+
+      const data = (await response.json()) as VccsApiResponse;
+      dualLogInfo("VCCS API response received", {
+        success: data.success,
+        vccsCount: data.data?.vccs?.length || 0,
+        totalAmount: data.data?.total_amount?.amount_formatted,
+      });
+
+      return data;
+    } catch (error) {
+      dualLogError("Failed to get VCCS data", { error, params });
+      return null;
+    }
+  }
+
+  /**
+   * Get card details for a specific reservation ID
+   */
+  async getCardDetails(
+    reservationId: string,
+    params: VccsUrlParams,
+    cookies: string,
+    headers: Record<string, string> = {}
+  ): Promise<CardDetailsResponse | null> {
+    try {
+      const cardDetailsUrl = `${this.cardDetailsBaseUrl}?lang=${params.lang}&bn=${reservationId}&hotel_id=${params.hotel_id}&ses=${params.ses}&has_bvc=1`;
+
+      dualLogInfo("Making card details request", {
+        url: cardDetailsUrl,
+        reservationId,
+      });
+
+      const response = await fetch(cardDetailsUrl, {
+        method: "GET",
+        headers: {
+          accept:
+            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+          "accept-language": "en-GB,en-US;q=0.9,en;q=0.8",
+          "cache-control": "max-age=0",
+          ect: "3g",
+          priority: "u=0, i",
+          referer: `${this.baseUrl}/`,
+          "sec-ch-ua":
+            '"Chromium";v="140", "Not=A?Brand";v="24", "Google Chrome";v="140"',
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": '"macOS"',
+          "sec-fetch-dest": "document",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-site": "same-site",
+          "sec-fetch-user": "?1",
+          "upgrade-insecure-requests": "1",
+          "user-agent":
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
+          cookie: cookies,
+          ...headers,
+        },
+      });
+
+      if (!response.ok) {
+        dualLogError("Card details request failed", {
+          status: response.status,
+          statusText: response.statusText,
+          reservationId,
+          url: cardDetailsUrl,
+        });
+        return null;
+      }
+
+      const html = await response.text();
+      const cardDetails = this.parseCardDetailsFromHtml(html);
+
+      dualLogInfo("Card details extracted", {
+        reservationId,
+        hasCardNumber: !!cardDetails?.cardNumber,
+        hasExpiry: !!cardDetails?.expiry,
+        hasCvv: !!cardDetails?.cvv,
+        hasCardholder: !!cardDetails?.cardholder,
+      });
+
+      return cardDetails;
+    } catch (error) {
+      dualLogError("Failed to get card details", {
+        error,
+        reservationId,
+        params,
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Parse card details from HTML response
+   */
+  private parseCardDetailsFromHtml(html: string): CardDetailsResponse | null {
+    try {
+      const cardDetails: CardDetailsResponse = {
+        cardNumber: "",
+        expiry: "",
+        cvv: "",
+        cardholder: "",
+        amountToChargeOrRefund: "",
+      };
+
+      // Extract card number from table structure
+      const cardNumberMatch = html.match(
+        /<td>Card number:<\/td>\s*<td>([^<]+)<\/td>/i
+      );
+      if (cardNumberMatch) {
+        cardDetails.cardNumber = cardNumberMatch[1].trim();
+      }
+
+      // Extract expiry date from table structure
+      const expiryMatch = html.match(
+        /<td>Expiration Date:<\/td>\s*<td>([^<]+)<\/td>/i
+      );
+      if (expiryMatch) {
+        cardDetails.expiry = expiryMatch[1].trim();
+      }
+
+      // Extract CVV from table structure
+      const cvvMatch = html.match(/<td>CVC Code:<\/td>\s*<td>([^<]+)<\/td>/i);
+      if (cvvMatch) {
+        cardDetails.cvv = cvvMatch[1].trim();
+      }
+
+      // Extract cardholder name from table structure
+      const cardholderMatch = html.match(
+        /<td>Card holder's name:<\/td>\s*<td>([^<]+)<\/td>/i
+      );
+      if (cardholderMatch) {
+        cardDetails.cardholder = cardholderMatch[1].trim();
+      }
+
+      // Extract available balance from table structure
+      const balanceMatch = html.match(
+        /<td class="sp">Available balance:<\/td>\s*<td>([^<]+)<\/td>/i
+      );
+      if (balanceMatch) {
+        cardDetails.amountToChargeOrRefund = balanceMatch[1].trim();
+      }
+
+      // Alternative: Extract remaining balance from the status message
+      if (!cardDetails.amountToChargeOrRefund) {
+        const remainingBalanceMatch = html.match(
+          /The remaining balance is <span>([^<]+)<\/span>/i
+        );
+        if (remainingBalanceMatch) {
+          cardDetails.amountToChargeOrRefund = remainingBalanceMatch[1].trim();
+        }
+      }
+
+      // Extract card type for additional context
+      const cardTypeMatch = html.match(
+        /<td class="sp">Card type:<\/td>\s*<td>([^<]+)<\/td>/i
+      );
+      if (cardTypeMatch) {
+        // Store card type in reason_for_charge field
+        cardDetails.reasonForCharge = cardTypeMatch[1].trim();
+      }
+
+      dualLogInfo("Parsed card details from HTML", {
+        hasCardNumber: !!cardDetails.cardNumber,
+        hasExpiry: !!cardDetails.expiry,
+        hasCvv: !!cardDetails.cvv,
+        hasCardholder: !!cardDetails.cardholder,
+        hasAmount: !!cardDetails.amountToChargeOrRefund,
+        cardType: cardDetails.reasonForCharge,
+      });
+
+      return cardDetails;
+    } catch (error) {
+      dualLogError("Failed to parse card details from HTML", { error });
+      return null;
+    }
+  }
+
+  /**
+   * Process all VCCS reservations and get card details
+   */
+  async processAllVccsReservations(
+    vccsData: VccsApiResponse,
+    params: VccsUrlParams,
+    cookies: string,
+    headers: Record<string, string> = {},
+    jobId?: string,
+    propertyId?: string
+  ): Promise<{
+    processed: number;
+    errors: number;
+    results: Array<{
+      reservationId: string;
+      vccsData: any;
+      cardDetails: CardDetailsResponse | null;
+      saved: boolean;
+    }>;
+  }> {
+    const results: Array<{
+      reservationId: string;
+      vccsData: any;
+      cardDetails: CardDetailsResponse | null;
+      saved: boolean;
+    }> = [];
+
+    let processed = 0;
+    let errors = 0;
+
+    dualLogInfo("Starting VCCS reservation processing", {
+      totalVccs: vccsData.data.vccs.length,
+      jobId,
+      propertyId,
+    });
+
+    for (const vccs of vccsData.data.vccs) {
+      try {
+        dualLogInfo(`Processing reservation ${vccs.hres_id}`);
+
+        // Get card details for this reservation
+        const cardDetails = await this.getCardDetails(
+          vccs.hres_id,
+          params,
+          cookies,
+          headers
+        );
+
+        let saved = false;
+
+        // Save to database if jobId and propertyId are provided
+        if (jobId && propertyId && cardDetails) {
+          try {
+            const jobItemData = await this.createJobItemData(
+              vccs,
+              cardDetails,
+              jobId,
+              propertyId
+            );
+
+            // Check if reservation already exists
+            const existingReservation =
+              await jobService.findJobItemByReservationId(jobId, vccs.hres_id);
+
+            if (existingReservation) {
+              const updatedItem = await jobService.updateJobItem(
+                existingReservation._id.toString(),
+                jobItemData
+              );
+              dualLogInfo(`Updated reservation ${vccs.hres_id} with new data`);
+              saved = true;
+            } else {
+              const savedItem = await jobService.createJobItem(jobItemData);
+              dualLogInfo(`Saved reservation ${vccs.hres_id} to database`);
+              saved = true;
+            }
+          } catch (saveError) {
+            dualLogError(
+              `Failed to save reservation ${vccs.hres_id} to database`,
+              {
+                error: saveError,
+                reservationId: vccs.hres_id,
+              }
+            );
+          }
+        }
+
+        results.push({
+          reservationId: vccs.hres_id,
+          vccsData: vccs,
+          cardDetails,
+          saved,
+        });
+
+        processed++;
+        dualLogInfo(
+          `Successfully processed reservation ${vccs.hres_id} (${processed}/${vccsData.data.vccs.length})`
+        );
+
+        // Add a small delay between requests to avoid rate limiting
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      } catch (error) {
+        errors++;
+        dualLogError(`Error processing reservation ${vccs.hres_id}`, {
+          error,
+          reservationId: vccs.hres_id,
+        });
+
+        results.push({
+          reservationId: vccs.hres_id,
+          vccsData: vccs,
+          cardDetails: null,
+          saved: false,
+        });
+      }
+    }
+
+    dualLogInfo("VCCS reservation processing completed", {
+      processed,
+      errors,
+      total: vccsData.data.vccs.length,
+    });
+
+    return {
+      processed,
+      errors,
+      results,
+    };
+  }
+
+  /**
+   * Create job item data from VCCS and card details
+   */
+  private async createJobItemData(
+    vccs: any,
+    cardDetails: CardDetailsResponse,
+    jobId: string,
+    propertyId: string
+  ): Promise<any> {
+    // Parse amount
+    const parseAmount = (amountStr: string): number => {
+      if (!amountStr) return 0;
+      const cleaned = amountStr.replace(/[^\d.-]/g, "");
+      const amount = parseFloat(cleaned);
+      return isNaN(amount) ? 0 : Math.abs(amount);
+    };
+
+    const jobItemData = {
+      job_id: jobId,
+      property_id: propertyId,
+      guest_name: "VCCS Guest", // This might need to be extracted from somewhere else
+      reservation_id: vccs.hres_id,
+      confirmation_number: vccs.hres_id, // Use reservation ID as confirmation number
+      check_in_date: new Date(), // These dates might need to be extracted from VCCS data
+      check_out_date: new Date(),
+      room_type: "VCCS Reservation",
+      booking_amount: parseAmount(vccs.current_amount.amount),
+      booked_date: new Date(),
+      has_card_info: !!cardDetails.cardNumber,
+      has_payment_info: !!vccs.current_amount.amount,
+      payment_info: {
+        total_guest_payment: parseAmount(vccs.current_amount.amount),
+        total_payout: parseAmount(vccs.current_amount.amount),
+        amount_to_charge_or_refund: parseAmount(
+          cardDetails.amountToChargeOrRefund
+        ),
+        cancellation_fee: 0,
+        charge_before: vccs.expiry_date,
+      },
+      card_info: {
+        expiry_date: cardDetails.expiry,
+        card_number: cardDetails.cardNumber,
+        cvv: cardDetails.cvv,
+        card_holder_name: cardDetails.cardholder,
+        reason_for_charge: cardDetails.reasonForCharge,
+      },
+      reservation_status: "VCCS Active",
+    };
+
+    return jobItemData;
+  }
+
+  /**
+   * Extract cookies and headers from browser page
+   */
+  async extractCookiesAndHeaders(page: any): Promise<{
+    cookies: string;
+    headers: Record<string, string>;
+    hotel_account_id?: string;
+  }> {
+    try {
+      console.log("=== STARTING COOKIE/HEADER EXTRACTION ===");
+
+      // Wait for page to load naturally like a human would (Puppeteer method)
+      console.log("Waiting for page to load...");
+      await page.waitForSelector("body", { timeout: 10000 });
+      console.log("Page loaded successfully");
+
+      // Simulate human-like behavior
+      console.log("Adding human-like delay...");
+      await new Promise((resolve) =>
+        setTimeout(resolve, 1000 + Math.random() * 2000)
+      );
+      console.log("Human-like delay completed");
+
+      // Simulate mouse movement to look more human (Puppeteer method)
+      try {
+        console.log("Simulating mouse movement...");
+        await page.mouse.move(
+          100 + Math.random() * 200,
+          100 + Math.random() * 200
+        );
+        await new Promise((resolve) =>
+          setTimeout(resolve, 200 + Math.random() * 500)
+        );
+        console.log("Mouse movement completed");
+      } catch (error) {
+        console.log("Mouse movement failed (ignoring):", error);
+        // Ignore mouse movement errors
+      }
+
+      // Get cookies from the page
+      console.log("Getting cookies from page...");
+      const cookies = await page.cookies();
+      console.log("Cookies retrieved successfully, count:", cookies.length);
+
+      const cookieString = cookies
+        .map((cookie: any) => `${cookie.name}=${cookie.value}`)
+        .join("; ");
+
+      // Log extracted cookies
+      console.log("=== EXTRACTED COOKIES FROM PAGE ===");
+      console.log("Total cookies found:", cookies.length);
+      console.log(
+        "Cookie names:",
+        cookies.map((c: any) => c.name)
+      );
+      console.log("Cookie string:", cookieString);
+      console.log("=== END EXTRACTED COOKIES ===");
+
+      // Extract headers from the page
+      const headers: Record<string, string> = {};
+      let pageData: any = {};
+
+      // Try to get headers from the page
+      try {
+        pageData = await page.evaluate(() => {
+          try {
+            const result: any = {};
+
+            // Debug: Log some page info
+            result.pageTitle = document.title;
+            result.scriptCount = document.querySelectorAll("script").length;
+            result.hasBookingGlobal =
+              typeof (window as any).booking !== "undefined";
+
+            // Note: CSRF token is not required for this API endpoint
+
+            // Try to get pageview ID from script - multiple patterns
+            const pageviewMatch = document.documentElement.innerHTML.match(
+              /booking\.PAGEVIEW_ID = "([^"]+)"/
+            );
+            if (pageviewMatch) {
+              result.pageviewId = pageviewMatch[1];
+            }
+
+            // Alternative pageview ID extraction from $u object
+            if (!result.pageviewId) {
+              const pageviewMatch2 = document.documentElement.innerHTML.match(
+                /"PAGEVIEW_ID":"([^"]+)"/
+              );
+              if (pageviewMatch2) {
+                result.pageviewId = pageviewMatch2[1];
+              }
+            }
+
+            // Try to extract hotel_account_id (user_id) from the $u object
+            const userMatch =
+              document.documentElement.innerHTML.match(/"user_id":\s*(\d+)/);
+            if (userMatch) {
+              result.hotelAccountId = userMatch[1];
+            }
+
+            // Alternative extraction from js_data
+            if (!result.hotelAccountId) {
+              const userMatch2 =
+                document.documentElement.innerHTML.match(/"user_id":(\d+)/);
+              if (userMatch2) {
+                result.hotelAccountId = userMatch2[1];
+              }
+            }
+
+            // Another alternative pattern
+            if (!result.pageviewId) {
+              const pageviewMatch3 = document.documentElement.innerHTML.match(
+                /PAGEVIEW_ID = "([^"]+)"/
+              );
+              if (pageviewMatch3) {
+                result.pageviewId = pageviewMatch3[1];
+              }
+            }
+
+            // Try to get req_info element content
+            const reqInfo = document.getElementById("req_info");
+            if (reqInfo) {
+              result.reqInfo = reqInfo.innerHTML;
+            }
+
+            return result;
+          } catch (error: any) {
+            return { error: error.message };
+          }
+        });
+
+        // Check if page evaluation had an error
+        if (pageData.error) {
+          dualLogError("Page evaluation error", { error: pageData.error });
+        } else {
+          if (pageData.pageviewId) {
+            headers["x-booking-pageview-id"] = pageData.pageviewId;
+          }
+
+          // Always set x-booking-info to the function string (not the actual value)
+          headers["x-booking-info"] =
+            "function(){return document&&document.getElementById('req_info')?document.getElementById('req_info').innerHTML:''}";
+
+          // Always set x-booking-client-info to the function string
+          headers["x-booking-client-info"] =
+            "function(){return vn.a.tracked&&vn.a.tracked()}";
+
+          // Add all the standard browser headers that your working curl has
+          headers["accept"] = "application/json, text/plain, */*";
+          headers["accept-language"] = "en-GB,en-US;q=0.9,en;q=0.8";
+          headers["ect"] = "3g";
+          headers["priority"] = "u=1, i";
+          headers["referer"] =
+            "https://admin.booking.com/hotel/hoteladmin/extranet_ng/manage/vccs_management.html";
+          headers["sec-ch-ua"] =
+            '"Chromium";v="140", "Not=A?Brand";v="24", "Google Chrome";v="140"';
+          headers["sec-ch-ua-mobile"] = "?0";
+          headers["sec-ch-ua-platform"] = '"macOS"';
+          headers["sec-fetch-dest"] = "empty";
+          headers["sec-fetch-mode"] = "cors";
+          headers["sec-fetch-site"] = "same-origin";
+          headers["user-agent"] =
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
+          headers["x-booking-language-code"] = "en-us";
+          headers["x-booking-sitetype-id"] = "31";
+
+          // Log extracted page data for debugging
+          dualLogInfo("Extracted page data", {
+            pageTitle: pageData.pageTitle,
+            scriptCount: pageData.scriptCount,
+            hasBookingGlobal: pageData.hasBookingGlobal,
+            hasPageviewId: !!pageData.pageviewId,
+            hasReqInfo: !!pageData.reqInfo,
+            hotelAccountId: pageData.hotelAccountId,
+          });
+        }
+      } catch (error) {
+        dualLogInfo("Could not extract headers from page", { error });
+      }
+
+      dualLogInfo("Extracted cookies and headers", {
+        cookieCount: cookies.length,
+        hasPageviewId: !!headers["x-booking-pageview-id"],
+        hasReqInfo: !!headers["x-booking-info"],
+        pageviewId: headers["x-booking-pageview-id"] || "none",
+        hotelAccountId: pageData.hotelAccountId || "none",
+        cookieNames: cookies.map((c: any) => c.name).slice(0, 10), // Show first 10 cookie names
+      });
+
+      return {
+        cookies: cookieString,
+        headers,
+        hotel_account_id: pageData.hotelAccountId,
+      };
+    } catch (error) {
+      dualLogError("Failed to extract cookies and headers", {
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      });
+      return {
+        cookies: "",
+        headers: {},
+        hotel_account_id: undefined,
+      };
+    }
+  }
+}
+
+export const vccsManagementService = new VccsManagementService();
