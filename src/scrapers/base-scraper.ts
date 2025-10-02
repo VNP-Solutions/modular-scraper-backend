@@ -7,6 +7,8 @@ import {
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import { screenshotManager } from "../common/screenshot-manager.js";
+import { JobStatus } from "../models/job.model.js";
+import { jobService } from "../services/job.service.js";
 
 export interface LoginCredentials {
   email: string;
@@ -303,6 +305,26 @@ export abstract class BaseScraper {
         action: "execute_scraping",
       });
       await this.takeScreenshot(`${this.platform}-error-${Date.now()}.png`);
+      //job status change to failed
+      if (this.jobId) {
+        try {
+          await jobService.updateJobStatus(this.jobId, JobStatus.Failed);
+          await dualLogInfo("Job status changed to failed", {
+            jobId: this.jobId,
+            platform: this.platform,
+          });
+        } catch (jobError) {
+          await dualLogError(
+            "Failed to change job status to failed",
+            jobError,
+            {
+              jobId: this.jobId,
+              platform: this.platform,
+              action: "update_job_status",
+            }
+          );
+        }
+      }
 
       // Clean up screenshots on error if captcha service is available
       try {
