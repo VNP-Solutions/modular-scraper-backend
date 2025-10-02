@@ -2671,7 +2671,7 @@ export class BookingScraper extends BaseScraper {
           expiry_date: cardData.expiry,
           card_number: cardData.cardNumber,
           cvv: cardData.cvv,
-          cardholder: cardData.cardholder,
+          card_holder_name: cardData.cardholder,
         },
         reservation_status: basicData.reservationStatus || "Unknown",
       };

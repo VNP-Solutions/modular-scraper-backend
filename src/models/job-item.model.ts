@@ -6,6 +6,7 @@ export interface CardInfo {
   expiry_date: string;
   cvv?: string; // Optional or encrypted
   reason_for_charge?: string;
+  card_holder_name?: string;
 }
 
 export interface PaymentInfo {
@@ -55,6 +56,10 @@ const CardInfoSchema = new Schema<CardInfo>(
       required: false,
     },
     reason_for_charge: {
+      type: String,
+      required: false,
+    },
+    card_holder_name: {
       type: String,
       required: false,
     },
