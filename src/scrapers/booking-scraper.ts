@@ -2454,6 +2454,9 @@ export class BookingScraper extends BaseScraper {
             await this.page.waitForSelector(BOOKING_SELECTORS.vccs.table, {
               timeout: 30000,
             });
+          } else {
+            await this.logError("Failed to click card details from row");
+            return false;
           }
         }
       } catch (error) {

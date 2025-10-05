@@ -4,14 +4,26 @@ import { JobLogger } from "./logger.js";
 // Store the current job logger globally for the running job
 let currentJobLogger: JobLogger | null = null;
 let currentJobId: string | null = null;
+let currentWorkerId: string | null = null;
 
 /**
  * Initialize logging for a job
  */
-export function initializeJobLogging(jobId: string): JobLogger {
+export function initializeJobLogging(
+  jobId: string,
+  workerId?: string
+): JobLogger {
   currentJobLogger = JobLogger.getInstance(jobId);
   currentJobId = jobId;
+  currentWorkerId = workerId || null;
   return currentJobLogger;
+}
+
+/**
+ * Set the current worker ID for logging
+ */
+export function setCurrentWorkerId(workerId: string | null): void {
+  currentWorkerId = workerId;
 }
 
 /**
@@ -88,6 +100,7 @@ export async function finalizeJobLogging(
 
       currentJobLogger = null; // Clear the reference
       currentJobId = null; // Clear the job ID
+      currentWorkerId = null; // Clear the worker ID
       return s3Url;
     } catch (error) {
       console.error(
@@ -96,6 +109,7 @@ export async function finalizeJobLogging(
       );
       currentJobLogger = null; // Clear the reference even on error
       currentJobId = null; // Clear the job ID even on error
+      currentWorkerId = null; // Clear the worker ID even on error
       return null;
     }
   }
@@ -126,7 +140,11 @@ export async function dualLogInfo(
   message: string,
   metadata?: any
 ): Promise<void> {
-  console.log(message, metadata ? JSON.stringify(metadata) : "");
+  const workerPrefix = currentWorkerId ? `[Worker-${currentWorkerId}] ` : "";
+  console.log(
+    `${workerPrefix}${message}`,
+    metadata ? JSON.stringify(metadata) : ""
+  );
   if (currentJobLogger) {
     await currentJobLogger.info(message, metadata);
   }

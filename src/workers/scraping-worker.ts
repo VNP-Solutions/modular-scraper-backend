@@ -1,6 +1,6 @@
 import dotenv from "dotenv";
 import mongoose from "mongoose";
-import { parentPort } from "worker_threads";
+import { parentPort, threadId } from "worker_threads";
 import {
   JobType,
   WorkerJobData,
@@ -19,6 +19,7 @@ import {
   dualLogInfo,
   finalizeJobLogging,
   initializeJobLogging,
+  setCurrentWorkerId,
 } from "../common/log-helper.js";
 import { progressManager } from "../common/progress-manager.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
@@ -50,6 +51,10 @@ class ScrapingWorker {
   constructor() {
     this.setupEventHandlers();
     this.initializeDatabase();
+
+    // Set the thread ID for logging immediately when worker starts
+    setCurrentWorkerId(`Thread-${threadId}`);
+    console.log(`Worker initialized on Thread-${threadId}`);
   }
 
   private setupEventHandlers(): void {
@@ -110,7 +115,7 @@ class ScrapingWorker {
     this.sendMessage({
       type: WorkerMessageType.JobStart,
       jobId: jobData.jobId,
-      data: { jobType: jobData.jobType, startTime: new Date() },
+      data: { jobType: jobData.jobType, startTime: new Date(), threadId },
       timestamp: new Date(),
     });
 
