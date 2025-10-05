@@ -5,6 +5,7 @@ import {
   getBookingErrorDescription,
 } from "../common/booking-error-types.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
+import { otpStatusManager } from "../common/otp-status-manager.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import { screenshotManager } from "../common/screenshot-manager.js";
 import { JobStatus } from "../models/job.model.js";
@@ -217,24 +218,42 @@ export abstract class BaseScraper {
           throw new Error("Scraping was stopped before login");
         }
 
-        await dualLogInfo("Performing login", {
-          platform: this.platform,
-          jobId: params.jobId,
-          propertyId: params.propertyId,
-          action: "login",
-        });
-        await this.login(params.credentials, params.propertyId);
+        try {
+          await dualLogInfo("Performing login", {
+            platform: this.platform,
+            jobId: params.jobId,
+            propertyId: params.propertyId,
+            action: "login",
+          });
+          await this.login(params.credentials, params.propertyId);
 
-        // Handle captcha if needed
-        const captchaHandled = await this.handleCaptcha();
-        if (!captchaHandled) {
-          await this.logError("Captcha handling failed");
-        }
+          // Handle captcha if needed
+          const captchaHandled = await this.handleCaptcha();
+          if (!captchaHandled) {
+            await this.logError("Captcha handling failed");
+          }
 
-        // Handle 2FA if needed
-        const twoFAHandled = await this.handle2FA();
-        if (!twoFAHandled) {
-          await this.logInfo("2FA not required or skipped");
+          // Handle 2FA if needed
+          const twoFAHandled = await this.handle2FA();
+          if (!twoFAHandled) {
+            await this.logInfo("2FA not required or skipped");
+          }
+        } catch (error) {
+          const otpReleased = await otpStatusManager.forceReleaseOtp();
+          if (otpReleased) {
+            console.log("OTP force released after login");
+          } else {
+            console.log("Failed to force release OTP after login");
+          }
+          await dualLogError("Login process failed", {
+            error: error,
+            platform: this.platform,
+            jobId: params.jobId,
+            propertyId: params.propertyId,
+            action: "login",
+          });
+
+          throw error;
         }
       }
 
