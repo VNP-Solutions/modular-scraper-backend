@@ -9,18 +9,14 @@ let currentWorkerId: string | null = null;
 /**
  * Initialize logging for a job
  */
-export function initializeJobLogging(
-  jobId: string,
-  workerId?: string
-): JobLogger {
+export function initializeJobLogging(jobId: string): JobLogger {
   currentJobLogger = JobLogger.getInstance(jobId);
   currentJobId = jobId;
-  currentWorkerId = workerId || null;
   return currentJobLogger;
 }
 
 /**
- * Set the current worker ID for logging
+ * Set the current worker/thread ID for logging
  */
 export function setCurrentWorkerId(workerId: string | null): void {
   currentWorkerId = workerId;
@@ -100,7 +96,6 @@ export async function finalizeJobLogging(
 
       currentJobLogger = null; // Clear the reference
       currentJobId = null; // Clear the job ID
-      currentWorkerId = null; // Clear the worker ID
       return s3Url;
     } catch (error) {
       console.error(
@@ -109,7 +104,6 @@ export async function finalizeJobLogging(
       );
       currentJobLogger = null; // Clear the reference even on error
       currentJobId = null; // Clear the job ID even on error
-      currentWorkerId = null; // Clear the worker ID even on error
       return null;
     }
   }
@@ -140,9 +134,9 @@ export async function dualLogInfo(
   message: string,
   metadata?: any
 ): Promise<void> {
-  const workerPrefix = currentWorkerId ? `[Worker-${currentWorkerId}] ` : "";
+  const threadPrefix = currentWorkerId ? `${currentWorkerId} - ` : "";
   console.log(
-    `${workerPrefix}${message}`,
+    `${threadPrefix}${message}`,
     metadata ? JSON.stringify(metadata) : ""
   );
   if (currentJobLogger) {
@@ -166,7 +160,11 @@ export async function dualLogError(
       }
     : metadata;
 
-  console.error(message, errorDetails ? JSON.stringify(errorDetails) : "");
+  const threadPrefix = currentWorkerId ? `${currentWorkerId} - ` : "";
+  console.error(
+    `${threadPrefix}${message}`,
+    errorDetails ? JSON.stringify(errorDetails) : ""
+  );
   if (currentJobLogger) {
     await currentJobLogger.error(message, errorDetails);
   }
@@ -179,7 +177,11 @@ export async function dualLogWarn(
   message: string,
   metadata?: any
 ): Promise<void> {
-  console.warn(message, metadata ? JSON.stringify(metadata) : "");
+  const threadPrefix = currentWorkerId ? `${currentWorkerId} - ` : "";
+  console.warn(
+    `${threadPrefix}${message}`,
+    metadata ? JSON.stringify(metadata) : ""
+  );
   if (currentJobLogger) {
     await currentJobLogger.warn(message, metadata);
   }
@@ -192,7 +194,11 @@ export async function dualLogDebug(
   message: string,
   metadata?: any
 ): Promise<void> {
-  console.debug(message, metadata ? JSON.stringify(metadata) : "");
+  const threadPrefix = currentWorkerId ? `${currentWorkerId} - ` : "";
+  console.debug(
+    `${threadPrefix}${message}`,
+    metadata ? JSON.stringify(metadata) : ""
+  );
   if (currentJobLogger) {
     await currentJobLogger.debug(message, metadata);
   }
