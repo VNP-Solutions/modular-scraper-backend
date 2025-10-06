@@ -49,12 +49,13 @@ class ScrapingWorker {
   private isShuttingDown = false;
 
   constructor() {
-    this.setupEventHandlers();
-    this.initializeDatabase();
-
     // Set the thread ID for logging immediately when worker starts
+    // Worker threads will be Thread-2, Thread-3, Thread-4, etc.
     setCurrentWorkerId(`Thread-${threadId}`);
     console.log(`Worker initialized on Thread-${threadId}`);
+
+    this.setupEventHandlers();
+    this.initializeDatabase();
   }
 
   private setupEventHandlers(): void {

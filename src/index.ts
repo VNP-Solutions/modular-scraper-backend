@@ -1,12 +1,19 @@
 import dotenv from "dotenv";
 import mongoose from "mongoose";
 import open from "open";
+import { isMainThread } from "worker_threads";
 import app from "./app/app.js";
 import { loadAndSetCredentials } from "./common/load-token.js";
+import { setCurrentWorkerId } from "./common/log-helper.js";
 import { otpAwareWorkerPool } from "./common/otp-aware-worker-pool.js";
 import { bookingTrustCron } from "./services/booking-trust-cron.service.js";
 import { jobQueueUrlService } from "./services/job-queue-url.service.js";
 dotenv.config();
+
+// Set main thread ID for system tasks (schedulers, cron, API calls)
+if (isMainThread) {
+  setCurrentWorkerId("Thread-1");
+}
 
 const port: number = parseInt(process.env.PORT || "3000");
 

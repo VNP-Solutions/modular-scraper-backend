@@ -1,8 +1,10 @@
 import bodyParser from "body-parser";
 import cors from "cors";
 import express from "express";
+import { isMainThread } from "worker_threads";
 import { emailNotifier } from "../common/email-notifier.js";
 import createError from "../common/error.js";
+import { setCurrentWorkerId } from "../common/log-helper.js";
 import { otpAwareWorkerPool } from "../common/otp-aware-worker-pool.js";
 import { progressManager } from "../common/progress-manager.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
@@ -19,6 +21,11 @@ import {
 import { bookingTrustScheduler } from "../services/booking-trust-scheduler.service.js";
 import { propertyCredentialsService } from "../services/job-credentials.service.js";
 import { jobService } from "../services/job.service.js";
+
+// Ensure main thread ID is set for API routes and system tasks
+if (isMainThread) {
+  setCurrentWorkerId("Thread-1");
+}
 
 const app = express();
 

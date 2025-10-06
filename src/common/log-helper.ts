@@ -26,10 +26,14 @@ export function setCurrentWorkerId(workerId: string | null): void {
  * Enhanced console.log that also writes to job log file
  */
 export async function logInfo(message: string, metadata?: any): Promise<void> {
+  const threadPrefix = currentWorkerId ? `${currentWorkerId} - ` : "";
   if (currentJobLogger) {
     await currentJobLogger.info(message, metadata);
   } else {
-    console.log(message, metadata ? JSON.stringify(metadata) : "");
+    console.log(
+      `${threadPrefix}${message}`,
+      metadata ? JSON.stringify(metadata) : ""
+    );
   }
 }
 
@@ -49,10 +53,14 @@ export async function logError(
       }
     : metadata;
 
+  const threadPrefix = currentWorkerId ? `${currentWorkerId} - ` : "";
   if (currentJobLogger) {
     await currentJobLogger.error(message, errorDetails);
   } else {
-    console.error(message, errorDetails ? JSON.stringify(errorDetails) : "");
+    console.error(
+      `${threadPrefix}${message}`,
+      errorDetails ? JSON.stringify(errorDetails) : ""
+    );
   }
 }
 
@@ -60,10 +68,14 @@ export async function logError(
  * Enhanced console.warn that also writes to job log file
  */
 export async function logWarn(message: string, metadata?: any): Promise<void> {
+  const threadPrefix = currentWorkerId ? `${currentWorkerId} - ` : "";
   if (currentJobLogger) {
     await currentJobLogger.warn(message, metadata);
   } else {
-    console.warn(message, metadata ? JSON.stringify(metadata) : "");
+    console.warn(
+      `${threadPrefix}${message}`,
+      metadata ? JSON.stringify(metadata) : ""
+    );
   }
 }
 
@@ -71,10 +83,14 @@ export async function logWarn(message: string, metadata?: any): Promise<void> {
  * Enhanced console.debug that also writes to job log file
  */
 export async function logDebug(message: string, metadata?: any): Promise<void> {
+  const threadPrefix = currentWorkerId ? `${currentWorkerId} - ` : "";
   if (currentJobLogger) {
     await currentJobLogger.debug(message, metadata);
   } else {
-    console.debug(message, metadata ? JSON.stringify(metadata) : "");
+    console.debug(
+      `${threadPrefix}${message}`,
+      metadata ? JSON.stringify(metadata) : ""
+    );
   }
 }
 
