@@ -2060,7 +2060,7 @@ export class BookingScraper extends BaseScraper {
           vccsData,
           urlParamsWithAccountId,
           params.jobId,
-          params.propertyId,
+          this.propertyIdForDb, // Use propertyIdForDb (MongoDB ObjectId), not hotel_id
           this // Pass scraper instance for captcha/2FA handling
         );
 

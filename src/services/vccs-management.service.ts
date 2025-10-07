@@ -293,11 +293,37 @@ export class VccsManagementService {
     page: any,
     reservationId: string,
     params: VccsUrlParams,
-    scraperInstance?: any // BookingScraper instance for captcha/2FA handling
+    scraperInstance?: any, // BookingScraper instance for captcha/2FA handling
+    authenticatedUrlPattern?: string // Use authenticated URL pattern from first successful fetch
   ): Promise<CardDetailsResponse | null> {
     try {
-      // Note: Booking.com uses semicolons (;) not ampersands (&) for this URL!
-      const cardDetailsUrl = `${this.cardDetailsBaseUrl}?lang=${params.lang};bn=${reservationId};hotel_id=${params.hotel_id};ses=${params.ses};has_bvc=1`;
+      let cardDetailsUrl: string;
+
+      // If we have an authenticated URL pattern from a previous successful fetch, use it!
+      if (authenticatedUrlPattern) {
+        // Replace the bn (booking number) parameter with the new reservation ID
+        cardDetailsUrl = authenticatedUrlPattern.replace(
+          /bn=[^;]+/,
+          `bn=${reservationId}`
+        );
+        dualLogInfo(
+          "Using authenticated URL pattern from previous successful fetch",
+          {
+            reservationId,
+            urlPattern: cardDetailsUrl,
+          }
+        );
+      } else {
+        // First time - construct URL with params (might require authentication)
+        // Note: Booking.com uses semicolons (;) not ampersands (&) for this URL!
+        cardDetailsUrl = `${this.cardDetailsBaseUrl}?lang=${params.lang};bn=${reservationId};hotel_id=${params.hotel_id};ses=${params.ses};has_bvc=1`;
+        dualLogInfo(
+          "First reservation - constructing URL with current session",
+          {
+            reservationId,
+          }
+        );
+      }
 
       dualLogInfo("Navigating to card details page (with old session)", {
         url: cardDetailsUrl,
@@ -333,6 +359,13 @@ export class VccsManagementService {
         const pageTitle = document.title.toLowerCase();
         const pageContent = document.body?.innerText?.toLowerCase() || "";
 
+        // Check for auth-assurance page (additional verification after login)
+        if (
+          window.location.href.includes("auth-assurance") ||
+          pageContent.includes("verify your identity")
+        ) {
+          return "2fa"; // Treat as 2FA since it needs verification
+        }
         if (
           pageTitle.includes("verification") ||
           pageContent.includes("verification code")
@@ -490,6 +523,14 @@ export class VccsManagementService {
           const pageContent = document.body?.innerText?.toLowerCase() || "";
           const url = window.location.href;
 
+          // Check for auth-assurance page (additional verification needed)
+          if (
+            url.includes("auth-assurance") ||
+            pageContent.includes("verify your identity")
+          ) {
+            return "auth-assurance";
+          }
+
           // Check for card details page indicators (multiple ways)
           if (
             pageTitle.includes("credit card") ||
@@ -508,7 +549,53 @@ export class VccsManagementService {
           return "unknown";
         });
 
-        if (updatedPageType !== "card_details") {
+        // If auth-assurance, we need to handle additional verification
+        if (updatedPageType === "auth-assurance") {
+          dualLogInfo("Auth-assurance page detected, solving verification...", {
+            reservationId,
+          });
+          const twoFAHandled = await scraperInstance.handle2FA({ page });
+
+          if (!twoFAHandled) {
+            dualLogError("Auth-assurance verification failed", {
+              reservationId,
+            });
+            return null;
+          }
+
+          dualLogInfo("Auth-assurance verification completed", {
+            reservationId,
+          });
+
+          // Wait for redirect to card details
+          await new Promise((resolve) => setTimeout(resolve, 5000));
+
+          // Re-check page type
+          const finalPageType = await page.evaluate(() => {
+            const url = window.location.href;
+            const pageContent = document.body?.innerText?.toLowerCase() || "";
+
+            if (
+              url.includes("booking_cc_details") ||
+              pageContent.includes("card number:") ||
+              document.querySelector("table.table-condensed")
+            ) {
+              return "card_details";
+            }
+            return "unknown";
+          });
+
+          if (finalPageType !== "card_details") {
+            dualLogError(
+              "Still not on card details page after auth-assurance",
+              {
+                reservationId,
+                currentUrl: page.url(),
+              }
+            );
+            return null;
+          }
+        } else if (updatedPageType !== "card_details") {
           // Log more details to debug
           const pageInfo = await page.evaluate(() => ({
             title: document.title,
@@ -609,6 +696,16 @@ export class VccsManagementService {
         hasCvv: !!cardDetails?.cvv,
         hasCardholder: !!cardDetails?.cardholder,
       });
+
+      // Add the authenticated URL pattern to the response for reuse
+      if (cardDetails) {
+        const currentUrl = page.url();
+        (cardDetails as any).authenticatedUrl = currentUrl;
+        dualLogInfo("Saved authenticated URL pattern for subsequent requests", {
+          reservationId,
+          authenticatedUrl: currentUrl,
+        });
+      }
 
       return cardDetails;
     } catch (error) {
@@ -819,7 +916,7 @@ export class VccsManagementService {
     vccsData: VccsApiResponse,
     params: VccsUrlParams,
     jobId?: string,
-    propertyId?: string,
+    propertyIdForDb?: string, // MongoDB ObjectId (NOT hotel_id!)
     scraperInstance?: any // BookingScraper instance for auth handling
   ): Promise<{
     processed: number;
@@ -840,11 +937,12 @@ export class VccsManagementService {
 
     let processed = 0;
     let errors = 0;
+    let latestAuthenticatedUrl: string | undefined = undefined; // Store LATEST authenticated URL (updated after EVERY successful fetch)
 
     dualLogInfo("Starting VCCS reservation processing", {
       totalVccs: vccsData.data.vccs.length,
       jobId,
-      propertyId,
+      propertyIdForDb,
     });
 
     for (const vccs of vccsData.data.vccs) {
@@ -852,23 +950,35 @@ export class VccsManagementService {
         dualLogInfo(`Processing reservation ${vccs.hres_id}`);
 
         // Get card details for this reservation using browser navigation
+        // Use LATEST authenticated URL from previous fetch (if available)
         const cardDetails = await this.getCardDetailsFromBrowser(
           page,
           vccs.hres_id,
           params,
-          scraperInstance // Pass scraper instance for auth handling
+          scraperInstance, // Pass scraper instance for auth handling
+          latestAuthenticatedUrl // Use LATEST authenticated URL
         );
+
+        // ALWAYS update the latest authenticated URL after EVERY successful fetch
+        // This is important because 2FA/captcha can happen at any time and change the session
+        if (cardDetails && (cardDetails as any).authenticatedUrl) {
+          latestAuthenticatedUrl = (cardDetails as any).authenticatedUrl;
+          dualLogInfo(`Updated latest authenticated URL for next reservation`, {
+            reservationId: vccs.hres_id,
+            latestAuthenticatedUrl,
+          });
+        }
 
         let saved = false;
 
-        // Save to database if jobId and propertyId are provided
-        if (jobId && propertyId && cardDetails) {
+        // Save to database if jobId and propertyIdForDb are provided
+        if (jobId && propertyIdForDb && cardDetails) {
           try {
             const jobItemData = await this.createJobItemData(
               vccs,
               cardDetails,
               jobId,
-              propertyId
+              propertyIdForDb
             );
 
             // Check if reservation already exists
@@ -1080,7 +1190,7 @@ export class VccsManagementService {
     vccs: any,
     cardDetails: CardDetailsResponse,
     jobId: string,
-    propertyId: string
+    propertyIdForDb: string // MongoDB ObjectId (NOT hotel_id!)
   ): Promise<any> {
     // Parse amount
     const parseAmount = (amountStr: string): number => {
@@ -1092,7 +1202,7 @@ export class VccsManagementService {
 
     const jobItemData = {
       job_id: jobId,
-      property_id: propertyId,
+      property_id: propertyIdForDb,
       guest_name: "VCCS Guest", // This might need to be extracted from somewhere else
       reservation_id: vccs.hres_id,
       confirmation_number: vccs.hres_id, // Use reservation ID as confirmation number
