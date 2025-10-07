@@ -8,6 +8,7 @@ export interface VccsUrlParams {
   lang: string;
   route: string;
   hotel_account_id?: string;
+  res_id?: string;
 }
 
 export interface VccsApiResponse {
@@ -68,6 +69,7 @@ export class VccsManagementService {
       const ses = params.get("ses");
       const lang = params.get("lang");
       const route = params.get("route") || "vccs_to_charge"; // Default to vccs_to_charge if not present
+      const res_id = params.get("res_id");
 
       if (!hotel_id || !ses || !lang) {
         dualLogError("Missing required URL parameters", {
@@ -75,6 +77,7 @@ export class VccsManagementService {
           ses,
           lang,
           route,
+          res_id,
           url,
         });
         return null;
@@ -85,6 +88,7 @@ export class VccsManagementService {
         ses,
         lang,
         route,
+        res_id: res_id || undefined,
       };
 
       dualLogInfo("Successfully extracted URL parameters", {
@@ -100,12 +104,94 @@ export class VccsManagementService {
   }
 
   /**
+   * Get VCCS data from the API using the browser's fetch (avoids fingerprinting detection)
+   */
+  async getVccsDataFromBrowser(
+    page: any,
+    params: VccsUrlParams
+  ): Promise<VccsApiResponse | null> {
+    try {
+      const apiUrl = `${this.apiBaseUrl}/vccs_to_charge`;
+      const queryParams = new URLSearchParams({
+        ses: params.ses,
+        lang: params.lang,
+        hotel_id: params.hotel_id,
+        hotel_account_id: params.hotel_account_id || "21604744",
+        limit: "100",
+        page: "1",
+      });
+
+      const fullUrl = `${apiUrl}?${queryParams.toString()}`;
+
+      dualLogInfo("Making VCCS API request from browser", {
+        url: fullUrl,
+      });
+
+      // Make the request from inside the browser to avoid fingerprinting
+      const result = await page.evaluate(async (url: string) => {
+        try {
+          const response = await fetch(url, {
+            method: "GET",
+            headers: {
+              accept: "application/json, text/plain, */*",
+              "x-requested-with": "XMLHttpRequest",
+            },
+          } as any); // Type assertion for browser fetch which supports credentials
+
+          if (!response.ok) {
+            return {
+              success: false,
+              status: response.status,
+              statusText: response.statusText,
+              error: await response.text(),
+            };
+          }
+
+          const data = await response.json();
+          return {
+            success: true,
+            data,
+          };
+        } catch (error: any) {
+          return {
+            success: false,
+            error: error.message,
+          };
+        }
+      }, fullUrl);
+
+      if (!result.success) {
+        dualLogError("VCCS API request from browser failed", {
+          status: result.status,
+          statusText: result.statusText,
+          url: fullUrl,
+          error: result.error,
+        });
+        return null;
+      }
+
+      const data = result.data as VccsApiResponse;
+      dualLogInfo("VCCS API response received from browser", {
+        success: data.success,
+        vccsCount: data.data?.vccs?.length || 0,
+        totalAmount: data.data?.total_amount?.amount_formatted,
+      });
+
+      return data;
+    } catch (error) {
+      dualLogError("Failed to get VCCS data from browser", { error, params });
+      return null;
+    }
+  }
+
+  /**
    * Get VCCS data from the API
    */
   async getVccsData(
     params: VccsUrlParams,
     cookies: string,
-    headers: Record<string, string> = {}
+    headers: Record<string, string> = {},
+    effectiveType: string = "4g"
   ): Promise<VccsApiResponse | null> {
     try {
       const apiUrl = `${this.apiBaseUrl}/vccs_to_charge`;
@@ -143,14 +229,19 @@ export class VccsManagementService {
         setTimeout(resolve, 500 + Math.random() * 1000)
       );
 
+      // Construct the correct referer URL based on whether we have res_id
+      const refererUrl = params.res_id
+        ? `${this.baseUrl}/hotel/hoteladmin/extranet_ng/manage/booking.html?res_id=${params.res_id}&ses=${params.ses}&lang=${params.lang}&hotel_id=${params.hotel_id}`
+        : `${this.baseUrl}/hotel/hoteladmin/extranet_ng/manage/vccs_management.html?lang=${params.lang}&ses=${params.ses}&hotel_id=${params.hotel_id}&route=${params.route}`;
+
       const response = await fetch(fullUrl, {
         method: "GET",
         headers: {
           accept: "application/json, text/plain, */*",
           "accept-language": "en-GB,en-US;q=0.9,en;q=0.8",
-          ect: "3g",
+          ect: effectiveType,
           priority: "u=1, i",
-          referer: `${this.baseUrl}/hotel/hoteladmin/extranet_ng/manage/vccs_management.html?lang=${params.lang}&hotel_id=${params.hotel_id}&ses=${params.ses}`,
+          referer: refererUrl,
           "sec-ch-ua":
             '"Chromium";v="140", "Not=A?Brand";v="24", "Google Chrome";v="140"',
           "sec-ch-ua-mobile": "?0",
@@ -160,15 +251,10 @@ export class VccsManagementService {
           "sec-fetch-site": "same-origin",
           "user-agent":
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36",
-          "x-booking-client-info":
-            "function(){return vn.a.tracked&&vn.a.tracked()}",
-          "x-booking-info":
-            "function(){return document&&document.getElementById('req_info')?document.getElementById('req_info').innerHTML:''}",
           "x-booking-language-code": "en-us",
-          "x-booking-pageview-id": headers["x-booking-pageview-id"] || "",
           "x-booking-sitetype-id": "31",
           cookie: cookies,
-          ...headers,
+          ...headers, // Apply custom headers last so they can override defaults
         },
       });
 
@@ -201,13 +287,74 @@ export class VccsManagementService {
   }
 
   /**
-   * Get card details for a specific reservation ID
+   * Get card details from browser to avoid fingerprinting (with semicolon URL format)
+   */
+  async getCardDetailsFromBrowser(
+    page: any,
+    reservationId: string,
+    params: VccsUrlParams
+  ): Promise<CardDetailsResponse | null> {
+    try {
+      // Note: Booking.com uses semicolons (;) not ampersands (&) for this URL!
+      const cardDetailsUrl = `${this.cardDetailsBaseUrl}?lang=${params.lang};bn=${reservationId};hotel_id=${params.hotel_id};ses=${params.ses};has_bvc=1`;
+
+      dualLogInfo("Making card details request from browser", {
+        url: cardDetailsUrl,
+        reservationId,
+      });
+
+      // Navigate browser to the card details page (goes through authentication)
+      await page.goto(cardDetailsUrl, {
+        waitUntil: "networkidle2",
+        timeout: 30000,
+      });
+
+      // Wait a bit for page to fully load
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+
+      // Get the HTML content
+      const html = await page.content();
+
+      // Log a sample of the HTML for debugging
+      dualLogInfo("Card details HTML received", {
+        reservationId,
+        htmlLength: html.length,
+        htmlSample: html.substring(0, 500),
+        containsCardNumber: html.includes("Card number"),
+        containsExpiry: html.includes("Expiration Date"),
+        containsCVC: html.includes("CVC"),
+      });
+
+      const cardDetails = this.parseCardDetailsFromHtml(html);
+
+      dualLogInfo("Card details extracted from browser", {
+        reservationId,
+        hasCardNumber: !!cardDetails?.cardNumber,
+        hasExpiry: !!cardDetails?.expiry,
+        hasCvv: !!cardDetails?.cvv,
+        hasCardholder: !!cardDetails?.cardholder,
+      });
+
+      return cardDetails;
+    } catch (error) {
+      dualLogError("Failed to get card details from browser", {
+        error,
+        reservationId,
+        params,
+      });
+      return null;
+    }
+  }
+
+  /**
+   * Get card details for a specific reservation ID (legacy Node.js fetch version)
    */
   async getCardDetails(
     reservationId: string,
     params: VccsUrlParams,
     cookies: string,
-    headers: Record<string, string> = {}
+    headers: Record<string, string> = {},
+    effectiveType: string = "4g"
   ): Promise<CardDetailsResponse | null> {
     try {
       const cardDetailsUrl = `${this.cardDetailsBaseUrl}?lang=${params.lang}&bn=${reservationId}&hotel_id=${params.hotel_id}&ses=${params.ses}&has_bvc=1`;
@@ -224,7 +371,7 @@ export class VccsManagementService {
             "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
           "accept-language": "en-GB,en-US;q=0.9,en;q=0.8",
           "cache-control": "max-age=0",
-          ect: "3g",
+          ect: effectiveType,
           priority: "u=0, i",
           referer: `${this.baseUrl}/`,
           "sec-ch-ua":
@@ -288,61 +435,89 @@ export class VccsManagementService {
         amountToChargeOrRefund: "",
       };
 
-      // Extract card number from table structure
-      const cardNumberMatch = html.match(
-        /<td>Card number:<\/td>\s*<td>([^<]+)<\/td>/i
+      // Remove extra whitespace to make parsing more reliable
+      const cleanHtml = html.replace(/\s+/g, " ");
+
+      // Extract card number - more flexible regex
+      const cardNumberMatch = cleanHtml.match(
+        /<td[^>]*>Card number:<\/td>\s*<td[^>]*>([^<]+)<\/td>/i
       );
       if (cardNumberMatch) {
         cardDetails.cardNumber = cardNumberMatch[1].trim();
+        dualLogInfo("Matched card number", { value: cardDetails.cardNumber });
+      } else {
+        dualLogInfo("Card number NOT matched in HTML");
       }
 
-      // Extract expiry date from table structure
-      const expiryMatch = html.match(
-        /<td>Expiration Date:<\/td>\s*<td>([^<]+)<\/td>/i
+      // Extract expiry date - more flexible regex
+      const expiryMatch = cleanHtml.match(
+        /<td[^>]*>Expiration Date:<\/td>\s*<td[^>]*>([^<]+)<\/td>/i
       );
       if (expiryMatch) {
         cardDetails.expiry = expiryMatch[1].trim();
+        dualLogInfo("Matched expiry", { value: cardDetails.expiry });
+      } else {
+        dualLogInfo("Expiry NOT matched in HTML");
       }
 
-      // Extract CVV from table structure
-      const cvvMatch = html.match(/<td>CVC Code:<\/td>\s*<td>([^<]+)<\/td>/i);
+      // Extract CVV - more flexible regex
+      const cvvMatch = cleanHtml.match(
+        /<td[^>]*>CVC Code:<\/td>\s*<td[^>]*>([^<]+)<\/td>/i
+      );
       if (cvvMatch) {
         cardDetails.cvv = cvvMatch[1].trim();
+        dualLogInfo("Matched CVV", { value: cardDetails.cvv });
+      } else {
+        dualLogInfo("CVV NOT matched in HTML");
       }
 
-      // Extract cardholder name from table structure
-      const cardholderMatch = html.match(
-        /<td>Card holder's name:<\/td>\s*<td>([^<]+)<\/td>/i
+      // Extract cardholder name - more flexible regex
+      const cardholderMatch = cleanHtml.match(
+        /<td[^>]*>Card holder's name:<\/td>\s*<td[^>]*>([^<]+)<\/td>/i
       );
       if (cardholderMatch) {
         cardDetails.cardholder = cardholderMatch[1].trim();
+        dualLogInfo("Matched cardholder", { value: cardDetails.cardholder });
+      } else {
+        dualLogInfo("Cardholder NOT matched in HTML");
       }
 
       // Extract available balance from table structure
-      const balanceMatch = html.match(
-        /<td class="sp">Available balance:<\/td>\s*<td>([^<]+)<\/td>/i
+      const balanceMatch = cleanHtml.match(
+        /<td[^>]*class="sp"[^>]*>Available balance:<\/td>\s*<td[^>]*>([^<]+)<\/td>/i
       );
       if (balanceMatch) {
         cardDetails.amountToChargeOrRefund = balanceMatch[1].trim();
+        dualLogInfo("Matched available balance", {
+          value: cardDetails.amountToChargeOrRefund,
+        });
+      } else {
+        dualLogInfo("Available balance NOT matched in HTML");
       }
 
-      // Alternative: Extract remaining balance from the status message
+      // Alternative: Extract from status message "You can charge this card <span>US$163.28</span>"
       if (!cardDetails.amountToChargeOrRefund) {
-        const remainingBalanceMatch = html.match(
-          /The remaining balance is <span>([^<]+)<\/span>/i
+        const chargeAmountMatch = cleanHtml.match(
+          /You can charge this card\s*<span>([^<]+)<\/span>/i
         );
-        if (remainingBalanceMatch) {
-          cardDetails.amountToChargeOrRefund = remainingBalanceMatch[1].trim();
+        if (chargeAmountMatch) {
+          cardDetails.amountToChargeOrRefund = chargeAmountMatch[1].trim();
+          dualLogInfo("Matched charge amount from message", {
+            value: cardDetails.amountToChargeOrRefund,
+          });
         }
       }
 
       // Extract card type for additional context
-      const cardTypeMatch = html.match(
-        /<td class="sp">Card type:<\/td>\s*<td>([^<]+)<\/td>/i
+      const cardTypeMatch = cleanHtml.match(
+        /<td[^>]*class="sp"[^>]*>Card type:<\/td>\s*<td[^>]*>([^<]+)<\/td>/i
       );
       if (cardTypeMatch) {
         // Store card type in reason_for_charge field
         cardDetails.reasonForCharge = cardTypeMatch[1].trim();
+        dualLogInfo("Matched card type", {
+          value: cardDetails.reasonForCharge,
+        });
       }
 
       dualLogInfo("Parsed card details from HTML", {
@@ -362,7 +537,135 @@ export class VccsManagementService {
   }
 
   /**
-   * Process all VCCS reservations and get card details
+   * Process all VCCS reservations and get card details (browser-based)
+   */
+  async processAllVccsReservationsFromBrowser(
+    page: any,
+    vccsData: VccsApiResponse,
+    params: VccsUrlParams,
+    jobId?: string,
+    propertyId?: string
+  ): Promise<{
+    processed: number;
+    errors: number;
+    results: Array<{
+      reservationId: string;
+      vccsData: any;
+      cardDetails: CardDetailsResponse | null;
+      saved: boolean;
+    }>;
+  }> {
+    const results: Array<{
+      reservationId: string;
+      vccsData: any;
+      cardDetails: CardDetailsResponse | null;
+      saved: boolean;
+    }> = [];
+
+    let processed = 0;
+    let errors = 0;
+
+    dualLogInfo("Starting VCCS reservation processing", {
+      totalVccs: vccsData.data.vccs.length,
+      jobId,
+      propertyId,
+    });
+
+    for (const vccs of vccsData.data.vccs) {
+      try {
+        dualLogInfo(`Processing reservation ${vccs.hres_id}`);
+
+        // Get card details for this reservation using browser fetch
+        const cardDetails = await this.getCardDetailsFromBrowser(
+          page,
+          vccs.hres_id,
+          params
+        );
+
+        let saved = false;
+
+        // Save to database if jobId and propertyId are provided
+        if (jobId && propertyId && cardDetails) {
+          try {
+            const jobItemData = await this.createJobItemData(
+              vccs,
+              cardDetails,
+              jobId,
+              propertyId
+            );
+
+            // Check if reservation already exists
+            const existingReservation =
+              await jobService.findJobItemByReservationId(jobId, vccs.hres_id);
+
+            if (existingReservation) {
+              const updatedItem = await jobService.updateJobItem(
+                existingReservation._id.toString(),
+                jobItemData
+              );
+              dualLogInfo(`Updated reservation ${vccs.hres_id} with new data`);
+              saved = true;
+            } else {
+              const savedItem = await jobService.createJobItem(jobItemData);
+              dualLogInfo(`Saved reservation ${vccs.hres_id} to database`);
+              saved = true;
+            }
+          } catch (saveError) {
+            dualLogError(
+              `Failed to save reservation ${vccs.hres_id} to database`,
+              {
+                error: saveError,
+                reservationId: vccs.hres_id,
+              }
+            );
+          }
+        }
+
+        results.push({
+          reservationId: vccs.hres_id,
+          vccsData: vccs,
+          cardDetails,
+          saved,
+        });
+
+        processed++;
+        dualLogInfo(
+          `Successfully processed reservation ${vccs.hres_id} (${processed}/${vccsData.data.vccs.length})`
+        );
+
+        // Add a small delay between requests to avoid rate limiting
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      } catch (error) {
+        errors++;
+        dualLogError(`Error processing reservation ${vccs.hres_id}`, {
+          error,
+          reservationId: vccs.hres_id,
+        });
+
+        results.push({
+          reservationId: vccs.hres_id,
+          vccsData: vccs,
+          cardDetails: null,
+          saved: false,
+        });
+      }
+    }
+
+    dualLogInfo("VCCS reservation processing completed", {
+      processed,
+      errors,
+      total: vccsData.data.vccs.length,
+    });
+
+    return {
+      processed,
+      errors,
+      results,
+    };
+  }
+
+  /**
+   * Process all VCCS reservations and get card details (legacy version)
    */
   async processAllVccsReservations(
     vccsData: VccsApiResponse,
@@ -370,7 +673,8 @@ export class VccsManagementService {
     cookies: string,
     headers: Record<string, string> = {},
     jobId?: string,
-    propertyId?: string
+    propertyId?: string,
+    effectiveType: string = "4g"
   ): Promise<{
     processed: number;
     errors: number;
@@ -406,7 +710,8 @@ export class VccsManagementService {
           vccs.hres_id,
           params,
           cookies,
-          headers
+          headers,
+          effectiveType
         );
 
         let saved = false;
@@ -550,6 +855,7 @@ export class VccsManagementService {
     cookies: string;
     headers: Record<string, string>;
     hotel_account_id?: string;
+    effectiveType: string;
   }> {
     try {
       console.log("=== STARTING COOKIE/HEADER EXTRACTION ===");
@@ -653,6 +959,43 @@ export class VccsManagementService {
               }
             }
 
+            // Try to extract CSRF token from meta tag
+            const csrfMeta = document.querySelector('meta[name="csrf-token"]');
+            if (csrfMeta) {
+              result.csrfToken = csrfMeta.getAttribute("content");
+            }
+
+            // Try to extract CSRF token from script variables
+            if (!result.csrfToken) {
+              const csrfMatch = document.documentElement.innerHTML.match(
+                /var\s+token\s*=\s*["']([^"']+)["']/
+              );
+              if (csrfMatch) {
+                result.csrfToken = csrfMatch[1];
+              }
+            }
+
+            // Alternative CSRF extraction from window object
+            if (!result.csrfToken) {
+              const csrfMatch2 = document.documentElement.innerHTML.match(
+                /window\.csrfToken\s*=\s*["']([^"']+)["']/
+              );
+              if (csrfMatch2) {
+                result.csrfToken = csrfMatch2[1];
+              }
+            }
+
+            // Try to get CSRF token from global variable
+            if (!result.csrfToken && typeof window !== "undefined") {
+              try {
+                if ((window as any).csrfToken) {
+                  result.csrfToken = (window as any).csrfToken;
+                }
+              } catch (e) {
+                // Ignore errors
+              }
+            }
+
             // Another alternative pattern
             if (!result.pageviewId) {
               const pageviewMatch3 = document.documentElement.innerHTML.match(
@@ -669,6 +1012,44 @@ export class VccsManagementService {
               result.reqInfo = reqInfo.innerHTML;
             }
 
+            // Evaluate x-booking-client-info function
+            try {
+              result.vnExists = typeof (window as any).vn !== "undefined";
+              result.vnAExists = typeof (window as any).vn?.a !== "undefined";
+              result.vnATrackedExists =
+                typeof (window as any).vn?.a?.tracked !== "undefined";
+
+              if (
+                typeof (window as any).vn !== "undefined" &&
+                (window as any).vn?.a?.tracked
+              ) {
+                const vnTracked = (window as any).vn.a.tracked();
+                result.vnTrackedResult = vnTracked;
+                result.vnTrackedType = typeof vnTracked;
+
+                if (vnTracked !== undefined && vnTracked !== null) {
+                  // If it's an object, stringify it; otherwise use as-is
+                  result.bookingClientInfo =
+                    typeof vnTracked === "object"
+                      ? JSON.stringify(vnTracked)
+                      : String(vnTracked);
+                }
+              }
+            } catch (e: any) {
+              result.vnTrackingError = e.message;
+            }
+
+            // Try to get ECT (Effective Connection Type) from navigator
+            const navConnection = (navigator as any).connection;
+            if (navConnection && navConnection.effectiveType) {
+              result.effectiveType = navConnection.effectiveType;
+            } else if (navConnection && navConnection.type) {
+              result.effectiveType = navConnection.type;
+            } else {
+              // Fallback to default
+              result.effectiveType = "4g";
+            }
+
             return result;
           } catch (error: any) {
             return { error: error.message };
@@ -683,21 +1064,34 @@ export class VccsManagementService {
             headers["x-booking-pageview-id"] = pageData.pageviewId;
           }
 
-          // Always set x-booking-info to the function string (not the actual value)
-          headers["x-booking-info"] =
-            "function(){return document&&document.getElementById('req_info')?document.getElementById('req_info').innerHTML:''}";
+          // Set x-booking-info to the actual evaluated value (not the function string)
+          if (pageData.reqInfo) {
+            headers["x-booking-info"] = pageData.reqInfo;
+          }
 
-          // Always set x-booking-client-info to the function string
-          headers["x-booking-client-info"] =
-            "function(){return vn.a.tracked&&vn.a.tracked()}";
+          // Set x-booking-client-info to the actual evaluated value
+          // If evaluation failed, send function string as fallback (header must be present)
+          if (pageData.bookingClientInfo) {
+            headers["x-booking-client-info"] = pageData.bookingClientInfo;
+          } else {
+            // Send function string as fallback - matches working curl command
+            headers["x-booking-client-info"] =
+              "function(){return vn.a.tracked&&vn.a.tracked()}";
+          }
+
+          // Add CSRF token if available
+          if (pageData.csrfToken) {
+            headers["x-booking-csrf"] = pageData.csrfToken;
+          }
 
           // Add all the standard browser headers that your working curl has
           headers["accept"] = "application/json, text/plain, */*";
           headers["accept-language"] = "en-GB,en-US;q=0.9,en;q=0.8";
-          headers["ect"] = "3g";
+          headers["ect"] = pageData.effectiveType || "4g";
           headers["priority"] = "u=1, i";
-          headers["referer"] =
-            "https://admin.booking.com/hotel/hoteladmin/extranet_ng/manage/vccs_management.html";
+          // Extract current page URL for referer
+          const currentUrl = await page.url();
+          headers["referer"] = currentUrl;
           headers["sec-ch-ua"] =
             '"Chromium";v="140", "Not=A?Brand";v="24", "Google Chrome";v="140"';
           headers["sec-ch-ua-mobile"] = "?0";
@@ -717,7 +1111,18 @@ export class VccsManagementService {
             hasBookingGlobal: pageData.hasBookingGlobal,
             hasPageviewId: !!pageData.pageviewId,
             hasReqInfo: !!pageData.reqInfo,
+            hasBookingClientInfo: !!pageData.bookingClientInfo,
             hotelAccountId: pageData.hotelAccountId,
+            csrfToken: pageData.csrfToken,
+            effectiveType: pageData.effectiveType,
+            reqInfoLength: pageData.reqInfo?.length || 0,
+            bookingClientInfoType: typeof pageData.bookingClientInfo,
+            // Debug info for vn.a.tracked
+            vnExists: pageData.vnExists,
+            vnAExists: pageData.vnAExists,
+            vnATrackedExists: pageData.vnATrackedExists,
+            vnTrackedType: pageData.vnTrackedType,
+            vnTrackingError: pageData.vnTrackingError,
           });
         }
       } catch (error) {
@@ -728,8 +1133,11 @@ export class VccsManagementService {
         cookieCount: cookies.length,
         hasPageviewId: !!headers["x-booking-pageview-id"],
         hasReqInfo: !!headers["x-booking-info"],
+        hasClientInfo: !!headers["x-booking-client-info"],
+        hasCsrfToken: !!headers["x-booking-csrf"],
         pageviewId: headers["x-booking-pageview-id"] || "none",
         hotelAccountId: pageData.hotelAccountId || "none",
+        effectiveType: pageData.effectiveType || "none",
         cookieNames: cookies.map((c: any) => c.name).slice(0, 10), // Show first 10 cookie names
       });
 
@@ -737,6 +1145,7 @@ export class VccsManagementService {
         cookies: cookieString,
         headers,
         hotel_account_id: pageData.hotelAccountId,
+        effectiveType: pageData.effectiveType || "4g",
       };
     } catch (error) {
       dualLogError("Failed to extract cookies and headers", {
@@ -747,6 +1156,7 @@ export class VccsManagementService {
         cookies: "",
         headers: {},
         hotel_account_id: undefined,
+        effectiveType: "4g",
       };
     }
   }
