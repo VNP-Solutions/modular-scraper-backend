@@ -88,6 +88,15 @@ export class BookingScraper extends BaseScraper {
     jobId?: string
   ): Promise<{ browser: Browser; page: Page }> {
     try {
+      // Check environment - use local browser for local/development
+      const environment = process.env.ENVIRONMENT || "browserless";
+      if (environment === "local" || environment === "development") {
+        await this.logInfo(
+          "Environment set to local/development, using local browser"
+        );
+        return await this.setupLocalBrowser(jobId);
+      }
+
       await this.logInfo(
         "Setting up Booking.com browser with Browserless session"
       );
@@ -109,25 +118,7 @@ export class BookingScraper extends BaseScraper {
           "Failed to create Browserless session, falling back to local browser"
         );
         // Fallback to local browser
-        const browser = await puppeteer.launch({
-          headless: false,
-          defaultViewport: null,
-          args: [
-            "--start-maximized",
-            "--no-sandbox",
-            "--disable-setuid-sandbox",
-            "--disable-web-security",
-            "--disable-features=IsolateOrigins,site-per-process",
-            "--disable-blink-features=AutomationControlled",
-            "--disable-extensions",
-          ],
-        });
-        const page = await browser.newPage();
-        await page.setUserAgent(
-          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
-        );
-        await this.logInfo("Local browser setup completed as fallback");
-        return { browser, page };
+        return await this.setupLocalBrowser(jobId);
       }
 
       // Connect to the created Browserless session
@@ -188,6 +179,177 @@ export class BookingScraper extends BaseScraper {
       return { browser, page };
     } catch (error) {
       await this.logError("Browser setup failed", error);
+      throw error;
+    }
+  }
+
+  /**
+   * Setup local browser for development/testing
+   */
+  private async setupLocalBrowser(
+    jobId?: string
+  ): Promise<{ browser: Browser; page: Page }> {
+    try {
+      await this.logInfo("Setting up local browser for Booking.com");
+
+      // Get timeout configuration
+      const loadingTimeout = jobId
+        ? await timeoutManager.getLoadingTimeout(jobId)
+        : 120000;
+      const selectorTimeout = jobId
+        ? await timeoutManager.getSelectorTimeout(jobId)
+        : 30000;
+
+      // Launch local browser with comprehensive anti-detection
+      const browser = await puppeteer.launch({
+        headless: false, // Set to false so you can see the browser
+        defaultViewport: null,
+        args: [
+          "--start-maximized",
+          "--no-sandbox",
+          "--disable-setuid-sandbox",
+          "--disable-web-security",
+          "--disable-features=IsolateOrigins,site-per-process",
+          "--disable-blink-features=AutomationControlled",
+          "--disable-extensions",
+          // Additional stealth args to avoid detection
+          "--disable-dev-shm-usage",
+          "--disable-gpu",
+          "--disable-background-timer-throttling",
+          "--disable-backgrounding-occluded-windows",
+          "--disable-renderer-backgrounding",
+          "--disable-features=TranslateUI",
+          "--disable-ipc-flooding-protection",
+          "--no-first-run",
+          "--no-default-browser-check",
+          "--no-pings",
+          "--password-store=basic",
+          "--use-mock-keychain",
+          "--excludeSwitches=enable-automation",
+          "--disable-automation",
+          "--disable-infobars",
+        ],
+      });
+
+      const page = await browser.newPage();
+
+      // Set user agent to match your working curl exactly
+      await page.setUserAgent(
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+      );
+
+      // Set comprehensive headers to match your working curl exactly
+      await page.setExtraHTTPHeaders({
+        "Accept-Language": "en-GB,en-US;q=0.9,en;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Cache-Control": "max-age=0",
+        "sec-ch-ua":
+          '"Chromium";v="140", "Not=A?Brand";v="24", "Google Chrome";v="140"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"macOS"',
+        DNT: "1",
+        "Upgrade-Insecure-Requests": "1",
+      });
+
+      // Hide automation indicators to avoid detection
+      await page.evaluateOnNewDocument(() => {
+        // Remove webdriver property
+        delete (navigator as any).webdriver;
+
+        // Override the plugins property to use a real value
+        Object.defineProperty(navigator, "plugins", {
+          get: () => [1, 2, 3, 4, 5],
+        });
+
+        // Override the languages property to use a real value
+        Object.defineProperty(navigator, "languages", {
+          get: () => ["en-US", "en"],
+        });
+
+        // Override chrome property
+        (window as any).chrome = {
+          runtime: {},
+        };
+
+        // Mock permissions
+        const originalQuery = window.navigator.permissions.query;
+        window.navigator.permissions.query = (parameters) => {
+          if (parameters.name === "notifications") {
+            return Promise.resolve({
+              state: Notification.permission,
+              name: "notifications",
+              onchange: null,
+              addEventListener: () => {},
+              removeEventListener: () => {},
+              dispatchEvent: () => false,
+            } as PermissionStatus);
+          }
+          return originalQuery(parameters);
+        };
+
+        // Override screen properties to match real browser
+        Object.defineProperty(screen, "availWidth", {
+          get: () => 1920,
+        });
+        Object.defineProperty(screen, "availHeight", {
+          get: () => 1080,
+        });
+        Object.defineProperty(screen, "width", {
+          get: () => 1920,
+        });
+        Object.defineProperty(screen, "height", {
+          get: () => 1080,
+        });
+      });
+
+      // Set default timeouts
+      await page.setDefaultNavigationTimeout(loadingTimeout);
+      await page.setDefaultTimeout(selectorTimeout);
+
+      // Set viewport
+      await page.setViewport({
+        width: 1905,
+        height: 945,
+      });
+
+      // Load saved cookies if they exist for the current property
+      if (this.propertyIdForDb) {
+        const cookies = await cookieStorageService.loadCookies(
+          this.propertyIdForDb,
+          PlatformsType.BOOKING
+        );
+        if (cookies) {
+          await page.setCookie(...cookies);
+          await this.logInfo(
+            `Loaded ${cookies.length} cookies from storage for property ${this.propertyIdForDb}`
+          );
+        } else {
+          await this.logInfo("No saved cookies found for this property");
+        }
+      }
+
+      // Navigate to login page
+      await this.logInfo("Navigating to Booking.com admin portal");
+      try {
+        await page.goto(this.baseUrl, {
+          waitUntil: "networkidle2",
+          timeout: loadingTimeout,
+        });
+      } catch (navError) {
+        await this.logInfo("Navigation slow, trying with domcontentloaded");
+        await page.goto(this.baseUrl, {
+          waitUntil: "domcontentloaded",
+          timeout: 60000,
+        });
+        await this.delay(5000);
+      }
+
+      await this.takeScreenshot();
+      await this.logInfo("Local browser setup completed successfully");
+
+      return { browser, page };
+    } catch (error) {
+      await this.logError("Local browser setup failed", error);
       throw error;
     }
   }
@@ -632,22 +794,74 @@ export class BookingScraper extends BaseScraper {
         );
       }
 
-      // Listen for new page creation for property selection
-      const newPagePromise = new Promise<Page>((resolve) => {
-        this.browser!.once("targetcreated", async (target) => {
-          if (target.type() === "page") {
-            const newPage = await target.page();
-            await newPage!.bringToFront();
-            resolve(newPage!);
-          }
+      // Handle property selection - try multiple approaches for reliability
+      let pageSwitched = false;
+
+      try {
+        // Approach 1: Listen for new page creation (works in browserless)
+        const newPagePromise = new Promise<Page>((resolve, reject) => {
+          const timeout = setTimeout(() => {
+            reject(new Error("Timeout waiting for new page"));
+          }, 10000);
+
+          this.browser!.once("targetcreated", async (target) => {
+            clearTimeout(timeout);
+            if (target.type() === "page") {
+              const newPage = await target.page();
+              await newPage!.bringToFront();
+              resolve(newPage!);
+            }
+          });
         });
-      });
 
-      // Wait for the new page to be created
-      const newPage = await newPagePromise;
+        // Wait for the new page to be created
+        const newPage = await newPagePromise;
+        this.page = newPage;
+        pageSwitched = true;
+        await this.logInfo(
+          `Switched to new page via event: ${this.page.url()}`
+        );
+      } catch (error) {
+        await this.logInfo(
+          "Event-based page detection failed, trying alternative approach"
+        );
 
-      // Switch to the new page and keep it
-      this.page = newPage;
+        // Approach 2: Wait and check for new pages (works locally)
+        await delay(3000);
+
+        const pages = await this.browser!.pages();
+        let newPage: Page | null = null;
+
+        // Find the page that's different from the current one
+        for (const page of pages) {
+          if (page !== this.page) {
+            const url = page.url();
+            // Check if this is the property page we're looking for
+            if (url.includes("hotel_id=") || url.includes("extranet_ng")) {
+              newPage = page;
+              break;
+            }
+          }
+        }
+
+        // If no new page found, try to get the most recent page
+        if (!newPage && pages.length > 1) {
+          newPage = pages[pages.length - 1];
+        }
+
+        if (newPage) {
+          this.page = newPage;
+          await this.page.bringToFront();
+          pageSwitched = true;
+          await this.logInfo(
+            `Switched to new page via enumeration: ${this.page.url()}`
+          );
+        } else {
+          await this.logInfo(
+            "No new page detected, continuing with current page"
+          );
+        }
+      }
 
       try {
         // Verify property is selected by checking URL
@@ -1512,14 +1726,50 @@ export class BookingScraper extends BaseScraper {
   }
 
   private async expandMainMenu(mainSection: string): Promise<boolean> {
+    // Wait for page to be ready before clicking menu
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+
     const mainMenuSelectors =
       BOOKING_SELECTORS.navigation.mainMenu(mainSection);
-    return SelectorUtils.findAndClick(this.page!, mainMenuSelectors);
+    const clicked = await SelectorUtils.findAndClick(
+      this.page!,
+      mainMenuSelectors
+    );
+
+    if (clicked) {
+      // Additional wait after clicking to ensure menu expands
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+
+    return clicked;
   }
 
   private async clickSubMenu(subSection: string): Promise<boolean> {
-    // Submenu time to render
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    // Submenu time to render - increased for local environment
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+
+    // Enhanced debugging for VCCS management
+    if (subSection === "vccs_management") {
+      await this.logInfo("Debugging VCCS management menu...");
+
+      // Log all available menu items for debugging
+      const menuItems = await this.page!.evaluate(() => {
+        const items = Array.from(
+          document.querySelectorAll(
+            'a[data-tid="item-link"], a.ext-navigation-submenu-item__link, a'
+          )
+        );
+        return items.map((item) => ({
+          text: item.textContent?.trim(),
+          href: item.getAttribute("href"),
+          dataNavTag: item.closest("li")?.getAttribute("data-nav-tag"),
+          className: item.className,
+        }));
+      });
+
+      await this.logInfo("Available menu items:", menuItems);
+    }
+
     const subMenuSelectors = BOOKING_SELECTORS.navigation.subMenu(subSection);
     const clicked = await SelectorUtils.findAndClick(
       this.page!,
@@ -1527,10 +1777,39 @@ export class BookingScraper extends BaseScraper {
     );
 
     if (!clicked) {
+      // Enhanced fallback for VCCS management
+      if (subSection === "vccs_management") {
+        await this.logInfo("Trying enhanced VCCS management search...");
+
+        // Try additional selectors specific to VCCS
+        const vccsFound = await this.page!.evaluate(() => {
+          const links = Array.from(document.querySelectorAll("a"));
+          for (const link of links) {
+            const text = link.textContent?.toLowerCase() || "";
+            if (
+              text.includes("virtual") ||
+              text.includes("vccs") ||
+              text.includes("cards")
+            ) {
+              (link as HTMLElement).click();
+              return true;
+            }
+          }
+          return false;
+        });
+
+        if (vccsFound) {
+          await this.logInfo("Found VCCS management by enhanced text search");
+          return true;
+        }
+      }
+
       // Fallback: try to find by visible text
       const textFound = await this.page!.evaluate((text) => {
         const links = Array.from(
-          document.querySelectorAll('a[data-tid="item-link"]')
+          document.querySelectorAll(
+            'a[data-tid="item-link"], a.ext-navigation-submenu-item__link, a'
+          )
         );
         for (const link of links) {
           if (
@@ -1587,6 +1866,10 @@ export class BookingScraper extends BaseScraper {
       }
 
       await this.logInfo(`${mainSection} menu expanded`);
+
+      // Additional wait for menu to fully expand in local environment
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+
       const subMenuClicked = await this.clickSubMenu(subSection);
 
       if (!subMenuClicked) {
@@ -1598,6 +1881,10 @@ export class BookingScraper extends BaseScraper {
       }
 
       await this.logInfo(`Clicked on ${subSection} link`);
+
+      // Additional wait for navigation to start in local environment
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+
       await this.waitForNavigationAndVerify(expectedUrl);
       await this.logInfo(`Successfully navigated to ${subSection} page`);
       await this.takeScreenshot();
@@ -1671,12 +1958,76 @@ export class BookingScraper extends BaseScraper {
       await this.logInfo("Successfully navigated to VCCS to charge page");
       this.takeScreenshot();
 
-      // Step 3: Use new VCCS API-based approach
+      // Step 3: Process VCCS data using API (instead of browser automation)
       await this.logInfo("Starting VCCS API-based processing...");
-      const vccsResult = await this.processVccsWithApi(
-        params.jobId,
-        params.propertyId
+
+      // Get current URL and extract parameters
+      const currentUrl = this.page?.url();
+      if (!currentUrl) {
+        throw new Error("Failed to get current page URL");
+      }
+      await this.logInfo(`Current VCCS page URL: ${currentUrl}`);
+
+      // Extract URL parameters
+      const urlParams = vccsManagementService.extractUrlParams(currentUrl);
+      await this.logInfo("Extracted URL parameters", urlParams);
+
+      // Validate required parameters
+      if (
+        !urlParams ||
+        !urlParams.hotel_id ||
+        !urlParams.ses ||
+        !urlParams.lang
+      ) {
+        throw new Error("Missing required URL parameters");
+      }
+
+      // Extract cookies and headers from the current page
+      const { cookies, headers, hotel_account_id } =
+        await vccsManagementService.extractCookiesAndHeaders(this.page!);
+
+      if (!cookies) {
+        throw new Error("Failed to extract cookies from page");
+      }
+
+      await this.logInfo("Extracted cookies and headers for API calls");
+
+      // Add extracted hotel_account_id to urlParams
+      const urlParamsWithAccountId = {
+        hotel_id: urlParams.hotel_id,
+        ses: urlParams.ses,
+        lang: urlParams.lang,
+        route: urlParams.route || "vccs_to_charge",
+        hotel_account_id,
+      };
+
+      // Get VCCS data from API using browser fetch to avoid fingerprinting
+      const vccsData = await vccsManagementService.getVccsDataFromBrowser(
+        this.page!,
+        urlParamsWithAccountId
       );
+
+      if (!vccsData || !vccsData.success) {
+        throw new Error("Failed to get VCCS data from API");
+      }
+
+      await this.logInfo("Successfully retrieved VCCS data from API");
+
+      // Process all VCCS reservations to get card details using browser fetch
+      const processingResult =
+        await vccsManagementService.processAllVccsReservationsFromBrowser(
+          this.page!,
+          vccsData,
+          urlParamsWithAccountId,
+          params.jobId,
+          params.propertyId
+        );
+
+      await this.logInfo("VCCS API Processing Results:");
+      await this.logInfo(
+        `Successfully processed: ${processingResult.processed} reservations`
+      );
+      await this.logInfo(`Errors encountered: ${processingResult.errors}`);
 
       // Step 4: Take final screenshot
       await this.takeScreenshot();
@@ -1692,9 +2043,9 @@ export class BookingScraper extends BaseScraper {
           viewAllButton: viewAllSuccess,
         },
         vccsProcessing: {
-          processed: vccsResult?.processed || 0,
-          errors: vccsResult?.errors || 0,
-          total: vccsResult?.results?.length || 0,
+          processed: processingResult.processed,
+          errors: processingResult.errors,
+          method: "api",
         },
       };
 
@@ -1727,132 +2078,6 @@ export class BookingScraper extends BaseScraper {
         error: error instanceof Error ? error.message : "Scraping failed",
         screenshots: [`booking-scraping-error-${Date.now()}.png`],
       };
-    }
-  }
-
-  /**
-   * Process VCCS using API calls instead of browser automation
-   */
-  async processVccsWithApi(
-    jobId?: string,
-    propertyId?: string
-  ): Promise<{
-    processed: number;
-    errors: number;
-    results: any[];
-  } | null> {
-    if (!this.page) {
-      await this.logError("Page not initialized for VCCS API processing");
-      return null;
-    }
-
-    try {
-      await this.logInfo("Starting VCCS API-based processing");
-
-      // Get current URL and extract parameters
-      const currentUrl = this.page.url();
-      await this.logInfo(`Current VCCS page URL: ${currentUrl}`);
-
-      const urlParams = vccsManagementService.extractUrlParams(currentUrl);
-      if (!urlParams) {
-        throw new Error("Failed to extract URL parameters from VCCS page");
-      }
-
-      await this.logInfo("Extracted URL parameters", urlParams);
-
-      // Extract cookies and headers from the current page
-      const { cookies, headers, hotel_account_id } =
-        await vccsManagementService.extractCookiesAndHeaders(this.page);
-
-      if (!cookies) {
-        throw new Error("Failed to extract cookies from page");
-      }
-
-      await this.logInfo("Extracted cookies and headers for API calls");
-
-      // Add extracted hotel_account_id to urlParams
-      const urlParamsWithAccountId = {
-        ...urlParams,
-        hotel_account_id,
-      };
-
-      // Get VCCS data from API
-      const vccsData = await vccsManagementService.getVccsData(
-        urlParamsWithAccountId,
-        cookies,
-        headers
-      );
-
-      if (!vccsData || !vccsData.success) {
-        throw new Error("Failed to get VCCS data from API");
-      }
-
-      await this.logInfo("Retrieved VCCS data from API", {
-        totalVccs: vccsData.data.vccs.length,
-        totalAmount: vccsData.data.total_amount.amount_formatted,
-      });
-
-      // Process all VCCS reservations
-      const processingResult =
-        await vccsManagementService.processAllVccsReservations(
-          vccsData,
-          urlParams,
-          cookies,
-          headers,
-          jobId,
-          propertyId
-        );
-
-      await this.logInfo("VCCS processing completed", {
-        processed: processingResult.processed,
-        errors: processingResult.errors,
-        total: processingResult.results.length,
-      });
-
-      return processingResult;
-    } catch (error) {
-      await this.logError("VCCS API processing failed", error);
-      return null;
-    }
-  }
-
-  /**
-   * Fallback method: Process VCCS using browser automation
-   */
-  async processVccsWithBrowserAutomation(
-    jobId?: string,
-    propertyId?: string
-  ): Promise<{
-    processed: number;
-    errors: number;
-    results: any[];
-  } | null> {
-    try {
-      await this.logInfo("Starting VCCS browser automation fallback");
-
-      // Use the original browser automation method
-      const result = await this.traverseAllReservations({
-        jobId,
-        propertyId,
-      });
-
-      await this.logInfo("VCCS browser automation completed", {
-        processed: result?.processed || 0,
-        errors: result?.errors || 0,
-      });
-
-      // Convert to expected format
-      return {
-        processed: result?.processed || 0,
-        errors: result?.errors || 0,
-        results: [], // Browser automation doesn't return individual results
-      };
-    } catch (error) {
-      await this.logError(
-        "VCCS browser automation fallback also failed",
-        error
-      );
-      return null;
     }
   }
 
