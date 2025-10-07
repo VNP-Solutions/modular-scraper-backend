@@ -923,29 +923,49 @@ export class BookingScraper extends BaseScraper {
       // wait fo page
       await this.delay(20000);
 
-      // Start recording and generate live URL for captcha solving
-      const cdp = await currentPage.createCDPSession();
-      await (cdp as any).send("Browserless.startRecording");
-      await this.logInfo("Recording started successfully");
+      // Start recording and generate live URL for captcha solving (Browserless only)
+      const environment = process.env.ENVIRONMENT || "browserless";
+      const isBrowserless =
+        environment === "browserless" || environment === "production";
 
-      await this.delay(2000);
-      await this.logInfo(`Current page: ${currentPage.url()}`);
-      try {
-        /* TO DO - check with their documentation/support why this can't be increased. 
-          I receive "Couldn't establish a secure connection to the server." when
-          trying to increase timeout.
-        */
-        const { liveURL } = (await (cdp as any).send("Browserless.liveURL", {
-          timeout: 600_000,
-        })) as { liveURL: string };
+      if (isBrowserless) {
+        try {
+          const cdp = await currentPage.createCDPSession();
+          await (cdp as any).send("Browserless.startRecording");
+          await this.logInfo("Recording started successfully");
 
-        this.sessionUrl = liveURL;
-        await this.logInfo("Live URL generated for captcha solving:", {
-          liveURL,
-          currentPage: currentPage.url(),
-        });
-      } catch (liveUrlError) {
-        await this.logError("Failed to generate live URL:", liveUrlError);
+          await this.delay(2000);
+          await this.logInfo(`Current page: ${currentPage.url()}`);
+
+          try {
+            /* TO DO - check with their documentation/support why this can't be increased. 
+              I receive "Couldn't establish a secure connection to the server." when
+              trying to increase timeout.
+            */
+            const { liveURL } = (await (cdp as any).send(
+              "Browserless.liveURL",
+              {
+                timeout: 600_000,
+              }
+            )) as { liveURL: string };
+
+            this.sessionUrl = liveURL;
+            await this.logInfo("Live URL generated for captcha solving:", {
+              liveURL,
+              currentPage: currentPage.url(),
+            });
+          } catch (liveUrlError) {
+            await this.logError("Failed to generate live URL:", liveUrlError);
+          }
+        } catch (browserlessError) {
+          await this.logInfo(
+            "Browserless APIs not available (running locally?), skipping live URL generation"
+          );
+        }
+      } else {
+        await this.logInfo(
+          "Running in local mode - skipping Browserless recording/live URL"
+        );
       }
 
       let captchaSolved = false;
@@ -1096,22 +1116,42 @@ export class BookingScraper extends BaseScraper {
           }
         );
 
-        const cdp = await currentPage.createCDPSession();
-        await (cdp as any).send("Browserless.startRecording");
-        await this.logInfo("Recording started successfully");
+        // Only try Browserless APIs if in Browserless environment
+        const environment = process.env.ENVIRONMENT || "browserless";
+        const isBrowserless =
+          environment === "browserless" || environment === "production";
 
-        await this.delay(2000);
-        try {
-          const { liveURL } = (await (cdp as any).send("Browserless.liveURL", {
-            timeout: 600_000,
-          })) as { liveURL: string };
+        if (isBrowserless) {
+          try {
+            const cdp = await currentPage.createCDPSession();
+            await (cdp as any).send("Browserless.startRecording");
+            await this.logInfo("Recording started successfully");
 
-          this.sessionUrl = liveURL;
-          await this.logInfo("Live URL generated for 2FA solving:", {
-            liveURL,
-          });
-        } catch (liveUrlError) {
-          await this.logError("Failed to generate live URL:", liveUrlError);
+            await this.delay(2000);
+            try {
+              const { liveURL } = (await (cdp as any).send(
+                "Browserless.liveURL",
+                {
+                  timeout: 600_000,
+                }
+              )) as { liveURL: string };
+
+              this.sessionUrl = liveURL;
+              await this.logInfo("Live URL generated for 2FA solving:", {
+                liveURL,
+              });
+            } catch (liveUrlError) {
+              await this.logError("Failed to generate live URL:", liveUrlError);
+            }
+          } catch (browserlessError) {
+            await this.logInfo(
+              "Browserless APIs not available (running locally?), skipping live URL generation for 2FA"
+            );
+          }
+        } else {
+          await this.logInfo(
+            "Running in local mode - skipping Browserless recording/live URL for 2FA"
+          );
         }
 
         await this.delay(300000);
@@ -2020,7 +2060,8 @@ export class BookingScraper extends BaseScraper {
           vccsData,
           urlParamsWithAccountId,
           params.jobId,
-          params.propertyId
+          params.propertyId,
+          this // Pass scraper instance for captcha/2FA handling
         );
 
       await this.logInfo("VCCS API Processing Results:");

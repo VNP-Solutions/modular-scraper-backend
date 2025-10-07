@@ -287,30 +287,295 @@ export class VccsManagementService {
   }
 
   /**
-   * Get card details from browser to avoid fingerprinting (with semicolon URL format)
+   * Get card details by navigating browser (follows authentication redirects)
    */
   async getCardDetailsFromBrowser(
     page: any,
     reservationId: string,
-    params: VccsUrlParams
+    params: VccsUrlParams,
+    scraperInstance?: any // BookingScraper instance for captcha/2FA handling
   ): Promise<CardDetailsResponse | null> {
     try {
       // Note: Booking.com uses semicolons (;) not ampersands (&) for this URL!
       const cardDetailsUrl = `${this.cardDetailsBaseUrl}?lang=${params.lang};bn=${reservationId};hotel_id=${params.hotel_id};ses=${params.ses};has_bvc=1`;
 
-      dualLogInfo("Making card details request from browser", {
+      dualLogInfo("Navigating to card details page (with old session)", {
         url: cardDetailsUrl,
         reservationId,
+        oldSession: params.ses,
       });
 
-      // Navigate browser to the card details page (goes through authentication)
-      await page.goto(cardDetailsUrl, {
+      // Navigate - Booking.com will automatically:
+      // 1. Check authentication cookies
+      // 2. Generate new session token
+      // 3. Redirect to card details with new session
+      // 4. May redirect through /authenticate.html if needed
+      const response = await page.goto(cardDetailsUrl, {
         waitUntil: "networkidle2",
-        timeout: 30000,
+        timeout: 60000, // Increased timeout for potential redirects/2FA
       });
 
-      // Wait a bit for page to fully load
+      // Get final URL after all redirects
+      const finalUrl = page.url();
+
+      dualLogInfo("Landed on page after redirects", {
+        reservationId,
+        finalUrl,
+        statusCode: response?.status(),
+        redirected: finalUrl !== cardDetailsUrl,
+      });
+
+      // Wait for page to fully render
       await new Promise((resolve) => setTimeout(resolve, 2000));
+
+      // Check if we're on a 2FA/captcha page (your existing detection can handle this)
+      const currentPageType = await page.evaluate(() => {
+        const pageTitle = document.title.toLowerCase();
+        const pageContent = document.body?.innerText?.toLowerCase() || "";
+
+        if (
+          pageTitle.includes("verification") ||
+          pageContent.includes("verification code")
+        ) {
+          return "2fa";
+        }
+        if (
+          pageTitle.includes("captcha") ||
+          document.querySelector('iframe[src*="captcha"]')
+        ) {
+          return "captcha";
+        }
+        if (pageTitle.includes("login") || pageContent.includes("sign in")) {
+          return "login";
+        }
+        if (
+          pageTitle.includes("credit card") ||
+          document.querySelector('td:contains("Card number")')
+        ) {
+          return "card_details";
+        }
+        return "unknown";
+      });
+
+      dualLogInfo("Detected page type", {
+        reservationId,
+        pageType: currentPageType,
+        pageTitle: await page.title(),
+      });
+
+      // Handle 2FA/captcha/login using existing scraper handlers
+      if (
+        currentPageType === "2fa" ||
+        currentPageType === "captcha" ||
+        currentPageType === "login"
+      ) {
+        dualLogInfo("Authentication challenge detected", {
+          reservationId,
+          pageType: currentPageType,
+          finalUrl,
+        });
+
+        if (!scraperInstance) {
+          dualLogError(
+            "No scraper instance provided to handle authentication",
+            {
+              reservationId,
+              pageType: currentPageType,
+            }
+          );
+          return null;
+        }
+
+        // Handle Captcha
+        if (currentPageType === "captcha") {
+          dualLogInfo("Attempting to solve captcha...", { reservationId });
+          const captchaHandled = await scraperInstance.handleCaptcha({
+            page,
+            type: "automatic", // Try automatic first, falls back to manual
+          });
+
+          if (!captchaHandled) {
+            dualLogError("Captcha solving failed", { reservationId });
+            return null;
+          }
+
+          dualLogInfo("Captcha solved successfully", { reservationId });
+          // Wait for page to reload after captcha
+          await new Promise((resolve) => setTimeout(resolve, 3000));
+        }
+
+        // Handle 2FA
+        if (currentPageType === "2fa") {
+          dualLogInfo("Attempting to solve 2FA...", { reservationId });
+          const twoFAHandled = await scraperInstance.handle2FA({ page });
+
+          if (!twoFAHandled) {
+            dualLogError("2FA verification failed", { reservationId });
+            return null;
+          }
+
+          dualLogInfo("2FA solved successfully", { reservationId });
+          // Wait for page to reload after 2FA
+          await new Promise((resolve) => setTimeout(resolve, 3000));
+        }
+
+        // Handle Login
+        if (currentPageType === "login") {
+          dualLogInfo("Login required - attempting to login", {
+            reservationId,
+          });
+
+          try {
+            // Call the scraper's login method with skip already logged check
+            await scraperInstance.login(
+              scraperInstance.credentials,
+              undefined,
+              true // skipAlreadyLogged = true to force re-login
+            );
+
+            dualLogInfo(
+              "Login successful, we should now be on card details page",
+              {
+                reservationId,
+                currentUrl: page.url(),
+              }
+            );
+
+            // DON'T navigate again! After login/2FA, we're already on the card details page
+            // Just wait for card details elements to appear
+            let cardDetailsFound = false;
+            try {
+              // Wait for session input or card table (appears on card details page)
+              await page.waitForSelector(
+                'input[name="ses"], table.table-condensed',
+                {
+                  timeout: 15000,
+                }
+              );
+              cardDetailsFound = true;
+              dualLogInfo(
+                "Card details page elements found after authentication",
+                {
+                  reservationId,
+                  currentUrl: page.url(),
+                }
+              );
+            } catch (waitError) {
+              dualLogInfo(
+                "Card details elements not found after authentication",
+                {
+                  reservationId,
+                  currentUrl: page.url(),
+                  waitError:
+                    waitError instanceof Error
+                      ? waitError.message
+                      : String(waitError),
+                }
+              );
+            }
+
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+          } catch (loginError) {
+            dualLogError("Login failed during card details flow", {
+              reservationId,
+              error: loginError,
+            });
+            return null;
+          }
+        }
+
+        // After solving captcha/2FA/login, check if we're now on the card details page
+        const updatedPageType = await page.evaluate(() => {
+          const pageTitle = document.title.toLowerCase();
+          const pageContent = document.body?.innerText?.toLowerCase() || "";
+          const url = window.location.href;
+
+          // Check for card details page indicators (multiple ways)
+          if (
+            pageTitle.includes("credit card") ||
+            pageTitle.includes("card details") ||
+            url.includes("booking_cc_details") ||
+            url.includes("cc_details") ||
+            pageContent.includes("card number:") ||
+            pageContent.includes("virtual credit card details") ||
+            pageContent.includes("expiration date:") ||
+            pageContent.includes("cvc code:") ||
+            document.querySelector('input[name="ses"]') || // Form with session
+            document.querySelector("table.table-condensed") // Card details table
+          ) {
+            return "card_details";
+          }
+          return "unknown";
+        });
+
+        if (updatedPageType !== "card_details") {
+          // Log more details to debug
+          const pageInfo = await page.evaluate(() => ({
+            title: document.title,
+            url: window.location.href,
+            bodyText: document.body?.innerText?.substring(0, 500) || "",
+            hasSesInput: !!document.querySelector('input[name="ses"]'),
+            hasTable: !!document.querySelector("table.table-condensed"),
+          }));
+
+          dualLogError(
+            "Still not on card details page after solving authentication",
+            {
+              reservationId,
+              currentPageType: updatedPageType,
+              currentUrl: page.url(),
+              pageInfo,
+            }
+          );
+          return null;
+        }
+
+        dualLogInfo(
+          "Successfully authenticated and reached card details page",
+          {
+            reservationId,
+          }
+        );
+
+        // Extract NEW session from URL or form after authentication
+        const newSession = await page.evaluate(() => {
+          // Try to get session from URL
+          const url = new URL(window.location.href);
+          const urlParams = new URLSearchParams(url.search.replace(/;/g, "&"));
+          const sesFromUrl = urlParams.get("ses");
+
+          if (sesFromUrl) {
+            return sesFromUrl;
+          }
+
+          // Try to get session from form hidden input
+          const sesInput =
+            document.querySelector<HTMLInputElement>('input[name="ses"]');
+          if (sesInput && sesInput.value) {
+            return sesInput.value;
+          }
+
+          return null;
+        });
+
+        if (newSession) {
+          dualLogInfo("Extracted NEW session after authentication", {
+            reservationId,
+            newSession,
+            oldSession: params.ses,
+          });
+
+          // Update params with new session for future requests
+          params.ses = newSession;
+        } else {
+          dualLogInfo(
+            "Could not extract new session, continuing with existing",
+            {
+              reservationId,
+            }
+          );
+        }
+      }
 
       // Get the HTML content
       const html = await page.content();
@@ -324,6 +589,16 @@ export class VccsManagementService {
         containsExpiry: html.includes("Expiration Date"),
         containsCVC: html.includes("CVC"),
       });
+
+      // Check if we actually got to the card details page
+      if (!html.includes("Card number") && !html.includes("Virtual card")) {
+        dualLogError("Did not reach card details page", {
+          reservationId,
+          finalUrl,
+          pageTitle: await page.title(),
+        });
+        return null;
+      }
 
       const cardDetails = this.parseCardDetailsFromHtml(html);
 
@@ -544,7 +819,8 @@ export class VccsManagementService {
     vccsData: VccsApiResponse,
     params: VccsUrlParams,
     jobId?: string,
-    propertyId?: string
+    propertyId?: string,
+    scraperInstance?: any // BookingScraper instance for auth handling
   ): Promise<{
     processed: number;
     errors: number;
@@ -575,11 +851,12 @@ export class VccsManagementService {
       try {
         dualLogInfo(`Processing reservation ${vccs.hres_id}`);
 
-        // Get card details for this reservation using browser fetch
+        // Get card details for this reservation using browser navigation
         const cardDetails = await this.getCardDetailsFromBrowser(
           page,
           vccs.hres_id,
-          params
+          params,
+          scraperInstance // Pass scraper instance for auth handling
         );
 
         let saved = false;
