@@ -2053,6 +2053,85 @@ export class BookingScraper extends BaseScraper {
 
       await this.logInfo("Successfully retrieved VCCS data from API");
 
+      // Fetch job from database to get end_date for filtering
+      let endDateForFilter: Date | null = null;
+      if (params.jobId) {
+        try {
+          const job = await jobService.getJobById(params.jobId);
+          if (job && job.end_date) {
+            // Parse end_date from MM/DD/YYYY format to UTC midnight
+            const [month, day, year] = job.end_date.split("/");
+            endDateForFilter = new Date(
+              Date.UTC(parseInt(year), parseInt(month) - 1, parseInt(day))
+            );
+            await this.logInfo(
+              `Found end_date in job: ${
+                job.end_date
+              } (parsed as ${endDateForFilter.toISOString()})`
+            );
+          } else {
+            await this.logInfo(
+              "No end_date found in job, will process all reservations"
+            );
+          }
+        } catch (error) {
+          await this.logError(
+            `Failed to fetch job for filtering: ${
+              error instanceof Error ? error.message : "Unknown error"
+            }`
+          );
+          await this.logInfo("Will process all reservations without filtering");
+        }
+      }
+
+      // Filter reservations based on expiry_date if endDateForFilter is available
+      if (endDateForFilter && vccsData.data && vccsData.data.vccs) {
+        const originalCount = vccsData.data.vccs.length;
+
+        await this.logInfo(
+          `Filtering VCCS reservations by expiry_date <= ${endDateForFilter.toDateString()}`,
+          {
+            originalCount,
+            endDate: endDateForFilter.toDateString(),
+            totalReservationsBeforeFilter: originalCount,
+          }
+        );
+
+        // Log each reservation and whether it passes the filter
+        const filteredOut: string[] = [];
+        const kept: string[] = [];
+
+        vccsData.data.vccs = vccsData.data.vccs.filter((vccs) => {
+          const expiryDate = new Date(vccs.expiry_date);
+          const shouldKeep = expiryDate <= endDateForFilter!;
+
+          if (shouldKeep) {
+            kept.push(`${vccs.hres_id} (expiry: ${vccs.expiry_date})`);
+          } else {
+            filteredOut.push(`${vccs.hres_id} (expiry: ${vccs.expiry_date})`);
+          }
+
+          return shouldKeep;
+        });
+
+        await this.logInfo(`VCCS Filter Results Summary:`, {
+          originalCount,
+          keptCount: vccsData.data.vccs.length,
+          filteredOutCount: filteredOut.length,
+          keptReservations:
+            kept.length > 10
+              ? [...kept.slice(0, 10), `... and ${kept.length - 10} more`]
+              : kept,
+          filteredOutReservations:
+            filteredOut.length > 10
+              ? [
+                  ...filteredOut.slice(0, 10),
+                  `... and ${filteredOut.length - 10} more`,
+                ]
+              : filteredOut,
+        });
+      }
+
       // Process all VCCS reservations to get card details using browser fetch
       const processingResult =
         await vccsManagementService.processAllVccsReservationsFromBrowser(
