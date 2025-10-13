@@ -998,13 +998,13 @@ export class BookingScraper extends BaseScraper {
             `❌ Automatic captcha solving failed after ${maxRetries} attempts, falling back to manual solving`
           );
           captchaSolved = await this.solveCaptchaManually(
-            options?.timeout || 86400000
+            options?.timeout || 600000
           );
         }
       } else if (options?.type === "browserless_ui") {
         captchaSolved = await this.solveCaptchaWithUI(
           this.sessionUrl || options.sessionUrl!,
-          options.timeout || 86400000
+          options.timeout || 600000
         );
       } else {
         // Default to trying automatic first, then manual fallback
@@ -1032,7 +1032,7 @@ export class BookingScraper extends BaseScraper {
             `❌ Automatic captcha solving failed after ${maxRetries} attempts, falling back to manual solving`
           );
           captchaSolved = await this.solveCaptchaManually(
-            options?.timeout || 86400000
+            options?.timeout || 600000
           );
         }
       }
@@ -1050,6 +1050,10 @@ export class BookingScraper extends BaseScraper {
             action: "handle_captcha",
           }
         );
+        const { otpStatusManager } = await import(
+          "../common/otp-status-manager.js"
+        );
+        await otpStatusManager.forceReleaseOtp();
         return false;
       }
 
