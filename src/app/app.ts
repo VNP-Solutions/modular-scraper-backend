@@ -11,6 +11,7 @@ import { getAccess, getOauth2Callback } from "../get-access/access.js";
 import { JobStatus } from "../models/job.model.js";
 import { propertyCredentialsService } from "../services/job-credentials.service.js";
 import { jobService } from "../services/job.service.js";
+import { retrievalService } from "../services/retrieval.service.js";
 
 const app = express();
 
@@ -1526,6 +1527,438 @@ app.post("/api/expedia/reservation-run-job", (async (
     res.status(500).json({
       status: 500,
       message: "Error processing reservation search",
+      error: err.message,
+    });
+  }
+}) as any);
+
+/**
+ * @swagger
+ * /api/expedia/retrieval-run-job:
+ *   post:
+ *     tags:
+ *       - Expedia Scraping
+ *     summary: Run scraping job using retrieval ID
+ *     description: Fetch reservations from a retrieval record and scrape data from Expedia for each reservation
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - retrieval_id
+ *             properties:
+ *               retrieval_id:
+ *                 type: string
+ *                 description: The retrieval ID to process
+ *                 example: "507f1f77bcf86cd799439011"
+ *     responses:
+ *       200:
+ *         description: Retrieval job started successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 200
+ *                 message:
+ *                   type: string
+ *                   example: "Retrieval job started successfully"
+ *                 jobId:
+ *                   type: string
+ *                 reservationCount:
+ *                   type: integer
+ *       400:
+ *         description: Bad request - retrieval_id missing or no reservations found
+ *       500:
+ *         description: Server error
+ */
+app.post("/api/expedia/retrieval-run-job", (async (
+  req: express.Request,
+  res: express.Response
+) => {
+  try {
+    const { retrieval_id } = req.body;
+
+    if (!retrieval_id) {
+      return res.status(400).json({
+        status: 400,
+        message: "retrieval_id is required",
+      });
+    }
+
+    console.log(
+      `Getting retrieval details for retrieval ID: ${retrieval_id}...`
+    );
+
+    // Get retrieval from database
+    const retrieval = await retrievalService.getRetrievalById(retrieval_id);
+
+    if (!retrieval) {
+      return res.status(404).json({
+        status: 404,
+        message: `Retrieval with ID ${retrieval_id} not found`,
+      });
+    }
+
+    // Get reservations array from retrieval
+    const reservations = retrieval.reservations || [];
+    console.log("reservations", reservations);
+
+    if (reservations.length === 0) {
+      return res.status(400).json({
+        status: 400,
+        message: "No reservations found in retrieval",
+      });
+    }
+
+    console.log(
+      `Found ${reservations.length} reservations in retrieval ${retrieval_id}`
+    );
+
+    // Get property credentials for the retrieval
+    const retrievalData = await retrievalService.getExpediaIdFromRetrieval(
+      retrieval_id
+    );
+
+    if (!retrievalData || !retrievalData.expediaId) {
+      return res.status(400).json({
+        status: 400,
+        message: "Could not retrieve Expedia credentials for retrieval",
+      });
+    }
+
+    console.log(
+      `✅ Found Expedia credentials for retrieval: ${retrieval_id}, property: ${retrieval.property_id}`
+    );
+    console.log(`Using expedia_id: ${retrievalData.expediaId} for scraping`);
+    console.log(`Using username: ${retrievalData.user_email}`);
+
+    // Check if worker threads are available
+    if (
+      !otpAwareWorkerPool.hasAvailableWorkers() &&
+      otpAwareWorkerPool.isQueueFull()
+    ) {
+      return res.status(200).json({
+        status: 200,
+        message: "All server busy, try again",
+        workerStatus: otpAwareWorkerPool.getStatus(),
+      });
+    }
+
+    // Format reservations for the worker
+    // Since all reservations belong to the same property, group them together
+    // Convert to plain array to avoid Mongoose document cloning issues
+    const plainReservations = reservations.map(String); // Ensure plain strings
+    const formattedReservations = [
+      {
+        id: String(retrievalData.expediaId), // Ensure plain string
+        idList: plainReservations,
+      },
+    ];
+
+    console.log(
+      `Formatted reservations for property ${retrievalData.expediaId}:`,
+      formattedReservations
+    );
+
+    // Generate job ID and prepare worker job data
+    const jobId = `retrieval_job_${retrieval_id}_${Date.now()}`;
+
+    const workerJobData: WorkerJobData = {
+      jobType: "retrieval-reservation-run",
+      jobId,
+      retrievalId: String(retrieval_id), // Ensure plain string
+      reservations: formattedReservations,
+      expediaId: String(retrievalData.expediaId), // Ensure plain string
+      user_email: String(retrievalData.user_email || ""), // Ensure plain string
+      user_password: String(retrievalData.user_password || ""), // Ensure plain string
+    };
+
+    // Update retrieval status to Running
+    await retrievalService.updateRetrievalStatus(retrieval_id, "Running");
+
+    // Execute job in worker thread
+    try {
+      console.log(`Submitting retrieval job ${jobId} to worker pool...`);
+
+      const result = await otpAwareWorkerPool.executeJob(workerJobData);
+
+      if (result.success) {
+        // Update retrieval status to Completed
+        await retrievalService.updateRetrievalStatus(retrieval_id, "Completed");
+
+        return res.status(200).json({
+          ...result.data,
+          retrieval_id,
+          reservationCount: reservations.length,
+        });
+      } else {
+        // Update retrieval status to Failed
+        await retrievalService.updateRetrievalStatus(retrieval_id, "Failed");
+
+        return res.status(500).json({
+          status: 500,
+          message: "Retrieval job execution failed",
+          error: result.error,
+          jobId: result.jobId,
+          retrieval_id,
+        });
+      }
+    } catch (workerError) {
+      console.error(`Worker error for retrieval job ${jobId}:`, workerError);
+
+      // Update retrieval status to Failed
+      await retrievalService.updateRetrievalStatus(retrieval_id, "Failed");
+
+      return res.status(500).json({
+        status: 500,
+        message: "Worker execution failed for retrieval job",
+        error:
+          workerError instanceof Error
+            ? workerError.message
+            : String(workerError),
+        jobId,
+        retrieval_id,
+      });
+    }
+  } catch (err: any) {
+    console.error("Error in /api/expedia/retrieval-run-job:", err);
+
+    res.status(500).json({
+      status: 500,
+      message: "Error processing retrieval job",
+      error: err.message,
+    });
+  }
+}) as any);
+
+/**
+ * @swagger
+ * /api/expedia/graphql-retrieval-run-job:
+ *   post:
+ *     tags:
+ *       - Scraping Jobs
+ *     summary: Start GraphQL-based retrieval scraping job
+ *     description: Start a new GraphQL-based retrieval scraping job using the retrieval_id. This endpoint uses GraphQL queries to fetch reservation data for each reservation ID in the retrieval and stores data in RetrievalItem collection.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - retrieval_id
+ *             properties:
+ *               retrieval_id:
+ *                 type: string
+ *                 description: MongoDB ObjectId of the retrieval to process
+ *                 example: "507f1f77bcf86cd799439011"
+ *     responses:
+ *       200:
+ *         description: GraphQL retrieval scraping job completed successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 200
+ *                 message:
+ *                   type: string
+ *                   example: "GraphQL retrieval search completed successfully"
+ *                 retrieval_id:
+ *                   type: string
+ *                   example: "507f1f77bcf86cd799439011"
+ *                 jobId:
+ *                   type: string
+ *                   example: "graphql_retrieval_job_1703123456789"
+ *                 reservationCount:
+ *                   type: integer
+ *                   example: 10
+ *       400:
+ *         description: Invalid request parameters
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 400
+ *                 message:
+ *                   type: string
+ *       404:
+ *         description: Retrieval not found
+ *       500:
+ *         description: Internal server error during scraping process
+ */
+app.post("/api/expedia/graphql-retrieval-run-job", (async (
+  req: express.Request,
+  res: express.Response
+) => {
+  try {
+    const { retrieval_id } = req.body;
+
+    if (!retrieval_id) {
+      return res.status(400).json({
+        status: 400,
+        message: "retrieval_id is required",
+      });
+    }
+
+    console.log(
+      `Getting retrieval details for GraphQL retrieval job: ${retrieval_id}...`
+    );
+
+    // Get retrieval from database
+    const retrieval = await retrievalService.getRetrievalById(retrieval_id);
+
+    if (!retrieval) {
+      return res.status(404).json({
+        status: 404,
+        message: `Retrieval with ID ${retrieval_id} not found`,
+      });
+    }
+
+    // Get reservations array from retrieval
+    const reservations = retrieval.reservations || [];
+    console.log("reservations", reservations);
+
+    if (reservations.length === 0) {
+      return res.status(400).json({
+        status: 400,
+        message: "No reservations found in retrieval",
+      });
+    }
+
+    console.log(
+      `Found ${reservations.length} reservations in retrieval ${retrieval_id}`
+    );
+
+    // Get property credentials for the retrieval
+    const retrievalData = await retrievalService.getExpediaIdFromRetrieval(
+      retrieval_id
+    );
+
+    if (!retrievalData || !retrievalData.expediaId) {
+      return res.status(400).json({
+        status: 400,
+        message: "Could not retrieve Expedia credentials for retrieval",
+      });
+    }
+
+    console.log(
+      `✅ Found Expedia credentials for GraphQL retrieval: ${retrieval_id}, property: ${retrieval.property_id}`
+    );
+    console.log(
+      `Using expedia_id: ${retrievalData.expediaId} for GraphQL scraping`
+    );
+    console.log(`Using username: ${retrievalData.user_email}`);
+
+    // Check if worker threads are available
+    if (
+      !otpAwareWorkerPool.hasAvailableWorkers() &&
+      otpAwareWorkerPool.isQueueFull()
+    ) {
+      return res.status(200).json({
+        status: 200,
+        message: "All server busy, try again",
+        workerStatus: otpAwareWorkerPool.getStatus(),
+      });
+    }
+
+    // Format reservations for the worker
+    // Since all reservations belong to the same property, group them together
+    // Convert to plain array to avoid Mongoose document cloning issues
+    const plainReservations = reservations.map(String); // Ensure plain strings
+    const formattedReservations = [
+      {
+        id: String(retrievalData.expediaId), // Ensure plain string
+        idList: plainReservations,
+      },
+    ];
+
+    console.log(
+      `Formatted reservations for GraphQL property ${retrievalData.expediaId}:`,
+      formattedReservations
+    );
+
+    // Generate job ID and prepare worker job data
+    const jobId = `graphql_retrieval_job_${retrieval_id}_${Date.now()}`;
+
+    const workerJobData: WorkerJobData = {
+      jobType: "graphql-retrieval-run",
+      jobId,
+      retrievalId: String(retrieval_id), // Ensure plain string
+      reservations: formattedReservations,
+      expediaId: String(retrievalData.expediaId), // Ensure plain string
+      user_email: String(retrievalData.user_email || ""), // Ensure plain string
+      user_password: String(retrievalData.user_password || ""), // Ensure plain string
+    };
+
+    // Update retrieval status to Running
+    await retrievalService.updateRetrievalStatus(retrieval_id, "Running");
+
+    // Execute job in worker thread
+    try {
+      console.log(
+        `Submitting GraphQL retrieval job ${jobId} to worker pool...`
+      );
+
+      const result = await otpAwareWorkerPool.executeJob(workerJobData);
+
+      if (result.success) {
+        // Update retrieval status to Completed
+        await retrievalService.updateRetrievalStatus(retrieval_id, "Completed");
+
+        return res.status(200).json({
+          ...result.data,
+          retrieval_id,
+          reservationCount: reservations.length,
+        });
+      } else {
+        // Update retrieval status to Failed
+        await retrievalService.updateRetrievalStatus(retrieval_id, "Failed");
+
+        return res.status(500).json({
+          status: 500,
+          message: "GraphQL retrieval job execution failed",
+          error: result.error,
+          jobId: result.jobId,
+          retrieval_id,
+        });
+      }
+    } catch (workerError) {
+      console.error(
+        `Worker error for GraphQL retrieval job ${jobId}:`,
+        workerError
+      );
+
+      // Update retrieval status to Failed
+      await retrievalService.updateRetrievalStatus(retrieval_id, "Failed");
+
+      return res.status(500).json({
+        status: 500,
+        message: "Worker execution failed for GraphQL retrieval job",
+        error:
+          workerError instanceof Error
+            ? workerError.message
+            : String(workerError),
+        jobId,
+        retrieval_id,
+      });
+    }
+  } catch (err: any) {
+    console.error("Error in /api/expedia/graphql-retrieval-run-job:", err);
+
+    res.status(500).json({
+      status: 500,
+      message: "Error processing GraphQL retrieval job",
       error: err.message,
     });
   }

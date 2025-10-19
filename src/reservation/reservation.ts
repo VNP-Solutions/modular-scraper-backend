@@ -17,7 +17,9 @@ dotenv.config();
 
 async function reservation(
   browser: Browser | null,
-  reservations: any[]
+  reservations: any[],
+  userEmail?: string,
+  userPassword?: string
 ): Promise<void> {
   try {
     const environment = process.env.ENVIRONMENT || "production";
@@ -37,8 +39,8 @@ async function reservation(
     await dualLogInfo("Browser setup complete. Page is ready at login screen.");
 
     // Step 2: Check if login credentials are provided
-    const email = process.env.EXPEDIA_EMAIL;
-    const password = process.env.EXPEDIA_PASSWORD;
+    const email = userEmail || process.env.EXPEDIA_EMAIL;
+    const password = userPassword || process.env.EXPEDIA_PASSWORD;
 
     if (email && password) {
       await dualLogInfo(
@@ -102,8 +104,20 @@ async function reservation(
               reservations.length
             );
           }
+
+          // Close browser after successful scraping
+          await dualLogInfo("All reservations processed, closing browser...");
+          if (browser) {
+            await browser.close();
+          }
+          await dualLogInfo("Browser closed successfully.");
         } catch (error: any) {
           await dualLogError("Reservation search failed:", error);
+          // Close browser on error
+          if (browser) {
+            await browser.close();
+          }
+          await dualLogInfo("Browser closed due to error.");
           throw error;
         }
       } else {

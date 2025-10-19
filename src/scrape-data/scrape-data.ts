@@ -9,9 +9,32 @@ import { scrapingStateManager } from "../common/scraping-state.js";
 import { timeoutManager } from "../common/timeout-manager.js";
 import { CardInfo, PaymentInfo } from "../models/job-item.model.js";
 import { CreateJobItemData, jobService } from "../services/job.service.js";
+import {
+  CreateRetrievalItemData,
+  retrievalService,
+} from "../services/retrieval.service.js";
 
 const pageReservations: any[] = [];
 const processedReservationIds = new Set();
+
+// Global context for retrieval scraping
+let currentRetrievalContext: {
+  retrievalId: string;
+  parentRetrievalId: string;
+  jobId: string; // Add jobId to context
+} | null = null;
+
+export function setRetrievalContext(
+  retrievalId: string,
+  parentRetrievalId: string,
+  jobId: string
+) {
+  currentRetrievalContext = { retrievalId, parentRetrievalId, jobId };
+}
+
+export function clearRetrievalContext() {
+  currentRetrievalContext = null;
+}
 
 // Function to clear processed reservations for new job runs
 export function clearProcessedReservations() {
@@ -27,37 +50,74 @@ export async function scrapeData(
   jobId?: string
 ) {
   try {
+    // Use jobId from retrieval context if not provided
+    const effectiveJobId = jobId || currentRetrievalContext?.jobId;
+
     await dualLogInfo(
-      `Starting scrapeData with jobId: ${jobId}, expediaId: ${expediaId}`,
-      { jobId, expediaId, start_date, end_date }
+      `Starting scrapeData with jobId: ${effectiveJobId}, expediaId: ${expediaId}`,
+      {
+        jobId: effectiveJobId,
+        expediaId,
+        start_date,
+        end_date,
+        hasRetrievalContext: !!currentRetrievalContext,
+      }
     );
 
     // Get timeout configuration for this job
-    const selectorTimeout = await timeoutManager.getSelectorTimeout(jobId);
+    const selectorTimeout = await timeoutManager.getSelectorTimeout(
+      effectiveJobId
+    );
 
-    // Get property_id from job for database storage
+    // Get property_id from job or retrieval for database storage
     let propertyIdForDb: string | null = null;
-    if (jobId) {
-      try {
-        const job = await jobService.getJobById(jobId);
-        if (job && job.property_id) {
-          propertyIdForDb = job.property_id.toString();
-          await dualLogInfo(
-            `Using property_id: ${propertyIdForDb} for database storage`,
-            { propertyIdForDb, jobId }
+    if (effectiveJobId) {
+      // If in retrieval context, get property_id from retrieval
+      if (currentRetrievalContext) {
+        try {
+          const retrieval = await retrievalService.getRetrievalById(
+            currentRetrievalContext.retrievalId
           );
-        } else {
-          await dualLogWarn(
-            `Could not get property_id from job ${jobId}, will skip database storage`,
-            { jobId }
+          if (retrieval && retrieval.property_id) {
+            propertyIdForDb = retrieval.property_id.toString();
+            await dualLogInfo(
+              `Using property_id from retrieval: ${propertyIdForDb} for database storage`,
+              {
+                propertyIdForDb,
+                retrievalId: currentRetrievalContext.retrievalId,
+              }
+            );
+          }
+        } catch (error) {
+          await dualLogError(
+            `Error getting property_id from retrieval ${currentRetrievalContext.retrievalId}:`,
+            error,
+            { retrievalId: currentRetrievalContext.retrievalId }
           );
         }
-      } catch (error) {
-        await dualLogError(
-          `Error getting property_id from job ${jobId}:`,
-          error,
-          { jobId }
-        );
+      } else {
+        // Standard job-based scraping
+        try {
+          const job = await jobService.getJobById(effectiveJobId);
+          if (job && job.property_id) {
+            propertyIdForDb = job.property_id.toString();
+            await dualLogInfo(
+              `Using property_id: ${propertyIdForDb} for database storage`,
+              { propertyIdForDb, jobId: effectiveJobId }
+            );
+          } else {
+            await dualLogWarn(
+              `Could not get property_id from job ${effectiveJobId}, will skip database storage`,
+              { jobId: effectiveJobId }
+            );
+          }
+        } catch (error) {
+          await dualLogError(
+            `Error getting property_id from job ${effectiveJobId}:`,
+            error,
+            { jobId: effectiveJobId }
+          );
+        }
       }
     }
 
@@ -251,9 +311,9 @@ export async function scrapeData(
               );
 
               // Save basic data to database even without card info (only if we have valid database info)
-              if (jobId && propertyIdForDb) {
+              if (effectiveJobId && propertyIdForDb) {
                 await saveReservationToDatabase(
-                  jobId,
+                  effectiveJobId,
                   propertyIdForDb,
                   basicData,
                   null,
@@ -290,9 +350,9 @@ export async function scrapeData(
                   );
 
                   // Save basic data to database even without detailed info (only if we have valid database info)
-                  if (jobId && propertyIdForDb) {
+                  if (effectiveJobId && propertyIdForDb) {
                     await saveReservationToDatabase(
-                      jobId,
+                      effectiveJobId,
                       propertyIdForDb,
                       basicData,
                       null,
@@ -997,9 +1057,9 @@ export async function scrapeData(
                 }
 
                 // Save the complete reservation data to database (only if we have valid database info)
-                if (jobId && propertyIdForDb) {
+                if (effectiveJobId && propertyIdForDb) {
                   await saveReservationToDatabase(
-                    jobId,
+                    effectiveJobId,
                     propertyIdForDb,
                     basicData,
                     cardData,
@@ -1018,9 +1078,9 @@ export async function scrapeData(
                 );
                 if (i === 2) {
                   // On final retry failure, still save basic data (only if we have valid database info)
-                  if (jobId && propertyIdForDb) {
+                  if (effectiveJobId && propertyIdForDb) {
                     await saveReservationToDatabase(
-                      jobId,
+                      effectiveJobId,
                       propertyIdForDb,
                       basicData,
                       null,
@@ -1036,9 +1096,9 @@ export async function scrapeData(
               { jobId }
             );
             // Still save what we have to database (only if we have valid database info)
-            if (jobId && propertyIdForDb && basicData?.reservationId) {
+            if (effectiveJobId && propertyIdForDb && basicData?.reservationId) {
               await saveReservationToDatabase(
-                jobId,
+                effectiveJobId,
                 propertyIdForDb,
                 basicData,
                 null,
@@ -1096,7 +1156,7 @@ async function saveReservationToDatabase(
   paymentData: PaymentInfo | null
 ) {
   try {
-    // Validate jobId before processing
+    // Validate inputs
     if (!jobId || typeof jobId !== "string") {
       throw new Error(
         `Invalid jobId: ${jobId}. JobId must be a non-empty string.`
@@ -1109,19 +1169,15 @@ async function saveReservationToDatabase(
       );
     }
 
-    // Check if jobId looks like a valid ObjectId (24 character hex string)
-    if (!/^[0-9a-fA-F]{24}$/.test(jobId)) {
-      throw new Error(
-        `Invalid jobId format: ${jobId}. JobId must be a 24 character hexadecimal string (MongoDB ObjectId).`
-      );
-    }
-
-    // propertyId should also be a valid ObjectId since it comes from the job's property_id
+    // propertyId should be a valid ObjectId
     if (!/^[0-9a-fA-F]{24}$/.test(propertyId)) {
       throw new Error(
         `Invalid propertyId format: ${propertyId}. PropertyId must be a 24 character hexadecimal string (MongoDB ObjectId).`
       );
     }
+
+    // Check if jobId is a valid ObjectId (for regular job-based scraping)
+    const isValidJobObjectId = /^[0-9a-fA-F]{24}$/.test(jobId);
 
     // Parse dates
     const parseDate = (dateStr: string): Date => {
@@ -1150,31 +1206,79 @@ async function saveReservationToDatabase(
       return isNaN(amount) ? 0 : amount;
     };
 
-    const jobItemData: CreateJobItemData = {
-      job_id: jobId,
-      property_id: propertyId, // Now an ObjectId string from the job
-      guest_name: basicData.guestName || "Unknown Guest",
-      reservation_id: basicData.reservationId,
-      confirmation_number: basicData.confirmationCode || "",
-      check_in_date: basicData.checkInDate,
-      check_out_date: basicData.checkOutDate,
-      room_type: basicData.roomType || "Unknown",
-      booking_amount: parseAmount(basicData.bookingAmount),
-      booked_date: parseDate(basicData.bookedDate),
-      has_card_info: !!cardData,
-      card_info: cardData || undefined,
-      has_payment_info: !!paymentData,
-      payment_info: paymentData || undefined,
-      reservation_status: basicData.reservationStatus,
-      additional_text: basicData.additional_text || undefined,
-    };
+    // Save to JobItem only if jobId is a valid ObjectId (regular job-based scraping)
+    if (isValidJobObjectId) {
+      const jobItemData: CreateJobItemData = {
+        job_id: jobId,
+        property_id: propertyId,
+        guest_name: basicData.guestName || "Unknown Guest",
+        reservation_id: basicData.reservationId,
+        confirmation_number: basicData.confirmationCode || "",
+        check_in_date: basicData.checkInDate,
+        check_out_date: basicData.checkOutDate,
+        room_type: basicData.roomType || "Unknown",
+        booking_amount: parseAmount(basicData.bookingAmount),
+        booked_date: parseDate(basicData.bookedDate),
+        has_card_info: !!cardData,
+        card_info: cardData || undefined,
+        has_payment_info: !!paymentData,
+        payment_info: paymentData || undefined,
+        reservation_status: basicData.reservationStatus,
+        additional_text: basicData.additional_text || undefined,
+      };
 
-    const savedItem = await jobService.createJobItem(jobItemData);
-    await dualLogInfo(
-      `✅ Saved reservation ${basicData.reservationId} to database`,
-      { jobId }
-    );
-    return savedItem;
+      // Save to JobItem (standard job-based scraping)
+      await jobService.createJobItem(jobItemData);
+      await dualLogInfo(
+        `✅ Saved reservation ${basicData.reservationId} to JobItem database`,
+        { jobId }
+      );
+    } else {
+      await dualLogInfo(
+        `Skipping JobItem save for non-job scraping (jobId: ${jobId})`,
+        { jobId }
+      );
+    }
+
+    // Also save to RetrievalItem if we're in a retrieval context
+    if (currentRetrievalContext) {
+      try {
+        const retrievalItemData: CreateRetrievalItemData = {
+          retrieval_id: currentRetrievalContext.retrievalId,
+          parent_retrieval_id: currentRetrievalContext.parentRetrievalId,
+          property_id: propertyId,
+          guest_name: basicData.guestName || "Unknown Guest",
+          reservation_id: basicData.reservationId,
+          confirmation_number: basicData.confirmationCode || "",
+          check_in_date: basicData.checkInDate,
+          check_out_date: basicData.checkOutDate,
+          room_type: basicData.roomType || "Unknown",
+          booking_amount: parseAmount(basicData.bookingAmount),
+          booked_date: parseDate(basicData.bookedDate),
+          has_card_info: !!cardData,
+          card_info: cardData || undefined,
+          has_payment_info: !!paymentData,
+          payment_info: paymentData || undefined,
+          reservation_status: basicData.reservationStatus,
+          additional_text: basicData.additional_text || undefined,
+        };
+
+        await retrievalService.createRetrievalItem(retrievalItemData);
+        await dualLogInfo(
+          `✅ Saved reservation ${basicData.reservationId} to RetrievalItem database`,
+          { retrievalId: currentRetrievalContext.retrievalId }
+        );
+      } catch (retrievalError: any) {
+        await dualLogError(
+          `❌ Failed to save reservation ${basicData.reservationId} to RetrievalItem:`,
+          retrievalError.message,
+          { retrievalId: currentRetrievalContext.retrievalId }
+        );
+        // Don't throw - continue with scraping even if retrieval item save fails
+      }
+    }
+
+    return true;
   } catch (dbError: any) {
     await dualLogError(
       `❌ Failed to save reservation ${

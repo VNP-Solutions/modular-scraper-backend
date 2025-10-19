@@ -14,12 +14,18 @@ import {
 } from "../common/log-helper.js";
 import { progressManager } from "../common/progress-manager.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
+import graphqlRetrievalScraping from "../expedia-graphql-retrieval.js";
 import graphqlScraping from "../expedia-graphql.js";
 import main from "../main.js";
 import { JobStatus } from "../models/job.model.js";
 import reservation from "../reservation/reservation.js";
+import {
+  clearRetrievalContext,
+  setRetrievalContext,
+} from "../scrape-data/scrape-data.js";
 import { propertyCredentialsService } from "../services/job-credentials.service.js";
 import { jobService } from "../services/job.service.js";
+import { retrievalService } from "../services/retrieval.service.js";
 
 // Load environment variables
 dotenv.config();
@@ -141,6 +147,14 @@ class ScrapingWorker {
 
         case "reservation-run":
           result = await this.handleReservationRun(jobData);
+          break;
+
+        case "retrieval-reservation-run":
+          result = await this.handleRetrievalReservationRun(jobData);
+          break;
+
+        case "graphql-retrieval-run":
+          result = await this.handleGraphqlRetrievalRun(jobData);
           break;
 
         case "graphql-run":
@@ -515,6 +529,220 @@ class ScrapingWorker {
       await finalizeJobLogging("failed");
 
       throw reservationError;
+    }
+  }
+
+  private async handleRetrievalReservationRun(
+    jobData: WorkerJobData
+  ): Promise<any> {
+    const { reservations, jobId, retrievalId, user_email, user_password } =
+      jobData;
+
+    if (!reservations || reservations.length === 0) {
+      throw new Error(
+        "reservations array is required for retrieval-reservation-run jobs"
+      );
+    }
+
+    if (!retrievalId) {
+      throw new Error(
+        "retrievalId is required for retrieval-reservation-run jobs"
+      );
+    }
+
+    // Generate job ID if not provided
+    const finalJobId = jobId || `retrieval_reservation_job_${Date.now()}`;
+
+    // Get retrieval details to get parent_retrieval_id
+    const retrieval = await retrievalService.getRetrievalById(retrievalId);
+    if (!retrieval) {
+      throw new Error(`Retrieval ${retrievalId} not found`);
+    }
+
+    const parentRetrievalId = retrieval.parent_retrieval_id.toString();
+
+    // Set retrieval context for scraping (including jobId for database saves)
+    setRetrievalContext(retrievalId, parentRetrievalId, finalJobId);
+    console.log(
+      `Worker: Set retrieval context - retrievalId: ${retrievalId}, parentRetrievalId: ${parentRetrievalId}, jobId: ${finalJobId}`
+    );
+
+    // Log credentials info
+    if (user_email && user_password) {
+      console.log(`Worker: Using credentials for retrieval ${retrievalId}`);
+      console.log(`Worker: Email: ${user_email}`);
+    } else {
+      console.warn(
+        `Worker: No credentials provided for retrieval ${retrievalId}`
+      );
+    }
+
+    // Initialize job logging for retrieval reservation job
+    initializeJobLogging(finalJobId);
+    await dualLogInfo(
+      `Worker: Starting retrieval reservation scraping job ${finalJobId}`,
+      {
+        jobId: finalJobId,
+        retrievalId: retrievalId,
+        parentRetrievalId: parentRetrievalId,
+        reservationCount: reservations.length,
+        hasCredentials: !!(user_email && user_password),
+      }
+    );
+
+    scrapingStateManager.startScraping("retrieval-reservations", finalJobId);
+
+    try {
+      // Pass credentials directly to the reservation function
+      await reservation(null, reservations, user_email, user_password);
+
+      // Mark scraping as completed
+      scrapingStateManager.stopScraping();
+
+      // Finalize logging with success status
+      await finalizeJobLogging("success");
+
+      console.log(
+        `Worker: ✅ Retrieval reservation job ${finalJobId} completed successfully`
+      );
+
+      return {
+        status: 200,
+        message: "Retrieval reservation search completed successfully",
+        reservations: reservations,
+        jobId: finalJobId,
+        retrievalId: retrievalId,
+      };
+    } catch (reservationError) {
+      await dualLogError(
+        `Worker: Retrieval reservation job ${finalJobId} failed`,
+        reservationError,
+        {
+          jobId: finalJobId,
+          retrievalId: retrievalId,
+        }
+      );
+
+      // Mark scraping as stopped on error
+      scrapingStateManager.stopScraping();
+
+      // Finalize logging with failed status
+      await finalizeJobLogging("failed");
+
+      throw reservationError;
+    } finally {
+      // Always clear retrieval context when done
+      clearRetrievalContext();
+      console.log(`Worker: Cleared retrieval context`);
+    }
+  }
+
+  private async handleGraphqlRetrievalRun(
+    jobData: WorkerJobData
+  ): Promise<any> {
+    const {
+      retrievalId,
+      reservations,
+      expediaId,
+      user_email,
+      user_password,
+      jobId,
+    } = jobData;
+
+    if (!retrievalId) {
+      throw new Error("retrievalId is required for graphql-retrieval-run jobs");
+    }
+
+    if (!reservations || reservations.length === 0) {
+      throw new Error(
+        "reservations array is required for graphql-retrieval-run jobs"
+      );
+    }
+
+    if (!expediaId) {
+      throw new Error("expediaId is required for graphql-retrieval-run jobs");
+    }
+
+    if (!user_email || !user_password) {
+      throw new Error(
+        "user_email and user_password are required for graphql-retrieval-run jobs"
+      );
+    }
+
+    // Generate job ID if not provided
+    const finalJobId = jobId || `graphql_retrieval_job_${Date.now()}`;
+
+    // Extract reservation IDs from the formatted reservations array
+    // The reservations come in format: [{ id: propertyId, idList: [reservationIds] }]
+    const reservationIds: string[] = [];
+    if (Array.isArray(reservations) && reservations.length > 0) {
+      for (const reservation of reservations) {
+        if (reservation.idList && Array.isArray(reservation.idList)) {
+          reservationIds.push(...reservation.idList);
+        }
+      }
+    }
+
+    if (reservationIds.length === 0) {
+      throw new Error("No reservation IDs found in reservations array");
+    }
+
+    await dualLogInfo(
+      `Worker: Starting GraphQL retrieval scraping job ${finalJobId}`,
+      {
+        jobId: finalJobId,
+        retrievalId: retrievalId,
+        expediaId: expediaId,
+        reservationCount: reservationIds.length,
+      }
+    );
+
+    // Initialize job logging for graphql retrieval job
+    initializeJobLogging(finalJobId);
+
+    scrapingStateManager.startScraping("graphql-retrieval", finalJobId);
+
+    try {
+      // Call the GraphQL retrieval scraping function
+      await graphqlRetrievalScraping(
+        retrievalId,
+        reservationIds,
+        expediaId,
+        user_email,
+        user_password
+      );
+
+      // Mark scraping as completed
+      scrapingStateManager.stopScraping();
+
+      // Finalize logging with success status
+      await finalizeJobLogging("success");
+
+      await dualLogInfo(
+        `Worker: ✅ GraphQL retrieval job ${finalJobId} completed successfully`
+      );
+
+      return {
+        status: 200,
+        message: "GraphQL retrieval search completed successfully",
+        retrievalId: retrievalId,
+        jobId: finalJobId,
+        processedCount: reservationIds.length,
+      };
+    } catch (graphqlRetrievalError: any) {
+      await dualLogError(
+        `Worker: ❌ GraphQL retrieval job ${finalJobId} failed:`,
+        graphqlRetrievalError.message,
+        { jobId: finalJobId, retrievalId }
+      );
+
+      // Mark scraping as stopped on error
+      scrapingStateManager.stopScraping();
+
+      // Finalize logging with failed status
+      await finalizeJobLogging("failed");
+
+      throw graphqlRetrievalError;
     }
   }
 

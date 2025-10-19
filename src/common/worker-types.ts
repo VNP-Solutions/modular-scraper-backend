@@ -3,6 +3,8 @@ export interface WorkerJobData {
     | "property-run"
     | "rerun-failed"
     | "reservation-run"
+    | "retrieval-reservation-run"
+    | "graphql-retrieval-run"
     | "graphql-run"
     | "agoda-property-run"
     | "agoda-rerun-failed"
@@ -17,6 +19,7 @@ export interface WorkerJobData {
   agodaUsername?: string;
   agodaPassword?: string;
   reservations?: any[];
+  retrievalId?: string;
   originalStatus?: string;
 }
 

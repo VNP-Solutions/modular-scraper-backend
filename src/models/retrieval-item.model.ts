@@ -1,0 +1,190 @@
+import mongoose, { Document, Schema, Types } from "mongoose";
+
+// Reuse the same CardInfo and PaymentInfo from JobItem
+export interface CardInfo {
+  card_number: string; // Store encrypted or masked
+  expiry_date: string;
+  cvv?: string; // Optional or encrypted
+  reason_for_charge?: string;
+}
+
+export interface PaymentInfo {
+  total_guest_payment?: number;
+  cancellation_fee?: number;
+  total_payout?: number;
+  amount_to_charge_or_refund: number; // Required field for calculations
+}
+
+// Interface for the RetrievalItem document
+export interface IRetrievalItem extends Document {
+  _id: Types.ObjectId;
+  retrieval_id: Types.ObjectId;
+  parent_retrieval_id: Types.ObjectId;
+  property_id: Types.ObjectId;
+  guest_name: string;
+  reservation_id?: string;
+  confirmation_number?: string;
+  check_in_date: Date;
+  check_out_date: Date;
+  room_type: string;
+  booking_amount?: number;
+  booked_date: Date;
+  has_card_info: boolean;
+  card_info?: CardInfo;
+  has_payment_info: boolean;
+  payment_info?: PaymentInfo;
+  reservation_status: string;
+  additional_text?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+// Embedded schemas
+const CardInfoSchema = new Schema<CardInfo>(
+  {
+    card_number: {
+      type: String,
+      required: true,
+    },
+    expiry_date: {
+      type: String,
+      required: true,
+    },
+    cvv: {
+      type: String,
+      required: false,
+    },
+    reason_for_charge: {
+      type: String,
+      required: false,
+    },
+  },
+  { _id: false }
+);
+
+const PaymentInfoSchema = new Schema<PaymentInfo>(
+  {
+    total_guest_payment: {
+      type: Number,
+      required: false,
+    },
+    cancellation_fee: {
+      type: Number,
+      required: false,
+    },
+    total_payout: {
+      type: Number,
+      required: false,
+    },
+    amount_to_charge_or_refund: {
+      type: Number,
+      required: true,
+    },
+  },
+  { _id: false }
+);
+
+// Main RetrievalItem Schema
+const RetrievalItemSchema = new Schema<IRetrievalItem>(
+  {
+    retrieval_id: {
+      type: Schema.Types.ObjectId,
+      ref: "Retrieval",
+      required: true,
+    },
+    parent_retrieval_id: {
+      type: Schema.Types.ObjectId,
+      ref: "ParentRetrieval",
+      required: true,
+    },
+    property_id: {
+      type: Schema.Types.ObjectId,
+      ref: "Property",
+      required: true,
+    },
+    guest_name: {
+      type: String,
+      required: true,
+    },
+    reservation_id: {
+      type: String,
+      required: false,
+    },
+    confirmation_number: {
+      type: String,
+      required: false,
+    },
+    check_in_date: {
+      type: Date,
+      required: true,
+    },
+    check_out_date: {
+      type: Date,
+      required: true,
+    },
+    room_type: {
+      type: String,
+      required: true,
+    },
+    booking_amount: {
+      type: Number,
+      required: false,
+    },
+    booked_date: {
+      type: Date,
+      required: true,
+    },
+    has_card_info: {
+      type: Boolean,
+      default: false,
+      required: false,
+    },
+    card_info: {
+      type: CardInfoSchema,
+      required: false,
+    },
+    has_payment_info: {
+      type: Boolean,
+      default: false,
+      required: false,
+    },
+    payment_info: {
+      type: PaymentInfoSchema,
+      required: false,
+    },
+    reservation_status: {
+      type: String,
+      required: true,
+    },
+    additional_text: {
+      type: String,
+      required: false,
+    },
+  },
+  {
+    timestamps: true,
+    collection: "retrieval_items",
+  }
+);
+
+// Indexes for efficient queries
+RetrievalItemSchema.index({ retrieval_id: 1 });
+RetrievalItemSchema.index({ property_id: 1 });
+RetrievalItemSchema.index({ reservation_id: 1 });
+RetrievalItemSchema.index({ confirmation_number: 1 });
+RetrievalItemSchema.index({ retrieval_id: 1, property_id: 1 });
+RetrievalItemSchema.index({ guest_name: 1 });
+RetrievalItemSchema.index({ check_in_date: 1 });
+RetrievalItemSchema.index({ reservation_status: 1 });
+RetrievalItemSchema.index({ parent_retrieval_id: 1 });
+
+// Compound index for unique constraint
+RetrievalItemSchema.index(
+  { retrieval_id: 1, reservation_id: 1 },
+  { unique: true }
+);
+
+export const RetrievalItem = mongoose.model<IRetrievalItem>(
+  "RetrievalItem",
+  RetrievalItemSchema
+);
