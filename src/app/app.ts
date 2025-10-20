@@ -1889,7 +1889,7 @@ app.post("/api/expedia/graphql-retrieval-run-job", (async (
     );
 
     // Generate job ID and prepare worker job data
-    const jobId = `graphql_retrieval_job_${retrieval_id}_${Date.now()}`;
+    const jobId = retrieval_id;
 
     const workerJobData: WorkerJobData = {
       jobType: "graphql-retrieval-run",

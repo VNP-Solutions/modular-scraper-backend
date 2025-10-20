@@ -593,8 +593,14 @@ class ScrapingWorker {
     scrapingStateManager.startScraping("retrieval-reservations", finalJobId);
 
     try {
-      // Pass credentials directly to the reservation function
-      await reservation(null, reservations, user_email, user_password);
+      // Pass credentials directly to the reservation function along with jobId
+      await reservation(
+        null,
+        reservations,
+        user_email,
+        user_password,
+        finalJobId
+      );
 
       // Mark scraping as completed
       scrapingStateManager.stopScraping();
@@ -709,7 +715,8 @@ class ScrapingWorker {
         reservationIds,
         expediaId,
         user_email,
-        user_password
+        user_password,
+        finalJobId
       );
 
       // Mark scraping as completed

@@ -27,8 +27,8 @@ export class OtpStatusManager extends EventEmitter {
   }
 
   private getOtpPlatform(): OtpPlatform {
-    if (process.env.OTP_PLATFORM === OtpPlatform.Agoda) {
-      return OtpPlatform.Agoda;
+    if (process.env.OTP_PLATFORM === OtpPlatform.ExpediaRetrieval) {
+      return OtpPlatform.ExpediaRetrieval;
     }
     return OtpPlatform.Expedia;
   }

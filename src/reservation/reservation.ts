@@ -4,6 +4,7 @@ import { browserSetupLocal } from "../browser-setup/browser-local.js";
 import { browserSetupProduction } from "../browser-setup/browser-prod.js";
 import { delay } from "../common/delay.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
+import { otpCompletionNotifier } from "../common/otp-completion-notifier.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import login from "../login/login.js";
 import handleOtpVerification from "../otp-verification/otp-verification.js";
@@ -19,7 +20,8 @@ async function reservation(
   browser: Browser | null,
   reservations: any[],
   userEmail?: string,
-  userPassword?: string
+  userPassword?: string,
+  jobId?: string
 ): Promise<void> {
   try {
     const environment = process.env.ENVIRONMENT || "production";
@@ -48,7 +50,7 @@ async function reservation(
       );
 
       try {
-        await login(browser, page, email, password);
+        await login(browser, page, email, password, jobId);
         console.log("Login completed successfully! User is now logged in.");
 
         // Add your post-login automation here
@@ -59,10 +61,20 @@ async function reservation(
       }
 
       try {
-        await handleOtpVerification(browser, page);
+        await handleOtpVerification(browser, page, jobId);
         console.log("OTP verification completed successfully!");
+
+        // Notify worker that OTP work is completed so other jobs can proceed
+        if (jobId) {
+          otpCompletionNotifier.notifyOtpCompleted(jobId);
+        }
       } catch (error: any) {
         console.error("OTP verification failed:", error);
+
+        // Notify that OTP work is completed (even on failure) so other jobs can proceed
+        if (jobId) {
+          otpCompletionNotifier.notifyOtpCompleted(jobId);
+        }
       }
 
       // Step 3: Perform reservation scraping

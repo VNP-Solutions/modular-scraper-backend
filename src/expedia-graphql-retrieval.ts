@@ -5,6 +5,7 @@ import { browserSetupProduction } from "./browser-setup/browser-prod.js";
 import { BROWSER_CONFIG } from "./common/browser-constants.js";
 import { delay } from "./common/delay.js";
 import { dualLogError, dualLogInfo } from "./common/log-helper.js";
+import { otpCompletionNotifier } from "./common/otp-completion-notifier.js";
 import { scrapingStateManager } from "./common/scraping-state.js";
 import login from "./login/login.js";
 import { CardInfo, PaymentInfo } from "./models/retrieval-item.model.js";
@@ -660,7 +661,8 @@ async function graphqlRetrievalScraping(
   reservationIds: string[],
   expediaId: string,
   userEmail: string,
-  userPassword: string
+  userPassword: string,
+  jobId?: string
 ): Promise<void> {
   let browser: Browser | null = null;
 
@@ -681,7 +683,7 @@ async function graphqlRetrievalScraping(
     // Login to Expedia
     await dualLogInfo("Performing automatic login...");
     try {
-      await login(browser, page, userEmail, userPassword);
+      await login(browser, page, userEmail, userPassword, jobId);
       await dualLogInfo("Login completed successfully!");
       await delay(10000);
     } catch (loginError) {
@@ -691,10 +693,21 @@ async function graphqlRetrievalScraping(
 
     // Handle OTP verification
     try {
-      await handleOtpVerification(browser, page);
+      await handleOtpVerification(browser, page, jobId);
       await dualLogInfo("OTP verification completed successfully!");
+
+      // Notify worker that OTP work is completed so other jobs can proceed
+      if (jobId) {
+        otpCompletionNotifier.notifyOtpCompleted(jobId);
+      }
     } catch (error: any) {
       await dualLogError("OTP verification failed:", error);
+
+      // Notify that OTP work is completed (even on failure) so other jobs can proceed
+      if (jobId) {
+        otpCompletionNotifier.notifyOtpCompleted(jobId);
+      }
+
       throw error;
     }
 
