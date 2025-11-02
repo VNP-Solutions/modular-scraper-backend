@@ -637,10 +637,10 @@ async function saveGraphQLReservationToRetrievalItem(
       additional_text: additionalText,
     };
 
-    // Save to database
-    await retrievalService.createRetrievalItem(retrievalItemData);
+    // Upsert to database (update if exists, create if not)
+    await retrievalService.upsertRetrievalItem(retrievalItemData);
     await dualLogInfo(
-      `✅ Saved reservation ${reservationId} to RetrievalItem database`,
+      `✅ Saved/Updated reservation ${reservationId} to RetrievalItem database`,
       { retrievalId }
     );
   } catch (error: any) {
@@ -790,6 +790,7 @@ async function graphqlRetrievalScraping(
             // Initialize card data and payment data variables
             let cardData: CardInfo | null = null;
             let paymentData: PaymentInfo | null = null;
+            let evcCardData: any | null = null;
 
             // Extract payment info
             const paymentInfo = item.paymentInfo || {};
@@ -804,7 +805,7 @@ async function graphqlRetrievalScraping(
                   `💳 Fetching EVC card data for ${reservationId}...`
                 );
 
-                const evcCardData = await fetchEVCCardData(
+                evcCardData = await fetchEVCCardData(
                   expediaId,
                   paymentInfo.expediaVirtualCardResourceId,
                   item.reservationItemId,
@@ -874,13 +875,19 @@ async function graphqlRetrievalScraping(
 
             // Extract payment information from reservation data
             if (item.totalAmounts) {
+              // Extract amount to charge/refund from EVC card data if available
+              let amountToChargeOrRefund = 0;
+              if (evcCardData?.cardInformation?.availableBalance?.amount) {
+                amountToChargeOrRefund =
+                  evcCardData.cardInformation.availableBalance.amount;
+              }
+
               paymentData = {
                 total_guest_payment:
                   item.totalAmounts.totalReservationAmount?.value || 0,
                 total_payout:
                   item.totalAmounts.totalAmountForPartners?.value || 0,
-                amount_to_charge_or_refund:
-                  item.totalAmounts.propertyBookingTotal?.value || 0,
+                amount_to_charge_or_refund: amountToChargeOrRefund,
               };
             }
 

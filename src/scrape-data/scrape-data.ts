@@ -1263,9 +1263,9 @@ async function saveReservationToDatabase(
           additional_text: basicData.additional_text || undefined,
         };
 
-        await retrievalService.createRetrievalItem(retrievalItemData);
+        await retrievalService.upsertRetrievalItem(retrievalItemData);
         await dualLogInfo(
-          `✅ Saved reservation ${basicData.reservationId} to RetrievalItem database`,
+          `✅ Saved/Updated reservation ${basicData.reservationId} to RetrievalItem database`,
           { retrievalId: currentRetrievalContext.retrievalId }
         );
       } catch (retrievalError: any) {

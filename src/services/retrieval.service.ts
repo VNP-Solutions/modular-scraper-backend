@@ -271,6 +271,58 @@ export class RetrievalService {
   }
 
   /**
+   * Upsert retrieval item (update if exists, create if not)
+   */
+  async upsertRetrievalItem(
+    itemData: CreateRetrievalItemData
+  ): Promise<IRetrievalItem> {
+    try {
+      const retrievalObjectId = this.validateObjectId(
+        itemData.retrieval_id,
+        "retrieval_id"
+      );
+      const parentRetrievalObjectId = this.validateObjectId(
+        itemData.parent_retrieval_id,
+        "parent_retrieval_id"
+      );
+      const propertyObjectId = this.validateObjectId(
+        itemData.property_id,
+        "property_id"
+      );
+
+      const updateData = {
+        ...itemData,
+        retrieval_id: retrievalObjectId,
+        parent_retrieval_id: parentRetrievalObjectId,
+        property_id: propertyObjectId,
+        has_card_info: itemData.has_card_info || false,
+        has_payment_info: itemData.has_payment_info || false,
+      };
+
+      // Use findOneAndUpdate with upsert option
+      // This will update if a document exists with the same retrieval_id and reservation_id
+      // Otherwise it will create a new document
+      const result = await RetrievalItem.findOneAndUpdate(
+        {
+          retrieval_id: retrievalObjectId,
+          reservation_id: itemData.reservation_id,
+        },
+        updateData,
+        {
+          upsert: true, // Create if not exists
+          new: true, // Return the updated document
+          setDefaultsOnInsert: true, // Set default values on insert
+        }
+      );
+
+      return result;
+    } catch (error) {
+      console.error(`Error upserting retrieval item: ${error}`);
+      throw error;
+    }
+  }
+
+  /**
    * Get retrieval items by retrieval ID
    */
   async getRetrievalItems(
