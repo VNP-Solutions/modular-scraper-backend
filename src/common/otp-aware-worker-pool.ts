@@ -1,3 +1,4 @@
+import dotenv from "dotenv";
 import { EventEmitter } from "events";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -12,7 +13,6 @@ import {
   WorkerPoolStatus,
   WorkerResponse,
 } from "./worker-types.js";
-import dotenv from "dotenv";
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
@@ -405,9 +405,13 @@ export class OtpAwareWorkerPool extends EventEmitter {
 
   private jobRequiresOtp(jobData: WorkerJobData): boolean {
     // Jobs that require OTP verification
-    return ["property-run", "graphql-run", "agoda-property-run"].includes(
-      jobData.jobType
-    );
+    return [
+      "property-run",
+      "graphql-run",
+      "agoda-property-run",
+      "db-run",
+      "db-api-run",
+    ].includes(jobData.jobType);
   }
 
   private getJobPlatform(jobData: WorkerJobData): OtpPlatform {
@@ -425,6 +429,8 @@ export class OtpAwareWorkerPool extends EventEmitter {
       ["agoda-property-run", "agoda-rerun-failed"].includes(jobData.jobType)
     ) {
       return OtpPlatform.Agoda;
+    } else if (["db-run", "db-api-run"].includes(jobData.jobType)) {
+      return OtpPlatform.ExpediaDb;
     }
     // Default to Expedia for unknown job types
     return OtpPlatform.Expedia;

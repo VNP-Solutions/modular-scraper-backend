@@ -8,6 +8,7 @@ export enum OtpStatusValue {
 export enum OtpPlatform {
   Expedia = "expedia",
   Agoda = "agoda",
+  ExpediaDb = "expedia_db",
 }
 
 export interface IOtpStatus extends Document {
