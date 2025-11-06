@@ -14,6 +14,8 @@ import {
 } from "../common/log-helper.js";
 import { progressManager } from "../common/progress-manager.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
+import dbApiScraping from "../expedia-db-api.js";
+import dbScraping from "../expedia-db.js";
 import graphqlScraping from "../expedia-graphql.js";
 import main from "../main.js";
 import { JobStatus } from "../models/job.model.js";
@@ -145,6 +147,14 @@ class ScrapingWorker {
 
         case "graphql-run":
           result = await this.handleGraphqlRun(jobData);
+          break;
+
+        case "db-api-run":
+          result = await this.handleDbApiRun(jobData);
+          break;
+
+        case "db-run":
+          result = await this.handleDbRun(jobData);
           break;
 
         case "agoda-property-run":
@@ -650,6 +660,289 @@ class ScrapingWorker {
     } catch (scrapingError) {
       // Mark job as failed on scraping error
       await dualLogError(`Worker: GraphQL job ${jobId} failed`, scrapingError, {
+        jobId,
+      });
+      await progressManager.handleJobError(jobId, scrapingError);
+      scrapingStateManager.stopScraping();
+
+      // Finalize logging with failed status
+      await finalizeJobLogging("failed");
+
+      throw scrapingError;
+    }
+  }
+
+  private async handleDbApiRun(jobData: WorkerJobData): Promise<any> {
+    const { jobId, startDate, endDate, expediaId, user_email, user_password } =
+      jobData;
+
+    if (!startDate || !endDate || !jobId) {
+      throw new Error(
+        "startDate, endDate, and jobId are required for db-api-run jobs"
+      );
+    }
+
+    // 1. Validate job exists and can be run
+    const validation = await jobService.validateJob(jobId);
+
+    if (!validation.exists) {
+      throw new Error(`Job with ID ${jobId} not found`);
+    }
+
+    if (!validation.canRun) {
+      throw new Error(
+        `Job ${jobId} is not in a runnable state. Current status: ${validation.job?.job_status}`
+      );
+    }
+
+    // 2. Get expedia_id from job's property if not provided
+    let finalExpediaId = expediaId;
+    let finalUserEmail = user_email;
+    let finalUserPassword = user_password;
+
+    if (!finalExpediaId || !finalUserEmail || !finalUserPassword) {
+      console.log(`Getting job data for DB API job ${jobId}...`);
+      const jobData = await jobService.getExpediaIdFromJob(jobId);
+
+      if (!jobData || !jobData.expediaId) {
+        throw new Error(
+          `Cannot retrieve valid expedia_id for job ${jobId}. Property may not have expedia_id assigned or expedia_id is "0".`
+        );
+      }
+
+      if (!jobData.user_email || !jobData.user_password) {
+        throw new Error(
+          `Cannot retrieve valid Expedia credentials for job ${jobId}. Property may not have credentials assigned.`
+        );
+      }
+
+      finalExpediaId = jobData.expediaId;
+      finalUserEmail = jobData.user_email;
+      finalUserPassword = jobData.user_password;
+    }
+
+    console.log(
+      `Worker: Using expedia_id: ${finalExpediaId} for DB API scraping`
+    );
+
+    // 3. Update job status to Running
+    console.log(`Worker: Starting DB API job ${jobId}...`);
+    await jobService.startJob(jobId);
+
+    // 4. Initialize job logging
+    initializeJobLogging(jobId);
+    await dualLogInfo(
+      `Worker: Starting DB API property scraping job ${jobId}`,
+      {
+        jobId,
+        expediaId: finalExpediaId,
+        startDate,
+        endDate,
+      }
+    );
+
+    // 5. Start scraping state manager
+    scrapingStateManager.startScraping(
+      finalExpediaId,
+      jobId,
+      startDate,
+      endDate
+    );
+
+    try {
+      // 6. Run the DB API scraping function
+      await dbApiScraping(
+        finalExpediaId,
+        startDate,
+        endDate,
+        jobId,
+        finalUserEmail,
+        finalUserPassword
+      );
+
+      // 7. Get final job statistics
+      const progress = await jobService.getJobProgress(jobId);
+
+      // 8. Determine final status based on completion
+      let finalStatus = "Completed";
+      if (progress.totalItems === 0) {
+        finalStatus = "Failed";
+      } else if (progress.completionPercentage < 100) {
+        finalStatus = "Partial";
+      }
+
+      // 9. Update final job status
+      await jobService.updateJobStatus(jobId, finalStatus as any);
+
+      // 10. Stop scraping state manager
+      scrapingStateManager.stopScraping();
+
+      // 11. Finalize logging
+      await finalizeJobLogging("success");
+
+      // Get log file information if available
+      const logger = (global as any).getCurrentJobLogger?.();
+      const logInfo = logger
+        ? {
+            logFilePath: logger.getLogFilePath(),
+            logEntriesCount: logger.getLogEntriesCount(),
+            note: "Log file uploaded to S3 and deleted locally after job completion",
+          }
+        : null;
+
+      console.log(`Worker: ✅ DB API job ${jobId} completed successfully`);
+
+      return {
+        status: 200,
+        message: `DB API property scraping ${finalStatus.toLowerCase()} successfully`,
+        expediaId: finalExpediaId,
+        jobId: jobId,
+        progress: progress,
+        finalStatus: finalStatus,
+        logInfo: logInfo,
+      };
+    } catch (scrapingError) {
+      // Mark job as failed on scraping error
+      await dualLogError(`Worker: DB API job ${jobId} failed`, scrapingError, {
+        jobId,
+      });
+      await progressManager.handleJobError(jobId, scrapingError);
+      scrapingStateManager.stopScraping();
+
+      // Finalize logging with failed status
+      await finalizeJobLogging("failed");
+
+      throw scrapingError;
+    }
+  }
+
+  private async handleDbRun(jobData: WorkerJobData): Promise<any> {
+    const { jobId, startDate, endDate, expediaId, user_email, user_password } =
+      jobData;
+
+    if (!startDate || !endDate || !jobId) {
+      throw new Error(
+        "startDate, endDate, and jobId are required for db-run jobs"
+      );
+    }
+
+    // 1. Validate job exists and can be run
+    const validation = await jobService.validateJob(jobId);
+
+    if (!validation.exists) {
+      throw new Error(`Job with ID ${jobId} not found`);
+    }
+
+    if (!validation.canRun) {
+      throw new Error(
+        `Job ${jobId} is not in a runnable state. Current status: ${validation.job?.job_status}`
+      );
+    }
+
+    // 2. Get expedia_id from job's property if not provided
+    let finalExpediaId = expediaId;
+    let finalUserEmail = user_email;
+    let finalUserPassword = user_password;
+
+    if (!finalExpediaId || !finalUserEmail || !finalUserPassword) {
+      console.log(`Getting job data for DB job ${jobId}...`);
+      const jobData = await jobService.getExpediaIdFromJob(jobId);
+
+      if (!jobData || !jobData.expediaId) {
+        throw new Error(
+          `Cannot retrieve valid expedia_id for job ${jobId}. Property may not have expedia_id assigned or expedia_id is "0".`
+        );
+      }
+
+      if (!jobData.user_email || !jobData.user_password) {
+        throw new Error(
+          `Cannot retrieve valid Expedia credentials for job ${jobId}. Property may not have credentials assigned.`
+        );
+      }
+
+      finalExpediaId = jobData.expediaId;
+      finalUserEmail = jobData.user_email;
+      finalUserPassword = jobData.user_password;
+    }
+
+    console.log(`Worker: Using expedia_id: ${finalExpediaId} for DB scraping`);
+
+    // 3. Update job status to Running
+    console.log(`Worker: Starting DB job ${jobId}...`);
+    await jobService.startJob(jobId);
+
+    // 4. Initialize job logging
+    initializeJobLogging(jobId);
+    await dualLogInfo(`Worker: Starting DB property scraping job ${jobId}`, {
+      jobId,
+      expediaId: finalExpediaId,
+      startDate,
+      endDate,
+    });
+
+    // 5. Start scraping state manager
+    scrapingStateManager.startScraping(
+      finalExpediaId,
+      jobId,
+      startDate,
+      endDate
+    );
+
+    try {
+      // 6. Run the DB scraping function
+      await dbScraping(
+        finalExpediaId,
+        startDate,
+        endDate,
+        jobId,
+        finalUserEmail,
+        finalUserPassword
+      );
+
+      // 7. Get final job statistics
+      const progress = await jobService.getJobProgress(jobId);
+
+      // 8. Determine final status based on completion
+      let finalStatus = "Completed";
+      if (progress.totalItems === 0) {
+        finalStatus = "Completed"; // Still mark as completed even if no items for DB job
+      } else if (progress.completionPercentage < 100) {
+        finalStatus = "Partial";
+      }
+
+      // 9. Update final job status
+      await jobService.updateJobStatus(jobId, finalStatus as any);
+
+      // 10. Stop scraping state manager
+      scrapingStateManager.stopScraping();
+
+      // 11. Finalize logging
+      await finalizeJobLogging("success");
+
+      // Get log file information if available
+      const logger = (global as any).getCurrentJobLogger?.();
+      const logInfo = logger
+        ? {
+            logFilePath: logger.getLogFilePath(),
+            logEntriesCount: logger.getLogEntriesCount(),
+            note: "Log file uploaded to S3 and deleted locally after job completion",
+          }
+        : null;
+
+      console.log(`Worker: ✅ DB job ${jobId} completed successfully`);
+
+      return {
+        status: 200,
+        message: `DB property scraping ${finalStatus.toLowerCase()} successfully`,
+        expediaId: finalExpediaId,
+        jobId: jobId,
+        progress: progress,
+        finalStatus: finalStatus,
+        logInfo: logInfo,
+      };
+    } catch (scrapingError) {
+      // Mark job as failed on scraping error
+      await dualLogError(`Worker: DB job ${jobId} failed`, scrapingError, {
         jobId,
       });
       await progressManager.handleJobError(jobId, scrapingError);

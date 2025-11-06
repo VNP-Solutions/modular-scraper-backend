@@ -1376,6 +1376,234 @@ app.post("/api/expedia/property-run-job", (async (
 
 /**
  * @swagger
+ * /api/expedia/db-run-job:
+ *   post:
+ *     tags:
+ *       - Scraping Jobs
+ *     summary: Start DB scraping job
+ *     description: Start a new DB scraping job for the specified property ID, date range, and job ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - startDate
+ *               - endDate
+ *               - jobId
+ *             properties:
+ *               startDate:
+ *                 type: string
+ *                 description: Start date for scraping (MM/DD/YYYY format)
+ *                 example: "01/01/2024"
+ *               endDate:
+ *                 type: string
+ *                 description: End date for scraping (MM/DD/YYYY format)
+ *                 example: "01/31/2024"
+ *               jobId:
+ *                 type: string
+ *                 description: MongoDB ObjectId of the job to run. The job's property must have a valid expedia_id (not "0")
+ *                 example: "507f1f77bcf86cd799439011"
+ *     responses:
+ *       200:
+ *         description: DB scraping job completed successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 200
+ *                 message:
+ *                   type: string
+ *                   example: "DB search completed successfully"
+ *                 propertyId:
+ *                   type: string
+ *                   example: "12345"
+ *                 jobId:
+ *                   type: string
+ *                   example: "job_12345_1703123456789"
+ *       400:
+ *         description: Missing required parameters in request body
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 400
+ *                 message:
+ *                   type: string
+ *                   example: "startDate and endDate are required in request body"
+ *                   enum:
+ *                     - "startDate and endDate are required in request body"
+ *                     - "jobId is required in request body"
+ *       409:
+ *         description: Scraping job already running
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 409
+ *                 message:
+ *                   type: string
+ *                   example: "Scraping job is already running"
+ *                 currentState:
+ *                   $ref: '#/components/schemas/ScrapingState'
+ *       500:
+ *         description: Error processing DB search
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
+app.post("/api/expedia/db-run-job", (async (
+  req: express.Request,
+  res: express.Response
+) => {
+  try {
+    const { startDate, endDate, jobId } = req.body;
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({
+        status: 400,
+        message: "startDate and endDate are required in request body",
+      });
+    }
+    if (!jobId) {
+      return res.status(400).json({
+        status: 400,
+        message: "jobId is required in request body",
+      });
+    }
+
+    // Check if worker threads are available
+    if (
+      !otpAwareWorkerPool.hasAvailableWorkers() &&
+      otpAwareWorkerPool.isQueueFull()
+    ) {
+      return res.status(200).json({
+        status: 200,
+        message: "All server busy, try again",
+        workerStatus: otpAwareWorkerPool.getStatus(),
+      });
+    }
+
+    // 1. Validate job exists and can be run
+    const validation = await jobService.validateJob(jobId);
+
+    if (!validation.exists) {
+      return res.status(404).json({
+        status: 404,
+        message: `Job with ID ${jobId} not found`,
+      });
+    }
+
+    if (!validation.canRun) {
+      return res.status(409).json({
+        status: 409,
+        message: `Job ${jobId} is not in a runnable state. Current status: ${validation.job?.job_status}`,
+        currentState: validation.job,
+      });
+    }
+
+    // 2. Get expedia_id from job's property
+    console.log(`Getting expedia_id for job ${jobId}...`);
+    const jobData = await jobService.getExpediaIdFromJob(jobId);
+
+    if (!jobData || !jobData.expediaId) {
+      return res.status(400).json({
+        status: 400,
+        message: `Cannot retrieve valid expedia_id for job ${jobId}. Property may not have expedia_id assigned or expedia_id is "0".`,
+      });
+    }
+
+    if (!jobData.user_email || !jobData.user_password) {
+      return res.status(400).json({
+        status: 400,
+        message: `Cannot retrieve valid user_email or user_password for job ${jobId}. Property may not have user_email or user_password assigned.`,
+      });
+    }
+
+    const { expediaId, user_email, user_password } = jobData;
+
+    console.log(`Using expedia_id: ${expediaId} for scraping`);
+
+    // 3. Prepare worker job data
+    const workerJobData: WorkerJobData = {
+      jobType: "db-run",
+      jobId,
+      startDate,
+      endDate,
+      expediaId,
+      user_email,
+      user_password,
+    };
+
+    // 4. Execute job in worker thread
+    try {
+      console.log(`Submitting job ${jobId} to worker pool...`);
+
+      const result = await otpAwareWorkerPool.executeJob(workerJobData);
+
+      if (result.success) {
+        return res.status(200).json(result.data);
+      } else {
+        return res.status(500).json({
+          status: 500,
+          message: "Job execution failed",
+          error: result.error,
+          jobId: result.jobId,
+        });
+      }
+    } catch (workerError) {
+      console.error(`Worker error for job ${jobId}:`, workerError);
+
+      // Ensure job is marked as failed
+      try {
+        await progressManager.handleJobError(jobId, workerError);
+      } catch (cleanupError) {
+        console.error("Error during cleanup:", cleanupError);
+      }
+
+      return res.status(500).json({
+        status: 500,
+        message: "Worker execution failed",
+        error:
+          workerError instanceof Error
+            ? workerError.message
+            : String(workerError),
+        jobId,
+      });
+    }
+  } catch (err: any) {
+    console.error("Error in /api/expedia/db-run-job:", err);
+
+    // Ensure job is marked as failed
+    try {
+      if (req.body.jobId) {
+        await progressManager.handleJobError(req.body.jobId, err);
+      }
+    } catch (cleanupError) {
+      console.error("Error during cleanup:", cleanupError);
+    }
+
+    res.status(500).json({
+      status: 500,
+      message: "Error processing DB search",
+      error: err.message,
+    });
+  }
+}) as any);
+
+/**
+ * @swagger
  * /api/expedia/reservation-run-job:
  *   post:
  *     tags:
@@ -2249,6 +2477,306 @@ app.post("/api/expedia/graphql-run-job", (async (
     res.status(500).json({
       status: 500,
       message: "Error processing GraphQL property search",
+      error: err.message,
+    });
+  }
+}) as any);
+
+/**
+ * @swagger
+ * /api/expedia/db-api-run-job:
+ *   post:
+ *     tags:
+ *       - Scraping Jobs
+ *     summary: Start DB API-based property scraping job
+ *     description: Start a new DB API-based property scraping job for the specified property ID, date range, and job ID. This endpoint uses database API calls for data retrieval. It includes login and OTP verification, then navigates to the homepage where custom DB API logic can be implemented.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - startDate
+ *               - endDate
+ *               - jobId
+ *             properties:
+ *               startDate:
+ *                 type: string
+ *                 description: Start date for scraping (MM/DD/YYYY format)
+ *                 example: "01/01/2024"
+ *               endDate:
+ *                 type: string
+ *                 description: End date for scraping (MM/DD/YYYY format)
+ *                 example: "01/31/2024"
+ *               jobId:
+ *                 type: string
+ *                 description: MongoDB ObjectId of the job to run. The job's property must have a valid expedia_id (not "0")
+ *                 example: "507f1f77bcf86cd799439011"
+ *     responses:
+ *       200:
+ *         description: DB API property scraping job completed successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 200
+ *                 message:
+ *                   type: string
+ *                   example: "Property scraping completed successfully"
+ *                   enum:
+ *                     - "Property scraping completed successfully"
+ *                     - "Property scraping partial successfully"
+ *                     - "Property scraping failed successfully"
+ *                 expediaId:
+ *                   type: string
+ *                   description: The Expedia property ID that was scraped
+ *                   example: "12345"
+ *                 jobId:
+ *                   type: string
+ *                   description: The job ID that was processed
+ *                   example: "507f1f77bcf86cd799439011"
+ *                 progress:
+ *                   type: object
+ *                   description: Final scraping progress statistics
+ *                   properties:
+ *                     totalItems:
+ *                       type: integer
+ *                       description: Total number of reservations processed
+ *                       example: 150
+ *                     itemsWithCardInfo:
+ *                       type: integer
+ *                       description: Number of reservations with card information scraped
+ *                       example: 140
+ *                     itemsWithPaymentInfo:
+ *                       type: integer
+ *                       description: Number of reservations with payment information scraped
+ *                       example: 135
+ *                     completionPercentage:
+ *                       type: integer
+ *                       description: Percentage of successful scraping completion
+ *                       example: 90
+ *                 finalStatus:
+ *                   type: string
+ *                   enum: [Completed, Partial, Failed]
+ *                   description: Final status of the scraping job
+ *                   example: "Completed"
+ *                 logInfo:
+ *                   type: object
+ *                   nullable: true
+ *                   description: Information about the job log file (if available)
+ *                   properties:
+ *                     logFilePath:
+ *                       type: string
+ *                       description: Path to the log file
+ *                     logEntriesCount:
+ *                       type: integer
+ *                       description: Number of log entries
+ *                     note:
+ *                       type: string
+ *                       example: "Log file uploaded to S3 and deleted locally after job completion"
+ *       400:
+ *         description: Invalid request parameters
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 400
+ *                 message:
+ *                   type: string
+ *                   example: "startDate and endDate are required in request body"
+ *                   enum:
+ *                     - "startDate and endDate are required in request body"
+ *                     - "jobId is required in request body"
+ *                     - "Cannot retrieve valid expedia_id for job {jobId}. Property may not have expedia_id assigned or expedia_id is \"0\"."
+ *                     - "Cannot retrieve valid user_email or user_password for job {jobId}. Property may not have user_email or user_password assigned."
+ *       404:
+ *         description: Job not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 404
+ *                 message:
+ *                   type: string
+ *                   example: "Job with ID 507f1f77bcf86cd799439011 not found"
+ *       409:
+ *         description: Job cannot be run (invalid state)
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 409
+ *                 message:
+ *                   type: string
+ *                   example: "Job 507f1f77bcf86cd799439011 is not in a runnable state. Current status: Running"
+ *                 currentState:
+ *                   type: object
+ *                   description: Current job object with status information
+ *       500:
+ *         description: Internal server error during scraping process
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 500
+ *                 message:
+ *                   type: string
+ *                   example: "Error processing property search"
+ *                 error:
+ *                   type: string
+ *                   description: Detailed error message
+ *                   example: "DB API query failed: Network timeout"
+ */
+app.post("/api/expedia/db-api-run-job", (async (
+  req: express.Request,
+  res: express.Response
+) => {
+  try {
+    const { startDate, endDate, jobId } = req.body;
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({
+        status: 400,
+        message: "startDate and endDate are required in request body",
+      });
+    }
+    if (!jobId) {
+      return res.status(400).json({
+        status: 400,
+        message: "jobId is required in request body",
+      });
+    }
+
+    // Check if worker threads are available
+    if (
+      !otpAwareWorkerPool.hasAvailableWorkers() &&
+      otpAwareWorkerPool.isQueueFull()
+    ) {
+      return res.status(200).json({
+        status: 200,
+        message: "All server busy, try again",
+        workerStatus: otpAwareWorkerPool.getStatus(),
+      });
+    }
+
+    // 1. Validate job exists and can be run
+    const validation = await jobService.validateJob(jobId);
+
+    if (!validation.exists) {
+      return res.status(404).json({
+        status: 404,
+        message: `Job with ID ${jobId} not found`,
+      });
+    }
+
+    if (!validation.canRun) {
+      return res.status(409).json({
+        status: 409,
+        message: `Job ${jobId} is not in a runnable state. Current status: ${validation.job?.job_status}`,
+        currentState: validation.job,
+      });
+    }
+
+    // 2. Get expedia_id from job's property
+    console.log(`Getting expedia_id for job ${jobId}...`);
+    const jobData = await jobService.getExpediaIdFromJob(jobId);
+
+    if (!jobData || !jobData.expediaId) {
+      return res.status(400).json({
+        status: 400,
+        message: `Cannot retrieve valid expedia_id for job ${jobId}. Property may not have expedia_id assigned or expedia_id is "0".`,
+      });
+    }
+
+    if (!jobData.user_email || !jobData.user_password) {
+      return res.status(400).json({
+        status: 400,
+        message: `Cannot retrieve valid user_email or user_password for job ${jobId}. Property may not have user_email or user_password assigned.`,
+      });
+    }
+
+    const { expediaId, user_email, user_password } = jobData;
+
+    console.log(`Using expedia_id: ${expediaId} for DB API scraping`);
+
+    // 3. Prepare worker job data
+    const workerJobData: WorkerJobData = {
+      jobType: "db-api-run",
+      jobId,
+      startDate,
+      endDate,
+      expediaId,
+      user_email,
+      user_password,
+    };
+
+    // 4. Execute job in worker thread
+    try {
+      console.log(`Submitting DB API job ${jobId} to worker pool...`);
+
+      const result = await otpAwareWorkerPool.executeJob(workerJobData);
+
+      if (result.success) {
+        return res.status(200).json(result.data);
+      } else {
+        return res.status(500).json({
+          status: 500,
+          message: "DB API job execution failed",
+          error: result.error,
+          jobId: result.jobId,
+        });
+      }
+    } catch (workerError) {
+      console.error(`Worker error for DB API job ${jobId}:`, workerError);
+
+      // Ensure job is marked as failed
+      try {
+        await progressManager.handleJobError(jobId, workerError);
+      } catch (cleanupError) {
+        console.error("Error during cleanup:", cleanupError);
+      }
+
+      return res.status(500).json({
+        status: 500,
+        message: "DB API worker execution failed",
+        error:
+          workerError instanceof Error
+            ? workerError.message
+            : String(workerError),
+        jobId,
+      });
+    }
+  } catch (err: any) {
+    console.error("Error in /api/expedia/db-api-run-job:", err);
+
+    // Ensure job is marked as failed
+    try {
+      if (req.body.jobId) {
+        await progressManager.handleJobError(req.body.jobId, err);
+      }
+    } catch (cleanupError) {
+      console.error("Error during cleanup:", cleanupError);
+    }
+
+    res.status(500).json({
+      status: 500,
+      message: "Error processing DB API property search",
       error: err.message,
     });
   }

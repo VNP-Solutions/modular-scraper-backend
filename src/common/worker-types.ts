@@ -4,6 +4,8 @@ export interface WorkerJobData {
     | "rerun-failed"
     | "reservation-run"
     | "graphql-run"
+    | "db-api-run"
+    | "db-run"
     | "agoda-property-run"
     | "agoda-rerun-failed"
     | "stop";
