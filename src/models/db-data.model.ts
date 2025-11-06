@@ -11,7 +11,6 @@ export interface IDbData extends Document {
     end_date: string;
   };
   gearbox_queue_ids: string[];
-  reservation_ids: string[]; // New field for storing BookingItemIds
   created_at: Date;
   updated_at: Date;
 }
@@ -47,12 +46,7 @@ const DbDataSchema = new Schema<IDbData>(
     gearbox_queue_ids: {
       type: [String],
       default: [],
-    },
-    reservation_ids: {
-      type: [String],
-      default: [],
-      index: true,
-    },
+    }
   },
   {
     timestamps: {
