@@ -44,7 +44,7 @@ async function getVerificationCode() {
     const res = await gmail.users.messages.list({
       userId: "me",
       maxResults: 5,
-      q: "subject:Partner Central Your verification code is", // Search by subject pattern
+      q: "subject:Login attempt from COLUMBUS, US to Partner Central Your verification code is", // Search by subject pattern
     });
 
     if (!res.data.messages) {
@@ -81,7 +81,7 @@ async function getVerificationCode() {
       await dualLogInfo(`Email subject: ${subject}`);
 
       // Verify it has the correct subject pattern
-      if (!subject.includes("Partner Central Your verification code is")) {
+      if (!subject.includes("Login attempt from COLUMBUS, US to Partner Central Your verification code is")) {
         await dualLogInfo(
           "Skipping email - doesn't contain Partner Central verification code pattern"
         );
