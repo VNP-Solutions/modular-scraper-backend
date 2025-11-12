@@ -84,17 +84,17 @@ export async function clickExpediaPaymentandsetDaterange(
         "Successfully navigated to Request payment from Expedia Group page"
       );
 
-      // Check if reservations are already showing
+      // Check if "Add more reservation IDs" link exists
       await delay(3000);
 
-      const hasReservations = await page.evaluate(() => {
-        const searchSummary = document.querySelector("#searchSummary");
-        return searchSummary !== null;
+      const addMoreReservationExists = await page.evaluate(() => {
+        const showSearchLink = document.querySelector("a.showSearch");
+        return showSearchLink !== null;
       });
 
-      if (hasReservations) {
+      if (addMoreReservationExists) {
         await dualLogInfo(
-          "Reservations found, clicking 'Add more reservation IDs'..."
+          "'Add more reservation IDs' link found, clicking it..."
         );
 
         // Click on "Add more reservation IDs" link
@@ -107,19 +107,19 @@ export async function clickExpediaPaymentandsetDaterange(
           return false;
         });
 
-        if (!showSearchClicked) {
-          throw new Error(
-            "Could not find or click 'Add more reservation IDs' link"
+        if (showSearchClicked) {
+          await dualLogInfo(
+            "Clicked 'Add more reservation IDs', waiting for page update..."
+          );
+          await delay(3000);
+        } else {
+          await dualLogInfo(
+            "Could not click 'Add more reservation IDs', proceeding anyway..."
           );
         }
-
-        await dualLogInfo(
-          "Clicked 'Add more reservation IDs', waiting for page update..."
-        );
-        await delay(3000);
       } else {
         await dualLogInfo(
-          "No existing reservations, proceeding to date range tab..."
+          "'Add more reservation IDs' link not found, proceeding to date range tab..."
         );
       }
 

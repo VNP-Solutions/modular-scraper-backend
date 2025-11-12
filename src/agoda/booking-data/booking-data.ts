@@ -1389,8 +1389,8 @@ export async function getAgodaBookingData(
     const parseResult = Papa.parse(csvContent, {
       header: true,
       skipEmptyLines: true,
-      transform: (value) => value.trim(), // Trim whitespace from values
-      transformHeader: (header) => header.trim(), // Trim whitespace from headers
+      transform: (value: string) => value.trim(), // Trim whitespace from values
+      transformHeader: (header: string) => header.trim(), // Trim whitespace from headers
     });
 
     if (parseResult.errors.length > 0) {
