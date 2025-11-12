@@ -141,6 +141,7 @@ const PropertySchema = new Schema<IProperty>(
 PropertySchema.index({ created_by: 1 });
 PropertySchema.index({ status: 1 });
 PropertySchema.index({ property_name: 1 });
+PropertySchema.index({ portfolio_id: 1 }); // For fast portfolio-based queries
 // Booking trust scheduling indexes
 PropertySchema.index({ booking_trusted_status: 1, booking_last_login: 1 });
 PropertySchema.index({ booking_id: 1, booking_trusted_status: 1 });
