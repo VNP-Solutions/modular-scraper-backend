@@ -142,7 +142,34 @@ export async function splitDateRange(
         await page.click("#searchButton");
 
         await dualLogInfo("Search button clicked, waiting for results...");
-        await delay(5000);
+
+        // Wait for any loading indicator to appear and disappear
+        await delay(2000);
+
+        try {
+          await dualLogInfo("Waiting for loading to complete...");
+          // Wait for loading indicator if it exists
+          await page
+            .waitForSelector(".fds-loader.is-loading.is-visible", {
+              visible: true,
+              timeout: 5000,
+            })
+            .catch(() => dualLogInfo("No loading indicator found"));
+
+          // Wait for loading to disappear
+          await page
+            .waitForSelector(".fds-loader.is-loading.is-visible", {
+              hidden: true,
+              timeout: 30000,
+            })
+            .catch(() => dualLogInfo("Loading indicator already hidden"));
+
+          await dualLogInfo("Loading completed");
+        } catch (loadError) {
+          await dualLogInfo("Loading detection skipped:", loadError);
+        }
+
+        await delay(3000); // Additional wait for table to be fully rendered
 
         // Check and validate invoice data for this chunk
         await dualLogInfo(

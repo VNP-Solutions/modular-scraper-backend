@@ -27,9 +27,51 @@ export async function dbDatachecking(
     // Get timeout configuration
     const loadingTimeout = await timeoutManager.getLoadingTimeout(jobId);
 
-    // Wait for the invoice table to load
-    await dualLogInfo("Waiting for invoice table to load...");
-    
+    // Wait for either results or no results alert
+    await dualLogInfo("Waiting for search results...");
+
+    await delay(2000);
+
+    // First check if "No results found" alert is showing
+    const noResultsAlert = await page.evaluate(() => {
+      const alert = document.querySelector("#noResultsAlert");
+      if (alert) {
+        const alertMessage = alert.querySelector(".alert-message");
+        const isVisible = alert.offsetParent !== null; // Check if element is visible
+        const messageText = alertMessage?.textContent?.trim() || "";
+        return { exists: true, visible: isVisible, message: messageText };
+      }
+      return { exists: false, visible: false, message: "" };
+    });
+
+    if (noResultsAlert.exists && noResultsAlert.visible) {
+      await dualLogInfo(
+        `No results found alert displayed: "${noResultsAlert.message}" - no data available for this date range`
+      );
+      return false;
+    }
+
+    await dualLogInfo(
+      "No 'No results' alert found, checking for data table..."
+    );
+
+    // Check if the table-contents div exists
+    const tableContentsExists = await page.evaluate(() => {
+      const tableDiv = document.querySelector("#table-contents");
+      return tableDiv !== null;
+    });
+
+    if (!tableContentsExists) {
+      await dualLogInfo(
+        "Table contents div not found - no data available for this date range"
+      );
+      return false;
+    }
+
+    await dualLogInfo(
+      "Table contents div found, checking for invoice table..."
+    );
+
     // Check if invoice table exists (without throwing error)
     const tableExists = await page
       .waitForSelector("#invoice-details-table", {
@@ -37,7 +79,15 @@ export async function dbDatachecking(
         timeout: loadingTimeout,
       })
       .then(() => true)
-      .catch(() => false);
+      .catch(async () => {
+        await dualLogInfo(
+          "Invoice table selector timed out, checking in DOM..."
+        );
+        return await page.evaluate(() => {
+          const table = document.querySelector("#invoice-details-table");
+          return table !== null;
+        });
+      });
 
     if (!tableExists) {
       await dualLogInfo(
