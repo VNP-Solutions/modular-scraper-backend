@@ -7,12 +7,13 @@ import { timeoutManager } from "../common/timeout-manager.js";
 /**
  * Check and fill invoice data in the table
  * This function validates and fills missing values in the invoice table
+ * Returns true if data was found, false if no data exists
  */
 export async function dbDatachecking(
   browser: Browser,
   page: Page,
   jobId?: string
-): Promise<void> {
+): Promise<boolean> {
   try {
     await dualLogInfo("Starting DB data checking...");
 
@@ -28,10 +29,22 @@ export async function dbDatachecking(
 
     // Wait for the invoice table to load
     await dualLogInfo("Waiting for invoice table to load...");
-    await page.waitForSelector("#invoice-details-table", {
-      visible: true,
-      timeout: loadingTimeout,
-    });
+    
+    // Check if invoice table exists (without throwing error)
+    const tableExists = await page
+      .waitForSelector("#invoice-details-table", {
+        visible: true,
+        timeout: loadingTimeout,
+      })
+      .then(() => true)
+      .catch(() => false);
+
+    if (!tableExists) {
+      await dualLogInfo(
+        "Invoice table not found - no data available for this date range"
+      );
+      return false;
+    }
 
     await delay(3000); // Give time for data to fully load
 
@@ -254,6 +267,7 @@ export async function dbDatachecking(
     }
 
     await dualLogInfo("DB data checking completed successfully!");
+    return true;
   } catch (error: any) {
     await dualLogError("Error in dbDatachecking:", error);
     throw error;

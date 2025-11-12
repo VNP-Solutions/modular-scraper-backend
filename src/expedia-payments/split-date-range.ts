@@ -148,101 +148,108 @@ export async function splitDateRange(
         await dualLogInfo(
           `Checking and validating data for chunk ${chunkCount}...`
         );
-        await dbDatachecking(browser, page, jobId);
+        const hasData = await dbDatachecking(browser, page, jobId);
         await dualLogInfo(`Chunk ${chunkCount} data validation completed`);
 
-        // Check disclaimer checkbox and submit invoice
-        await dualLogInfo(
-          `Chunk ${chunkCount}: Checking disclaimer checkbox...`
-        );
+        // Variable to store Gearbox Queue IDs
+        let gearboxQueueIds: string[] = [];
 
-        await page.evaluate(() => {
-          const disclaimerCheckbox = document.querySelector(
-            "#invoiceUploadDisclaimer"
-          ) as HTMLInputElement;
-          if (disclaimerCheckbox && !disclaimerCheckbox.checked) {
-            disclaimerCheckbox.click();
-          }
-        });
+        if (!hasData) {
+          await dualLogInfo(
+            `Chunk ${chunkCount}: No data found for this date range, skipping invoice creation`
+          );
+        } else {
+          // Check disclaimer checkbox and submit invoice
+          await dualLogInfo(
+            `Chunk ${chunkCount}: Checking disclaimer checkbox...`
+          );
 
-        await delay(500);
-        await dualLogInfo(`Chunk ${chunkCount}: Disclaimer checkbox checked`);
-
-        // Click "Create Invoice" button
-        await dualLogInfo(
-          `Chunk ${chunkCount}: Clicking 'Create Invoice' button...`
-        );
-
-        //TODO: create invoice button here
-        await page.click("#submitInvoice");
-        await delay(3000); // Wait for invoice creation
-
-        // Wait for success alert and get Gearbox Queue ID(s)
-        let gearboxQueueIds: string[] | null = null;
-        try {
-          await page.waitForSelector("#success-alert", { timeout: 10000 });
-
-          gearboxQueueIds = await page.evaluate(() => {
-            const successAlert = document.querySelector("#success-alert");
-            if (successAlert) {
-              // Find all <p> tags that contain "Gearbox Queue ID"
-              const paragraphs = Array.from(successAlert.querySelectorAll("p"));
-              const ids: string[] = [];
-
-              paragraphs.forEach((p) => {
-                const text = p.textContent || "";
-                if (text.includes("Gearbox Queue ID")) {
-                  // Extract all <b> tags within this paragraph
-                  const boldElements = p.querySelectorAll("b");
-                  boldElements.forEach((b) => {
-                    const id = b.textContent?.trim();
-                    if (id) {
-                      ids.push(id);
-                    }
-                  });
-                }
-              });
-
-              return ids.length > 0 ? ids : null;
+          await page.evaluate(() => {
+            const disclaimerCheckbox = document.querySelector(
+              "#invoiceUploadDisclaimer"
+            ) as HTMLInputElement;
+            if (disclaimerCheckbox && !disclaimerCheckbox.checked) {
+              disclaimerCheckbox.click();
             }
-            return null;
           });
 
-          if (gearboxQueueIds && gearboxQueueIds.length > 0) {
-            if (gearboxQueueIds.length === 1) {
-              await dualLogInfo(
-                `Chunk ${chunkCount}: Invoice created successfully! Gearbox Queue ID: ${gearboxQueueIds[0]}`
-              );
+          await delay(500);
+          await dualLogInfo(`Chunk ${chunkCount}: Disclaimer checkbox checked`);
+
+          // Click "Create Invoice" button
+          await dualLogInfo(
+            `Chunk ${chunkCount}: Clicking 'Create Invoice' button...`
+          );
+
+          //TODO: create invoice button here
+          await page.click("#submitInvoice");
+          await delay(3000); // Wait for invoice creation
+
+          // Wait for success alert and get Gearbox Queue ID(s)
+          try {
+            await page.waitForSelector("#success-alert", { timeout: 10000 });
+
+            const extractedIds = await page.evaluate(() => {
+              const successAlert = document.querySelector("#success-alert");
+              if (successAlert) {
+                // Find all <p> tags that contain "Gearbox Queue ID"
+                const paragraphs = Array.from(
+                  successAlert.querySelectorAll("p")
+                );
+                const ids: string[] = [];
+
+                paragraphs.forEach((p) => {
+                  const text = p.textContent || "";
+                  if (text.includes("Gearbox Queue ID")) {
+                    // Extract all <b> tags within this paragraph
+                    const boldElements = p.querySelectorAll("b");
+                    boldElements.forEach((b) => {
+                      const id = b.textContent?.trim();
+                      if (id) {
+                        ids.push(id);
+                      }
+                    });
+                  }
+                });
+
+                return ids.length > 0 ? ids : [];
+              }
+              return [];
+            });
+
+            gearboxQueueIds = extractedIds;
+
+            if (gearboxQueueIds.length > 0) {
+              if (gearboxQueueIds.length === 1) {
+                await dualLogInfo(
+                  `Chunk ${chunkCount}: Invoice created successfully! Gearbox Queue ID: ${gearboxQueueIds[0]}`
+                );
+              } else {
+                await dualLogInfo(
+                  `Chunk ${chunkCount}: Invoice created successfully! Gearbox Queue IDs: ${gearboxQueueIds.join(
+                    ", "
+                  )}`
+                );
+              }
             } else {
               await dualLogInfo(
-                `Chunk ${chunkCount}: Invoice created successfully! Gearbox Queue IDs: ${gearboxQueueIds.join(
-                  ", "
-                )}`
+                `Chunk ${chunkCount}: Invoice created successfully!`
               );
             }
-          } else {
+          } catch (waitError) {
+            await dualLogError(
+              `Chunk ${chunkCount}: Could not find success alert:`,
+              waitError
+            );
             await dualLogInfo(
-              `Chunk ${chunkCount}: Invoice created successfully!`
+              `Chunk ${chunkCount}: Invoice creation status unknown`
             );
           }
-        } catch (waitError) {
-          await dualLogError(
-            `Chunk ${chunkCount}: Could not find success alert:`,
-            waitError
-          );
-          await dualLogInfo(
-            `Chunk ${chunkCount}: Invoice creation status unknown`
-          );
         }
 
-        // Save to database
+        // Save to database (always save, even with no queue IDs)
         try {
-          if (
-            jobId &&
-            expediaId &&
-            gearboxQueueIds &&
-            gearboxQueueIds.length > 0
-          ) {
+          if (jobId && expediaId) {
             await dualLogInfo(
               `Chunk ${chunkCount}: Saving data to database...`
             );
@@ -258,12 +265,18 @@ export async function splitDateRange(
               gearbox_queue_ids: gearboxQueueIds,
             });
 
-            await dualLogInfo(
-              `Chunk ${chunkCount}: Data saved successfully to database with ${gearboxQueueIds.length} Gearbox Queue ID(s)`
-            );
+            if (gearboxQueueIds.length > 0) {
+              await dualLogInfo(
+                `Chunk ${chunkCount}: Data saved successfully to database with ${gearboxQueueIds.length} Gearbox Queue ID(s)`
+              );
+            } else {
+              await dualLogInfo(
+                `Chunk ${chunkCount}: Data saved successfully to database with no Gearbox Queue IDs (no data found for this date range)`
+              );
+            }
           } else {
             await dualLogInfo(
-              `Chunk ${chunkCount}: Skipping database save - missing required data (jobId: ${!!jobId}, expediaId: ${!!expediaId}, gearboxQueueIds: ${!!gearboxQueueIds})`
+              `Chunk ${chunkCount}: Skipping database save - missing required data (jobId: ${!!jobId}, expediaId: ${!!expediaId})`
             );
           }
         } catch (dbError) {
@@ -276,33 +289,41 @@ export async function splitDateRange(
         await dualLogInfo(`Chunk ${chunkCount} processed successfully`);
 
         // After processing this chunk, navigate back to search form for next chunk
-        // Click "Add more reservation IDs" to show the search form again
         if (currentStart < endDateObj) {
           await dualLogInfo("Navigating back to search form for next chunk...");
 
           try {
-            const showSearchClicked = await page.evaluate(() => {
-              const showSearchLink = document.querySelector("a.showSearch");
-              if (showSearchLink && showSearchLink instanceof HTMLElement) {
-                showSearchLink.click();
-                return true;
-              }
-              return false;
-            });
+            if (hasData) {
+              // If data was found and invoice was created, click "Add more reservation IDs"
+              const showSearchClicked = await page.evaluate(() => {
+                const showSearchLink = document.querySelector("a.showSearch");
+                if (showSearchLink && showSearchLink instanceof HTMLElement) {
+                  showSearchLink.click();
+                  return true;
+                }
+                return false;
+              });
 
-            if (showSearchClicked) {
-              await dualLogInfo(
-                "Clicked 'Add more reservation IDs' successfully"
-              );
-              await delay(2000);
+              if (showSearchClicked) {
+                await dualLogInfo(
+                  "Clicked 'Add more reservation IDs' successfully"
+                );
+                await delay(2000);
+              } else {
+                await dualLogInfo(
+                  "Could not find 'Add more reservation IDs' link, search form may already be visible"
+                );
+              }
             } else {
+              // If no data was found, search form should already be visible
               await dualLogInfo(
-                "Could not find 'Add more reservation IDs' link, continuing anyway"
+                "No data was found in previous chunk, search form should already be visible"
               );
+              await delay(1000);
             }
           } catch (navError) {
             await dualLogError(
-              "Error clicking 'Add more reservation IDs':",
+              "Error navigating back to search form:",
               navError
             );
             // Continue anyway, maybe the form is already visible
