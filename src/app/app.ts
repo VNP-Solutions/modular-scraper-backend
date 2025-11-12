@@ -77,7 +77,7 @@ app.use((req, res, next) => {
 app.get("/", (req, res, next) => {
   try {
     res.status(200).json({
-      messge: "Connection established on graphql-agoda-thread branch",
+      messge: "Connection established on expedia-db branch",
     });
   } catch (err: any) {
     next(createError(err.status, err.message));
