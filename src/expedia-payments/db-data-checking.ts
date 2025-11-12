@@ -34,7 +34,9 @@ export async function dbDatachecking(
 
     // First check if "No results found" alert is showing
     const noResultsAlert = await page.evaluate(() => {
-      const alert = document.querySelector("#noResultsAlert") as HTMLElement | null;
+      const alert = document.querySelector(
+        "#noResultsAlert"
+      ) as HTMLElement | null;
       if (alert) {
         const alertMessage = alert.querySelector(".alert-message");
         const isVisible = alert.offsetParent !== null; // Check if element is visible
