@@ -1,16 +1,16 @@
 import { Browser, Page } from "puppeteer";
 import { delay } from "../../common/delay.js";
-import { cleanupOnError } from "../utils/error-cleanup.js";
 import { dualLogError, dualLogInfo } from "../../common/log-helper.js";
 import { otpCompletionNotifier } from "../../common/otp-completion-notifier.js";
 import { progressManager } from "../../common/progress-manager.js";
 import { scrapingStateManager } from "../../common/scraping-state.js";
 import {
-  takeSuccessScreenshot,
   takeErrorScreenshot,
+  takeSuccessScreenshot,
 } from "../../common/screenshot-helper.js";
 import { timeManager } from "../../common/time-manager.js";
 import { timeoutManager } from "../../common/timeout-manager.js";
+import { cleanupOnError } from "../utils/error-cleanup.js";
 import { getAgodaSignInLink } from "./email-link-helper.js";
 import { getAgodaOtpCode } from "./email-otp-helper.js";
 
@@ -405,8 +405,8 @@ async function agodaLogin(
  * Handle direct email link flow (existing functionality)
  */
 async function handleDirectLinkFlow(page: Page, jobId?: string): Promise<void> {
-  // Wait 30 seconds for email to arrive in inbox
-  await dualLogInfo("Waiting 30 seconds for email delivery...");
+  // Wait 60 seconds for email to arrive in inbox
+  await dualLogInfo("Waiting 60 seconds for email delivery...");
 
   // Update progress - waiting for email
   if (jobId) {
@@ -419,7 +419,7 @@ async function handleDirectLinkFlow(page: Page, jobId?: string): Promise<void> {
     );
   }
 
-  await new Promise((resolve) => setTimeout(resolve, 30000));
+  await new Promise((resolve) => setTimeout(resolve, 60000));
 
   await dualLogInfo("Now fetching sign-in link from email...");
 
@@ -493,8 +493,8 @@ async function handleOtpFlow(
     timeout: selectorTimeout,
   });
 
-  // Wait 30 seconds for OTP email to arrive
-  await dualLogInfo("Waiting 30 seconds for OTP email delivery...");
+  // Wait 60 seconds for OTP email to arrive
+  await dualLogInfo("Waiting 60 seconds for OTP email delivery...");
 
   // Update progress - waiting for OTP email
   if (jobId) {
@@ -507,7 +507,7 @@ async function handleOtpFlow(
     );
   }
 
-  await new Promise((resolve) => setTimeout(resolve, 30000));
+  await new Promise((resolve) => setTimeout(resolve, 60000));
 
   await dualLogInfo("Now fetching OTP code from email...");
 
