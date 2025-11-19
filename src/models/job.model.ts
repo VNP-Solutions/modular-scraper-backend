@@ -42,6 +42,7 @@ export interface IJob extends Document {
   sub_portfolio_name: string;
   property_name: string;
   billing_type: string;
+  db_billing_duration?: number;
   next_due_date: Date;
   ota_provider: OTAProvider;
   remaining_direct_billed: number;
@@ -118,6 +119,10 @@ const JobSchema = new Schema<IJob>(
     billing_type: {
       type: String,
       required: true,
+    },
+    db_billing_duration: {
+      type: Number,
+      required: false,
     },
     next_due_date: {
       type: Date,

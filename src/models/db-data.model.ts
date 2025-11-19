@@ -11,6 +11,7 @@ export interface IDbData extends Document {
     end_date: string;
   };
   gearbox_queue_ids: string[];
+  total_invoice_amount: number;
   created_at: Date;
   updated_at: Date;
 }
@@ -46,7 +47,11 @@ const DbDataSchema = new Schema<IDbData>(
     gearbox_queue_ids: {
       type: [String],
       default: [],
-    }
+    },
+    total_invoice_amount: {
+      type: Number,
+      required: true,
+    },
   },
   {
     timestamps: {

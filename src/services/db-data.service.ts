@@ -10,6 +10,7 @@ export interface CreateDbDataInput {
     end_date: string;
   };
   gearbox_queue_ids: string[];
+  total_invoice_amount: number;
 }
 
 export class DbDataService {
@@ -26,6 +27,7 @@ export class DbDataService {
         end_date: data.date_range.end_date,
       },
       gearbox_queue_ids: data.gearbox_queue_ids,
+      total_invoice_amount: data.total_invoice_amount,
     });
 
     return await dbData.save();

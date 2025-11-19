@@ -35,14 +35,25 @@ async function dbScraping(
       jobId,
     });
 
-    // Fetch job to get property name
+    // Fetch job to get property name and db_billing_duration
     let propertyName = "Unknown Property";
+    let dbBillingDuration: number | undefined = undefined;
     if (jobId) {
       try {
         const job = await Job.findById(jobId);
         if (job) {
           propertyName = job.property_name || "Unknown Property";
+          dbBillingDuration = job.db_billing_duration;
           await dualLogInfo(`Fetched property name from job: ${propertyName}`);
+          if (dbBillingDuration) {
+            await dualLogInfo(
+              `Fetched db_billing_duration from job: ${dbBillingDuration} days`
+            );
+          } else {
+            await dualLogInfo(
+              "No db_billing_duration found in job, will use default logic"
+            );
+          }
         }
       } catch (jobError) {
         await dualLogError("Error fetching job for property name:", jobError);
@@ -214,7 +225,8 @@ async function dbScraping(
           endDate!,
           jobId,
           expediaId,
-          propertyName
+          propertyName,
+          dbBillingDuration
         );
         await dualLogInfo("Date range processing completed successfully!");
       } catch (error: any) {

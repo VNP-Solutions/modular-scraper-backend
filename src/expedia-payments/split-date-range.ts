@@ -56,7 +56,7 @@ function isFirstDayOfMonth(date: Date): boolean {
 
 /**
  * Split date range into chunks and process each chunk
- * Expedia allows up to 31 days per search
+ * Uses db_billing_duration from job if available, otherwise defaults to 30 days
  */
 export async function splitDateRange(
   browser: Browser,
@@ -65,7 +65,8 @@ export async function splitDateRange(
   endDate: string,
   jobId?: string,
   expediaId?: string,
-  propertyName?: string
+  propertyName?: string,
+  dbBillingDuration?: number
 ): Promise<void> {
   try {
     await dualLogInfo(`Starting date range split: ${startDate} to ${endDate}`);
@@ -89,19 +90,32 @@ export async function splitDateRange(
       // Calculate chunk end date
       let chunkEnd: Date;
 
-      if (isFirstDayOfMonth(currentStart)) {
-        // If starting on 1st day, take whole month
+      // Use db_billing_duration if available, otherwise use default logic
+      if (dbBillingDuration && dbBillingDuration > 0) {
+        // Always use db_billing_duration when provided, regardless of day of month
+        const chunkSize = dbBillingDuration;
+        const calculatedEnd = addDays(currentStart, chunkSize - 1); // -1 because we include the start date
+        chunkEnd = calculatedEnd < endDateObj ? calculatedEnd : endDateObj;
+        await dualLogInfo(
+          `Using chunk size of ${chunkSize} days (from db_billing_duration: ${dbBillingDuration})`
+        );
+      } else if (isFirstDayOfMonth(currentStart)) {
+        // If starting on 1st day and no db_billing_duration, take whole month
         const lastDayOfMonth = getLastDayOfMonth(currentStart);
         chunkEnd = lastDayOfMonth < endDateObj ? lastDayOfMonth : endDateObj;
         await dualLogInfo(
           `Starting on 1st day of month, taking whole month until ${formatDate(
             chunkEnd
-          )}`
+          )} (no db_billing_duration specified)`
         );
       } else {
-        // Otherwise, take 30 days
-        const calculatedEnd = addDays(currentStart, 30);
+        // Default to 30 days if no db_billing_duration and not 1st of month
+        const chunkSize = 30;
+        const calculatedEnd = addDays(currentStart, chunkSize - 1); // -1 because we include the start date
         chunkEnd = calculatedEnd < endDateObj ? calculatedEnd : endDateObj;
+        await dualLogInfo(
+          `Using default chunk size of ${chunkSize} days (no db_billing_duration specified)`
+        );
       }
 
       const chunkStartStr = formatDate(currentStart);
@@ -180,6 +194,45 @@ export async function splitDateRange(
 
         // Variable to store Gearbox Queue IDs
         let gearboxQueueIds: string[] = [];
+        // Variable to store total invoice amount
+        let totalInvoiceAmount: number = 0;
+
+        // Extract total invoice amount before clicking disclaimer checkbox
+        try {
+          await dualLogInfo(
+            `Chunk ${chunkCount}: Extracting total invoice amount...`
+          );
+
+          const extractedAmount = await page.evaluate(() => {
+            const invoiceTotalElement = document.querySelector(".invoiceTotal");
+            if (invoiceTotalElement) {
+              const boldElement = invoiceTotalElement.querySelector("b");
+              if (boldElement) {
+                const text = boldElement.textContent || "";
+                // Extract number from text like "USD 90.32" or "90.32"
+                const match = text.match(/[\d,]+\.?\d*/);
+                if (match) {
+                  // Remove commas and parse as float
+                  const amount = parseFloat(match[0].replace(/,/g, ""));
+                  return isNaN(amount) ? 0 : amount;
+                }
+              }
+            }
+            return 0;
+          });
+
+          totalInvoiceAmount = extractedAmount;
+          await dualLogInfo(
+            `Chunk ${chunkCount}: Extracted total invoice amount: ${totalInvoiceAmount}`
+          );
+        } catch (amountError) {
+          await dualLogError(
+            `Chunk ${chunkCount}: Error extracting total invoice amount:`,
+            amountError
+          );
+          // Continue with 0 if extraction fails
+          totalInvoiceAmount = 0;
+        }
 
         if (!hasData) {
           await dualLogInfo(
@@ -290,6 +343,7 @@ export async function splitDateRange(
                 end_date: toDateExpedia,
               },
               gearbox_queue_ids: gearboxQueueIds,
+              total_invoice_amount: totalInvoiceAmount,
             });
 
             if (gearboxQueueIds.length > 0) {

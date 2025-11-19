@@ -187,6 +187,7 @@ export async function getDBData(
                 end_date: chunk.end,
               },
               gearbox_queue_ids: [],
+              total_invoice_amount: 0,
             });
 
             await dualLogInfo(
