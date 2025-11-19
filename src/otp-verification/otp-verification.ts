@@ -206,7 +206,7 @@ async function handleOtpVerification(
 
       // Add delay before fetching verification code
       await dualLogInfo("Waiting for verification email...");
-      await delay(30000); // Wait 30 seconds for email to arrive
+      await delay(60000); // Wait 30 seconds for email to arrive
 
       // Get verification code
       try {
