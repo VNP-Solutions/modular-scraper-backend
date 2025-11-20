@@ -409,9 +409,9 @@ async function makeGraphQLRequest(
 
       clearTimeout(timeoutId);
 
-      console.log(
-        `📊 GraphQL Response Status: ${response.status} ${response.statusText}`
-      );
+      // console.log(
+      //   `📊 GraphQL Response Status: ${response.status} ${response.statusText}`
+      // );
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -429,10 +429,10 @@ async function makeGraphQLRequest(
       }
 
       const responseData = await response.json();
-      console.log(
-        "✅ GraphQL API Response:",
-        JSON.stringify(responseData, null, 2)
-      );
+      // console.log(
+      //   "✅ GraphQL API Response:",
+      //   JSON.stringify(responseData, null, 2)
+      // );
 
       // Process the response data here
       if (responseData.data && responseData.data.reservationSearchV2) {
@@ -442,10 +442,10 @@ async function makeGraphQLRequest(
 
         // Log sample reservation data for debugging
         if (reservationItems.length > 0) {
-          console.log(
-            "📄 Sample reservation item:",
-            JSON.stringify(reservationItems[0], null, 2)
-          );
+          // console.log(
+          //   "📄 Sample reservation item:",
+          //   JSON.stringify(reservationItems[0], null, 2)
+          // );
 
           // Get property_id from job for database storage
           let propertyIdForDb: string | null = null;
@@ -496,28 +496,7 @@ async function makeGraphQLRequest(
 
             console.log(`🏨 Reservation ${index + 1}:`);
             console.log(`   Guest: ${guestName}`);
-            console.log(`   Confirmation: ${confirmationCode}`);
-            console.log(`   Check-in: ${checkIn}`);
-            console.log(`   Check-out: ${checkOut}`);
-            console.log(
-              `   Business Model: ${
-                item.reservationInfo?.reservationAttributes?.businessModel ||
-                "N/A"
-              }`
-            );
-            console.log(
-              `   Booking Status: ${
-                item.reservationInfo?.reservationAttributes?.bookingStatus ||
-                "N/A"
-              }`
-            );
-            console.log(
-              `   Total Amount: ${
-                item.totalAmounts?.totalReservationAmount?.value || "N/A"
-              } ${
-                item.totalAmounts?.totalReservationAmount?.currencyCode || ""
-              }`
-            );
+
             console.log(
               `   EVC Card Details Exist: ${
                 paymentInfo.evcCardDetailsExist || false
@@ -595,17 +574,17 @@ async function makeGraphQLRequest(
                     cardInfo.reasonForCharge ||
                     "";
 
-                  console.log(`🔍 Raw EVC card info:`, {
-                    cardNumber: cardNumber
-                      ? `${cardNumber.substring(
-                          0,
-                          6
-                        )}****${cardNumber.substring(cardNumber.length - 4)}`
-                      : "None",
-                    expirationDate,
-                    cvv: cvv ? "***" : "None",
-                    chargeStatus,
-                  });
+                  // console.log(`🔍 Raw EVC card info:`, {
+                  //   cardNumber: cardNumber
+                  //     ? `${cardNumber.substring(
+                  //         0,
+                  //         6
+                  //       )}****${cardNumber.substring(cardNumber.length - 4)}`
+                  //     : "None",
+                  //   expirationDate,
+                  //   cvv: cvv ? "***" : "None",
+                  //   chargeStatus,
+                  // });
 
                   if (cardNumber && cvv) {
                     cardData = {
@@ -615,17 +594,17 @@ async function makeGraphQLRequest(
                       reason_for_charge: mapReasonForCharge(chargeStatus),
                     };
 
-                    console.log(`✅ Mapped EVC card data:`, {
-                      card_number: `${cardData.card_number.substring(
-                        0,
-                        6
-                      )}****${cardData.card_number.substring(
-                        cardData.card_number.length - 4
-                      )}`,
-                      expiry_date: cardData.expiry_date,
-                      cvv: "***",
-                      reason_for_charge: cardData.reason_for_charge,
-                    });
+                    // console.log(`✅ Mapped EVC card data:`, {
+                    //   card_number: `${cardData.card_number.substring(
+                    //     0,
+                    //     6
+                    //   )}****${cardData.card_number.substring(
+                    //     cardData.card_number.length - 4
+                    //   )}`,
+                    //   expiry_date: cardData.expiry_date,
+                    //   cvv: "***",
+                    //   reason_for_charge: cardData.reason_for_charge,
+                    // });
                   } else {
                     console.warn(
                       `⚠️ Missing essential card data (cardNumber: ${!!cardNumber}, cvv: ${!!cvv}) for reservation ${
@@ -683,10 +662,10 @@ async function makeGraphQLRequest(
                       index + 1
                     }`
                   );
-                  console.log(
-                    `🔍 EVC Response structure:`,
-                    Object.keys(evcCardData || {})
-                  );
+                  // console.log(
+                  //   `🔍 EVC Response structure:`,
+                  //   Object.keys(evcCardData || {})
+                  // );
                 }
               } catch (cardError: any) {
                 console.error(
@@ -1007,7 +986,9 @@ async function fetchEVCCardData(
   let attempt = 0;
 
   // Base delay between requests (configurable) - prevent rate limiting
-  const baseDelayMs = parseInt(process.env.EVC_API_DELAY_MS || "4000"); // 3 seconds default between requests
+  // Use random delay between 4-8 seconds to simulate human-like behavior
+  const minDelayMs = parseInt(process.env.EVC_API_MIN_DELAY_MS || "4000"); // 4 seconds minimum
+  const maxDelayMs = parseInt(process.env.EVC_API_MAX_DELAY_MS || "8000"); // 8 seconds maximum
 
   while (attempt < maxRetries) {
     try {
@@ -1020,11 +1001,14 @@ async function fetchEVCCardData(
         );
         await delay(retryDelay);
       } else {
-        // Standard delay between normal requests to prevent rate limiting
+        // Random delay between min and max to simulate human-like behavior
+        const randomDelay =
+          Math.floor(Math.random() * (maxDelayMs - minDelayMs + 1)) +
+          minDelayMs;
         console.log(
-          `⏳ Rate limiting protection: ${baseDelayMs}ms delay before EVC API call...`
+          `⏳ Rate limiting protection: ${randomDelay}ms (random ${minDelayMs}-${maxDelayMs}ms) delay before EVC API call...`
         );
-        await delay(baseDelayMs);
+        await delay(randomDelay);
       }
 
       const url = `https://apps.expediapartnercentral.com/lodging/bookings/evc/getEVCCardDataByCardResourceId?htid=${propertyId}&cardResourceId=${encodeURIComponent(
