@@ -59,7 +59,7 @@ async function makeGraphQLRequest(
     const formattedStartDate = formatDate(startDate || "");
     const formattedEndDate = formatDate(endDate || "");
 
-    console.log(`📅 Using dates: ${formattedStartDate} to ${formattedEndDate}`);
+    // console.log(`📅 Using dates: ${formattedStartDate} to ${formattedEndDate}`);
     console.log(`🏨 Property ID: ${expediaId}`);
 
     // Real Expedia GraphQL query based on your working curl command
@@ -372,367 +372,455 @@ async function makeGraphQLRequest(
       variables: {},
     };
 
-    console.log("📤 Sending GraphQL Query:");
-    console.log(JSON.stringify(graphqlQuery, null, 2));
+    // console.log("📤 Sending GraphQL Query:");
+    // console.log(JSON.stringify(graphqlQuery, null, 2));
 
-    const response = await fetch(
-      "https://api.expediapartnercentral.com/supply/experience/gateway/graphql",
-      {
-        method: "POST",
-        headers: {
-          ...BROWSER_CONFIG.GRAPHQL_HEADERS,
-          "client-name": "pc-reservations-web",
-          "user-agent": BROWSER_CONFIG.USER_AGENT,
-          cookie: cookieHeader,
-        },
-        body: JSON.stringify(graphqlQuery),
-      }
-    );
-
-    console.log(
-      `📊 GraphQL Response Status: ${response.status} ${response.statusText}`
-    );
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error("❌ GraphQL API Error Response:", errorText);
-      console.error(
-        `❌ Response Status: ${response.status} ${response.statusText}`
-      );
-      console.error(
-        `❌ Response Headers:`,
-        Object.fromEntries(response.headers.entries())
-      );
-      throw new Error(
-        `GraphQL API failed with status ${response.status}: ${errorText}`
-      );
+    // Add delay before GraphQL request to avoid overwhelming the API
+    const graphqlDelayMs = parseInt(process.env.GRAPHQL_API_DELAY_MS || "2000"); // 2 seconds default
+    if (graphqlDelayMs > 0) {
+      console.log(`⏳ Waiting ${graphqlDelayMs}ms before GraphQL API call...`);
+      await delay(graphqlDelayMs);
     }
 
-    const responseData = await response.json();
-    console.log(
-      "✅ GraphQL API Response:",
-      JSON.stringify(responseData, null, 2)
-    );
+    // Configure timeout for GraphQL request (default 120 seconds, configurable)
+    const graphqlTimeoutMs = parseInt(
+      process.env.GRAPHQL_API_TIMEOUT_MS || "120000"
+    ); // 120 seconds default
+    const abortController = new AbortController();
+    const timeoutId = setTimeout(() => {
+      abortController.abort();
+    }, graphqlTimeoutMs);
 
-    // Process the response data here
-    if (responseData.data && responseData.data.reservationSearchV2) {
-      const reservationItems =
-        responseData.data.reservationSearchV2.reservationItems || [];
-      console.log(`📋 Found ${reservationItems.length} reservation items`);
+    try {
+      const response = await fetch(
+        "https://api.expediapartnercentral.com/supply/experience/gateway/graphql",
+        {
+          method: "POST",
+          headers: {
+            ...BROWSER_CONFIG.GRAPHQL_HEADERS,
+            "client-name": "pc-reservations-web",
+            "user-agent": BROWSER_CONFIG.USER_AGENT,
+            cookie: cookieHeader,
+          },
+          body: JSON.stringify(graphqlQuery),
+          signal: abortController.signal,
+        }
+      );
 
-      // Log sample reservation data for debugging
-      if (reservationItems.length > 0) {
-        console.log(
-          "📄 Sample reservation item:",
-          JSON.stringify(reservationItems[0], null, 2)
+      clearTimeout(timeoutId);
+
+      console.log(
+        `📊 GraphQL Response Status: ${response.status} ${response.statusText}`
+      );
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error("❌ GraphQL API Error Response:", errorText);
+        console.error(
+          `❌ Response Status: ${response.status} ${response.statusText}`
         );
+        console.error(
+          `❌ Response Headers:`,
+          Object.fromEntries(response.headers.entries())
+        );
+        throw new Error(
+          `GraphQL API failed with status ${response.status}: ${errorText}`
+        );
+      }
 
-        // Get property_id from job for database storage
-        let propertyIdForDb: string | null = null;
-        if (jobId) {
-          try {
-            const job = await jobService.getJobById(jobId);
-            if (job && job.property_id) {
-              propertyIdForDb = job.property_id.toString();
-              await dualLogInfo(
-                `Using property_id: ${propertyIdForDb} for database storage`,
-                { propertyIdForDb, jobId }
-              );
-            } else {
+      const responseData = await response.json();
+      console.log(
+        "✅ GraphQL API Response:",
+        JSON.stringify(responseData, null, 2)
+      );
+
+      // Process the response data here
+      if (responseData.data && responseData.data.reservationSearchV2) {
+        const reservationItems =
+          responseData.data.reservationSearchV2.reservationItems || [];
+        console.log(`📋 Found ${reservationItems.length} reservation items`);
+
+        // Log sample reservation data for debugging
+        if (reservationItems.length > 0) {
+          console.log(
+            "📄 Sample reservation item:",
+            JSON.stringify(reservationItems[0], null, 2)
+          );
+
+          // Get property_id from job for database storage
+          let propertyIdForDb: string | null = null;
+          if (jobId) {
+            try {
+              const job = await jobService.getJobById(jobId);
+              if (job && job.property_id) {
+                propertyIdForDb = job.property_id.toString();
+                await dualLogInfo(
+                  `Using property_id: ${propertyIdForDb} for database storage`,
+                  { propertyIdForDb, jobId }
+                );
+              } else {
+                await dualLogError(
+                  `Could not get property_id from job ${jobId}, will skip database storage`,
+                  null,
+                  { jobId }
+                );
+              }
+            } catch (error: any) {
               await dualLogError(
-                `Could not get property_id from job ${jobId}, will skip database storage`,
-                null,
+                `Error getting property_id from job ${jobId}:`,
+                error,
                 { jobId }
               );
             }
-          } catch (error: any) {
-            await dualLogError(
-              `Error getting property_id from job ${jobId}:`,
-              error,
-              { jobId }
-            );
           }
-        }
 
-        // Process each reservation with delays to prevent rate limiting
-        for (let index = 0; index < reservationItems.length; index++) {
-          // Add delay between processing reservations to avoid overwhelming the API
-          if (index > 0) {
-            const reservationDelay = parseInt(
-              process.env.RESERVATION_PROCESSING_DELAY_MS || "1000"
-            ); // 1 second between reservations
-            console.log(
-              `⏳ Reservation processing delay: ${reservationDelay}ms...`
-            );
-            await delay(reservationDelay);
-          }
-          const item = reservationItems[index];
-          const guestName = item.customer?.guestName || "Unknown Guest";
-          const confirmationCode =
-            item.confirmationInfo?.productConfirmationCode || "N/A";
-          const checkIn = item.reservationInfo?.startDate || "N/A";
-          const checkOut = item.reservationInfo?.endDate || "N/A";
-          const paymentInfo = item.paymentInfo || {};
-
-          console.log(`🏨 Reservation ${index + 1}:`);
-          console.log(`   Guest: ${guestName}`);
-          console.log(`   Confirmation: ${confirmationCode}`);
-          console.log(`   Check-in: ${checkIn}`);
-          console.log(`   Check-out: ${checkOut}`);
-          console.log(
-            `   Business Model: ${
-              item.reservationInfo?.reservationAttributes?.businessModel ||
-              "N/A"
-            }`
-          );
-          console.log(
-            `   Booking Status: ${
-              item.reservationInfo?.reservationAttributes?.bookingStatus ||
-              "N/A"
-            }`
-          );
-          console.log(
-            `   Total Amount: ${
-              item.totalAmounts?.totalReservationAmount?.value || "N/A"
-            } ${item.totalAmounts?.totalReservationAmount?.currencyCode || ""}`
-          );
-          console.log(
-            `   EVC Card Details Exist: ${
-              paymentInfo.evcCardDetailsExist || false
-            }`
-          );
-          console.log(
-            `   EVC Card Resource ID: ${
-              paymentInfo.expediaVirtualCardResourceId || "N/A"
-            }`
-          );
-          console.log(
-            `   Credit Card Viewable: ${
-              paymentInfo.creditCardDetails?.viewable || false
-            }`
-          );
-          console.log(
-            `   Card View Count Left: ${
-              paymentInfo.creditCardDetails?.viewCountLeft || "N/A"
-            }`
-          );
-
-          // Initialize card data and EVC data variables
-          let cardData: CardInfo | null = null;
-          let evcCardData: any = null;
-
-          // If EVC card details exist, try to fetch the actual card data
-          if (
-            paymentInfo.evcCardDetailsExist &&
-            paymentInfo.expediaVirtualCardResourceId
-          ) {
-            try {
+          // Process each reservation with delays to prevent rate limiting
+          for (let index = 0; index < reservationItems.length; index++) {
+            // Add delay between processing reservations to avoid overwhelming the API
+            if (index > 0) {
+              const reservationDelay = parseInt(
+                process.env.RESERVATION_PROCESSING_DELAY_MS || "1000"
+              ); // 1 second between reservations
               console.log(
-                `💳 Fetching EVC card data for reservation ${index + 1}...`
+                `⏳ Reservation processing delay: ${reservationDelay}ms...`
               );
-              evcCardData = await fetchEVCCardData(
-                expediaId || "",
-                paymentInfo.expediaVirtualCardResourceId,
-                item.reservationItemId,
-                checkIn,
-                cookieHeader
-              );
-              console.log(`✅ EVC Card Data:`, evcCardData);
+              await delay(reservationDelay);
+            }
+            const item = reservationItems[index];
+            const guestName = item.customer?.guestName || "Unknown Guest";
+            const confirmationCode =
+              item.confirmationInfo?.productConfirmationCode || "N/A";
+            const checkIn = item.reservationInfo?.startDate || "N/A";
+            const checkOut = item.reservationInfo?.endDate || "N/A";
+            const paymentInfo = item.paymentInfo || {};
 
-              // Map EVC card data to CardInfo format - Handle actual API response structure
-              if (evcCardData && evcCardData.cardInformation) {
-                const cardInfo = evcCardData.cardInformation;
+            console.log(`🏨 Reservation ${index + 1}:`);
+            console.log(`   Guest: ${guestName}`);
+            console.log(`   Confirmation: ${confirmationCode}`);
+            console.log(`   Check-in: ${checkIn}`);
+            console.log(`   Check-out: ${checkOut}`);
+            console.log(
+              `   Business Model: ${
+                item.reservationInfo?.reservationAttributes?.businessModel ||
+                "N/A"
+              }`
+            );
+            console.log(
+              `   Booking Status: ${
+                item.reservationInfo?.reservationAttributes?.bookingStatus ||
+                "N/A"
+              }`
+            );
+            console.log(
+              `   Total Amount: ${
+                item.totalAmounts?.totalReservationAmount?.value || "N/A"
+              } ${
+                item.totalAmounts?.totalReservationAmount?.currencyCode || ""
+              }`
+            );
+            console.log(
+              `   EVC Card Details Exist: ${
+                paymentInfo.evcCardDetailsExist || false
+              }`
+            );
+            console.log(
+              `   EVC Card Resource ID: ${
+                paymentInfo.expediaVirtualCardResourceId || "N/A"
+              }`
+            );
+            console.log(
+              `   Credit Card Viewable: ${
+                paymentInfo.creditCardDetails?.viewable || false
+              }`
+            );
+            console.log(
+              `   Card View Count Left: ${
+                paymentInfo.creditCardDetails?.viewCountLeft || "N/A"
+              }`
+            );
 
-                // Map EVC charge status values to desired format
-                const mapReasonForCharge = (graphqlReason: string): string => {
-                  switch (graphqlReason?.toLowerCase()) {
-                    case "deactivatedduetofullcharge":
-                      return "Charged in full";
-                    case "chargecompleted":
-                      return "Charged in full";
-                    case "partiallycharged":
-                      return "Partially charged";
-                    case "readytocharge":
-                      return "Ready to charge";
-                    case "deactivated":
-                      return "Deactivated";
-                    default:
-                      return graphqlReason || "";
-                  }
-                };
+            // Initialize card data and EVC data variables
+            let cardData: CardInfo | null = null;
+            let evcCardData: any = null;
 
-                // Extract data from the actual API response structure
-                const cardNumber = cardInfo.cardNumber || "";
-                const expirationDate =
-                  cardInfo.expirationDate || cardInfo.expiryDate || "";
-                const cvv = cardInfo.cvv || "";
-                const chargeStatus =
-                  cardInfo.chargeStatus?.chargeStatus ||
-                  cardInfo.reasonForCharge ||
-                  "";
+            // If EVC card details exist, try to fetch the actual card data
+            if (
+              paymentInfo.evcCardDetailsExist &&
+              paymentInfo.expediaVirtualCardResourceId
+            ) {
+              try {
+                console.log(
+                  `💳 Fetching EVC card data for reservation ${index + 1}...`
+                );
+                evcCardData = await fetchEVCCardData(
+                  expediaId || "",
+                  paymentInfo.expediaVirtualCardResourceId,
+                  item.reservationItemId,
+                  checkIn,
+                  cookieHeader
+                );
+                console.log(`✅ EVC Card Data:`, evcCardData);
 
-                console.log(`🔍 Raw EVC card info:`, {
-                  cardNumber: cardNumber
-                    ? `${cardNumber.substring(0, 6)}****${cardNumber.substring(
-                        cardNumber.length - 4
-                      )}`
-                    : "None",
-                  expirationDate,
-                  cvv: cvv ? "***" : "None",
-                  chargeStatus,
-                });
+                // Map EVC card data to CardInfo format - Handle actual API response structure
+                if (evcCardData && evcCardData.cardInformation) {
+                  const cardInfo = evcCardData.cardInformation;
 
-                if (cardNumber && cvv) {
-                  cardData = {
-                    card_number: cardNumber,
-                    expiry_date: expirationDate,
-                    cvv: cvv,
-                    reason_for_charge: mapReasonForCharge(chargeStatus),
+                  // Map EVC charge status values to desired format
+                  const mapReasonForCharge = (
+                    graphqlReason: string
+                  ): string => {
+                    switch (graphqlReason?.toLowerCase()) {
+                      case "deactivatedduetofullcharge":
+                        return "Charged in full";
+                      case "chargecompleted":
+                        return "Charged in full";
+                      case "partiallycharged":
+                        return "Partially charged";
+                      case "readytocharge":
+                        return "Ready to charge";
+                      case "deactivated":
+                        return "Deactivated";
+                      default:
+                        return graphqlReason || "";
+                    }
                   };
 
-                  console.log(`✅ Mapped EVC card data:`, {
-                    card_number: `${cardData.card_number.substring(
-                      0,
-                      6
-                    )}****${cardData.card_number.substring(
-                      cardData.card_number.length - 4
-                    )}`,
-                    expiry_date: cardData.expiry_date,
-                    cvv: "***",
-                    reason_for_charge: cardData.reason_for_charge,
+                  // Extract data from the actual API response structure
+                  const cardNumber = cardInfo.cardNumber || "";
+                  const expirationDate =
+                    cardInfo.expirationDate || cardInfo.expiryDate || "";
+                  const cvv = cardInfo.cvv || "";
+                  const chargeStatus =
+                    cardInfo.chargeStatus?.chargeStatus ||
+                    cardInfo.reasonForCharge ||
+                    "";
+
+                  console.log(`🔍 Raw EVC card info:`, {
+                    cardNumber: cardNumber
+                      ? `${cardNumber.substring(
+                          0,
+                          6
+                        )}****${cardNumber.substring(cardNumber.length - 4)}`
+                      : "None",
+                    expirationDate,
+                    cvv: cvv ? "***" : "None",
+                    chargeStatus,
                   });
-                } else {
-                  console.warn(
-                    `⚠️ Missing essential card data (cardNumber: ${!!cardNumber}, cvv: ${!!cvv}) for reservation ${
+
+                  if (cardNumber && cvv) {
+                    cardData = {
+                      card_number: cardNumber,
+                      expiry_date: expirationDate,
+                      cvv: cvv,
+                      reason_for_charge: mapReasonForCharge(chargeStatus),
+                    };
+
+                    console.log(`✅ Mapped EVC card data:`, {
+                      card_number: `${cardData.card_number.substring(
+                        0,
+                        6
+                      )}****${cardData.card_number.substring(
+                        cardData.card_number.length - 4
+                      )}`,
+                      expiry_date: cardData.expiry_date,
+                      cvv: "***",
+                      reason_for_charge: cardData.reason_for_charge,
+                    });
+                  } else {
+                    console.warn(
+                      `⚠️ Missing essential card data (cardNumber: ${!!cardNumber}, cvv: ${!!cvv}) for reservation ${
+                        index + 1
+                      }`
+                    );
+                  }
+                } else if (
+                  evcCardData &&
+                  (evcCardData.cardNumber || evcCardData.card_number)
+                ) {
+                  // Fallback for old/different response format
+                  console.log(
+                    `🔄 Using fallback card data mapping for reservation ${
                       index + 1
                     }`
                   );
+
+                  const mapReasonForCharge = (
+                    graphqlReason: string
+                  ): string => {
+                    switch (graphqlReason?.toLowerCase()) {
+                      case "deactivatedduetofullcharge":
+                        return "Charged in full";
+                      case "chargecompleted":
+                        return "Charged in full";
+                      case "partiallycharged":
+                        return "Partially charged";
+                      case "readytocharge":
+                        return "Ready to charge";
+                      case "deactivated":
+                        return "Deactivated";
+                      default:
+                        return graphqlReason || "";
+                    }
+                  };
+
+                  cardData = {
+                    card_number:
+                      evcCardData.cardNumber || evcCardData.card_number || "",
+                    expiry_date:
+                      evcCardData.expiryDate || evcCardData.expiry_date || "",
+                    cvv: evcCardData.cvv || evcCardData.securityCode || "",
+                    reason_for_charge: mapReasonForCharge(
+                      evcCardData.reasonForCharge ||
+                        evcCardData.reason_for_charge ||
+                        ""
+                    ),
+                  };
+
+                  console.log(`✅ Mapped EVC card data (fallback):`, cardData);
+                } else {
+                  console.warn(
+                    `⚠️ No valid card data in EVC response for reservation ${
+                      index + 1
+                    }`
+                  );
+                  console.log(
+                    `🔍 EVC Response structure:`,
+                    Object.keys(evcCardData || {})
+                  );
                 }
-              } else if (
-                evcCardData &&
-                (evcCardData.cardNumber || evcCardData.card_number)
-              ) {
-                // Fallback for old/different response format
-                console.log(
-                  `🔄 Using fallback card data mapping for reservation ${
+              } catch (cardError: any) {
+                console.error(
+                  `❌ Failed to fetch EVC card data for reservation ${
                     index + 1
-                  }`
-                );
-
-                const mapReasonForCharge = (graphqlReason: string): string => {
-                  switch (graphqlReason?.toLowerCase()) {
-                    case "deactivatedduetofullcharge":
-                      return "Charged in full";
-                    case "chargecompleted":
-                      return "Charged in full";
-                    case "partiallycharged":
-                      return "Partially charged";
-                    case "readytocharge":
-                      return "Ready to charge";
-                    case "deactivated":
-                      return "Deactivated";
-                    default:
-                      return graphqlReason || "";
-                  }
-                };
-
-                cardData = {
-                  card_number:
-                    evcCardData.cardNumber || evcCardData.card_number || "",
-                  expiry_date:
-                    evcCardData.expiryDate || evcCardData.expiry_date || "",
-                  cvv: evcCardData.cvv || evcCardData.securityCode || "",
-                  reason_for_charge: mapReasonForCharge(
-                    evcCardData.reasonForCharge ||
-                      evcCardData.reason_for_charge ||
-                      ""
-                  ),
-                };
-
-                console.log(`✅ Mapped EVC card data (fallback):`, cardData);
-              } else {
-                console.warn(
-                  `⚠️ No valid card data in EVC response for reservation ${
-                    index + 1
-                  }`
-                );
-                console.log(
-                  `🔍 EVC Response structure:`,
-                  Object.keys(evcCardData || {})
+                  }:`,
+                  cardError.message
                 );
               }
-            } catch (cardError: any) {
-              console.error(
-                `❌ Failed to fetch EVC card data for reservation ${
-                  index + 1
-                }:`,
-                cardError.message
+            }
+
+            // Save reservation data to database (only if we have valid database info)
+            if (jobId && propertyIdForDb) {
+              await saveGraphQLReservationToDatabase(
+                jobId,
+                propertyIdForDb,
+                item,
+                cardData,
+                evcCardData
               );
             }
           }
+        }
+      } else if (responseData.errors) {
+        console.error("❌ GraphQL Errors:", responseData.errors);
 
-          // Save reservation data to database (only if we have valid database info)
-          if (jobId && propertyIdForDb) {
-            await saveGraphQLReservationToDatabase(
-              jobId,
-              propertyIdForDb,
-              item,
-              cardData,
-              evcCardData
+        // Log specific error details for debugging
+        responseData.errors.forEach((error: any, index: number) => {
+          console.error(`❌ Error ${index + 1}:`, {
+            message: error.message,
+            path: error.path,
+            extensions: error.extensions,
+          });
+
+          if (error.extensions?.exceptionDetails) {
+            console.error(
+              `❌ Exception Details ${index + 1}:`,
+              error.extensions.exceptionDetails
             );
           }
-        }
-      }
-    } else if (responseData.errors) {
-      console.error("❌ GraphQL Errors:", responseData.errors);
-
-      // Log specific error details for debugging
-      responseData.errors.forEach((error: any, index: number) => {
-        console.error(`❌ Error ${index + 1}:`, {
-          message: error.message,
-          path: error.path,
-          extensions: error.extensions,
         });
 
-        if (error.extensions?.exceptionDetails) {
-          console.error(
-            `❌ Exception Details ${index + 1}:`,
-            error.extensions.exceptionDetails
+        // Check if this is a network timeout error
+        const isNetworkTimeout = responseData.errors.some(
+          (error: any) =>
+            error.message?.includes("network timeout") ||
+            error.message?.includes("timeout") ||
+            (error.extensions?.code === "INTERNAL_SERVER_ERROR" &&
+              error.message?.includes("timeout"))
+        );
+
+        // Check if this is a downstream service error (temporary issue)
+        const isDownstreamError = responseData.errors.some(
+          (error: any) =>
+            error.extensions?.code === "DOWNSTREAM_SERVICE_ERROR" ||
+            error.message?.includes("Downstream service error") ||
+            error.extensions?.classification === "DATA_SOURCE_ERROR"
+        );
+
+        if (isNetworkTimeout) {
+          console.warn(
+            "⚠️ Detected network timeout error - this may be temporary"
+          );
+          await dualLogError(
+            "Network timeout error detected - Expedia's API may be experiencing high load",
+            `This is likely a temporary issue with Expedia's reservation search API. Error: ${responseData.errors[0]?.message}`,
+            {
+              jobId,
+              expediaId,
+              startDate,
+              endDate,
+              errorType: "NETWORK_TIMEOUT",
+            }
+          );
+          // Throw a specific error that can be caught and retried
+          const timeoutError = new Error(
+            `GraphQL API network timeout: ${
+              responseData.errors[0]?.message || "Network timeout"
+            }`
+          );
+          timeoutError.name = "NETWORK_TIMEOUT";
+          throw timeoutError;
+        }
+
+        if (isDownstreamError) {
+          console.warn(
+            "⚠️ Detected downstream service error - this may be temporary"
+          );
+          await dualLogError(
+            "Downstream service error detected - Expedia's API may be experiencing issues",
+            `This is likely a temporary issue with Expedia's reservation search API. Error: ${responseData.errors[0]?.message}`,
+            {
+              jobId,
+              expediaId,
+              startDate,
+              endDate,
+              errorType: "DOWNSTREAM_SERVICE_ERROR",
+            }
           );
         }
-      });
 
-      // Check if this is a downstream service error (temporary issue)
-      const isDownstreamError = responseData.errors.some(
-        (error: any) =>
-          error.extensions?.code === "DOWNSTREAM_SERVICE_ERROR" ||
-          error.message?.includes("Downstream service error") ||
-          error.extensions?.classification === "DATA_SOURCE_ERROR"
-      );
+        throw new Error(
+          `GraphQL query errors: ${JSON.stringify(responseData.errors)}`
+        );
+      } else {
+        console.warn("⚠️ No reservation data found in response");
+        console.log("📋 Full response structure:", Object.keys(responseData));
+      }
+    } catch (fetchError: any) {
+      clearTimeout(timeoutId);
 
-      if (isDownstreamError) {
-        console.warn(
-          "⚠️ Detected downstream service error - this may be temporary"
+      // Handle timeout errors specifically
+      if (fetchError.name === "AbortError" || abortController.signal.aborted) {
+        const timeoutError = new Error(
+          `GraphQL API request timed out after ${graphqlTimeoutMs}ms. This may be due to network issues or server overload.`
         );
-        await dualLogError(
-          "Downstream service error detected - Expedia's API may be experiencing issues",
-          `This is likely a temporary issue with Expedia's reservation search API. Error: ${responseData.errors[0]?.message}`,
-          {
-            jobId,
-            expediaId,
-            startDate,
-            endDate,
-            errorType: "DOWNSTREAM_SERVICE_ERROR",
-          }
-        );
+        timeoutError.name = "NETWORK_TIMEOUT";
+        throw timeoutError;
       }
 
-      throw new Error(
-        `GraphQL query errors: ${JSON.stringify(responseData.errors)}`
-      );
-    } else {
-      console.warn("⚠️ No reservation data found in response");
-      console.log("📋 Full response structure:", Object.keys(responseData));
+      // Handle other fetch errors
+      if (
+        fetchError.message?.includes("timeout") ||
+        fetchError.message?.includes("network timeout")
+      ) {
+        const timeoutError = new Error(
+          `GraphQL API network timeout: ${fetchError.message}`
+        );
+        timeoutError.name = "NETWORK_TIMEOUT";
+        throw timeoutError;
+      }
+
+      // Re-throw other errors
+      throw fetchError;
     }
   } catch (error: any) {
     console.error("❌ Error making GraphQL request:", error);
@@ -1534,7 +1622,9 @@ async function runScrapingWithRestart(
           try {
             // Add retry logic for GraphQL API calls
             let graphqlRetries = 0;
-            const maxGraphqlRetries = 3;
+            const maxGraphqlRetries = parseInt(
+              process.env.GRAPHQL_MAX_RETRIES || "5"
+            ); // Increased to 5 retries for network timeouts
             let graphqlSuccess = false;
 
             while (!graphqlSuccess && graphqlRetries < maxGraphqlRetries) {
@@ -1550,8 +1640,15 @@ async function runScrapingWithRestart(
               } catch (graphqlRetryError: any) {
                 graphqlRetries++;
 
+                // Check if it's a network timeout error (worth retrying with longer delays)
+                const isNetworkTimeout =
+                  graphqlRetryError.name === "NETWORK_TIMEOUT" ||
+                  graphqlRetryError.message?.includes("network timeout") ||
+                  graphqlRetryError.message?.includes("timeout") ||
+                  graphqlRetryError.message?.includes("timed out");
+
                 // Check if it's a downstream service error (worth retrying)
-                const isRetryableError =
+                const isDownstreamError =
                   graphqlRetryError.message?.includes(
                     "DOWNSTREAM_SERVICE_ERROR"
                   ) ||
@@ -1559,20 +1656,38 @@ async function runScrapingWithRestart(
                     "Downstream service error"
                   );
 
+                const isRetryableError = isNetworkTimeout || isDownstreamError;
+
                 if (isRetryableError && graphqlRetries < maxGraphqlRetries) {
-                  const retryDelay = Math.min(
-                    1000 * Math.pow(2, graphqlRetries),
-                    10000
-                  ); // Exponential backoff, max 10s
+                  // Use longer delays for network timeouts
+                  let retryDelay: number;
+                  if (isNetworkTimeout) {
+                    // Exponential backoff for network timeouts: 5s, 10s, 20s, 30s, 60s
+                    retryDelay = Math.min(
+                      5000 * Math.pow(2, graphqlRetries - 1),
+                      60000
+                    );
+                  } else {
+                    // Shorter delays for downstream errors: 1s, 2s, 4s, 8s, 10s
+                    retryDelay = Math.min(
+                      1000 * Math.pow(2, graphqlRetries),
+                      10000
+                    );
+                  }
+
+                  const retryReason = isNetworkTimeout
+                    ? "NETWORK_TIMEOUT"
+                    : "DOWNSTREAM_SERVICE_ERROR";
                   console.warn(
-                    `⚠️ GraphQL retry ${graphqlRetries}/${maxGraphqlRetries} in ${retryDelay}ms...`
+                    `⚠️ GraphQL retry ${graphqlRetries}/${maxGraphqlRetries} (${retryReason}) in ${retryDelay}ms...`
                   );
                   await dualLogInfo(
                     `GraphQL API retry ${graphqlRetries}/${maxGraphqlRetries} after ${retryDelay}ms delay`,
                     {
                       jobId,
                       date: singleDate,
-                      retryReason: "DOWNSTREAM_SERVICE_ERROR",
+                      retryReason,
+                      errorMessage: graphqlRetryError.message,
                     }
                   );
                   await delay(retryDelay);
