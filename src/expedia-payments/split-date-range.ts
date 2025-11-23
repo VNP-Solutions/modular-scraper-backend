@@ -135,6 +135,18 @@ export async function splitDateRange(
 
       // Type dates into the input fields
       try {
+        // Wait for the search form to be ready (especially important in headless mode)
+        await dualLogInfo("Waiting for search form to be ready...");
+        await page.waitForSelector("#startDateInput", {
+          visible: true,
+          timeout: 10000,
+        });
+        await page.waitForSelector("#endDateInput", {
+          visible: true,
+          timeout: 10000,
+        });
+        await delay(1000); // Additional wait to ensure form is fully interactive
+
         // Clear and type "From" date
         await page.click("#startDateInput", { clickCount: 3 });
         await delay(500);
