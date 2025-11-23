@@ -17,6 +17,7 @@ import {
   Property,
 } from "../models/property.model.js";
 import { BookingScraper, ScraperContext } from "../scrapers/booking-scraper.js";
+import { notificationService } from "./notification.service.js";
 
 interface TrustVerificationResult {
   propertyId: string;
@@ -70,7 +71,9 @@ export class BookingTrustSchedulerService {
                 $and: [
                   {
                     $or: [
-                      { booking_trusted_status: BookingTrustedStatus.NotTrusted },
+                      {
+                        booking_trusted_status: BookingTrustedStatus.NotTrusted,
+                      },
                       { booking_trusted_status: { $exists: false } },
                     ],
                   },
@@ -239,6 +242,41 @@ export class BookingTrustSchedulerService {
             new Date()
           );
 
+          // Send notification if trust status changed
+          if (previousStatus !== newStatus) {
+            try {
+              if (newStatus === BookingTrustedStatus.Trusted) {
+                await notificationService.sendPublicNotification({
+                  title: "Property Trusted on Booking.com",
+                  message: `Property ${property.property_name} has been verified as Trusted and can now access card details`,
+                  metadata: {
+                    propertyId,
+                    propertyName: property.property_name,
+                    bookingId,
+                    previousStatus,
+                    newStatus,
+                  },
+                });
+              } else {
+                await notificationService.sendPublicNotification({
+                  title: "Property Trust Status Changed",
+                  message: `Property ${property.property_name} trust status changed to Not Trusted. Card details access may be limited`,
+                  metadata: {
+                    propertyId,
+                    propertyName: property.property_name,
+                    bookingId,
+                    previousStatus,
+                    newStatus,
+                  },
+                });
+              }
+            } catch (notificationError) {
+              await dualLogError(
+                `Error sending trust status change notification: ${notificationError}`
+              );
+            }
+          }
+
           await dualLogInfo(
             `Trust verification completed for property ${propertyId}`,
             {
@@ -288,6 +326,27 @@ export class BookingTrustSchedulerService {
           loginError,
           { propertyId, bookingId, previousStatus }
         );
+
+        // Send public notification for login failure
+        try {
+          await notificationService.sendPublicNotification({
+            title: "Booking.com Login Failed",
+            message: `Booking.com login failed for property ${property.property_name}. Credentials may be invalid or expired`,
+            metadata: {
+              propertyId,
+              propertyName: property.property_name,
+              bookingId,
+              error:
+                loginError instanceof Error
+                  ? loginError.message
+                  : String(loginError),
+            },
+          });
+        } catch (notificationError) {
+          await dualLogError(
+            `Error sending login failure notification: ${notificationError}`
+          );
+        }
 
         await finalizeJobLogging("failed");
 
@@ -432,6 +491,29 @@ export class BookingTrustSchedulerService {
         stats: this.stats,
         duration: `${this.stats.totalRuntime}ms`,
       });
+
+      // Send public notification for scheduler completion
+      try {
+        const runtimeMinutes = Math.round(this.stats.totalRuntime / 60000);
+        await notificationService.sendPublicNotification({
+          title: "Booking Trust Verification Completed",
+          message: `Trust verification scheduler completed: ${this.stats.totalPropertiesChecked} properties checked, ${this.stats.successfulVerifications} successful, ${this.stats.newlyTrusted} newly trusted, ${this.stats.failedVerifications} failed. Runtime: ${runtimeMinutes} minute(s)`,
+          metadata: {
+            totalPropertiesChecked: this.stats.totalPropertiesChecked,
+            successfulVerifications: this.stats.successfulVerifications,
+            failedVerifications: this.stats.failedVerifications,
+            newlyTrusted: this.stats.newlyTrusted,
+            remainingUntrusted: this.stats.remainingUntrusted,
+            totalRuntime: this.stats.totalRuntime,
+            runtimeMinutes,
+            completedAt: new Date().toISOString(),
+          },
+        });
+      } catch (notificationError) {
+        await dualLogError(
+          `Error sending trust scheduler completion notification: ${notificationError}`
+        );
+      }
 
       return this.stats;
     } catch (error) {

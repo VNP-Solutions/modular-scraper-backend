@@ -1140,7 +1140,11 @@ export class BookingScraper extends BaseScraper {
       await this.takeScreenshot();
 
       try {
-        await handleBookingOtpVerification(currentPage);
+        await handleBookingOtpVerification(
+          currentPage,
+          this.jobId,
+          this.propertyIdForDb
+        );
         await this.logInfo("Automated OTP verification completed successfully");
         return true;
       } catch (otpError) {

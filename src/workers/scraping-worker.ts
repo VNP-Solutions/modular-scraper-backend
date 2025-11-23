@@ -28,6 +28,7 @@ import { JobStatus } from "../models/job.model.js";
 import reservation from "../reservation/reservation.js";
 import { propertyCredentialsService } from "../services/job-credentials.service.js";
 import { jobService } from "../services/job.service.js";
+import { notificationService } from "../services/notification.service.js";
 
 // Global function to release OTP from worker
 (global as any).releaseOtpFromWorker = (jobId: string) => {
@@ -665,6 +666,42 @@ class ScrapingWorker {
 
       // Update job status to Failed
       await jobService.updateJobStatus(jobId, JobStatus.Failed);
+
+      // Get job details for notification
+      let propertyName: string | undefined;
+      try {
+        const job = await jobService.getJobById(jobId);
+        propertyName = job?.property_name;
+      } catch (error) {
+        await dualLogError(
+          `Error fetching job details for notification: ${error}`
+        );
+      }
+
+      // Send public notification for booking scraping job failure
+      try {
+        await notificationService.sendPublicNotification({
+          title: "Booking.com Scraping Job Failed",
+          message: `Booking.com scraping job failed for property ${
+            propertyName || propertyId || "Unknown"
+          }. Job ID: ${jobId}`,
+          metadata: {
+            jobId,
+            propertyId,
+            propertyName,
+            portfolioId,
+            bookingId: finalBookingId,
+            error: error instanceof Error ? error.message : String(error),
+            retryAttempt: jobService.retryAttempt,
+            maxRetries: jobService.maxRetries,
+            failedAt: new Date().toISOString(),
+          },
+        });
+      } catch (notificationError) {
+        await dualLogError(
+          `Error sending booking job failure notification: ${notificationError}`
+        );
+      }
 
       // Finalize logging with failed status
       await finalizeJobLogging("failed");

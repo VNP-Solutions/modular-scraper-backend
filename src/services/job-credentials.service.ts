@@ -5,6 +5,7 @@ import {
   PropertyCredentials,
 } from "../models/Property-credentials.js";
 import { IProperty, Property } from "../models/property.model.js";
+import { notificationService } from "./notification.service.js";
 
 export interface CreatePropertyCredentialsData {
   property_id: string;
@@ -140,7 +141,23 @@ export class PropertyCredentialsService {
     try {
       const objectId = this.validateObjectId(propertyId, "propertyId");
 
-      return await PropertyCredentials.findOneAndUpdate(
+      // Check if booking credentials are being updated
+      const isBookingUpdate =
+        updateData.bookingPassword !== undefined ||
+        updateData.bookingUsername !== undefined;
+
+      // Get property info for notification if booking credentials are updated
+      let propertyName: string | undefined;
+      if (isBookingUpdate) {
+        try {
+          const property = await Property.findById(objectId);
+          propertyName = property?.property_name;
+        } catch (error) {
+          console.error(`Error fetching property for notification: ${error}`);
+        }
+      }
+
+      const updatedCredentials = await PropertyCredentials.findOneAndUpdate(
         { property_id: objectId },
         {
           ...updateData,
@@ -148,6 +165,29 @@ export class PropertyCredentialsService {
         },
         { new: true }
       );
+
+      // Send public notification if booking credentials were updated
+      if (isBookingUpdate && updatedCredentials) {
+        try {
+          await notificationService.sendPublicNotification({
+            title: "Booking.com Password Updated",
+            message: `Booking.com password has been updated for property ${
+              propertyName || propertyId
+            }`,
+            metadata: {
+              propertyId,
+              propertyName,
+              updatedAt: new Date().toISOString(),
+            },
+          });
+        } catch (notificationError) {
+          console.error(
+            `Error sending booking credential update notification: ${notificationError}`
+          );
+        }
+      }
+
+      return updatedCredentials;
     } catch (error) {
       console.error(`Error updating property credentials: ${error}`);
       return null;
@@ -164,7 +204,28 @@ export class PropertyCredentialsService {
     try {
       const objectId = this.validateObjectId(credentialsId, "credentialsId");
 
-      return await PropertyCredentials.findByIdAndUpdate(
+      // Check if booking credentials are being updated
+      const isBookingUpdate =
+        updateData.bookingPassword !== undefined ||
+        updateData.bookingUsername !== undefined;
+
+      // Get property info for notification if booking credentials are updated
+      let propertyName: string | undefined;
+      let propertyId: string | undefined;
+      if (isBookingUpdate) {
+        try {
+          const credentials = await PropertyCredentials.findById(objectId);
+          if (credentials?.property_id) {
+            const property = await Property.findById(credentials.property_id);
+            propertyName = property?.property_name;
+            propertyId = credentials.property_id.toString();
+          }
+        } catch (error) {
+          console.error(`Error fetching property for notification: ${error}`);
+        }
+      }
+
+      const updatedCredentials = await PropertyCredentials.findByIdAndUpdate(
         objectId,
         {
           ...updateData,
@@ -172,6 +233,30 @@ export class PropertyCredentialsService {
         },
         { new: true }
       );
+
+      // Send public notification if booking credentials were updated
+      if (isBookingUpdate && updatedCredentials) {
+        try {
+          await notificationService.sendPublicNotification({
+            title: "Booking.com Password Updated",
+            message: `Booking.com password has been updated for property ${
+              propertyName || propertyId || credentialsId
+            }`,
+            metadata: {
+              propertyId,
+              propertyName,
+              credentialsId,
+              updatedAt: new Date().toISOString(),
+            },
+          });
+        } catch (notificationError) {
+          console.error(
+            `Error sending booking credential update notification: ${notificationError}`
+          );
+        }
+      }
+
+      return updatedCredentials;
     } catch (error) {
       console.error(`Error updating credentials by ID: ${error}`);
       return null;

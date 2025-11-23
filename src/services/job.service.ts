@@ -14,6 +14,7 @@ import {
 } from "../models/job.model.js";
 import { PropertyCredentials } from "../models/Property-credentials.js";
 import { IProperty, Property } from "../models/property.model.js";
+import { notificationService } from "./notification.service.js";
 
 export interface CreateJobData {
   name?: string;
@@ -227,7 +228,63 @@ export class JobService {
       // Check if booking_id exists and is valid
       if (!property.booking_id || property.booking_id === 0) {
         console.error(`Property ${job.property_id} has no valid booking_id`);
+
+        // Send public notification for missing booking_id
+        try {
+          await notificationService.sendPublicNotification({
+            title: "Booking.com Credentials Missing",
+            message: `Booking.com credentials are missing for property ${
+              property.property_name ||
+              job.property_name ||
+              job.property_id._id.toString()
+            }. Property has no valid booking_id. Please update credentials`,
+            metadata: {
+              jobId,
+              propertyId: job.property_id._id.toString(),
+              propertyName: property.property_name || job.property_name,
+              bookingId: property.booking_id,
+              issue: "missing_booking_id",
+              detectedAt: new Date().toISOString(),
+            },
+          });
+        } catch (notificationError) {
+          console.error(
+            `Error sending booking credential missing notification: ${notificationError}`
+          );
+        }
+
         return null;
+      }
+
+      // Check if booking credentials are missing
+      if (!credentials?.bookingUsername || !credentials?.bookingPassword) {
+        console.error(`Property ${job.property_id} has no booking credentials`);
+
+        // Send public notification for missing booking credentials
+        try {
+          await notificationService.sendPublicNotification({
+            title: "Booking.com Credentials Missing",
+            message: `Booking.com credentials are missing for property ${
+              property.property_name ||
+              job.property_name ||
+              job.property_id._id.toString()
+            }. Please update credentials`,
+            metadata: {
+              jobId,
+              propertyId: job.property_id._id.toString(),
+              propertyName: property.property_name || job.property_name,
+              bookingId: property.booking_id,
+              hasUsername: !!credentials?.bookingUsername,
+              hasPassword: !!credentials?.bookingPassword,
+              issue: "missing_credentials",
+              detectedAt: new Date().toISOString(),
+            },
+          });
+        } catch (notificationError) {
+          console.error(
+            `Error sending booking credential missing notification: ${notificationError}`
+          );
+        }
       }
 
       console.log(`Found booking_id: ${property.booking_id} for job: ${jobId}`);
