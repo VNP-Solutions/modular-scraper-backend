@@ -48,6 +48,14 @@ export async function browserSetupLocal(
 
     const page: Page = await browser.newPage();
 
+    // Set viewport explicitly (critical for both headless and non-headless modes)
+    // When headless=false with defaultViewport: null, the viewport depends on window size
+    // which can cause elements to be off-screen or not visible
+    await page.setViewport({
+      width: 1920,
+      height: 1080,
+    });
+
     // Set user agent to match GraphQL API headers exactly
     await page.setUserAgent(BROWSER_CONFIG.USER_AGENT);
 
