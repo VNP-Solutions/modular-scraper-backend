@@ -1,3 +1,4 @@
+import dotenv from "dotenv";
 import { EventEmitter } from "events";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -12,7 +13,6 @@ import {
   WorkerPoolStatus,
   WorkerResponse,
 } from "./worker-types.js";
-import dotenv from "dotenv";
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
@@ -65,6 +65,11 @@ export class OtpAwareWorkerPool extends EventEmitter {
       // Set up OTP event listeners
       this.otpManager.on("otpReleased", this.onOtpReleased.bind(this));
       this.otpManager.on("otpReserved", this.onOtpReserved.bind(this));
+
+      // Set up worker ready listener to process queue when worker becomes available
+      this.on("workerReady", () => {
+        this.processQueue();
+      });
 
       // Initialize workers
       this.initializeWorkers();
@@ -677,6 +682,13 @@ export class OtpAwareWorkerPool extends EventEmitter {
       console.log(
         `Job ${jobId} stopped and OTP-aware worker ${targetWorkerId} recreated`
       );
+
+      // Process next job in queue after worker is recreated
+      // Small delay to ensure worker is fully initialized
+      setTimeout(() => {
+        this.processQueue();
+      }, 500);
+
       return true;
     } catch (error) {
       console.error(`Error stopping job ${jobId}:`, error);
