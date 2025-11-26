@@ -66,6 +66,11 @@ export class OtpAwareWorkerPool extends EventEmitter {
       this.otpManager.on("otpReleased", this.onOtpReleased.bind(this));
       this.otpManager.on("otpReserved", this.onOtpReserved.bind(this));
 
+      // Set up worker ready listener to process queue when worker becomes available
+      this.on("workerReady", () => {
+        this.processQueue();
+      });
+
       // Initialize workers
       this.initializeWorkers();
 
@@ -683,6 +688,13 @@ export class OtpAwareWorkerPool extends EventEmitter {
       console.log(
         `Job ${jobId} stopped and OTP-aware worker ${targetWorkerId} recreated`
       );
+
+      // Process next job in queue after worker is recreated
+      // Small delay to ensure worker is fully initialized
+      setTimeout(() => {
+        this.processQueue();
+      }, 500);
+
       return true;
     } catch (error) {
       console.error(`Error stopping job ${jobId}:`, error);

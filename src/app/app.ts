@@ -686,7 +686,7 @@ app.post("/api/scraping/resume", (async (
  *               $ref: '#/components/schemas/ErrorResponse'
  */
 // API to stop specific scraping job
-app.post("/api/scraping/stop", (async (
+app.post("/api/retrieval/stop", (async (
   req: express.Request,
   res: express.Response
 ) => {
@@ -700,12 +700,12 @@ app.post("/api/scraping/stop", (async (
       });
     }
 
-    // Check if job exists
-    const job = await jobService.getJobById(jobId);
-    if (!job) {
+    // Check if retrieval exists (jobId is the retrievalId)
+    const retrieval = await retrievalService.getRetrievalById(jobId);
+    if (!retrieval) {
       return res.status(404).json({
         status: 404,
-        message: `Job with ID ${jobId} not found`,
+        message: `Retrieval with ID ${jobId} not found`,
       });
     }
 
@@ -713,13 +713,13 @@ app.post("/api/scraping/stop", (async (
     const stopSuccess = await otpAwareWorkerPool.stopJob(jobId);
 
     if (stopSuccess) {
-      // Update job status to Stopped in database
-      const updatedJob = await jobService.updateJobStatus(
+      // Update retrieval status to Stopped in database
+      const updatedRetrieval = await retrievalService.updateRetrievalStatus(
         jobId,
-        JobStatus.Stopped
+        "Stopped"
       );
 
-      if (updatedJob) {
+      if (updatedRetrieval) {
         res.status(200).json({
           status: 200,
           message: "Job stopped successfully",

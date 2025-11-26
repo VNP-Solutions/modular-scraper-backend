@@ -45,8 +45,45 @@ class ScrapingWorker {
       throw new Error("Worker must be run as a worker thread");
     }
 
-    // Listen for job data from main thread
-    parentPort.on("message", async (jobData: WorkerJobData) => {
+    // Listen for messages from main thread (both job data and stop commands)
+    parentPort.on("message", async (message: any) => {
+      // Handle stop command
+      if (message.type === "stop" && message.jobId) {
+        console.log(`Worker: Received stop command for job ${message.jobId}`);
+        const state = scrapingStateManager.getState();
+        const isCurrentJob =
+          this.currentJobId === message.jobId ||
+          state.currentJobId === message.jobId;
+
+        if (isCurrentJob) {
+          // Stop scraping gracefully
+          scrapingStateManager.stopScraping();
+          console.log(`Worker: Stopped scraping for job ${message.jobId}`);
+
+          // Send acknowledgment
+          this.sendMessage({
+            type: "job-progress",
+            jobId: message.jobId,
+            data: {
+              message: `Job ${message.jobId} stopped by user request`,
+              stopped: true,
+            },
+            timestamp: new Date(),
+          });
+        } else {
+          console.log(
+            `Worker: Stop command received for job ${
+              message.jobId
+            }, but current job is ${
+              this.currentJobId || state.currentJobId || "none"
+            }`
+          );
+        }
+        return;
+      }
+
+      // Handle job data (existing logic)
+      const jobData = message as WorkerJobData;
       try {
         await this.executeJob(jobData);
       } catch (error) {
