@@ -12,7 +12,8 @@ export interface PaymentInfo {
   total_guest_payment?: number;
   cancellation_fee?: number;
   total_payout?: number;
-  amount_to_charge_or_refund: number; // Required field for calculations
+  amount_to_charge_or_refund: number;
+  amount_to_charge_or_refund_currency?: string;
 }
 
 // Interface for the JobItem document
@@ -78,6 +79,10 @@ const PaymentInfoSchema = new Schema<PaymentInfo>(
     amount_to_charge_or_refund: {
       type: Number,
       required: true,
+    },
+    amount_to_charge_or_refund_currency: {
+      type: String,
+      required: false,
     },
   },
   { _id: false }

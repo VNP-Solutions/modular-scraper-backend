@@ -900,9 +900,14 @@ async function saveGraphQLReservationToDatabase(
     if (reservationItem.totalAmounts) {
       // Extract amount to charge/refund from EVC card data if available
       let amountToChargeOrRefund = 0;
+      let amountToChargeOrRefundCurrency: string | undefined = undefined;
       if (evcCardData?.cardInformation?.availableBalance?.amount) {
         amountToChargeOrRefund =
           evcCardData.cardInformation.availableBalance.amount;
+      }
+      if (evcCardData?.cardInformation?.availableBalance?.currency) {
+        amountToChargeOrRefundCurrency =
+          evcCardData.cardInformation.availableBalance.currency;
       }
 
       paymentData = {
@@ -914,6 +919,7 @@ async function saveGraphQLReservationToDatabase(
           reservationItem.totalAmounts.propertyBookingTotal
         ),
         amount_to_charge_or_refund: amountToChargeOrRefund,
+        amount_to_charge_or_refund_currency: amountToChargeOrRefundCurrency,
       };
     }
 
