@@ -11,6 +11,7 @@ export interface CreateDbDataInput {
   };
   gearbox_queue_ids: string[];
   total_invoice_amount: number;
+  total_invoice_amount_currency?: string;
 }
 
 export class DbDataService {
@@ -28,6 +29,7 @@ export class DbDataService {
       },
       gearbox_queue_ids: data.gearbox_queue_ids,
       total_invoice_amount: data.total_invoice_amount,
+      total_invoice_amount_currency: data.total_invoice_amount_currency,
     });
 
     return await dbData.save();

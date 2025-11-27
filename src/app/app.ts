@@ -685,7 +685,7 @@ app.post("/api/scraping/resume", (async (
  *               $ref: '#/components/schemas/ErrorResponse'
  */
 // API to stop specific scraping job
-app.post("/api/scraping/stop", (async (
+app.post("/api/db/stop", (async (
   req: express.Request,
   res: express.Response
 ) => {
