@@ -16,6 +16,8 @@ import { propertySearchAndClickPayments } from "./property-search/property-searc
 
 dotenv.config();
 
+//MARK: This is the ectry function for the db scraping.
+// It will scrape the db for the given expediaId, startDate, endDate, jobId, user_email, user_password which 
 async function dbScraping(
   expediaId?: string,
   startDate?: string,

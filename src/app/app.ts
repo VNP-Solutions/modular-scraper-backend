@@ -1463,11 +1463,19 @@ app.post("/api/expedia/property-run-job", (async (
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  */
+
+// MARK: DB Run Job API
+// Explanation: This endpoint initiates a Direct Billing (DB) scraping job for Expedia Partner Central.
+// The endpoint orchestrates job submission to worker threads which handle the actual scraping process.
+// Manual Flow: Login → Choose Property → Payment Page → Request Payment from Expedia Group →
+// Select Date Range → Set Date & Search → Select All Data clicking checkbox → set Max. Billable Amount for all rows → check the invoice checkbox → click submit → store total invoice amount , gearboxid in database
 app.post("/api/expedia/db-run-job", (async (
   req: express.Request,
   res: express.Response
 ) => {
   try {
+    // MARK: Request Validation
+    // Explanation: Validates required parameters from request body before processing.
     const { startDate, endDate, jobId } = req.body;
 
     if (!startDate || !endDate) {
@@ -1476,6 +1484,7 @@ app.post("/api/expedia/db-run-job", (async (
         message: "startDate and endDate are required in request body",
       });
     }
+
     if (!jobId) {
       return res.status(400).json({
         status: 400,
@@ -1483,7 +1492,8 @@ app.post("/api/expedia/db-run-job", (async (
       });
     }
 
-    // Check if worker threads are available
+    // MARK: Worker Pool Availability Check
+    // Explanation: Checks if system has capacity to process the job. Prevents overload.
     if (
       !otpAwareWorkerPool.hasAvailableWorkers() &&
       otpAwareWorkerPool.isQueueFull()
@@ -1495,7 +1505,8 @@ app.post("/api/expedia/db-run-job", (async (
       });
     }
 
-    // 1. Validate job exists and can be run
+    // MARK: Job Validation
+    // Explanation: Validates job exists in database and is in a runnable state.
     const validation = await jobService.validateJob(jobId);
 
     if (!validation.exists) {
@@ -1513,7 +1524,8 @@ app.post("/api/expedia/db-run-job", (async (
       });
     }
 
-    // 2. Get expedia_id from job's property
+    // MARK: Credential Retrieval
+    // Explanation: Fetches Expedia property ID and login credentials from job's associated property.
     console.log(`Getting expedia_id for job ${jobId}...`);
     const jobData = await jobService.getExpediaIdFromJob(jobId);
 
@@ -1535,7 +1547,8 @@ app.post("/api/expedia/db-run-job", (async (
 
     console.log(`Using expedia_id: ${expediaId} for scraping`);
 
-    // 3. Prepare worker job data
+    // MARK: Worker Job Data Preparation
+    // Explanation: Constructs data structure to be passed to worker thread for execution.
     const workerJobData: WorkerJobData = {
       jobType: "db-run",
       jobId,
@@ -1546,7 +1559,8 @@ app.post("/api/expedia/db-run-job", (async (
       user_password,
     };
 
-    // 4. Execute job in worker thread
+    // MARK: Worker Thread Execution
+    // Explanation: Submits job to worker pool for asynchronous processing. Worker handles browser automation, login, OTP verification, and scraping.
     try {
       console.log(`Submitting job ${jobId} to worker pool...`);
 
@@ -1565,7 +1579,8 @@ app.post("/api/expedia/db-run-job", (async (
     } catch (workerError) {
       console.error(`Worker error for job ${jobId}:`, workerError);
 
-      // Ensure job is marked as failed
+      // MARK: Error Handling & Cleanup
+      // Explanation: Ensures job is marked as failed and cleanup is performed on errors.
       try {
         await progressManager.handleJobError(jobId, workerError);
       } catch (cleanupError) {
@@ -1583,9 +1598,10 @@ app.post("/api/expedia/db-run-job", (async (
       });
     }
   } catch (err: any) {
+    // MARK: Global Error Handler
+    // Explanation: Catches unexpected errors outside worker execution and ensures proper cleanup.
     console.error("Error in /api/expedia/db-run-job:", err);
 
-    // Ensure job is marked as failed
     try {
       if (req.body.jobId) {
         await progressManager.handleJobError(req.body.jobId, err);
