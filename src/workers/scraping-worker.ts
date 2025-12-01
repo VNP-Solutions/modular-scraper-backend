@@ -5,6 +5,7 @@ import { otpCompletionNotifier } from "../common/otp-completion-notifier.js";
 import { WorkerJobData, WorkerMessage } from "../common/worker-types.js";
 
 // Import the main functions
+import agodaRetrieval from "../agoda-retriveal.js";
 import agoda from "../agoda.js";
 import {
   dualLogError,
@@ -20,6 +21,7 @@ import { JobStatus } from "../models/job.model.js";
 import reservation from "../reservation/reservation.js";
 import { propertyCredentialsService } from "../services/job-credentials.service.js";
 import { jobService } from "../services/job.service.js";
+import { retrievalService } from "../services/retriveal-job.service.js";
 
 // Load environment variables
 dotenv.config();
@@ -190,6 +192,10 @@ class ScrapingWorker {
 
         case "agoda-rerun-failed":
           result = await this.handleAgodaRerunFailed(jobData);
+          break;
+
+        case "agoda-retrieval-run":
+          result = await this.handleAgodaRetrievalRun(jobData);
           break;
 
         case "stop":
@@ -980,6 +986,138 @@ class ScrapingWorker {
       await finalizeJobLogging("failed");
 
       throw error;
+    }
+  }
+
+  private async handleAgodaRetrievalRun(jobData: WorkerJobData): Promise<any> {
+    const {
+      reservations,
+      jobId,
+      retrievalId,
+      agodaId,
+      user_email,
+      user_password,
+    } = jobData;
+
+    if (!reservations || reservations.length === 0) {
+      throw new Error(
+        "reservations array is required for agoda-retrieval-run jobs"
+      );
+    }
+
+    if (!retrievalId) {
+      throw new Error("retrievalId is required for agoda-retrieval-run jobs");
+    }
+
+    // Generate job ID if not provided
+    const finalJobId = jobId || `agoda_retrieval_job_${Date.now()}`;
+
+    // 1. Validate retrieval exists
+    const validation = await retrievalService.validateRetrieval(retrievalId);
+    if (!validation.exists) {
+      throw new Error(`Retrieval with ID ${retrievalId} not found`);
+    }
+
+    if (!validation.canRun) {
+      throw new Error(
+        `Retrieval ${retrievalId} is not in a runnable state. Current status: ${validation.retrieval?.job_status}`
+      );
+    }
+
+    // 2. Get Agoda credentials
+    if (!agodaId || !user_email || !user_password) {
+      throw new Error(
+        "agodaId, user_email, and user_password are required for agoda-retrieval-run jobs"
+      );
+    }
+
+    // Initialize job logging for retrieval job
+    initializeJobLogging(finalJobId);
+    await dualLogInfo(
+      `Worker: Starting Agoda retrieval scraping job ${finalJobId}`,
+      {
+        jobId: finalJobId,
+        retrievalId,
+        agodaId,
+        reservationCount: reservations.length,
+      }
+    );
+
+    try {
+      // 5. Run the main Agoda scraping function
+      // Use start_date and end_date from retrieval if available, otherwise use default range
+
+      await agodaRetrieval(
+        agodaId,
+        finalJobId,
+        user_email,
+        user_password,
+        reservations
+      );
+
+      // 6. Get final retrieval statistics
+      const progress = await retrievalService.getRetrievalProgress(retrievalId);
+
+      // 7. Determine final status based on completion
+      let finalStatus = "Completed";
+      if (progress.totalItems === 0) {
+        finalStatus = "Failed";
+      } else if (progress.completionPercentage < 100) {
+        finalStatus = "Partial";
+      }
+
+      // 8. Update final retrieval status
+      await retrievalService.updateRetrievalStatus(retrievalId, finalStatus);
+
+      // 9. Stop scraping state manager
+      scrapingStateManager.stopScraping();
+
+      // 10. Finalize logging
+      await finalizeJobLogging("success");
+
+      // Get log file information if available
+      const logger = (global as any).getCurrentJobLogger?.();
+      const logInfo = logger
+        ? {
+            logFilePath: logger.getLogFilePath(),
+            logEntriesCount: logger.getLogEntriesCount(),
+            note: "Log file uploaded to S3 and deleted locally after job completion",
+          }
+        : null;
+
+      console.log(
+        `Worker: ✅ Agoda retrieval job ${finalJobId} completed successfully`
+      );
+
+      return {
+        status: 200,
+        message: "Agoda retrieval scraping completed successfully",
+        agodaId,
+        retrievalId,
+        jobId: finalJobId,
+        progress: progress,
+        finalStatus: finalStatus,
+        logInfo: logInfo,
+      };
+    } catch (retrievalError) {
+      await dualLogError(
+        `Worker: Agoda retrieval job ${finalJobId} failed`,
+        retrievalError,
+        {
+          jobId: finalJobId,
+          retrievalId,
+        }
+      );
+
+      // Update retrieval status to Failed
+      await retrievalService.updateRetrievalStatus(retrievalId, "Failed");
+      // Mark scraping as stopped on error
+      scrapingStateManager.stopScraping();
+
+      // Finalize logging with failed status
+      await finalizeJobLogging("failed");
+
+      throw retrievalError;
     }
   }
 

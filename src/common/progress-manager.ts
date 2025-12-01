@@ -69,6 +69,31 @@ export class ProgressManager {
   }
 
   /**
+   * Initialize progress tracking for a job
+   */
+  async initializeJobProgressForAgodaRetriveal(
+    jobId: string,
+    totalChunks: number
+  ): Promise<void> {
+    const progress: JobProgress = {
+      jobId,
+      totalChunks,
+      progressPercentage: 0,
+      currentStage: "initialized",
+      completedChunks: 0,
+      updatedAt: new Date(),
+    };
+
+    this.progressMap.set(jobId, progress);
+    await this.saveJobProgressToDisk(jobId);
+
+    await dualLogInfo(`Initialized progress tracking for job ${jobId}`, {
+      jobId,
+      totalChunks,
+    });
+  }
+
+  /**
    * Update job progress
    */
   async updateJobProgress(

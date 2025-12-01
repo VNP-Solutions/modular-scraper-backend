@@ -11,6 +11,7 @@ import { getAccess, getOauth2Callback } from "../get-access/access.js";
 import { JobStatus } from "../models/job.model.js";
 import { propertyCredentialsService } from "../services/job-credentials.service.js";
 import { jobService } from "../services/job.service.js";
+import { retrievalService } from "../services/retriveal-job.service.js";
 
 const app = express();
 
@@ -2651,10 +2652,9 @@ app.post("/api/agoda/rerun-failed-job", (async (
   }
 }) as any);
 
-
 /**
  * @swagger
- * /api/agoda/property-run-job:
+ * /api/agoda/retriveal-run-job:
  *   post:
  *     tags:
  *       - Agoda Scraping
@@ -2751,21 +2751,62 @@ app.post("/api/agoda/retriveal-run-job", (async (
   res: express.Response
 ) => {
   try {
-    const { startDate, endDate, jobId } = req.body;
+    const { retrieval_id } = req.body;
 
-    if (!startDate || !endDate) {
+    if (!retrieval_id) {
       return res.status(400).json({
         status: 400,
-        message: "startDate and endDate are required in request body",
-      });
-    }
-    if (!jobId) {
-      return res.status(400).json({
-        status: 400,
-        message: "jobId is required in request body",
+        message: "retrieval_id is required",
       });
     }
 
+     // Get property credentials for the retrieval
+     const retrievalData = await retrievalService.getAgodaIdFromRetrieval(
+      retrieval_id
+    );
+
+    if (!retrievalData || !retrievalData.agodaId) {
+      return res.status(400).json({
+        status: 400,
+        message: "Could not retrieve Agoda credentials for retrieval",
+      });
+    }
+
+    console.log(
+      `✅ Found Agoda credentials for retrieval: ${retrieval_id}, agoda_id: ${retrievalData.agodaId}`
+    );
+    console.log(`Using agoda_id: ${retrievalData.agodaId} for scraping`);
+    console.log(`Using username: ${retrievalData.user_email}`);
+
+
+    console.log(
+      `Getting retrieval details for retrieval ID: ${retrieval_id}...`
+    );
+
+    // Get retrieval from database
+    const retrieval = await retrievalService.getRetrievalById(retrieval_id);
+
+    if (!retrieval) {
+      return res.status(404).json({
+        status: 404,
+        message: `Retrieval with ID ${retrieval_id} not found`,
+      });
+    }
+
+    // Get reservations array from retrieval
+    const reservations = retrieval.reservations || [];
+    console.log("reservations", reservations);
+
+    if (reservations.length === 0) {
+      return res.status(400).json({
+        status: 400,
+        message: "No reservations found in retrieval",
+      });
+    }
+
+    console.log(
+      `Found ${reservations.length} reservations in retrieval ${retrieval_id}`
+    );
     // Check if worker threads are available
     if (
       !otpAwareWorkerPool.hasAvailableWorkers() &&
@@ -2778,114 +2819,85 @@ app.post("/api/agoda/retriveal-run-job", (async (
       });
     }
 
-    // 1. Validate job exists and can be run
-    const validation = await jobService.validateJob(jobId);
+    const plainReservations = reservations.map(String); // Ensure plain strings
+    const formattedReservations = [
+      {
+        id: String(retrievalData.agodaId), // Ensure plain string
+        idList: plainReservations,
+      },
+    ];
 
-    if (!validation.exists) {
-      return res.status(404).json({
-        status: 404,
-        message: `Job with ID ${jobId} not found`,
-      });
-    }
+    console.log(
+      `Formatted reservations for property ${retrievalData.agodaId}:`,
+      formattedReservations
+    );
 
-    if (!validation.canRun) {
-      return res.status(409).json({
-        status: 409,
-        message: `Job ${jobId} is not in a runnable state. Current status: ${validation.job?.job_status}`,
-        currentState: validation.job,
-      });
-    }
+    // Generate job ID and prepare worker job data
+    const jobId = `retrieval_job_${retrieval_id}_${Date.now()}`;
 
-    // 2. Get agoda_id from job's property and credentials
-    console.log(`Getting agoda_id for job ${jobId}...`);
-    const propertyData = await jobService.getAgodaIdFromJob(jobId);
-    const propertyCredentials =
-      await propertyCredentialsService.getCredentialsByJobId(jobId);
-
-    if (!propertyData || !propertyData.agodaId) {
-      return res.status(400).json({
-        status: 400,
-        message: `Cannot retrieve valid agoda_id for job ${jobId}. Property may not have agoda_id assigned or agoda_id is "0".`,
-      });
-    }
-
-    if (
-      !propertyCredentials?.agodaUsername ||
-      !propertyCredentials?.agodaPassword
-    ) {
-      return res.status(400).json({
-        status: 400,
-        message: `Cannot retrieve valid agodaUsername or agodaPassword for job ${jobId}. Property may not have agodaUsername or agodaPassword assigned.`,
-      });
-    }
-
-    const { agodaId } = propertyData;
-    const { agodaUsername, agodaPassword } = propertyCredentials;
-
-    console.log(`Using agoda_id: ${agodaId} for scraping`);
-
-    // 3. Prepare worker job data
     const workerJobData: WorkerJobData = {
-      jobType: "agoda-property-run",
+      jobType: "agoda-retrieval-run",
       jobId,
-      startDate,
-      endDate,
-      agodaId,
-      agodaUsername,
-      agodaPassword,
+      retrievalId: String(retrieval_id), // Ensure plain string
+      reservations: formattedReservations,
+      agodaId: String(retrievalData.agodaId), // Ensure plain string
+      user_email: String(retrievalData.user_email || ""), // Ensure plain string
+      user_password: String(retrievalData.user_password || ""), // Ensure plain string
     };
 
-    // 4. Execute job in worker thread
+    // Update retrieval status to Running
+    await retrievalService.updateRetrievalStatus(retrieval_id, "Running");
+
+    // Execute job in worker thread
     try {
-      console.log(`Submitting Agoda job ${jobId} to worker pool...`);
+      console.log(`Submitting retrieval job ${jobId} to worker pool...`);
 
       const result = await otpAwareWorkerPool.executeJob(workerJobData);
 
       if (result.success) {
-        return res.status(200).json(result.data);
+        // Update retrieval status to Completed
+        await retrievalService.updateRetrievalStatus(retrieval_id, "Completed");
+
+        return res.status(200).json({
+          ...result.data,
+          retrieval_id,
+          reservationCount: reservations.length,
+        });
       } else {
+        // Update retrieval status to Failed
+        await retrievalService.updateRetrievalStatus(retrieval_id, "Failed");
+
         return res.status(500).json({
           status: 500,
-          message: "Agoda job execution failed",
+          message: "Retrieval job execution failed",
           error: result.error,
           jobId: result.jobId,
+          retrieval_id,
         });
       }
     } catch (workerError) {
-      console.error(`Agoda Worker error for job ${jobId}:`, workerError);
+      console.error(`Worker error for retrieval job ${jobId}:`, workerError);
 
-      // Ensure job is marked as failed
-      try {
-        await progressManager.handleJobError(jobId, workerError);
-      } catch (cleanupError) {
-        console.error("Error during cleanup:", cleanupError);
-      }
+      // Update retrieval status to Failed
+      await retrievalService.updateRetrievalStatus(retrieval_id, "Failed");
 
       return res.status(500).json({
         status: 500,
-        message: "Agoda Worker execution failed",
+        message: "Worker execution failed for retrieval job",
         error:
           workerError instanceof Error
             ? workerError.message
             : String(workerError),
         jobId,
+        retrieval_id,
       });
     }
   } catch (err: any) {
-    console.error("Error in /api/agoda/property-run-job:", err);
-
-    // Ensure job is marked as failed
-    try {
-      if (req.body.jobId) {
-        await progressManager.handleJobError(req.body.jobId, err);
-      }
-    } catch (cleanupError) {
-      console.error("Error during cleanup:", cleanupError);
-    }
+    console.error("Error in /api/agoda/retriveal-run-job:", err);
 
     res.status(500).json({
       status: 500,
-      message: "Error processing Agoda property search",
+      message: "Error processing retrieval job",
       error: err.message,
     });
   }
