@@ -2651,6 +2651,246 @@ app.post("/api/agoda/rerun-failed-job", (async (
   }
 }) as any);
 
+
+/**
+ * @swagger
+ * /api/agoda/property-run-job:
+ *   post:
+ *     tags:
+ *       - Agoda Scraping
+ *     summary: Execute Agoda property scraping job
+ *     description: |
+ *       Executes a scraping job for an Agoda property within the specified date range.
+ *       This endpoint performs the following operations:
+ *
+ *       1. **Job Validation**: Validates that the job exists and is in a runnable state
+ *       2. **Credential Retrieval**: Gets Agoda credentials and property ID from the job
+ *       3. **Authentication**: Uses email-based sign-in link authentication with Agoda
+ *       4. **Data Extraction**: Scrapes reservation and payment data from Agoda
+ *       5. **Progress Tracking**: Monitors and logs job progress with detailed statistics
+ *       6. **Resource Management**: Manages browser resources and worker thread assignments
+ *       7. **Error Handling**: Comprehensive error handling with email notifications
+ *       8. **Log Management**: Uploads detailed logs to S3 storage
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - startDate
+ *               - endDate
+ *               - jobId
+ *             properties:
+ *               startDate:
+ *                 type: string
+ *                 format: date
+ *                 example: "01/01/2025"
+ *                 description: Start date for scraping (MM/DD/YYYY format)
+ *               endDate:
+ *                 type: string
+ *                 format: date
+ *                 example: "01/31/2025"
+ *                 description: End date for scraping (MM/DD/YYYY format)
+ *               jobId:
+ *                 type: string
+ *                 example: "6892f4bf9df8bc296bdcdff0"
+ *                 description: MongoDB ObjectId of the job to execute
+ *     responses:
+ *       200:
+ *         description: Job completed successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 200
+ *                 message:
+ *                   type: string
+ *                   example: "Agoda property scraping completed successfully"
+ *                 agodaId:
+ *                   type: string
+ *                   example: "123456"
+ *                 jobId:
+ *                   type: string
+ *                   example: "507f1f77bcf86cd799439011"
+ *                 progress:
+ *                   type: object
+ *                   properties:
+ *                     totalItems:
+ *                       type: integer
+ *                       example: 150
+ *                     completionPercentage:
+ *                       type: number
+ *                       example: 97
+ *                 finalStatus:
+ *                   type: string
+ *                   example: "Completed"
+ *                 logInfo:
+ *                   type: object
+ *                   properties:
+ *                     logFilePath:
+ *                       type: string
+ *                     logEntriesCount:
+ *                       type: integer
+ *                     note:
+ *                       type: string
+ *       400:
+ *         description: Bad request - Invalid input parameters
+ *       404:
+ *         description: Job not found
+ *       409:
+ *         description: Job not in runnable state
+ *       500:
+ *         description: Internal server error
+ */
+app.post("/api/agoda/retriveal-run-job", (async (
+  req: express.Request,
+  res: express.Response
+) => {
+  try {
+    const { startDate, endDate, jobId } = req.body;
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({
+        status: 400,
+        message: "startDate and endDate are required in request body",
+      });
+    }
+    if (!jobId) {
+      return res.status(400).json({
+        status: 400,
+        message: "jobId is required in request body",
+      });
+    }
+
+    // Check if worker threads are available
+    if (
+      !otpAwareWorkerPool.hasAvailableWorkers() &&
+      otpAwareWorkerPool.isQueueFull()
+    ) {
+      return res.status(200).json({
+        status: 200,
+        message: "All server busy, try again",
+        workerStatus: otpAwareWorkerPool.getStatus(),
+      });
+    }
+
+    // 1. Validate job exists and can be run
+    const validation = await jobService.validateJob(jobId);
+
+    if (!validation.exists) {
+      return res.status(404).json({
+        status: 404,
+        message: `Job with ID ${jobId} not found`,
+      });
+    }
+
+    if (!validation.canRun) {
+      return res.status(409).json({
+        status: 409,
+        message: `Job ${jobId} is not in a runnable state. Current status: ${validation.job?.job_status}`,
+        currentState: validation.job,
+      });
+    }
+
+    // 2. Get agoda_id from job's property and credentials
+    console.log(`Getting agoda_id for job ${jobId}...`);
+    const propertyData = await jobService.getAgodaIdFromJob(jobId);
+    const propertyCredentials =
+      await propertyCredentialsService.getCredentialsByJobId(jobId);
+
+    if (!propertyData || !propertyData.agodaId) {
+      return res.status(400).json({
+        status: 400,
+        message: `Cannot retrieve valid agoda_id for job ${jobId}. Property may not have agoda_id assigned or agoda_id is "0".`,
+      });
+    }
+
+    if (
+      !propertyCredentials?.agodaUsername ||
+      !propertyCredentials?.agodaPassword
+    ) {
+      return res.status(400).json({
+        status: 400,
+        message: `Cannot retrieve valid agodaUsername or agodaPassword for job ${jobId}. Property may not have agodaUsername or agodaPassword assigned.`,
+      });
+    }
+
+    const { agodaId } = propertyData;
+    const { agodaUsername, agodaPassword } = propertyCredentials;
+
+    console.log(`Using agoda_id: ${agodaId} for scraping`);
+
+    // 3. Prepare worker job data
+    const workerJobData: WorkerJobData = {
+      jobType: "agoda-property-run",
+      jobId,
+      startDate,
+      endDate,
+      agodaId,
+      agodaUsername,
+      agodaPassword,
+    };
+
+    // 4. Execute job in worker thread
+    try {
+      console.log(`Submitting Agoda job ${jobId} to worker pool...`);
+
+      const result = await otpAwareWorkerPool.executeJob(workerJobData);
+
+      if (result.success) {
+        return res.status(200).json(result.data);
+      } else {
+        return res.status(500).json({
+          status: 500,
+          message: "Agoda job execution failed",
+          error: result.error,
+          jobId: result.jobId,
+        });
+      }
+    } catch (workerError) {
+      console.error(`Agoda Worker error for job ${jobId}:`, workerError);
+
+      // Ensure job is marked as failed
+      try {
+        await progressManager.handleJobError(jobId, workerError);
+      } catch (cleanupError) {
+        console.error("Error during cleanup:", cleanupError);
+      }
+
+      return res.status(500).json({
+        status: 500,
+        message: "Agoda Worker execution failed",
+        error:
+          workerError instanceof Error
+            ? workerError.message
+            : String(workerError),
+        jobId,
+      });
+    }
+  } catch (err: any) {
+    console.error("Error in /api/agoda/property-run-job:", err);
+
+    // Ensure job is marked as failed
+    try {
+      if (req.body.jobId) {
+        await progressManager.handleJobError(req.body.jobId, err);
+      }
+    } catch (cleanupError) {
+      console.error("Error during cleanup:", cleanupError);
+    }
+
+    res.status(500).json({
+      status: 500,
+      message: "Error processing Agoda property search",
+      error: err.message,
+    });
+  }
+}) as any);
+
 // * Global error handle middleware
 app.use((err: any, req: any, res: any, next: any) => {
   if (res.headersSent) {
