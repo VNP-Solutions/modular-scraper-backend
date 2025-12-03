@@ -6,6 +6,7 @@ import { takeSuccessScreenshot } from "../../common/screenshot-helper.js";
 import { timeoutManager } from "../../common/timeout-manager.js";
 import { searchBookingAndNavigateToPayout } from "../retriveal-data/retriveal-data.js";
 import { PAGE_LOADING, RESERVATIONS_PAGE } from "../utils/selectors.js";
+import { scrapingStateManager } from "../../common/scraping-state.js";
 
 // Interface for reservation data
 interface Reservation {
@@ -83,11 +84,11 @@ export async function getAgodaRetrivealData(
 
   try {
     // Check if scraping is paused before starting
-    // await scrapingStateManager.waitWhilePaused();
-    // if (!scrapingStateManager.isRunning()) {
-    //   await dualLogError("Scraping was stopped during booking data retrieval");
-    //   throw new Error("Scraping was stopped during booking data retrieval");
-    // }
+    await scrapingStateManager.waitWhilePaused();
+    if (!scrapingStateManager.isRunning()) {
+      await dualLogError("Scraping was stopped during booking data retrieval");
+      throw new Error("Scraping was stopped during booking data retrieval");
+    }
 
     // Get timeout configuration for this job
     const selectorTimeout = await timeoutManager.getSelectorTimeout(jobId);

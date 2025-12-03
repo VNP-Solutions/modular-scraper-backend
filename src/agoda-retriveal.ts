@@ -19,6 +19,7 @@ import {
 import { timeManager } from "./common/time-manager.js";
 import { JobStatus } from "./models/job.model.js";
 import { jobService } from "./services/job.service.js";
+import { scrapingStateManager } from "./common/scraping-state.js";
 
 dotenv.config();
 
@@ -26,6 +27,26 @@ dotenv.config();
 interface Reservation {
   id: string;
   idList: string[];
+}
+
+let currentRetrievalContext: {
+  retrievalId: string;
+  parentRetrievalId: string;
+  jobId: string; // Add jobId to context
+} | null = null;
+
+
+export function setAgodaRetrievalContext(
+  retrievalId: string,
+  parentRetrievalId: string,
+  jobId: string
+) {
+  currentRetrievalContext = { retrievalId, parentRetrievalId, jobId };
+}
+
+
+export function clearAgodaRetrievalContext() {
+  currentRetrievalContext = null;
 }
 
 async function agodaRetrieval(
@@ -63,24 +84,24 @@ async function agodaRetrieval(
     }
 
     // Check if scraping is paused before starting
-    // await scrapingStateManager.waitWhilePaused();
-    // if (!scrapingStateManager.isRunning()) {
-    //   await dualLogError(
-    //     "Scraping was stopped during Agoda automation startup"
-    //   );
-    //   throw new Error("Scraping was stopped during Agoda automation startup");
-    // }
+    await scrapingStateManager.waitWhilePaused();
+    if (!scrapingStateManager.isRunning()) {
+      await dualLogError(
+        "Scraping was stopped during Agoda automation startup"
+      );
+      throw new Error("Scraping was stopped during Agoda automation startup");
+    }
 
     // // Update progress - initialization phase
-    // if (jobId) {
-    //   await progressManager.updateJobProgress(
-    //     jobId,
-    //     undefined,
-    //     5,
-    //     PROGRESS_STATUS.AUTOMATION_INITIALIZED,
-    //     undefined
-    //   );
-    // }
+    if (jobId) {
+      await progressManager.updateJobProgress(
+        jobId,
+        undefined,
+        5,
+        PROGRESS_STATUS.AUTOMATION_INITIALIZED,
+        undefined
+      );
+    }
 
     // Browser setup
     const environment = process.env.ENVIRONMENT || CONFIG.ENVIRONMENT.DEFAULT;
@@ -220,11 +241,6 @@ async function agodaRetrieval(
         await dualLogError("Failed to take error screenshot:", screenshotError);
       }
     }
-
-    // Only notify OTP completion if login was actually attempted
-    // (OTP completion is handled in login.ts after OTP verification)
-    // If error occurs before login, don't notify OTP completion
-    // This prevents false OTP release when job fails early
 
     // End time session on error
     await timeManager.endSession();

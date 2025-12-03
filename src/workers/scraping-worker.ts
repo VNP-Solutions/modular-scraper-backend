@@ -5,7 +5,10 @@ import { otpCompletionNotifier } from "../common/otp-completion-notifier.js";
 import { WorkerJobData, WorkerMessage } from "../common/worker-types.js";
 
 // Import the main functions
-import agodaRetrieval from "../agoda-retriveal.js";
+import agodaRetrieval, {
+  clearAgodaRetrievalContext,
+  setAgodaRetrievalContext,
+} from "../agoda-retriveal.js";
 import agoda from "../agoda.js";
 import {
   dualLogError,
@@ -1023,7 +1026,7 @@ class ScrapingWorker {
     const parentRetrievalId = retrieval.parent_retrieval_id.toString();
 
     // Set retrieval context for scraping (including jobId for database saves)
-    setRetrievalContext(retrievalId, parentRetrievalId, finalJobId);
+    setAgodaRetrievalContext(retrievalId, parentRetrievalId, finalJobId);
     console.log(
       `Worker: Set retrieval context - retrievalId: ${retrievalId}, parentRetrievalId: ${parentRetrievalId}, jobId: ${finalJobId}`
     );
@@ -1100,7 +1103,7 @@ class ScrapingWorker {
       throw reservationError;
     } finally {
       // Always clear retrieval context when done
-      clearRetrievalContext();
+      clearAgodaRetrievalContext();
       console.log(`Worker: Cleared retrieval context`);
     }
   }
