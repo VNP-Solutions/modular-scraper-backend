@@ -1,6 +1,7 @@
 import bodyParser from "body-parser";
 import cors from "cors";
 import express from "express";
+import agodaRetrieval from "../agoda-retriveal.js";
 import createError from "../common/error.js";
 import { otpAwareWorkerPool } from "../common/otp-aware-worker-pool.js";
 import { progressManager } from "../common/progress-manager.js";
@@ -2658,17 +2659,18 @@ app.post("/api/agoda/rerun-failed-job", (async (
  *   post:
  *     tags:
  *       - Agoda Scraping
- *     summary: Execute Agoda property scraping job
+ *     summary: Execute Agoda retrieval scraping job
  *     description: |
- *       Executes a scraping job for an Agoda property within the specified date range.
+ *       Executes a scraping job for Agoda retrieval reservations. This endpoint processes
+ *       reservation data extraction for a specific retrieval record.
  *       This endpoint performs the following operations:
  *
- *       1. **Job Validation**: Validates that the job exists and is in a runnable state
- *       2. **Credential Retrieval**: Gets Agoda credentials and property ID from the job
- *       3. **Authentication**: Uses email-based sign-in link authentication with Agoda
- *       4. **Data Extraction**: Scrapes reservation and payment data from Agoda
- *       5. **Progress Tracking**: Monitors and logs job progress with detailed statistics
- *       6. **Resource Management**: Manages browser resources and worker thread assignments
+ *       1. **Retrieval Validation**: Validates that the retrieval exists in the database
+ *       2. **Reservations Check**: Verifies that the retrieval contains reservation IDs
+ *       3. **Credential Retrieval**: Gets Agoda credentials (username, password) and property ID (agodaId) from the retrieval's associated property
+ *       4. **Authentication**: Uses email-based sign-in link authentication with Agoda
+ *       5. **Data Extraction**: Scrapes reservation and payment data from Agoda for the specified reservations
+ *       6. **Progress Tracking**: Monitors and logs job progress with detailed statistics
  *       7. **Error Handling**: Comprehensive error handling with email notifications
  *       8. **Log Management**: Uploads detailed logs to S3 storage
  *     requestBody:
@@ -2678,27 +2680,15 @@ app.post("/api/agoda/rerun-failed-job", (async (
  *           schema:
  *             type: object
  *             required:
- *               - startDate
- *               - endDate
- *               - jobId
+ *               - retrieval_id
  *             properties:
- *               startDate:
- *                 type: string
- *                 format: date
- *                 example: "01/01/2025"
- *                 description: Start date for scraping (MM/DD/YYYY format)
- *               endDate:
- *                 type: string
- *                 format: date
- *                 example: "01/31/2025"
- *                 description: End date for scraping (MM/DD/YYYY format)
- *               jobId:
+ *               retrieval_id:
  *                 type: string
  *                 example: "6892f4bf9df8bc296bdcdff0"
- *                 description: MongoDB ObjectId of the job to execute
+ *                 description: MongoDB ObjectId of the retrieval record to execute
  *     responses:
  *       200:
- *         description: Job completed successfully
+ *         description: Retrieval job started successfully (job runs asynchronously)
  *         content:
  *           application/json:
  *             schema:
@@ -2709,42 +2699,54 @@ app.post("/api/agoda/rerun-failed-job", (async (
  *                   example: 200
  *                 message:
  *                   type: string
- *                   example: "Agoda property scraping completed successfully"
- *                 agodaId:
- *                   type: string
- *                   example: "123456"
- *                 jobId:
- *                   type: string
- *                   example: "507f1f77bcf86cd799439011"
- *                 progress:
- *                   type: object
- *                   properties:
- *                     totalItems:
- *                       type: integer
- *                       example: 150
- *                     completionPercentage:
- *                       type: number
- *                       example: 97
- *                 finalStatus:
- *                   type: string
- *                   example: "Completed"
- *                 logInfo:
- *                   type: object
- *                   properties:
- *                     logFilePath:
- *                       type: string
- *                     logEntriesCount:
- *                       type: integer
- *                     note:
- *                       type: string
+ *                   example: "Retrieval job started successfully"
  *       400:
  *         description: Bad request - Invalid input parameters
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 400
+ *                 message:
+ *                   type: string
+ *                   example: "retrieval_id is required"
+ *                   description: |
+ *                     Possible error messages:
+ *                     - "retrieval_id is required"
+ *                     - "No reservations found in retrieval"
+ *                     - "Could not retrieve Agoda credentials for retrieval"
  *       404:
- *         description: Job not found
- *       409:
- *         description: Job not in runnable state
+ *         description: Retrieval not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 404
+ *                 message:
+ *                   type: string
+ *                   example: "Retrieval with ID {retrieval_id} not found"
  *       500:
  *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 500
+ *                 message:
+ *                   type: string
+ *                   example: "Error processing retrieval job"
+ *                 error:
+ *                   type: string
+ *                   example: "Error message details"
  */
 app.post("/api/agoda/retriveal-run-job", (async (
   req: express.Request,
@@ -2759,25 +2761,6 @@ app.post("/api/agoda/retriveal-run-job", (async (
         message: "retrieval_id is required",
       });
     }
-
-     // Get property credentials for the retrieval
-     const retrievalData = await retrievalService.getAgodaIdFromRetrieval(
-      retrieval_id
-    );
-
-    if (!retrievalData || !retrievalData.agodaId) {
-      return res.status(400).json({
-        status: 400,
-        message: "Could not retrieve Agoda credentials for retrieval",
-      });
-    }
-
-    console.log(
-      `✅ Found Agoda credentials for retrieval: ${retrieval_id}, agoda_id: ${retrievalData.agodaId}`
-    );
-    console.log(`Using agoda_id: ${retrievalData.agodaId} for scraping`);
-    console.log(`Using username: ${retrievalData.user_email}`);
-
 
     console.log(
       `Getting retrieval details for retrieval ID: ${retrieval_id}...`
@@ -2807,6 +2790,25 @@ app.post("/api/agoda/retriveal-run-job", (async (
     console.log(
       `Found ${reservations.length} reservations in retrieval ${retrieval_id}`
     );
+
+    // Get property credentials for the retrieval
+    const retrievalData = await retrievalService.getAgodaIdFromRetrieval(
+      retrieval_id
+    );
+
+    if (!retrievalData || !retrievalData.agodaId) {
+      return res.status(400).json({
+        status: 400,
+        message: "Could not retrieve Agoda credentials for retrieval",
+      });
+    }
+
+    console.log(
+      `✅ Found Agoda credentials for retrieval: ${retrieval_id}, agoda_id: ${retrievalData.agodaId}`
+    );
+    console.log(`Using agoda_id: ${retrievalData.agodaId} for scraping`);
+    console.log(`Using username: ${retrievalData.user_email}`);
+
     // Check if worker threads are available
     if (
       !otpAwareWorkerPool.hasAvailableWorkers() &&
@@ -2818,7 +2820,6 @@ app.post("/api/agoda/retriveal-run-job", (async (
         workerStatus: otpAwareWorkerPool.getStatus(),
       });
     }
-
     const plainReservations = reservations.map(String); // Ensure plain strings
     const formattedReservations = [
       {
@@ -2845,59 +2846,279 @@ app.post("/api/agoda/retriveal-run-job", (async (
       user_password: String(retrievalData.user_password || ""), // Ensure plain string
     };
 
-    // Update retrieval status to Running
-    await retrievalService.updateRetrievalStatus(retrieval_id, "Running");
+    // Note: Do NOT update status to "Running" here - let the worker do it after validation
 
+    await agodaRetrieval(
+      retrievalData.agodaId,
+      retrieval_id,
+      retrievalData.user_email,
+      retrievalData.user_password,
+      formattedReservations
+    );
     // Execute job in worker thread
-    try {
-      console.log(`Submitting retrieval job ${jobId} to worker pool...`);
+    // try {
+    //   console.log(`Submitting retrieval job ${jobId} to worker pool...`);
 
-      const result = await otpAwareWorkerPool.executeJob(workerJobData);
+    //   const result = await otpAwareWorkerPool.executeJob(workerJobData);
 
-      if (result.success) {
-        // Update retrieval status to Completed
-        await retrievalService.updateRetrievalStatus(retrieval_id, "Completed");
+    //   if (result.success) {
+    //     // Worker already updates status to Completed/Partial/Failed based on progress
+    //     return res.status(200).json({
+    //       ...result.data,
+    //       retrieval_id,
+    //       reservationCount: reservations.length,
+    //     });
+    //   } else {
+    //     // Worker already updates status to Failed on error, but update here as fallback
+    //     // in case worker failed before updating status
+    //     await retrievalService.updateRetrievalStatus(retrieval_id, "Failed");
 
-        return res.status(200).json({
-          ...result.data,
-          retrieval_id,
-          reservationCount: reservations.length,
-        });
-      } else {
-        // Update retrieval status to Failed
-        await retrievalService.updateRetrievalStatus(retrieval_id, "Failed");
+    //     return res.status(500).json({
+    //       status: 500,
+    //       message: "Retrieval job execution failed",
+    //       error: result.error,
+    //       jobId: result.jobId,
+    //       retrieval_id,
+    //     });
+    //   }
+    // } catch (workerError) {
+    //   console.error(`Worker error for retrieval job ${jobId}:`, workerError);
 
-        return res.status(500).json({
-          status: 500,
-          message: "Retrieval job execution failed",
-          error: result.error,
-          jobId: result.jobId,
-          retrieval_id,
-        });
-      }
-    } catch (workerError) {
-      console.error(`Worker error for retrieval job ${jobId}:`, workerError);
+    //   // Update retrieval status to Failed as fallback (worker may have already updated it)
+    //   await retrievalService.updateRetrievalStatus(retrieval_id, "Failed");
 
-      // Update retrieval status to Failed
-      await retrievalService.updateRetrievalStatus(retrieval_id, "Failed");
-
-      return res.status(500).json({
-        status: 500,
-        message: "Worker execution failed for retrieval job",
-        error:
-          workerError instanceof Error
-            ? workerError.message
-            : String(workerError),
-        jobId,
-        retrieval_id,
-      });
-    }
+    //   return res.status(500).json({
+    //     status: 500,
+    //     message: "Worker execution failed for retrieval job",
+    //     error:
+    //       workerError instanceof Error
+    //         ? workerError.message
+    //         : String(workerError),
+    //     jobId,
+    //     retrieval_id,
+    //   });
+    // }
   } catch (err: any) {
     console.error("Error in /api/agoda/retriveal-run-job:", err);
 
     res.status(500).json({
       status: 500,
       message: "Error processing retrieval job",
+      error: err.message,
+    });
+  }
+}) as any);
+
+/**
+ * @swagger
+ * /api/agoda/retrieval-stop-job:
+ *   post:
+ *     tags:
+ *       - Agoda Scraping
+ *     summary: Stop Agoda retrieval scraping job
+ *     description: |
+ *       Stops a running Agoda retrieval scraping job by retrieval ID.
+ *       This endpoint performs the following operations:
+ *
+ *       1. **Validation**: Validates that the retrieval exists
+ *       2. **Job Finding**: Finds the associated job in worker threads
+ *       3. **Job Stopping**: Stops the job and releases the worker thread
+ *       4. **Status Update**: Updates retrieval status to "Stopped" in database
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - retrieval_id
+ *             properties:
+ *               retrieval_id:
+ *                 type: string
+ *                 example: "6892f4bf9df8bc296bdcdff0"
+ *                 description: MongoDB ObjectId of the retrieval to stop
+ *     responses:
+ *       200:
+ *         description: Job stopped successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 200
+ *                 message:
+ *                   type: string
+ *                   example: "Retrieval job stopped successfully"
+ *                 retrieval_id:
+ *                   type: string
+ *                   example: "6892f4bf9df8bc296bdcdff0"
+ *                 finalStatus:
+ *                   type: string
+ *                   example: "Stopped"
+ *       400:
+ *         description: Bad request - Missing retrieval_id
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 400
+ *                 message:
+ *                   type: string
+ *                   example: "retrieval_id is required"
+ *       404:
+ *         description: Retrieval not found or job not currently running
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 404
+ *                 message:
+ *                   type: string
+ *                   example: "Retrieval not found or job not currently running"
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 500
+ *                 message:
+ *                   type: string
+ *                   example: "Error stopping retrieval job"
+ */
+app.post("/api/agoda/retrieval-stop-job", (async (
+  req: express.Request,
+  res: express.Response
+) => {
+  try {
+    const { retrieval_id } = req.body;
+
+    if (!retrieval_id) {
+      return res.status(400).json({
+        status: 400,
+        message: "retrieval_id is required",
+      });
+    }
+
+    console.log(
+      `Attempting to stop retrieval job for retrieval ID: ${retrieval_id}...`
+    );
+
+    // Check if retrieval exists
+    const retrieval = await retrievalService.getRetrievalById(retrieval_id);
+
+    if (!retrieval) {
+      return res.status(404).json({
+        status: 404,
+        message: `Retrieval with ID ${retrieval_id} not found`,
+      });
+    }
+
+    // Find the jobId associated with this retrieval_id
+    const jobId = otpAwareWorkerPool.findJobIdByRetrievalId(retrieval_id);
+
+    if (!jobId) {
+      // Job might not be running, but we can still update status if it exists
+      console.log(
+        `No active job found for retrieval ${retrieval_id}, updating status to Stopped`
+      );
+
+      // Update retrieval status to Stopped
+      const updatedRetrieval = await retrievalService.updateRetrievalStatus(
+        retrieval_id,
+        "Stopped"
+      );
+
+      if (updatedRetrieval) {
+        return res.status(200).json({
+          status: 200,
+          message: "Retrieval status updated to Stopped (no active job found)",
+          retrieval_id,
+          finalStatus: "Stopped",
+        });
+      } else {
+        return res.status(500).json({
+          status: 500,
+          message: "Failed to update retrieval status",
+          retrieval_id,
+        });
+      }
+    }
+
+    console.log(
+      `Found job ${jobId} for retrieval ${retrieval_id}, attempting to stop...`
+    );
+
+    // Attempt to stop the job in the worker pool
+    const stopSuccess = await otpAwareWorkerPool.stopJob(jobId);
+
+    if (stopSuccess) {
+      // Update retrieval status to Stopped in database
+      const updatedRetrieval = await retrievalService.updateRetrievalStatus(
+        retrieval_id,
+        "Stopped"
+      );
+
+      if (updatedRetrieval) {
+        res.status(200).json({
+          status: 200,
+          message: "Retrieval job stopped successfully",
+          retrieval_id,
+          jobId,
+          finalStatus: "Stopped",
+        });
+      } else {
+        res.status(500).json({
+          status: 500,
+          message:
+            "Job stopped but failed to update retrieval status in database",
+          retrieval_id,
+          jobId,
+        });
+      }
+    } else {
+      // Job might not be currently running, but update status anyway
+      console.log(
+        `Job ${jobId} not found in worker pool, updating retrieval status to Stopped`
+      );
+
+      const updatedRetrieval = await retrievalService.updateRetrievalStatus(
+        retrieval_id,
+        "Stopped"
+      );
+
+      if (updatedRetrieval) {
+        res.status(200).json({
+          status: 200,
+          message: "Retrieval status updated to Stopped (job was not active)",
+          retrieval_id,
+          finalStatus: "Stopped",
+        });
+      } else {
+        res.status(404).json({
+          status: 404,
+          message: "Retrieval not found or job not currently running",
+          retrieval_id,
+        });
+      }
+    }
+  } catch (err: any) {
+    console.error("Error in /api/agoda/retrieval-stop-job:", err);
+
+    res.status(500).json({
+      status: 500,
+      message: "Error stopping retrieval job",
       error: err.message,
     });
   }

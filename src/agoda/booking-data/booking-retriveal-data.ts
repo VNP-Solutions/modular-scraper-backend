@@ -2,7 +2,6 @@ import { Browser, Page } from "puppeteer";
 import { delay } from "../../common/delay.js";
 import { dualLogError, dualLogInfo } from "../../common/log-helper.js";
 import { progressManager } from "../../common/progress-manager.js";
-import { scrapingStateManager } from "../../common/scraping-state.js";
 import { takeSuccessScreenshot } from "../../common/screenshot-helper.js";
 import { timeoutManager } from "../../common/timeout-manager.js";
 import { searchBookingAndNavigateToPayout } from "../retriveal-data/retriveal-data.js";
@@ -76,18 +75,19 @@ export async function getAgodaRetrivealData(
   agodaId: string,
   jobId?: string,
   reservations?: Reservation[],
-  agodaUsername?: string
+  agodaUsername?: string,
+  retrievalId?: string
 ): Promise<any[]> {
   let newPage: Page | undefined;
   let client: any;
 
   try {
     // Check if scraping is paused before starting
-    await scrapingStateManager.waitWhilePaused();
-    if (!scrapingStateManager.isRunning()) {
-      await dualLogError("Scraping was stopped during booking data retrieval");
-      throw new Error("Scraping was stopped during booking data retrieval");
-    }
+    // await scrapingStateManager.waitWhilePaused();
+    // if (!scrapingStateManager.isRunning()) {
+    //   await dualLogError("Scraping was stopped during booking data retrieval");
+    //   throw new Error("Scraping was stopped during booking data retrieval");
+    // }
 
     // Get timeout configuration for this job
     const selectorTimeout = await timeoutManager.getSelectorTimeout(jobId);
@@ -304,7 +304,8 @@ export async function getAgodaRetrivealData(
             const success = await searchBookingAndNavigateToPayout(
               newPage,
               bookingId,
-              agodaUsername
+              agodaUsername,
+              retrievalId
             );
 
             if (success) {

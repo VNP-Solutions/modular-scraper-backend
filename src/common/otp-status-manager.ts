@@ -1,3 +1,4 @@
+import dotenv from "dotenv";
 import { EventEmitter } from "events";
 import mongoose from "mongoose";
 import {
@@ -6,7 +7,6 @@ import {
   OtpStatus,
   OtpStatusValue,
 } from "../models/otp-status.model.js";
-import dotenv from "dotenv";
 
 dotenv.config();
 

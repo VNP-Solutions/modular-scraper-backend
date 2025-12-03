@@ -11,9 +11,7 @@ import { browserSetupLocal } from "./browser-setup/browser-local.js";
 import { browserSetupProduction } from "./browser-setup/browser-prod.js";
 import { emailNotifier } from "./common/email-notifier.js";
 import { dualLogError, dualLogInfo } from "./common/log-helper.js";
-import { otpCompletionNotifier } from "./common/otp-completion-notifier.js";
 import { progressManager } from "./common/progress-manager.js";
-import { scrapingStateManager } from "./common/scraping-state.js";
 import {
   takeErrorScreenshot,
   takeSuccessScreenshot,
@@ -35,7 +33,8 @@ async function agodaRetrieval(
   jobId?: string,
   agodaUsername?: string,
   agodaPassword?: string,
-  reservations?: Reservation[]
+  reservations?: Reservation[],
+  retrievalId?: string
 ): Promise<any[]> {
   let browser: Browser | null = null;
 
@@ -64,24 +63,24 @@ async function agodaRetrieval(
     }
 
     // Check if scraping is paused before starting
-    await scrapingStateManager.waitWhilePaused();
-    if (!scrapingStateManager.isRunning()) {
-      await dualLogError(
-        "Scraping was stopped during Agoda automation startup"
-      );
-      throw new Error("Scraping was stopped during Agoda automation startup");
-    }
+    // await scrapingStateManager.waitWhilePaused();
+    // if (!scrapingStateManager.isRunning()) {
+    //   await dualLogError(
+    //     "Scraping was stopped during Agoda automation startup"
+    //   );
+    //   throw new Error("Scraping was stopped during Agoda automation startup");
+    // }
 
-    // Update progress - initialization phase
-    if (jobId) {
-      await progressManager.updateJobProgress(
-        jobId,
-        undefined,
-        5,
-        PROGRESS_STATUS.AUTOMATION_INITIALIZED,
-        undefined
-      );
-    }
+    // // Update progress - initialization phase
+    // if (jobId) {
+    //   await progressManager.updateJobProgress(
+    //     jobId,
+    //     undefined,
+    //     5,
+    //     PROGRESS_STATUS.AUTOMATION_INITIALIZED,
+    //     undefined
+    //   );
+    // }
 
     // Browser setup
     const environment = process.env.ENVIRONMENT || CONFIG.ENVIRONMENT.DEFAULT;
@@ -166,7 +165,8 @@ async function agodaRetrieval(
       agodaId,
       jobId,
       reservations,
-      agodaUsername
+      agodaUsername,
+      retrievalId
     );
 
     // Take screenshot after successful booking data retrieval
@@ -221,10 +221,10 @@ async function agodaRetrieval(
       }
     }
 
-    // Notify that OTP work is completed (on error) so other jobs can proceed
-    if (jobId) {
-      otpCompletionNotifier.notifyOtpCompleted(jobId);
-    }
+    // Only notify OTP completion if login was actually attempted
+    // (OTP completion is handled in login.ts after OTP verification)
+    // If error occurs before login, don't notify OTP completion
+    // This prevents false OTP release when job fails early
 
     // End time session on error
     await timeManager.endSession();

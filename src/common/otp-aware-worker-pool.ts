@@ -613,6 +613,39 @@ export class OtpAwareWorkerPool extends EventEmitter {
     return this.jobQueue.length >= this.config.queueSize;
   }
 
+  /**
+   * Find jobId by retrievalId in active workers and queue
+   */
+  public findJobIdByRetrievalId(retrievalId: string): string | null {
+    // First, check the queue (has access to jobData)
+    for (const queuedJob of this.jobQueue) {
+      if (queuedJob.jobData.retrievalId === retrievalId) {
+        console.log(
+          `Found job ${queuedJob.jobData.jobId} in queue for retrieval ${retrievalId}`
+        );
+        return queuedJob.jobData.jobId;
+      }
+    }
+
+    // For active workers, we need to check if jobId contains retrievalId
+    // This works if jobId format is like "retrieval_job_{retrievalId}_{timestamp}"
+    for (const [workerId, activeWorker] of this.workers) {
+      const currentJobId = activeWorker.info.currentJobId;
+      if (currentJobId) {
+        // Check if jobId contains retrievalId (for patterns like retrieval_job_{retrievalId}_*)
+        if (currentJobId.includes(retrievalId)) {
+          console.log(
+            `Found job ${currentJobId} in active worker ${workerId} for retrieval ${retrievalId}`
+          );
+          return currentJobId;
+        }
+      }
+    }
+
+    console.log(`No job found for retrieval ${retrievalId}`);
+    return null;
+  }
+
   public async stopJob(jobId: string): Promise<boolean> {
     console.log(`Attempting to stop job: ${jobId}`);
 

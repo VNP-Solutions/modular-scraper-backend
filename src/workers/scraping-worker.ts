@@ -1024,12 +1024,18 @@ class ScrapingWorker {
       );
     }
 
-    // 2. Get Agoda credentials
+    // 2. Update retrieval status to Running (after validation passes)
+    await retrievalService.updateRetrievalStatus(retrievalId, "Running");
+
+    // 3. Get Agoda credentials
     if (!agodaId || !user_email || !user_password) {
       throw new Error(
         "agodaId, user_email, and user_password are required for agoda-retrieval-run jobs"
       );
     }
+
+    // 4. Start scraping state manager (required before calling agodaRetrieval)
+    scrapingStateManager.startScraping(agodaId, finalJobId);
 
     // Initialize job logging for retrieval job
     initializeJobLogging(finalJobId);
@@ -1052,7 +1058,8 @@ class ScrapingWorker {
         finalJobId,
         user_email,
         user_password,
-        reservations
+        reservations,
+        retrievalId
       );
 
       // 6. Get final retrieval statistics

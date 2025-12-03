@@ -1,6 +1,7 @@
 import { Page } from "puppeteer";
 import { delay } from "../../common/delay.js";
 import { dualLogError, dualLogInfo } from "../../common/log-helper.js";
+import { retrievalService } from "../../services/retriveal-job.service.js";
 import { getYcsRetrievalOtpCode } from "../utils/retriveal-email.js";
 import {
   BOOKING_DETAIL,
@@ -16,12 +17,14 @@ import {
  * @param page - Puppeteer page instance
  * @param bookingId - The booking ID to search for
  * @param userEmail - The user's email address (agodausername) for OTP verification
+ * @param retrievalId - Optional retrieval ID for saving card info to database
  * @returns Promise<boolean> - Returns true if successful, false otherwise
  */
 export async function searchBookingAndNavigateToPayout(
   page: Page,
   bookingId: string,
-  userEmail?: string
+  userEmail?: string,
+  retrievalId?: string
 ): Promise<boolean> {
   try {
     await dualLogInfo(`Starting search for booking ID: ${bookingId}`);
@@ -45,8 +48,56 @@ export async function searchBookingAndNavigateToPayout(
 
     // Clear existing value and type the booking ID
     await dualLogInfo(`Entering booking ID: ${bookingId} in search field`);
-    await page.click(BOOKING_SEARCH.INPUT, { clickCount: 3 }); // Triple click to select all
-    await delay(500);
+
+    // Click on the input field first
+    await page.click(BOOKING_SEARCH.INPUT);
+    await delay(300);
+
+    // Use $eval to directly manipulate the input element (most reliable)
+    await page.$eval(BOOKING_SEARCH.INPUT, (input: HTMLInputElement) => {
+      input.focus();
+      input.select();
+      input.value = "";
+      // Trigger all necessary events
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+      input.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true }));
+      input.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true }));
+    });
+    await delay(300);
+
+    // Also use keyboard method to ensure it's cleared
+    await page.keyboard.down("Control");
+    await page.keyboard.press("KeyA"); // Select all (Ctrl+A)
+    await page.keyboard.up("Control");
+    await delay(100);
+    await page.keyboard.press("Delete"); // Delete selected text
+    await delay(200);
+    await page.keyboard.press("Backspace"); // Additional backspace for safety
+    await delay(200);
+
+    // Verify the field is actually empty before typing
+    const currentValue = await page.$eval(
+      BOOKING_SEARCH.INPUT,
+      (input: HTMLInputElement) => input.value
+    );
+
+    if (currentValue && currentValue.length > 0) {
+      await dualLogInfo(
+        `Input field still has value: "${currentValue}", force clearing...`
+      );
+      // Force clear using $eval
+      await page.$eval(BOOKING_SEARCH.INPUT, (input: HTMLInputElement) => {
+        input.value = "";
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      await delay(300);
+    } else {
+      await dualLogInfo("Input field cleared successfully");
+    }
+
+    // Now type the new booking ID
     await page.type(BOOKING_SEARCH.INPUT, bookingId, { delay: 100 });
     await delay(1000);
 
@@ -192,6 +243,24 @@ export async function searchBookingAndNavigateToPayout(
           if (!otpHandled) {
             return false;
           }
+
+          // After OTP verification, we need to search again and navigate to payout tab
+          await dualLogInfo(
+            "OTP verification completed, re-searching for booking ID to access payout tab..."
+          );
+          await delay(3000); // Wait for page to settle after OTP submission
+
+          // Re-search for the same booking ID
+          const reSearchSuccess = await reSearchAndNavigateToPayout(
+            page,
+            bookingId
+          );
+          if (!reSearchSuccess) {
+            await dualLogError(
+              "Failed to re-search and navigate to payout tab after OTP verification"
+            );
+            return false;
+          }
         } else {
           await dualLogInfo(
             "No OTP verification required - proceeding to scrape UPC widget data"
@@ -206,6 +275,24 @@ export async function searchBookingAndNavigateToPayout(
           userEmail
         );
         if (!otpHandled) {
+          return false;
+        }
+
+        // After OTP verification, we need to search again and navigate to payout tab
+        await dualLogInfo(
+          "OTP verification completed, re-searching for booking ID to access payout tab..."
+        );
+        await delay(3000); // Wait for page to settle after OTP submission
+
+        // Re-search for the same booking ID
+        const reSearchSuccess = await reSearchAndNavigateToPayout(
+          page,
+          bookingId
+        );
+        if (!reSearchSuccess) {
+          await dualLogError(
+            "Failed to re-search and navigate to payout tab after OTP verification"
+          );
           return false;
         }
       }
@@ -223,6 +310,51 @@ export async function searchBookingAndNavigateToPayout(
         console.log("Expiration Date:", upcData.expirationDate);
         console.log("CVC Code:", upcData.cvcCode);
         console.log("======================");
+
+        // Save card info to database if retrievalId is provided
+        if (retrievalId && upcData.cardNumber && upcData.expirationDate) {
+          try {
+            // Format expiration date from "2026/01" to "01/26" or keep as is
+            let formattedExpiryDate = upcData.expirationDate;
+            if (formattedExpiryDate.includes("/")) {
+              // Format: "2026/01" -> "01/26"
+              const [year, month] = formattedExpiryDate.split("/");
+              if (year && month) {
+                const shortYear = year.length === 4 ? year.slice(-2) : year;
+                formattedExpiryDate = `${month}/${shortYear}`;
+              }
+            }
+
+            const cardInfo = {
+              card_number: upcData.cardNumber || "",
+              expiry_date: formattedExpiryDate,
+              cvv: upcData.cvcCode || undefined,
+              reason_for_charge: upcData.cardHolderName || undefined,
+            };
+
+            const updatedItem =
+              await retrievalService.updateRetrievalItemCardInfo(
+                retrievalId,
+                bookingId,
+                cardInfo
+              );
+
+            if (updatedItem) {
+              await dualLogInfo(
+                `✅ Card info saved to database for booking ID: ${bookingId}`
+              );
+            } else {
+              await dualLogError(
+                `Failed to save card info to database for booking ID: ${bookingId}. Item may not exist yet.`
+              );
+            }
+          } catch (dbError: any) {
+            await dualLogError(
+              `Error saving card info to database for booking ID ${bookingId}:`,
+              dbError
+            );
+          }
+        }
       } else {
         await dualLogInfo("UPC widget data not found or not accessible");
       }
@@ -244,6 +376,51 @@ export async function searchBookingAndNavigateToPayout(
           console.log("Expiration Date:", upcData.expirationDate);
           console.log("CVC Code:", upcData.cvcCode);
           console.log("======================");
+
+          // Save card info to database if retrievalId is provided
+          if (retrievalId && upcData.cardNumber && upcData.expirationDate) {
+            try {
+              // Format expiration date from "2026/01" to "01/26" or keep as is
+              let formattedExpiryDate = upcData.expirationDate;
+              if (formattedExpiryDate.includes("/")) {
+                // Format: "2026/01" -> "01/26"
+                const [year, month] = formattedExpiryDate.split("/");
+                if (year && month) {
+                  const shortYear = year.length === 4 ? year.slice(-2) : year;
+                  formattedExpiryDate = `${month}/${shortYear}`;
+                }
+              }
+
+              const cardInfo = {
+                card_number: upcData.cardNumber || "",
+                expiry_date: formattedExpiryDate,
+                cvv: upcData.cvcCode || undefined,
+                reason_for_charge: upcData.cardHolderName || undefined,
+              };
+
+              const updatedItem =
+                await retrievalService.updateRetrievalItemCardInfo(
+                  retrievalId,
+                  bookingId,
+                  cardInfo
+                );
+
+              if (updatedItem) {
+                await dualLogInfo(
+                  `✅ Card info saved to database for booking ID: ${bookingId}`
+                );
+              } else {
+                await dualLogError(
+                  `Failed to save card info to database for booking ID: ${bookingId}. Item may not exist yet.`
+                );
+              }
+            } catch (dbError: any) {
+              await dualLogError(
+                `Error saving card info to database for booking ID ${bookingId}:`,
+                dbError
+              );
+            }
+          }
         }
       } catch (scrapeError) {
         await dualLogError("Error scraping UPC widget data", scrapeError);
@@ -444,6 +621,243 @@ async function handleOtpVerification(
     return true;
   } catch (error: any) {
     await dualLogError("Error in handleOtpVerification:", error);
+    return false;
+  }
+}
+
+/**
+ * Re-searches for a booking ID and navigates to the Get payout (UPC) tab
+ * This is used after OTP verification to re-access the payout tab
+ * @param page - Puppeteer page instance
+ * @param bookingId - The booking ID to search for
+ * @returns Promise<boolean> - Returns true if successful, false otherwise
+ */
+async function reSearchAndNavigateToPayout(
+  page: Page,
+  bookingId: string
+): Promise<boolean> {
+  try {
+    await dualLogInfo(
+      `Re-searching for booking ID: ${bookingId} after OTP verification`
+    );
+
+    // Step 1: Find and fill the booking ID input field
+    await dualLogInfo("Looking for booking ID / Guest name input field...");
+
+    try {
+      await page.waitForSelector(BOOKING_SEARCH.INPUT, {
+        visible: true,
+        timeout: 10000,
+      });
+    } catch (error) {
+      await dualLogError(
+        `Search input field not found: ${BOOKING_SEARCH.INPUT}`,
+        error
+      );
+      return false;
+    }
+
+    // Clear existing value and type the booking ID
+    await dualLogInfo(`Entering booking ID: ${bookingId} in search field`);
+
+    // Click on the input field first to focus it
+    await page.click(BOOKING_SEARCH.INPUT);
+    await delay(300);
+
+    // For React-controlled inputs, use keyboard method first (most reliable)
+    // Select all existing text
+    await page.keyboard.down("Control");
+    await page.keyboard.press("KeyA"); // Select all (Ctrl+A)
+    await page.keyboard.up("Control");
+    await delay(100);
+
+    // Delete the selected text
+    await page.keyboard.press("Delete");
+    await delay(200);
+
+    // Also try Backspace as backup
+    await page.keyboard.press("Backspace");
+    await delay(200);
+
+    // Use native value setter to properly update React-controlled input
+    await page.$eval(BOOKING_SEARCH.INPUT, (input: HTMLInputElement) => {
+      // Get the native input value setter
+      const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype,
+        "value"
+      )?.set;
+
+      if (nativeInputValueSetter) {
+        // Use native setter to set empty value (bypasses React's value tracking)
+        nativeInputValueSetter.call(input, "");
+      } else {
+        input.value = "";
+      }
+
+      // Trigger React's synthetic events
+      const inputEvent = new Event("input", {
+        bubbles: true,
+        cancelable: true,
+      });
+      const changeEvent = new Event("change", {
+        bubbles: true,
+        cancelable: true,
+      });
+
+      // Set target property for React compatibility
+      Object.defineProperty(inputEvent, "target", {
+        value: input,
+        enumerable: true,
+      });
+      Object.defineProperty(changeEvent, "target", {
+        value: input,
+        enumerable: true,
+      });
+
+      input.dispatchEvent(inputEvent);
+      input.dispatchEvent(changeEvent);
+
+      // Update React's internal value tracker if it exists
+      if ((input as any)._valueTracker) {
+        (input as any)._valueTracker.setValue("");
+      }
+    });
+    await delay(300);
+
+    // Verify the field is actually empty before typing
+    const currentValue = await page.$eval(
+      BOOKING_SEARCH.INPUT,
+      (input: HTMLInputElement) => input.value
+    );
+
+    if (currentValue && currentValue.length > 0) {
+      await dualLogInfo(
+        `Input field still has value: "${currentValue}", trying alternative clear method...`
+      );
+
+      // Try triple-click and delete as last resort
+      await page.click(BOOKING_SEARCH.INPUT, { clickCount: 3 });
+      await delay(200);
+      await page.keyboard.press("Delete");
+      await delay(200);
+      await page.keyboard.press("Backspace");
+      await delay(200);
+
+      // Final verification
+      const finalValue = await page.$eval(
+        BOOKING_SEARCH.INPUT,
+        (input: HTMLInputElement) => input.value
+      );
+
+      if (finalValue && finalValue.length > 0) {
+        await dualLogError(
+          `Warning: Input field still contains "${finalValue}" after clearing attempts. Proceeding anyway.`
+        );
+      } else {
+        await dualLogInfo(
+          "Input field cleared successfully after alternative method"
+        );
+      }
+    } else {
+      await dualLogInfo("Input field cleared successfully");
+    }
+
+    // Now type the new booking ID
+    await page.type(BOOKING_SEARCH.INPUT, bookingId, { delay: 100 });
+    await delay(1000);
+
+    // Step 2: Click the Search button
+    await dualLogInfo("Clicking Search button...");
+
+    try {
+      await page.waitForSelector(BOOKING_SEARCH.BUTTON, {
+        visible: true,
+        timeout: 5000,
+      });
+      await page.click(BOOKING_SEARCH.BUTTON);
+      await dualLogInfo("Search button clicked");
+    } catch (error) {
+      await dualLogError("Search button not found or not clickable", error);
+      return false;
+    }
+
+    // Step 3: Wait for search results to load
+    await dualLogInfo("Waiting for search results to load...");
+    await delay(3000);
+
+    // Wait for the booking result row to appear
+    const bookingRowSelector = BOOKING_RESULTS.ROW(bookingId);
+
+    try {
+      await page.waitForSelector(bookingRowSelector, {
+        visible: true,
+        timeout: 15000,
+      });
+      await dualLogInfo(`Booking row found for ID: ${bookingId}`);
+    } catch (error) {
+      await dualLogError(`Booking row not found for ID: ${bookingId}`, error);
+      return false;
+    }
+
+    // Step 4: Click on the booking row (preferably on the guest name)
+    await dualLogInfo("Clicking on booking row (guest name)...");
+
+    const guestNameSelector = BOOKING_RESULTS.GUEST_NAME(bookingId);
+
+    try {
+      const guestNameElement = await page.$(guestNameSelector);
+      if (guestNameElement) {
+        await guestNameElement.click();
+        await dualLogInfo("Clicked on guest name");
+      } else {
+        await page.click(bookingRowSelector);
+        await dualLogInfo("Clicked on booking row");
+      }
+    } catch (error) {
+      await dualLogError("Failed to click on booking row", error);
+      return false;
+    }
+
+    // Step 5: Wait for the right sidebar to appear
+    await dualLogInfo("Waiting for booking detail sidebar to appear...");
+    await delay(2000);
+
+    try {
+      await page.waitForSelector(BOOKING_DETAIL.TAB_LIST, {
+        visible: true,
+        timeout: 10000,
+      });
+      await dualLogInfo("Booking detail sidebar appeared");
+    } catch (error) {
+      await dualLogError("Booking detail sidebar did not appear", error);
+      return false;
+    }
+
+    // Step 6: Click on "Get payout (UPC)" tab
+    await dualLogInfo("Clicking on 'Get payout (UPC)' tab...");
+
+    try {
+      await page.waitForSelector(BOOKING_DETAIL.PAYOUT_TAB, {
+        visible: true,
+        timeout: 5000,
+      });
+      await page.click(BOOKING_DETAIL.PAYOUT_TAB);
+      await dualLogInfo("Successfully clicked on 'Get payout (UPC)' tab");
+      await delay(2000);
+    } catch (error) {
+      await dualLogError("Failed to click on 'Get payout (UPC)' tab", error);
+      return false;
+    }
+
+    await dualLogInfo(
+      `✅ Successfully re-navigated to Get payout (UPC) tab for booking ID: ${bookingId}`
+    );
+    return true;
+  } catch (error: any) {
+    await dualLogError(
+      `Error in reSearchAndNavigateToPayout for booking ID ${bookingId}:`,
+      error
+    );
     return false;
   }
 }

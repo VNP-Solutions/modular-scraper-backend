@@ -44,11 +44,11 @@ async function agodaLogin(
     }
 
     // Check if scraping is paused before starting
-    await scrapingStateManager.waitWhilePaused();
-    if (!scrapingStateManager.isRunning()) {
-      await dualLogError("Scraping was stopped during Agoda login");
-      throw new Error("Scraping was stopped during Agoda login");
-    }
+    // await scrapingStateManager.waitWhilePaused();
+    // if (!scrapingStateManager.isRunning()) {
+    //   await dualLogError("Scraping was stopped during Agoda login");
+    //   throw new Error("Scraping was stopped during Agoda login");
+    // }
 
     // Page and iframe initialization
     try {

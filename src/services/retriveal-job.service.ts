@@ -115,10 +115,27 @@ export class RetrievalService {
 
       if (!credentials) {
         console.log(`No credentials found for property ${propertyIdString}`);
+        // Still return agodaId even if no credentials, but check if it's valid
+        const agodaId = property.agoda_id || "";
+        if (!agodaId || agodaId === "0") {
+          console.log(
+            `Property ${propertyIdString} has invalid or missing agoda_id: ${agodaId}`
+          );
+          return null;
+        }
         return {
-          agodaId: property.agoda_id || "",
+          agodaId: agodaId,
           property: property,
         };
+      }
+
+      // Validate agodaId before proceeding
+      const agodaId = property.agoda_id || "";
+      if (!agodaId || agodaId === "0") {
+        console.log(
+          `Property ${propertyIdString} has invalid or missing agoda_id: ${agodaId}`
+        );
+        return null;
       }
 
       // Decrypt password if it's encrypted
@@ -144,8 +161,8 @@ export class RetrievalService {
       }
 
       return {
-        agodaId: property.agoda_id || "",
-        user_email: credentials.expediaUsername,
+        agodaId: agodaId,
+        user_email: credentials.agodaUsername,
         user_password: decryptedPassword,
         credentials: credentials,
         property: property,
@@ -406,6 +423,40 @@ export class RetrievalService {
         itemsWithPaymentInfo: 0,
         completionPercentage: 0,
       };
+    }
+  }
+
+  /**
+   * Update retrieval item with card info
+   */
+  async updateRetrievalItemCardInfo(
+    retrievalId: string,
+    reservationId: string,
+    cardInfo: CardInfo
+  ): Promise<IRetrievalItem | null> {
+    try {
+      const retrievalObjectId = this.validateObjectId(
+        retrievalId,
+        "retrievalId"
+      );
+
+      const result = await RetrievalItem.findOneAndUpdate(
+        {
+          retrieval_id: retrievalObjectId,
+          reservation_id: reservationId,
+        },
+        {
+          has_card_info: true,
+          card_info: cardInfo,
+          updatedAt: new Date(),
+        },
+        { new: true }
+      );
+
+      return result;
+    } catch (error) {
+      console.error(`Error updating retrieval item card info: ${error}`);
+      return null;
     }
   }
 }
