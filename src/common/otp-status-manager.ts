@@ -106,20 +106,59 @@ export class OtpStatusManager extends EventEmitter {
     jobId: string,
     platform: OtpPlatform
   ): Promise<boolean> {
-    platform = this.getOtpPlatform();
+    // Use the platform parameter passed in, don't override it
+    // This allows different job types to use different platforms
     if (!this.isInitialized) {
       await this.initialize();
     }
 
     try {
+      // Extract valid ObjectId from jobId if it's not already a valid ObjectId
+      // For retrieval jobs, jobId format is: retrieval_job_${retrieval_id}_${Date.now()}
+      let objectIdForReservation: mongoose.Types.ObjectId | null = null;
+
+      if (mongoose.Types.ObjectId.isValid(jobId)) {
+        // jobId is already a valid ObjectId
+        objectIdForReservation = new mongoose.Types.ObjectId(jobId);
+      } else if (jobId.startsWith("retrieval_job_")) {
+        // Extract retrieval_id from jobId format: retrieval_job_${retrieval_id}_${Date.now()}
+        const parts = jobId.split("_");
+        if (parts.length >= 3 && mongoose.Types.ObjectId.isValid(parts[2])) {
+          objectIdForReservation = new mongoose.Types.ObjectId(parts[2]);
+        }
+      }
+
       // Attempt to reserve OTP atomically
+      const updateData: any = {
+        status: OtpStatusValue.Occupied,
+        platform: platform,
+      };
+
+      if (objectIdForReservation) {
+        updateData.job_id = objectIdForReservation;
+      }
+
+      // First check if an entry exists for this platform (regardless of status)
+      const existingEntry = await OtpStatus.findOne({
+        platform: platform,
+      }).lean();
+
+      if (!existingEntry) {
+        // No entry exists for this platform, create one as Released first
+        await OtpStatus.create({
+          status: OtpStatusValue.Released,
+          platform: platform,
+          job_id: null,
+        });
+        console.log(
+          `Created new OTP status entry for platform ${platform} as Released`
+        );
+      }
+
+      // Now try to reserve (update from Released to Occupied)
       const result = await OtpStatus.findOneAndUpdate(
         { status: OtpStatusValue.Released, platform: platform }, // Only update if currently Released
-        {
-          status: OtpStatusValue.Occupied,
-          platform: platform,
-          job_id: new mongoose.Types.ObjectId(jobId),
-        },
+        updateData,
         { new: true }
       );
 
@@ -136,10 +175,26 @@ export class OtpStatusManager extends EventEmitter {
         this.emit("otpReserved", jobId, platform);
         return true;
       } else {
-        // OTP is already occupied
-        console.log(
-          `Failed to reserve OTP for job ${jobId} on platform ${platform} - already occupied`
-        );
+        // Check what the actual status is
+        const currentEntry = await OtpStatus.findOne({
+          platform: platform,
+        }).lean();
+
+        if (currentEntry) {
+          if (currentEntry.status === OtpStatusValue.Occupied) {
+            console.log(
+              `Failed to reserve OTP for job ${jobId} on platform ${platform} - already occupied by job ${currentEntry.job_id}`
+            );
+          } else {
+            console.log(
+              `Failed to reserve OTP for job ${jobId} on platform ${platform} - unexpected status: ${currentEntry.status}`
+            );
+          }
+        } else {
+          console.log(
+            `Failed to reserve OTP for job ${jobId} on platform ${platform} - no entry found after creation attempt`
+          );
+        }
         return false;
       }
     } catch (error) {
@@ -157,12 +212,40 @@ export class OtpStatusManager extends EventEmitter {
     }
 
     try {
+      // Extract valid ObjectId from jobId if it's not already a valid ObjectId
+      // For retrieval jobs, jobId format is: retrieval_job_${retrieval_id}_${Date.now()}
+      let objectIdForRelease: mongoose.Types.ObjectId | null = null;
+
+      if (mongoose.Types.ObjectId.isValid(jobId)) {
+        // jobId is already a valid ObjectId
+        objectIdForRelease = new mongoose.Types.ObjectId(jobId);
+      } else if (jobId.startsWith("retrieval_job_")) {
+        // Extract retrieval_id from jobId format: retrieval_job_${retrieval_id}_${Date.now()}
+        const parts = jobId.split("_");
+        if (parts.length >= 3 && mongoose.Types.ObjectId.isValid(parts[2])) {
+          objectIdForRelease = new mongoose.Types.ObjectId(parts[2]);
+        }
+      }
+
+      // Build query to find the OTP status
+      const query: any = {
+        status: OtpStatusValue.Occupied,
+      };
+
+      if (objectIdForRelease) {
+        query.job_id = objectIdForRelease;
+      } else {
+        // If we can't extract a valid ObjectId, we can't match by job_id
+        // In this case, we'll try to release based on current status only
+        // This is a fallback for edge cases
+        console.warn(
+          `Cannot extract valid ObjectId from jobId ${jobId} for OTP release. Attempting release by status only.`
+        );
+      }
+
       // Only release if the current job is the one that reserved it
       const result = await OtpStatus.findOneAndUpdate(
-        {
-          status: OtpStatusValue.Occupied,
-          job_id: new mongoose.Types.ObjectId(jobId),
-        },
+        query,
         {
           status: OtpStatusValue.Released,
           job_id: null,
@@ -183,9 +266,18 @@ export class OtpStatusManager extends EventEmitter {
         this.emit("otpReleased", jobId);
         return true;
       } else {
-        console.log(
-          `\x1b[33mFailed to release OTP for job ${jobId} - not currently owner\x1b[0m`
-        );
+        // OTP is not currently owned by this job (might have been released already or never reserved)
+        // This is normal for stopped jobs or jobs that failed before reserving OTP
+        // Only log as info, not as an error
+        if (objectIdForRelease) {
+          console.log(
+            `OTP not owned by job ${jobId} (may have been released already or never reserved)`
+          );
+        } else {
+          console.log(
+            `Cannot release OTP for job ${jobId} - invalid jobId format for OTP tracking`
+          );
+        }
         return false;
       }
     } catch (error) {

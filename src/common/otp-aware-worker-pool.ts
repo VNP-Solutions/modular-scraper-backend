@@ -426,10 +426,11 @@ export class OtpAwareWorkerPool extends EventEmitter {
         "graphql-run",
         "rerun-failed",
         "reservation-run",
-        "agoda-retrieval-run",
       ].includes(jobData.jobType)
     ) {
       return OtpPlatform.Expedia;
+    } else if (jobData.jobType === "agoda-retrieval-run") {
+      return OtpPlatform.AgodaRetrieval;
     } else if (
       ["agoda-property-run", "agoda-rerun-failed"].includes(jobData.jobType)
     ) {
@@ -631,15 +632,22 @@ export class OtpAwareWorkerPool extends EventEmitter {
       }
     }
 
-    // For active workers, we need to check if jobId contains retrievalId
-    // This works if jobId format is like "retrieval_job_{retrievalId}_{timestamp}"
+    // For active workers, check for exact match first (jobId === retrievalId)
+    // Then check if jobId contains retrievalId (for backward compatibility with old format)
     for (const [workerId, activeWorker] of this.workers) {
       const currentJobId = activeWorker.info.currentJobId;
       if (currentJobId) {
-        // Check if jobId contains retrievalId (for patterns like retrieval_job_{retrievalId}_*)
+        // Check for exact match first (new format: jobId === retrievalId)
+        if (currentJobId === retrievalId) {
+          console.log(
+            `Found job ${currentJobId} in active worker ${workerId} for retrieval ${retrievalId} (exact match)`
+          );
+          return currentJobId;
+        }
+        // Fallback: Check if jobId contains retrievalId (old format: retrieval_job_{retrievalId}_{timestamp})
         if (currentJobId.includes(retrievalId)) {
           console.log(
-            `Found job ${currentJobId} in active worker ${workerId} for retrieval ${retrievalId}`
+            `Found job ${currentJobId} in active worker ${workerId} for retrieval ${retrievalId} (contains match)`
           );
           return currentJobId;
         }
@@ -651,6 +659,89 @@ export class OtpAwareWorkerPool extends EventEmitter {
   }
 
   public async stopJob(jobId: string): Promise<boolean> {
+    console.log(`Attempting to stop job: ${jobId}`);
+
+    // First, check if job is in queue and remove it
+    const queueIndex = this.jobQueue.findIndex(
+      (queuedJob) => queuedJob.jobData.jobId === jobId
+    );
+    if (queueIndex !== -1) {
+      const removedJob = this.jobQueue.splice(queueIndex, 1)[0];
+      removedJob.reject(new Error(`Job ${jobId} was stopped before execution`));
+      console.log(`Job ${jobId} removed from queue`);
+      return true;
+    }
+
+    // Find worker currently executing this job
+    let targetWorker: ActiveWorker | undefined;
+    let targetWorkerId: string | undefined;
+
+    for (const [workerId, activeWorker] of this.workers) {
+      if (activeWorker.info.currentJobId === jobId) {
+        targetWorker = activeWorker;
+        targetWorkerId = workerId;
+        break;
+      }
+    }
+
+    if (!targetWorker || !targetWorkerId) {
+      console.log(`Job ${jobId} not found in active workers or queue`);
+      return false;
+    }
+
+    try {
+      // Release OTP if this job had reserved it
+      await this.otpManager.releaseOtp(jobId);
+
+      // Send stop message to worker first (if worker supports it)
+      targetWorker.worker.postMessage({ type: "stop", jobId });
+
+      // Give worker a moment to handle stop gracefully
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+
+      // Terminate the worker and recreate it
+      await targetWorker.worker.terminate();
+      console.log(
+        `OTP-aware worker ${targetWorkerId} terminated for job ${jobId}`
+      );
+
+      // Resolve the promise with stopped status
+      if (targetWorker.resolve) {
+        targetWorker.resolve({
+          success: false,
+          error: `Job ${jobId} was stopped by user request`,
+          jobId: jobId,
+          data: {
+            status: 500,
+            message: `Job ${jobId} was stopped by user request`,
+            jobId: jobId,
+            finalStatus: "Stopped",
+          },
+        });
+      }
+
+      // Remove the old worker and create a new one
+      this.workers.delete(targetWorkerId);
+      this.createWorker(targetWorkerId);
+
+      console.log(
+        `Job ${jobId} stopped and OTP-aware worker ${targetWorkerId} recreated`
+      );
+
+      // Process next job in queue after worker is recreated
+      // Small delay to ensure worker is fully initialized
+      setTimeout(() => {
+        this.processQueue();
+      }, 500);
+
+      return true;
+    } catch (error) {
+      console.error(`Error stopping job ${jobId}:`, error);
+      return false;
+    }
+  }
+
+  public async stopRetrievalJob(jobId: string): Promise<boolean> {
     console.log(`Attempting to stop job: ${jobId}`);
 
     // First, check if job is in queue and remove it

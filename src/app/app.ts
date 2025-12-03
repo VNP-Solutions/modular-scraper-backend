@@ -1,7 +1,6 @@
 import bodyParser from "body-parser";
 import cors from "cors";
 import express from "express";
-import agodaRetrieval from "../agoda-retriveal.js";
 import createError from "../common/error.js";
 import { otpAwareWorkerPool } from "../common/otp-aware-worker-pool.js";
 import { progressManager } from "../common/progress-manager.js";
@@ -702,7 +701,7 @@ app.post("/api/scraping/stop", (async (
     }
 
     // Check if job exists
-    const job = await jobService.getJobById(jobId);
+    const job = await retrievalService.getRetrievalById(jobId);
     if (!job) {
       return res.status(404).json({
         status: 404,
@@ -711,7 +710,7 @@ app.post("/api/scraping/stop", (async (
     }
 
     // Attempt to stop the job in the worker pool
-    const stopSuccess = await otpAwareWorkerPool.stopJob(jobId);
+    const stopSuccess = await otpAwareWorkerPool.stopRetrievalJob(jobId);
 
     if (stopSuccess) {
       // Update job status to Stopped in database
@@ -2833,8 +2832,7 @@ app.post("/api/agoda/retriveal-run-job", (async (
       formattedReservations
     );
 
-    // Generate job ID and prepare worker job data
-    const jobId = `retrieval_job_${retrieval_id}_${Date.now()}`;
+    const jobId = String(retrieval_id);
 
     const workerJobData: WorkerJobData = {
       jobType: "agoda-retrieval-run",
@@ -2846,64 +2844,229 @@ app.post("/api/agoda/retriveal-run-job", (async (
       user_password: String(retrievalData.user_password || ""),
     };
 
-    // Note: Do NOT update status to "Running" here - let the worker do it after validation
+    // Update retrieval status to Running
+    await retrievalService.updateRetrievalStatus(retrieval_id, "Running");
 
-    await agodaRetrieval(
-      retrievalData.agodaId,
-      retrieval_id,
-      retrievalData.user_email,
-      retrievalData.user_password,
-      formattedReservations
-    );
     // Execute job in worker thread
-    // try {
-    //   console.log(`Submitting retrieval job ${jobId} to worker pool...`);
+    try {
+      console.log(`Submitting retrieval job ${jobId} to worker pool...`);
 
-    //   const result = await otpAwareWorkerPool.executeJob(workerJobData);
+      const result = await otpAwareWorkerPool.executeJob(workerJobData);
 
-    //   if (result.success) {
-    //     // Worker already updates status to Completed/Partial/Failed based on progress
-    //     return res.status(200).json({
-    //       ...result.data,
-    //       retrieval_id,
-    //       reservationCount: reservations.length,
-    //     });
-    //   } else {
-    //     // Worker already updates status to Failed on error, but update here as fallback
-    //     // in case worker failed before updating status
-    //     await retrievalService.updateRetrievalStatus(retrieval_id, "Failed");
+      if (result.success) {
+        // Update retrieval status to Completed
+        await retrievalService.updateRetrievalStatus(retrieval_id, "Completed");
 
-    //     return res.status(500).json({
-    //       status: 500,
-    //       message: "Retrieval job execution failed",
-    //       error: result.error,
-    //       jobId: result.jobId,
-    //       retrieval_id,
-    //     });
-    //   }
-    // } catch (workerError) {
-    //   console.error(`Worker error for retrieval job ${jobId}:`, workerError);
+        return res.status(200).json({
+          ...result.data,
+          retrieval_id,
+          reservationCount: reservations.length,
+        });
+      } else {
+        // Check if job was stopped by user (don't overwrite Stopped status)
+        const finalStatus = result.data?.finalStatus;
+        if (finalStatus === "Stopped") {
+          // Job was stopped, status already updated by stop API
+          return res.status(200).json({
+            status: 200,
+            message: "Retrieval job was stopped",
+            jobId: result.jobId,
+            retrieval_id,
+            finalStatus: "Stopped",
+          });
+        }
 
-    //   // Update retrieval status to Failed as fallback (worker may have already updated it)
-    //   await retrievalService.updateRetrievalStatus(retrieval_id, "Failed");
+        // Update retrieval status to Failed only if not stopped
+        await retrievalService.updateRetrievalStatus(retrieval_id, "Failed");
 
-    //   return res.status(500).json({
-    //     status: 500,
-    //     message: "Worker execution failed for retrieval job",
-    //     error:
-    //       workerError instanceof Error
-    //         ? workerError.message
-    //         : String(workerError),
-    //     jobId,
-    //     retrieval_id,
-    //   });
-    // }
+        return res.status(500).json({
+          status: 500,
+          message: "Retrieval job execution failed",
+          error: result.error,
+          jobId: result.jobId,
+          retrieval_id,
+        });
+      }
+    } catch (workerError) {
+      console.error(`Worker error for retrieval job ${jobId}:`, workerError);
+
+      // Check if error indicates job was stopped
+      const errorMessage =
+        workerError instanceof Error
+          ? workerError.message
+          : String(workerError);
+
+      if (
+        errorMessage.includes("was stopped by user request") ||
+        errorMessage.includes("was stopped")
+      ) {
+        // Job was stopped, don't update status (stop API already did)
+        return res.status(200).json({
+          status: 200,
+          message: "Retrieval job was stopped",
+          jobId,
+          retrieval_id,
+          finalStatus: "Stopped",
+        });
+      }
+
+      // Update retrieval status to Failed only if not stopped
+      await retrievalService.updateRetrievalStatus(retrieval_id, "Failed");
+
+      return res.status(500).json({
+        status: 500,
+        message: "Worker execution failed for retrieval job",
+        error: errorMessage,
+        jobId,
+        retrieval_id,
+      });
+    }
   } catch (err: any) {
     console.error("Error in /api/agoda/retriveal-run-job:", err);
 
     res.status(500).json({
       status: 500,
       message: "Error processing retrieval job",
+      error: err.message,
+    });
+  }
+}) as any);
+
+/**
+ * @swagger
+ * /api/scraping/stop:
+ *   post:
+ *     tags:
+ *       - Scraping Control
+ *     summary: Stop specific scraping job
+ *     description: Stop a specific running scraping job by job ID. The job will be terminated and marked as stopped.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - jobId
+ *             properties:
+ *               jobId:
+ *                 type: string
+ *                 description: MongoDB ObjectId of the job to stop
+ *                 example: "507f1f77bcf86cd799439011"
+ *     responses:
+ *       200:
+ *         description: Job stopped successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 200
+ *                 message:
+ *                   type: string
+ *                   example: "Job stopped successfully"
+ *                 jobId:
+ *                   type: string
+ *                   example: "507f1f77bcf86cd799439011"
+ *                 finalStatus:
+ *                   type: string
+ *                   example: "Stopped"
+ *       400:
+ *         description: Missing jobId or invalid request
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 400
+ *                 message:
+ *                   type: string
+ *                   example: "jobId is required in request body"
+ *       404:
+ *         description: Job not found or not currently running
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 404
+ *                 message:
+ *                   type: string
+ *                   example: "Job not found or not currently running"
+ *       500:
+ *         description: Error stopping job
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
+// API to stop specific scraping job
+app.post("/api/retrieval/stop", (async (
+  req: express.Request,
+  res: express.Response
+) => {
+  try {
+    const { jobId } = req.body;
+
+    if (!jobId) {
+      return res.status(400).json({
+        status: 400,
+        message: "jobId is required in request body",
+      });
+    }
+
+    // Check if retrieval exists (jobId is the retrievalId)
+    const retrieval = await retrievalService.getRetrievalById(jobId);
+    if (!retrieval) {
+      return res.status(404).json({
+        status: 404,
+        message: `Retrieval with ID ${jobId} not found`,
+      });
+    }
+
+    // Attempt to stop the job in the worker pool
+    const stopSuccess = await otpAwareWorkerPool.stopJob(jobId);
+
+    if (stopSuccess) {
+      // Update retrieval status to Stopped in database
+      const updatedRetrieval = await retrievalService.updateRetrievalStatus(
+        jobId,
+        "Stopped"
+      );
+
+      if (updatedRetrieval) {
+        res.status(200).json({
+          status: 200,
+          message: "Job stopped successfully",
+          jobId: jobId,
+          finalStatus: "Stopped",
+        });
+      } else {
+        res.status(500).json({
+          status: 500,
+          message: "Job stopped but failed to update status in database",
+          jobId: jobId,
+        });
+      }
+    } else {
+      // Job might not be currently running
+      res.status(404).json({
+        status: 404,
+        message: "Job not found or not currently running",
+        jobId: jobId,
+      });
+    }
+  } catch (err: any) {
+    console.error("Error stopping job:", err);
+    res.status(500).json({
+      status: 500,
+      message: "Error stopping job",
       error: err.message,
     });
   }
