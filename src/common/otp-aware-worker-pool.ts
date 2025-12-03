@@ -410,9 +410,12 @@ export class OtpAwareWorkerPool extends EventEmitter {
 
   private jobRequiresOtp(jobData: WorkerJobData): boolean {
     // Jobs that require OTP verification
-    return ["property-run", "graphql-run", "agoda-property-run"].includes(
-      jobData.jobType
-    );
+    return [
+      "property-run",
+      "graphql-run",
+      "agoda-property-run",
+      "agoda-retrieval-run",
+    ].includes(jobData.jobType);
   }
 
   private getJobPlatform(jobData: WorkerJobData): OtpPlatform {
@@ -423,6 +426,7 @@ export class OtpAwareWorkerPool extends EventEmitter {
         "graphql-run",
         "rerun-failed",
         "reservation-run",
+        "agoda-retrieval-run",
       ].includes(jobData.jobType)
     ) {
       return OtpPlatform.Expedia;

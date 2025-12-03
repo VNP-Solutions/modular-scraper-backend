@@ -2839,11 +2839,11 @@ app.post("/api/agoda/retriveal-run-job", (async (
     const workerJobData: WorkerJobData = {
       jobType: "agoda-retrieval-run",
       jobId,
-      retrievalId: String(retrieval_id), // Ensure plain string
+      retrievalId: String(retrieval_id),
       reservations: formattedReservations,
-      agodaId: String(retrievalData.agodaId), // Ensure plain string
-      user_email: String(retrievalData.user_email || ""), // Ensure plain string
-      user_password: String(retrievalData.user_password || ""), // Ensure plain string
+      agodaId: String(retrievalData.agodaId),
+      user_email: String(retrievalData.user_email || ""),
+      user_password: String(retrievalData.user_password || ""),
     };
 
     // Note: Do NOT update status to "Running" here - let the worker do it after validation

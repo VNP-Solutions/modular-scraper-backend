@@ -1001,58 +1001,60 @@ class ScrapingWorker {
 
     if (!reservations || reservations.length === 0) {
       throw new Error(
-        "reservations array is required for agoda-retrieval-run jobs"
+        "reservations array is required for retrieval-reservation-run jobs"
       );
     }
 
     if (!retrievalId) {
-      throw new Error("retrievalId is required for agoda-retrieval-run jobs");
+      throw new Error(
+        "retrievalId is required for retrieval-reservation-run jobs"
+      );
     }
 
     // Generate job ID if not provided
-    const finalJobId = jobId || `agoda_retrieval_job_${Date.now()}`;
+    const finalJobId = jobId || `agoda-retrieval-run${Date.now()}`;
 
-    // 1. Validate retrieval exists
-    const validation = await retrievalService.validateRetrieval(retrievalId);
-    if (!validation.exists) {
-      throw new Error(`Retrieval with ID ${retrievalId} not found`);
+    // Get retrieval details to get parent_retrieval_id
+    const retrieval = await retrievalService.getRetrievalById(retrievalId);
+    if (!retrieval) {
+      throw new Error(`Retrieval ${retrievalId} not found`);
     }
 
-    if (!validation.canRun) {
-      throw new Error(
-        `Retrieval ${retrievalId} is not in a runnable state. Current status: ${validation.retrieval?.job_status}`
+    const parentRetrievalId = retrieval.parent_retrieval_id.toString();
+
+    // Set retrieval context for scraping (including jobId for database saves)
+    setRetrievalContext(retrievalId, parentRetrievalId, finalJobId);
+    console.log(
+      `Worker: Set retrieval context - retrievalId: ${retrievalId}, parentRetrievalId: ${parentRetrievalId}, jobId: ${finalJobId}`
+    );
+
+    // Log credentials info
+    if (user_email && user_password) {
+      console.log(`Worker: Using credentials for retrieval ${retrievalId}`);
+      console.log(`Worker: Email: ${user_email}`);
+    } else {
+      console.warn(
+        `Worker: No credentials provided for retrieval ${retrievalId}`
       );
     }
 
-    // 2. Update retrieval status to Running (after validation passes)
-    await retrievalService.updateRetrievalStatus(retrievalId, "Running");
-
-    // 3. Get Agoda credentials
-    if (!agodaId || !user_email || !user_password) {
-      throw new Error(
-        "agodaId, user_email, and user_password are required for agoda-retrieval-run jobs"
-      );
-    }
-
-    // 4. Start scraping state manager (required before calling agodaRetrieval)
-    scrapingStateManager.startScraping(agodaId, finalJobId);
-
-    // Initialize job logging for retrieval job
+    // Initialize job logging for retrieval reservation job
     initializeJobLogging(finalJobId);
     await dualLogInfo(
-      `Worker: Starting Agoda retrieval scraping job ${finalJobId}`,
+      `Worker: Starting retrieval reservation scraping job ${finalJobId}`,
       {
         jobId: finalJobId,
-        retrievalId,
-        agodaId,
+        retrievalId: retrievalId,
+        parentRetrievalId: parentRetrievalId,
         reservationCount: reservations.length,
+        hasCredentials: !!(user_email && user_password),
       }
     );
 
-    try {
-      // 5. Run the main Agoda scraping function
-      // Use start_date and end_date from retrieval if available, otherwise use default range
+    scrapingStateManager.startScraping("retrieval-reservations", finalJobId);
 
+    try {
+      // Pass credentials directly to the reservation function along with jobId
       await agodaRetrieval(
         agodaId,
         finalJobId,
@@ -1062,69 +1064,44 @@ class ScrapingWorker {
         retrievalId
       );
 
-      // 6. Get final retrieval statistics
-      const progress = await retrievalService.getRetrievalProgress(retrievalId);
-
-      // 7. Determine final status based on completion
-      let finalStatus = "Completed";
-      if (progress.totalItems === 0) {
-        finalStatus = "Failed";
-      } else if (progress.completionPercentage < 100) {
-        finalStatus = "Partial";
-      }
-
-      // 8. Update final retrieval status
-      await retrievalService.updateRetrievalStatus(retrievalId, finalStatus);
-
-      // 9. Stop scraping state manager
+      // Mark scraping as completed
       scrapingStateManager.stopScraping();
 
-      // 10. Finalize logging
+      // Finalize logging with success status
       await finalizeJobLogging("success");
 
-      // Get log file information if available
-      const logger = (global as any).getCurrentJobLogger?.();
-      const logInfo = logger
-        ? {
-            logFilePath: logger.getLogFilePath(),
-            logEntriesCount: logger.getLogEntriesCount(),
-            note: "Log file uploaded to S3 and deleted locally after job completion",
-          }
-        : null;
-
       console.log(
-        `Worker: ✅ Agoda retrieval job ${finalJobId} completed successfully`
+        `Worker: ✅ Retrieval reservation job ${finalJobId} completed successfully`
       );
 
       return {
         status: 200,
-        message: "Agoda retrieval scraping completed successfully",
-        agodaId,
-        retrievalId,
+        message: "Retrieval reservation search completed successfully",
+        reservations: reservations,
         jobId: finalJobId,
-        progress: progress,
-        finalStatus: finalStatus,
-        logInfo: logInfo,
+        retrievalId: retrievalId,
       };
-    } catch (retrievalError) {
+    } catch (reservationError) {
       await dualLogError(
-        `Worker: Agoda retrieval job ${finalJobId} failed`,
-        retrievalError,
+        `Worker: Retrieval reservation job ${finalJobId} failed`,
+        reservationError,
         {
           jobId: finalJobId,
-          retrievalId,
+          retrievalId: retrievalId,
         }
       );
 
-      // Update retrieval status to Failed
-      await retrievalService.updateRetrievalStatus(retrievalId, "Failed");
       // Mark scraping as stopped on error
       scrapingStateManager.stopScraping();
 
       // Finalize logging with failed status
       await finalizeJobLogging("failed");
 
-      throw retrievalError;
+      throw reservationError;
+    } finally {
+      // Always clear retrieval context when done
+      clearRetrievalContext();
+      console.log(`Worker: Cleared retrieval context`);
     }
   }
 
