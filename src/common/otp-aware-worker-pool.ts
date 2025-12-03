@@ -427,11 +427,17 @@ export class OtpAwareWorkerPool extends EventEmitter {
         "graphql-run",
         "rerun-failed",
         "reservation-run",
-        "retrieval-reservation-run",
-        "graphql-retrieval-run",
       ].includes(jobData.jobType)
     ) {
       return OtpPlatform.Expedia;
+    } else if (
+      ["retrieval-reservation-run", "graphql-retrieval-run"].includes(
+        jobData.jobType
+      )
+    ) {
+      return OtpPlatform.ExpediaRetrieval;
+    } else if (jobData.jobType === "agoda-retrieval-run") {
+      return OtpPlatform.AgodaRetrieval;
     } else if (
       ["agoda-property-run", "agoda-rerun-failed"].includes(jobData.jobType)
     ) {
@@ -617,6 +623,46 @@ export class OtpAwareWorkerPool extends EventEmitter {
 
   public isQueueFull(): boolean {
     return this.jobQueue.length >= this.config.queueSize;
+  }
+
+  /**
+   * Find jobId by retrievalId in active workers and queue
+   */
+  public findJobIdByRetrievalId(retrievalId: string): string | null {
+    // First, check the queue (has access to jobData)
+    for (const queuedJob of this.jobQueue) {
+      if (queuedJob.jobData.retrievalId === retrievalId) {
+        console.log(
+          `Found job ${queuedJob.jobData.jobId} in queue for retrieval ${retrievalId}`
+        );
+        return queuedJob.jobData.jobId;
+      }
+    }
+
+    // For active workers, check for exact match first (jobId === retrievalId)
+    // Then check if jobId contains retrievalId (for backward compatibility with old format)
+    for (const [workerId, activeWorker] of this.workers) {
+      const currentJobId = activeWorker.info.currentJobId;
+      if (currentJobId) {
+        // Check for exact match first (new format: jobId === retrievalId)
+        if (currentJobId === retrievalId) {
+          console.log(
+            `Found job ${currentJobId} in active worker ${workerId} for retrieval ${retrievalId} (exact match)`
+          );
+          return currentJobId;
+        }
+        // Fallback: Check if jobId contains retrievalId (old format: retrieval_job_{retrievalId}_{timestamp})
+        if (currentJobId.includes(retrievalId)) {
+          console.log(
+            `Found job ${currentJobId} in active worker ${workerId} for retrieval ${retrievalId} (contains match)`
+          );
+          return currentJobId;
+        }
+      }
+    }
+
+    console.log(`No job found for retrieval ${retrievalId}`);
+    return null;
   }
 
   public async stopJob(jobId: string): Promise<boolean> {

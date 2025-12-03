@@ -8,6 +8,7 @@ export interface WorkerJobData {
     | "graphql-run"
     | "agoda-property-run"
     | "agoda-rerun-failed"
+    | "agoda-retrieval-run"
     | "stop";
   jobId: string;
   startDate?: string;

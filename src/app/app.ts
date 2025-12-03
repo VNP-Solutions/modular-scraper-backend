@@ -709,8 +709,43 @@ app.post("/api/retrieval/stop", (async (
       });
     }
 
+    // Find the jobId associated with this retrieval_id
+    const actualJobId = otpAwareWorkerPool.findJobIdByRetrievalId(jobId);
+
+    if (!actualJobId) {
+      // Job might not be running, but we can still update status if it exists
+      console.log(
+        `No active job found for retrieval ${jobId}, updating status to Stopped`
+      );
+
+      // Update retrieval status to Stopped
+      const updatedRetrieval = await retrievalService.updateRetrievalStatus(
+        jobId,
+        "Stopped"
+      );
+
+      if (updatedRetrieval) {
+        return res.status(200).json({
+          status: 200,
+          message: "Retrieval status updated to Stopped (no active job found)",
+          jobId,
+          finalStatus: "Stopped",
+        });
+      } else {
+        return res.status(500).json({
+          status: 500,
+          message: "Failed to update retrieval status",
+          jobId,
+        });
+      }
+    }
+
+    console.log(
+      `Found job ${actualJobId} for retrieval ${jobId}, attempting to stop...`
+    );
+
     // Attempt to stop the job in the worker pool
-    const stopSuccess = await otpAwareWorkerPool.stopJob(jobId);
+    const stopSuccess = await otpAwareWorkerPool.stopJob(actualJobId);
 
     if (stopSuccess) {
       // Update retrieval status to Stopped in database
@@ -722,24 +757,47 @@ app.post("/api/retrieval/stop", (async (
       if (updatedRetrieval) {
         res.status(200).json({
           status: 200,
-          message: "Job stopped successfully",
-          jobId: jobId,
+          message: "Retrieval job stopped successfully",
+          jobId: actualJobId,
+          retrieval_id: jobId,
           finalStatus: "Stopped",
         });
       } else {
         res.status(500).json({
           status: 500,
-          message: "Job stopped but failed to update status in database",
-          jobId: jobId,
+          message:
+            "Job stopped but failed to update retrieval status in database",
+          jobId: actualJobId,
+          retrieval_id: jobId,
         });
       }
     } else {
-      // Job might not be currently running
-      res.status(404).json({
-        status: 404,
-        message: "Job not found or not currently running",
-        jobId: jobId,
-      });
+      // Job might not be currently running, but update status anyway
+      console.log(
+        `Job ${actualJobId} not found in worker pool, updating retrieval status to Stopped`
+      );
+
+      const updatedRetrieval = await retrievalService.updateRetrievalStatus(
+        jobId,
+        "Stopped"
+      );
+
+      if (updatedRetrieval) {
+        res.status(200).json({
+          status: 200,
+          message: "Retrieval status updated to Stopped (job was not active)",
+          jobId: actualJobId,
+          retrieval_id: jobId,
+          finalStatus: "Stopped",
+        });
+      } else {
+        res.status(404).json({
+          status: 404,
+          message: "Retrieval not found or job not currently running",
+          jobId: actualJobId,
+          retrieval_id: jobId,
+        });
+      }
     }
   } catch (err: any) {
     console.error("Error stopping job:", err);
@@ -1665,8 +1723,9 @@ app.post("/api/expedia/retrieval-run-job", (async (
       formattedReservations
     );
 
-    // Generate job ID and prepare worker job data
-    const jobId = `retrieval_job_${retrieval_id}_${Date.now()}`;
+    // Use retrieval_id directly as jobId since it's a valid MongoDB ObjectId
+    // This ensures OTP operations work correctly without needing to extract ObjectId
+    const jobId = String(retrieval_id);
 
     const workerJobData: WorkerJobData = {
       jobType: "retrieval-reservation-run",
@@ -1697,7 +1756,20 @@ app.post("/api/expedia/retrieval-run-job", (async (
           reservationCount: reservations.length,
         });
       } else {
-        // Update retrieval status to Failed
+        // Check if job was stopped by user (don't overwrite Stopped status)
+        const finalStatus = result.data?.finalStatus;
+        if (finalStatus === "Stopped") {
+          // Job was stopped, status already updated by stop API
+          return res.status(200).json({
+            status: 200,
+            message: "Retrieval job was stopped",
+            jobId: result.jobId,
+            retrieval_id,
+            finalStatus: "Stopped",
+          });
+        }
+
+        // Update retrieval status to Failed only if not stopped
         await retrievalService.updateRetrievalStatus(retrieval_id, "Failed");
 
         return res.status(500).json({
@@ -1711,16 +1783,33 @@ app.post("/api/expedia/retrieval-run-job", (async (
     } catch (workerError) {
       console.error(`Worker error for retrieval job ${jobId}:`, workerError);
 
-      // Update retrieval status to Failed
+      // Check if error indicates job was stopped
+      const errorMessage =
+        workerError instanceof Error
+          ? workerError.message
+          : String(workerError);
+
+      if (
+        errorMessage.includes("was stopped by user request") ||
+        errorMessage.includes("was stopped")
+      ) {
+        // Job was stopped, don't update status (stop API already did)
+        return res.status(200).json({
+          status: 200,
+          message: "Retrieval job was stopped",
+          jobId,
+          retrieval_id,
+          finalStatus: "Stopped",
+        });
+      }
+
+      // Update retrieval status to Failed only if not stopped
       await retrievalService.updateRetrievalStatus(retrieval_id, "Failed");
 
       return res.status(500).json({
         status: 500,
         message: "Worker execution failed for retrieval job",
-        error:
-          workerError instanceof Error
-            ? workerError.message
-            : String(workerError),
+        error: errorMessage,
         jobId,
         retrieval_id,
       });

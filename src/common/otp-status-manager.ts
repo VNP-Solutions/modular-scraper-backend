@@ -1,3 +1,4 @@
+import dotenv from "dotenv";
 import { EventEmitter } from "events";
 import mongoose from "mongoose";
 import {
@@ -6,7 +7,6 @@ import {
   OtpStatus,
   OtpStatusValue,
 } from "../models/otp-status.model.js";
-import dotenv from "dotenv";
 
 dotenv.config();
 
@@ -106,13 +106,31 @@ export class OtpStatusManager extends EventEmitter {
     jobId: string,
     platform: OtpPlatform
   ): Promise<boolean> {
-    platform = this.getOtpPlatform();
+    // Use the platform parameter passed in, don't override it
+    // This allows different job types to use different platforms
     if (!this.isInitialized) {
       await this.initialize();
     }
 
     try {
-      // Attempt to reserve OTP atomically
+      // First check if an entry exists for this platform (regardless of status)
+      const existingEntry = await OtpStatus.findOne({
+        platform: platform,
+      }).lean();
+
+      if (!existingEntry) {
+        // No entry exists for this platform, create one as Released first
+        await OtpStatus.create({
+          status: OtpStatusValue.Released,
+          platform: platform,
+          job_id: null,
+        });
+        console.log(
+          `Created new OTP status entry for platform ${platform} as Released`
+        );
+      }
+
+      // Now try to reserve (update from Released to Occupied)
       const result = await OtpStatus.findOneAndUpdate(
         { status: OtpStatusValue.Released, platform: platform }, // Only update if currently Released
         {
