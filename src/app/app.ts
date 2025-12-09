@@ -2654,7 +2654,7 @@ app.post("/api/agoda/rerun-failed-job", (async (
 
 /**
  * @swagger
- * /api/agoda/retriveal-run-job:
+ * /api/agoda/retrieval-run-job:
  *   post:
  *     tags:
  *       - Agoda Scraping
@@ -2747,7 +2747,7 @@ app.post("/api/agoda/rerun-failed-job", (async (
  *                   type: string
  *                   example: "Error message details"
  */
-app.post("/api/agoda/retriveal-run-job", (async (
+app.post("/api/agoda/retrieval-run-job", (async (
   req: express.Request,
   res: express.Response
 ) => {
@@ -2922,7 +2922,7 @@ app.post("/api/agoda/retriveal-run-job", (async (
       });
     }
   } catch (err: any) {
-    console.error("Error in /api/agoda/retriveal-run-job:", err);
+    console.error("Error in /api/agoda/retrieval-run-job:", err);
 
     res.status(500).json({
       status: 500,
