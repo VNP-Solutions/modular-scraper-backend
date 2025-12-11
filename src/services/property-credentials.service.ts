@@ -188,6 +188,103 @@ class PropertyCredentialsService {
       return false;
     }
   }
+
+  /**
+   * Get portfolio and property details for a given portfolio ID
+   * Returns structured data with portfolio name and all property names
+   */
+  async getPortfolioAndPropertyDetails(
+    portfolioId: Types.ObjectId
+  ): Promise<{
+    portfolioName: string;
+    properties: Array<{ propertyName: string; propertyId: Types.ObjectId }>;
+  } | null> {
+    try {
+      // Get all properties in the portfolio with their names
+      const properties = await Property.find({ portfolio_id: portfolioId })
+        .select("_id property_name")
+        .lean();
+
+      if (properties.length === 0) {
+        await dualLogError(
+          `No properties found for portfolio ${portfolioId}`
+        );
+        return null;
+      }
+
+      // Get portfolio name from Job collection (using any job with this portfolio)
+      const jobWithPortfolio = await Job.findOne({
+        portfolio_id: portfolioId,
+      })
+        .select("portfolio_name")
+        .lean();
+
+      const portfolioName = jobWithPortfolio?.portfolio_name || "Unknown Portfolio";
+
+      return {
+        portfolioName,
+        properties: properties.map((prop: any) => ({
+          propertyName: prop.property_name || "Unknown Property",
+          propertyId: prop._id,
+        })),
+      };
+    } catch (error) {
+      await dualLogError(
+        `Error getting portfolio and property details for ${portfolioId}:`,
+        error
+      );
+      return null;
+    }
+  }
+
+  /**
+   * Get latest Booking.com credentials from database using job_id
+   * Fetches the most up-to-date password for the property associated with the job
+   */
+  async getBookingCredentialsFromJob(
+    jobId: string
+  ): Promise<{ bookingUsername?: string; bookingPassword?: string } | null> {
+    try {
+      // Step 1: Get job details to find property_id
+      const job = await Job.findById(jobId).select("property_id").lean();
+
+      if (!job || !job.property_id) {
+        await dualLogError(
+          `Cannot get credentials: Job not found or has no property_id for job ${jobId}`
+        );
+        return null;
+      }
+
+      // Step 2: Get property credentials using property_id
+      const credentials = await PropertyCredentials.findOne({
+        property_id: job.property_id,
+      })
+        .select("bookingUsername bookingPassword")
+        .lean();
+
+      if (!credentials) {
+        await dualLogError(
+          `No Booking.com credentials found for property ${job.property_id}`
+        );
+        return null;
+      }
+
+      await dualLogInfo(
+        `Retrieved latest Booking.com credentials from database for job ${jobId}`
+      );
+
+      return {
+        bookingUsername: credentials.bookingUsername,
+        bookingPassword: credentials.bookingPassword,
+      };
+    } catch (error) {
+      await dualLogError(
+        `Error getting Booking.com credentials for job ${jobId}:`,
+        error
+      );
+      return null;
+    }
+  }
 }
 
 export const propertyCredentialsService = new PropertyCredentialsService();

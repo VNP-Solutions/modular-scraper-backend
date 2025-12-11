@@ -480,6 +480,38 @@ export class BookingScraper extends BaseScraper {
     return isIncluded && !isExcluded;
   }
 
+  /**
+   * Get the latest password from database for the current booking property
+   * This ensures we always use the most up-to-date password throughout the scraping process
+   */
+  async getLatestBookingPassword(): Promise<string | null> {
+    try {
+      if (!this.jobId) {
+        await this.logInfo(
+          "No jobId available, cannot fetch latest password from database"
+        );
+        return null;
+      }
+
+      const credentials =
+        await propertyPasswordUpdateService.getBookingCredentialsFromJob(
+          this.jobId
+        );
+
+      if (credentials?.bookingPassword) {
+        const decryptedPassword = decryptPassword(credentials.bookingPassword);
+        await this.logInfo("Latest booking password fetched from database");
+        return decryptedPassword;
+      }
+
+      await this.logInfo("No booking password found in database");
+      return null;
+    } catch (error) {
+      await this.logError("Error fetching latest password from database:", error);
+      return null;
+    }
+  }
+
   async login(
     credentials?: LoginCredentials,
     propertyId?: string,
@@ -492,6 +524,36 @@ export class BookingScraper extends BaseScraper {
       throw new Error(
         "No credentials provided for login. Please provide credentials or set them on the scraper instance."
       );
+    }
+
+    // Always fetch the freshest credentials from the database using jobId
+    let effectiveCredentials: LoginCredentials = { ...loginCredentials };
+    if (this.jobId) {
+      try {
+        await this.logInfo(
+          `Fetching latest Booking.com credentials from database for job ${this.jobId}...`
+        );
+        const latest = await propertyCredentialsService.getBookingCredentialsFromJob(
+          this.jobId
+        );
+
+        if (latest?.bookingPassword) {
+          effectiveCredentials = {
+            email: latest.bookingUsername || effectiveCredentials.email,
+            password: decryptPassword(latest.bookingPassword),
+          };
+          await this.logInfo("Using latest Booking.com credentials from database");
+        } else {
+          await this.logInfo(
+            "No latest credentials found in database, using provided credentials"
+          );
+        }
+      } catch (err) {
+        await this.logError(
+          "Failed to fetch latest Booking.com credentials, using provided credentials",
+          err
+        );
+      }
     }
 
     try {
@@ -515,7 +577,7 @@ export class BookingScraper extends BaseScraper {
       // Check if scraping should continue before entering email
       await this.throwIfScrapingShouldStop("enter_email");
 
-      const emailEntered = await this.enterEmail(loginCredentials.email);
+      const emailEntered = await this.enterEmail(effectiveCredentials.email);
       if (!emailEntered) {
         await this.takeScreenshot();
         throw new Error("Email field not found");
@@ -580,7 +642,7 @@ export class BookingScraper extends BaseScraper {
 
       // Enter password using the new function
       const passwordEntered = await this.enterPassword(
-        loginCredentials.password
+        effectiveCredentials.password
       );
       if (!passwordEntered) {
         await this.takeScreenshot();
@@ -1470,6 +1532,12 @@ export class BookingScraper extends BaseScraper {
           await this.logInfo(
             "Booking password updated successfully in database"
           );
+
+          // Send password change notification email
+          await this.sendPasswordChangeEmail(
+            newPassword,
+            "Account was locked - password reset required"
+          );
         } else {
           await this.logError(
             "Failed to update booking password in database, but continuing with reset"
@@ -2066,6 +2134,12 @@ export class BookingScraper extends BaseScraper {
         if (passwordUpdated) {
           await this.logInfo(
             "Booking password updated successfully in database"
+          );
+
+          // Send password change notification email
+          await this.sendPasswordChangeEmail(
+            newPassword,
+            "Password mismatch detected - password reset required"
           );
         } else {
           await this.logError(
@@ -3627,6 +3701,126 @@ export class BookingScraper extends BaseScraper {
     }
 
     return solved;
+  }
+
+  /**
+   * Send batch password change notification email for multiple properties/portfolios
+   */
+  private async sendPasswordChangeEmail(
+    newPassword: string,
+    reason: string
+  ): Promise<void> {
+    try {
+      if (!this.jobId) {
+        await this.logError(
+          "Cannot send password change email: No jobId available"
+        );
+        return;
+      }
+
+      // Get job details to retrieve portfolio ID and watcher emails
+      const job = await jobService.getJobById(this.jobId);
+      if (!job) {
+        await this.logError(
+          `Cannot send password change email: Job not found for jobId: ${this.jobId}`
+        );
+        return;
+      }
+
+      if (!job.portfolio_id) {
+        await this.logError(
+          `Cannot send password change email: No portfolio_id in job ${this.jobId}`
+        );
+        return;
+      }
+
+      // Build recipients list: EMAIL_USER + watcher_emails from job + PASSWORD_CHANGE_RECIPIENTS
+      const emailSet = new Set<string>();
+
+      // Add EMAIL_USER (main recipient)
+      if (process.env.EMAIL_USER) {
+        emailSet.add(process.env.EMAIL_USER);
+      }
+
+      // Add watcher emails from job
+      if (job.watcher_emails && Array.isArray(job.watcher_emails)) {
+        job.watcher_emails.forEach((email: string) => {
+          if (email && email.trim()) {
+            emailSet.add(email.trim());
+          }
+        });
+      }
+
+      // Add PASSWORD_CHANGE_RECIPIENTS if configured
+      if (process.env.PASSWORD_CHANGE_RECIPIENTS) {
+        process.env.PASSWORD_CHANGE_RECIPIENTS.split(",").forEach((email) => {
+          const trimmedEmail = email.trim();
+          if (trimmedEmail) {
+            emailSet.add(trimmedEmail);
+          }
+        });
+      }
+
+      // Add CAPTCHA_RECIPIENTS as fallback
+      if (emailSet.size === 0 && process.env.CAPTCHA_RECIPIENTS) {
+        process.env.CAPTCHA_RECIPIENTS.split(",").forEach((email) => {
+          const trimmedEmail = email.trim();
+          if (trimmedEmail) {
+            emailSet.add(trimmedEmail);
+          }
+        });
+      }
+
+      // Fallback to default if still empty
+      if (emailSet.size === 0) {
+        emailSet.add("ITSUPPORT@vnpsolutions.com");
+      }
+
+      const recipients = Array.from(emailSet);
+
+      // Get detailed portfolio and property information
+      const portfolioDetails =
+        await propertyPasswordUpdateService.getPortfolioAndPropertyDetails(
+          job.portfolio_id
+        );
+
+      if (!portfolioDetails || portfolioDetails.properties.length === 0) {
+        await this.logError(
+          `Cannot send password change email: No properties found for portfolio ${job.portfolio_id}`
+        );
+        return;
+      }
+
+      // Prepare notification data with batch structure
+      const notificationData = {
+        jobId: this.jobId,
+        portfolios: [
+          {
+            portfolioName: portfolioDetails.portfolioName,
+            properties: portfolioDetails.properties.map((p) => ({
+              propertyName: p.propertyName,
+            })),
+          },
+        ],
+        newPassword: newPassword,
+        timestamp: new Date(),
+        reason: reason,
+        totalPropertiesUpdated: portfolioDetails.properties.length,
+      };
+
+      await emailNotifier.sendBatchPasswordChangeEmail(
+        recipients,
+        notificationData
+      );
+      await this.logInfo(
+        `Password change notification email sent to ${recipients.join(", ")} for ${portfolioDetails.properties.length} properties`
+      );
+    } catch (error) {
+      await this.logError(
+        "Failed to send password change notification email:",
+        error
+      );
+    }
   }
 
   private async sendCaptchaEmail(): Promise<void> {
