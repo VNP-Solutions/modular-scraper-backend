@@ -23,7 +23,7 @@ export async function browserSetupProduction(jobId?: string): Promise<{
     const selectorTimeout = await timeoutManager.getSelectorTimeout(jobId);
 
     const launchArgs = {
-      headless: false,
+      headless: true,
       stealth: false,
       args: ["--window-size=1920,1080"],
     };
@@ -43,7 +43,7 @@ export async function browserSetupProduction(jobId?: string): Promise<{
       });
     } catch (error: any) {
       await dualLogError("Error connecting to Browserless:", error);
-      
+
       // Send email notification for browser connection error
       if (jobId) {
         try {        } catch (emailError) {
@@ -55,13 +55,13 @@ export async function browserSetupProduction(jobId?: string): Promise<{
 
     const page: Page = await browser.newPage();
     const cdp = await page.createCDPSession();
-    
+
     try {
       await (cdp as any).send("Browserless.startRecording");
       await dualLogInfo("Recording started successfully");
     } catch (error: any) {
       await dualLogError("Error starting recording:", error);
-      
+
       // Send email notification for recording start error
       if (jobId) {
         try {        } catch (emailError) {
@@ -84,7 +84,7 @@ export async function browserSetupProduction(jobId?: string): Promise<{
       await dualLogInfo("Click for live experience:", { liveURL });
     } catch (error: any) {
       await dualLogError("Error generating live URL:", error);
-      
+
       // Send email notification for live URL generation error
       if (jobId) {
         try {        } catch (emailError) {
@@ -106,7 +106,7 @@ export async function browserSetupProduction(jobId?: string): Promise<{
         }
       } catch (error: any) {
         await dualLogError("Error storing live URL in database:", error);
-        
+
         // Send email notification for live URL storage error
         if (jobId) {
           try {          } catch (emailError) {
@@ -164,14 +164,14 @@ export async function browserSetupProduction(jobId?: string): Promise<{
           await dualLogError("All navigation attempts failed", navError, {
             maxRetries,
           });
-          
+
           // Send email notification for navigation failure
           if (jobId) {
             try {            } catch (emailError) {
               await dualLogError("Failed to send navigation error notification:", emailError);
             }
           }
-          
+
           throw navError;
         }
       }
@@ -181,14 +181,14 @@ export async function browserSetupProduction(jobId?: string): Promise<{
       const error = new Error(
         "Failed to navigate to the target page after all attempts"
       );
-      
+
       // Send email notification for final navigation failure
       if (jobId) {
         try {        } catch (emailError) {
           await dualLogError("Failed to send final navigation error notification:", emailError);
         }
       }
-      
+
       throw error;
     }
 

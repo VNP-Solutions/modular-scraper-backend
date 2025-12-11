@@ -21,7 +21,7 @@ export async function browserSetupLocal(
   try {
     try {
       browser = await puppeteer.launch({
-        headless: false,
+        headless: true,
         defaultViewport: null,
         args: [
           "--start-maximized",

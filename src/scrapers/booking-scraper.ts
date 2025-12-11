@@ -209,7 +209,7 @@ export class BookingScraper extends BaseScraper {
 
       // Launch local browser with comprehensive anti-detection
       const browser = await puppeteer.launch({
-        headless: false, // Set to false so you can see the browser
+        headless: true, // Set to false so you can see the browser
         defaultViewport: null,
         args: [
           "--start-maximized",
@@ -972,7 +972,7 @@ export class BookingScraper extends BaseScraper {
           await this.logInfo(`Current page: ${currentPage.url()}`);
 
           try {
-            /* TO DO - check with their documentation/support why this can't be increased. 
+            /* TO DO - check with their documentation/support why this can't be increased.
               I receive "Couldn't establish a secure connection to the server." when
               trying to increase timeout.
             */
@@ -3343,7 +3343,7 @@ export class BookingScraper extends BaseScraper {
       const sessionConfig = {
         ttl: 86400000, // 24h
         stealth: true,
-        headless: false,
+        headless: true,
         args: [
           "--no-sandbox",
           "--disable-dev-shm-usage",
