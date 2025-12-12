@@ -35,6 +35,8 @@ import {
 import { cookieStorageService } from "../services/cookie-storage.service.js";
 import { propertyCredentialsService } from "../services/job-credentials.service.js";
 import { jobService } from "../services/job.service.js";
+import { Types } from "mongoose";
+import { Property } from "../models/property.model.js";
 import { propertyCredentialsService as propertyPasswordUpdateService } from "../services/property-credentials.service.js";
 import { vccsManagementService } from "../services/vccs-management.service.js";
 import {
@@ -425,7 +427,28 @@ export class BookingScraper extends BaseScraper {
 
     await this.takeScreenshot();
 
-    await this.handlePropertySearch(propertyId);
+    // Map MongoDB ObjectId (property _id) to actual Booking hotel id if needed
+    let effectivePropertyId = propertyId;
+    if (effectivePropertyId && Types.ObjectId.isValid(effectivePropertyId)) {
+      try {
+        const propertyRecord = await Property.findById(effectivePropertyId).lean();
+        if (propertyRecord && propertyRecord.booking_id) {
+          await this.logInfo(
+            `Property id passed as MongoDB id. Mapping to booking id: ${propertyRecord.booking_id}`
+          );
+          this.setPropertyIdForDb(effectivePropertyId);
+          effectivePropertyId = propertyRecord.booking_id.toString();
+        } else {
+          await this.logInfo(
+            `Property id passed as MongoDB id but booking_id not found for ${effectivePropertyId}`
+          );
+        }
+      } catch (err) {
+        await this.logError(`Error mapping MongoDB id to booking id: ${err}`);
+      }
+    }
+
+    await this.handlePropertySearch(effectivePropertyId);
   }
 
   /**
@@ -459,7 +482,28 @@ export class BookingScraper extends BaseScraper {
 
     await this.takeScreenshot();
 
-    await this.handlePropertySearch(propertyId);
+    // Map MongoDB ObjectId (property _id) to actual Booking hotel id if needed
+    let effectivePropertyId = propertyId;
+    if (effectivePropertyId && Types.ObjectId.isValid(effectivePropertyId)) {
+      try {
+        const propertyRecord = await Property.findById(effectivePropertyId).lean();
+        if (propertyRecord && propertyRecord.booking_id) {
+          await this.logInfo(
+            `Property id passed as MongoDB id. Mapping to booking id: ${propertyRecord.booking_id}`
+          );
+          this.setPropertyIdForDb(effectivePropertyId);
+          effectivePropertyId = propertyRecord.booking_id.toString();
+        } else {
+          await this.logInfo(
+            `Property id passed as MongoDB id but booking_id not found for ${effectivePropertyId}`
+          );
+        }
+      } catch (err) {
+        await this.logError(`Error mapping MongoDB id to booking id: ${err}`);
+      }
+    }
+
+    await this.handlePropertySearch(effectivePropertyId);
   }
 
   /**
@@ -562,7 +606,29 @@ export class BookingScraper extends BaseScraper {
 
       if (this.isAlreadyLoggedIn() && !skipAlreadyLogged) {
         await this.logInfo("Already logged in");
-        await this.handlePropertySearch(propertyId);
+
+        // Map MongoDB ObjectId (property _id) to actual Booking hotel id if needed
+        let effectivePropertyId = propertyId;
+        if (effectivePropertyId && Types.ObjectId.isValid(effectivePropertyId)) {
+          try {
+            const propertyRecord = await Property.findById(effectivePropertyId).lean();
+            if (propertyRecord && propertyRecord.booking_id) {
+              await this.logInfo(
+                `Property id passed as MongoDB id. Mapping to booking id: ${propertyRecord.booking_id}`
+              );
+              this.setPropertyIdForDb(effectivePropertyId);
+              effectivePropertyId = propertyRecord.booking_id.toString();
+            } else {
+              await this.logInfo(
+                `Property id passed as MongoDB id but booking_id not found for ${effectivePropertyId}`
+              );
+            }
+          } catch (err) {
+            await this.logError(`Error mapping MongoDB id to booking id: ${err}`);
+          }
+        }
+
+        await this.handlePropertySearch(effectivePropertyId);
         return;
       }
 
