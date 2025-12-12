@@ -14,6 +14,7 @@ export interface PaymentInfo {
   cancellation_fee?: number;
   total_payout: number;
   amount_to_charge_or_refund?: number; // Reverted back to number type
+  amount_to_charge_or_refund_currency?: string;
   charge_before?: string;
 }
 
@@ -84,6 +85,10 @@ const PaymentInfoSchema = new Schema<PaymentInfo>(
     amount_to_charge_or_refund: {
       type: Number,
       required: true,
+    },
+    amount_to_charge_or_refund_currency: {
+      type: String,
+      required: false,
     },
     charge_before: {
       type: String,

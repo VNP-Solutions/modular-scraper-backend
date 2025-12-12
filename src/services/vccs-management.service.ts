@@ -48,6 +48,7 @@ export interface CardDetailsResponse {
   cvv: string;
   cardholder: string;
   amountToChargeOrRefund: string;
+  amountToChargeOrRefundCurrency?: string;
   reasonForCharge?: string;
 }
 
@@ -854,14 +855,27 @@ export class VccsManagementService {
         dualLogInfo("Cardholder NOT matched in HTML");
       }
 
+      const extractCurrency = (value: string): string | null => {
+        const codeMatch = value.match(/\b([A-Z]{3})\b/);
+        if (codeMatch) return codeMatch[1];
+
+        const symbolMatch = value.match(/^([^\d\s-]+)/);
+        return symbolMatch?.[1]?.trim() || null;
+      };
+
       // Extract available balance from table structure
       const balanceMatch = cleanHtml.match(
         /<td[^>]*class="sp"[^>]*>Available balance:<\/td>\s*<td[^>]*>([^<]+)<\/td>/i
       );
       if (balanceMatch) {
         cardDetails.amountToChargeOrRefund = balanceMatch[1].trim();
+        const currency = extractCurrency(cardDetails.amountToChargeOrRefund);
+        if (currency) {
+          cardDetails.amountToChargeOrRefundCurrency = currency;
+        }
         dualLogInfo("Matched available balance", {
           value: cardDetails.amountToChargeOrRefund,
+          currency: cardDetails.amountToChargeOrRefundCurrency,
         });
       } else {
         dualLogInfo("Available balance NOT matched in HTML");
@@ -874,8 +888,13 @@ export class VccsManagementService {
         );
         if (chargeAmountMatch) {
           cardDetails.amountToChargeOrRefund = chargeAmountMatch[1].trim();
+          const currency = extractCurrency(cardDetails.amountToChargeOrRefund);
+          if (currency) {
+            cardDetails.amountToChargeOrRefundCurrency = currency;
+          }
           dualLogInfo("Matched charge amount from message", {
             value: cardDetails.amountToChargeOrRefund,
+            currency: cardDetails.amountToChargeOrRefundCurrency,
           });
         }
       }
@@ -1219,6 +1238,10 @@ export class VccsManagementService {
         amount_to_charge_or_refund: parseAmount(
           cardDetails.amountToChargeOrRefund
         ),
+        amount_to_charge_or_refund_currency:
+          cardDetails.amountToChargeOrRefundCurrency ||
+          vccs.current_amount.currency ||
+          "",
         cancellation_fee: 0,
         charge_before: vccs.expiry_date,
       },
