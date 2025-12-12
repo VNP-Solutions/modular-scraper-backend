@@ -193,33 +193,35 @@ class PropertyCredentialsService {
    * Get portfolio and property details for a given portfolio ID
    * Returns structured data with portfolio name and all property names
    */
-  async getPortfolioAndPropertyDetails(
-    portfolioId: Types.ObjectId
-  ): Promise<{
+  async getPortfolioAndPropertyDetails(portfolioId: Types.ObjectId): Promise<{
     portfolioName: string;
     properties: Array<{ propertyName: string; propertyId: Types.ObjectId }>;
   } | null> {
     try {
-      // Get all properties in the portfolio with their names
-      const properties = await Property.find({ portfolio_id: portfolioId })
+      // Get all jobs for this portfolio to find associated properties
+      const jobs = await Job.find({ portfolio_id: portfolioId })
+        .select("property_id portfolio_name")
+        .lean();
+
+      if (jobs.length === 0) {
+        await dualLogError(`No jobs found for portfolio ${portfolioId}`);
+        return null;
+      }
+
+      // Extract unique property IDs from jobs
+      const propertyIds = [...new Set(jobs.map((job) => job.property_id))];
+
+      // Get all properties with their names
+      const properties = await Property.find({ _id: { $in: propertyIds } })
         .select("_id property_name")
         .lean();
 
       if (properties.length === 0) {
-        await dualLogError(
-          `No properties found for portfolio ${portfolioId}`
-        );
+        await dualLogError(`No properties found for portfolio ${portfolioId}`);
         return null;
       }
 
-      // Get portfolio name from Job collection (using any job with this portfolio)
-      const jobWithPortfolio = await Job.findOne({
-        portfolio_id: portfolioId,
-      })
-        .select("portfolio_name")
-        .lean();
-
-      const portfolioName = jobWithPortfolio?.portfolio_name || "Unknown Portfolio";
+      const portfolioName = jobs[0]?.portfolio_name || "Unknown Portfolio";
 
       return {
         portfolioName,
