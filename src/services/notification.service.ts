@@ -40,7 +40,14 @@ export class NotificationService {
    */
   private async getAllUserIds(): Promise<string[]> {
     const mongoose = await import("mongoose");
-    const db = mongoose.connection.db!;
+    
+    // Check if database connection is available
+    if (!mongoose.connection || !mongoose.connection.db) {
+      console.error("MongoDB connection not available for notification service");
+      return [];
+    }
+
+    const db = mongoose.connection.db;
 
     const users = await db
       .collection("users")
@@ -75,6 +82,7 @@ export class NotificationService {
       const userIds = await this.getAllUserIds();
 
       if (!userIds.length) {
+        console.warn("No users found for public notification");
         return [];
       }
 
@@ -88,7 +96,8 @@ export class NotificationService {
       return await Notification.insertMany(notifications);
     } catch (error) {
       console.error(`Error sending public notification: ${error}`);
-      throw error;
+      // Don't throw error to prevent blocking the main flow
+      return [];
     }
   }
 
@@ -97,6 +106,7 @@ export class NotificationService {
   ): Promise<INotification[]> {
     try {
       if (!data.user_ids?.length) {
+        console.warn("No user IDs provided for protected notification");
         return [];
       }
 
@@ -112,7 +122,8 @@ export class NotificationService {
       return await Notification.insertMany(notifications);
     } catch (error) {
       console.error(`Error sending protected notification: ${error}`);
-      throw error;
+      // Don't throw error to prevent blocking the main flow
+      return [];
     }
   }
 }
