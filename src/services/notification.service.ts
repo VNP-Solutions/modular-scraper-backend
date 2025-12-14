@@ -40,10 +40,12 @@ export class NotificationService {
    */
   private async getAllUserIds(): Promise<string[]> {
     const mongoose = await import("mongoose");
-    
+
     // Check if database connection is available
     if (!mongoose.connection || !mongoose.connection.db) {
-      console.error("MongoDB connection not available for notification service");
+      console.error(
+        "MongoDB connection not available for notification service"
+      );
       return [];
     }
 
