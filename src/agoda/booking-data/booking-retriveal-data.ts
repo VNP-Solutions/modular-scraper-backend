@@ -2,11 +2,11 @@ import { Browser, Page } from "puppeteer";
 import { delay } from "../../common/delay.js";
 import { dualLogError, dualLogInfo } from "../../common/log-helper.js";
 import { progressManager } from "../../common/progress-manager.js";
+import { scrapingStateManager } from "../../common/scraping-state.js";
 import { takeSuccessScreenshot } from "../../common/screenshot-helper.js";
 import { timeoutManager } from "../../common/timeout-manager.js";
 import { searchBookingAndNavigateToPayout } from "../retriveal-data/retriveal-data.js";
 import { PAGE_LOADING, RESERVATIONS_PAGE } from "../utils/selectors.js";
-import { scrapingStateManager } from "../../common/scraping-state.js";
 
 // Interface for reservation data
 interface Reservation {
@@ -293,8 +293,30 @@ export async function getAgodaRetrivealData(
       if (allBookingIds.length > 0) {
         await dualLogInfo("Processing booking IDs...");
 
-        // Wait for the booking list/table to be visible
-        await delay(3000);
+        // Wait for the booking list/table to be visible with extended timeout
+        await dualLogInfo("Waiting for booking list table to load...");
+
+        // Add initial delay to allow page to start rendering
+        await delay(5000);
+
+        try {
+          // Wait for the booking list box element with data-testid
+          await newPage.waitForSelector('[data-testid="booking-list-box"]', {
+            visible: true,
+            timeout: 30000, // 30 seconds timeout for the table to appear
+          });
+          await dualLogInfo("✅ Booking list table loaded successfully!");
+
+          // Additional delay to ensure table content is fully rendered
+          await delay(3000);
+        } catch (tableError: any) {
+          await dualLogError(
+            "Warning: Could not find booking list table with data-testid. Attempting to continue...",
+            tableError.message
+          );
+          // Add extra delay as fallback
+          await delay(5000);
+        }
 
         // Process each booking ID
         for (const bookingId of allBookingIds) {
