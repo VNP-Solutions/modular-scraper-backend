@@ -44,11 +44,19 @@ class PropertyCredentialsService {
         `Finding all properties for portfolio ${portfolioId}...`
       );
 
-      const properties = await Property.find({ portfolio_id: portfolioId })
-        .select("_id")
+      // Get property IDs from jobs since properties don't have portfolio_id
+      const jobs = await Job.find({ portfolio_id: portfolioId })
+        .select("property_id")
         .lean();
 
-      const propertyIds = properties.map((prop) => prop._id);
+      // Extract unique property IDs
+      const propertyIds = [
+        ...new Set(
+          jobs
+            .map((job) => job.property_id)
+            .filter((id): id is Types.ObjectId => id !== undefined)
+        ),
+      ];
 
       await dualLogInfo(
         `Found ${propertyIds.length} properties in portfolio ${portfolioId}`
@@ -198,7 +206,7 @@ class PropertyCredentialsService {
     properties: Array<{ propertyName: string; propertyId: Types.ObjectId }>;
   } | null> {
     try {
-      // Get all jobs for this portfolio to find associated properties
+      // Get all jobs for this portfolio to find property IDs and portfolio name
       const jobs = await Job.find({ portfolio_id: portfolioId })
         .select("property_id portfolio_name")
         .lean();
@@ -208,27 +216,52 @@ class PropertyCredentialsService {
         return null;
       }
 
-      // Extract unique property IDs from jobs
-      const propertyIds = [...new Set(jobs.map((job) => job.property_id))];
+      const portfolioName = jobs[0]?.portfolio_name || "Unknown Portfolio";
 
-      // Get all properties with their names
-      const properties = await Property.find({ _id: { $in: propertyIds } })
+      // Extract unique property IDs from jobs
+      const uniquePropertyIds = [
+        ...new Set(
+          jobs
+            .map((job) => job.property_id?.toString())
+            .filter((id): id is string => id !== undefined)
+        ),
+      ];
+
+      if (uniquePropertyIds.length === 0) {
+        await dualLogError(
+          `No property IDs found in jobs for portfolio ${portfolioId}`
+        );
+        return null;
+      }
+
+      // Fetch actual property documents to get current property names (source of truth)
+      const properties = await Property.find({
+        _id: { $in: uniquePropertyIds.map((id) => new Types.ObjectId(id)) },
+      })
         .select("_id property_name")
         .lean();
 
       if (properties.length === 0) {
-        await dualLogError(`No properties found for portfolio ${portfolioId}`);
+        await dualLogError(
+          `No properties found in database for portfolio ${portfolioId}`
+        );
         return null;
       }
 
-      const portfolioName = jobs[0]?.portfolio_name || "Unknown Portfolio";
+      // Map properties with current names from Property collection
+      const propertyDetails = properties.map((prop: any) => ({
+        propertyName: prop.property_name || "Unknown Property",
+        propertyId: prop._id,
+      }));
+
+      await dualLogInfo(
+        `Found ${propertyDetails.length} properties for portfolio ${portfolioName}:`,
+        propertyDetails.map((p) => `${p.propertyName} (${p.propertyId})`)
+      );
 
       return {
         portfolioName,
-        properties: properties.map((prop: any) => ({
-          propertyName: prop.property_name || "Unknown Property",
-          propertyId: prop._id,
-        })),
+        properties: propertyDetails,
       };
     } catch (error) {
       await dualLogError(
