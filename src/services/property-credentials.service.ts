@@ -206,10 +206,18 @@ class PropertyCredentialsService {
     properties: Array<{ propertyName: string; propertyId: Types.ObjectId }>;
   } | null> {
     try {
+      await dualLogInfo(
+        `[getPortfolioAndPropertyDetails] Starting lookup for portfolio: ${portfolioId}`
+      );
+
       // Get all jobs for this portfolio to find property IDs and portfolio name
       const jobs = await Job.find({ portfolio_id: portfolioId })
-        .select("property_id portfolio_name")
+        .select("property_id property_name portfolio_name")
         .lean();
+
+      await dualLogInfo(
+        `[getPortfolioAndPropertyDetails] Found ${jobs.length} jobs for portfolio ${portfolioId}`
+      );
 
       if (jobs.length === 0) {
         await dualLogError(`No jobs found for portfolio ${portfolioId}`);
@@ -227,6 +235,12 @@ class PropertyCredentialsService {
         ),
       ];
 
+      await dualLogInfo(
+        `[getPortfolioAndPropertyDetails] Found ${
+          uniquePropertyIds.length
+        } unique property IDs: ${uniquePropertyIds.join(", ")}`
+      );
+
       if (uniquePropertyIds.length === 0) {
         await dualLogError(
           `No property IDs found in jobs for portfolio ${portfolioId}`
@@ -241,21 +255,51 @@ class PropertyCredentialsService {
         .select("_id property_name")
         .lean();
 
+      await dualLogInfo(
+        `[getPortfolioAndPropertyDetails] Fetched ${properties.length} property documents from database`
+      );
+
+      // Log each property to see what data we have
+      properties.forEach((prop: any, index: number) => {
+        dualLogInfo(
+          `[getPortfolioAndPropertyDetails] Property ${index + 1}: ID=${
+            prop._id
+          }, name="${prop.property_name || "MISSING"}"`
+        );
+      });
+
       if (properties.length === 0) {
         await dualLogError(
-          `No properties found in database for portfolio ${portfolioId}`
+          `No properties found in database for portfolio ${portfolioId}. Checked IDs: ${uniquePropertyIds.join(
+            ", "
+          )}`
         );
         return null;
       }
 
-      // Map properties with current names from Property collection
-      const propertyDetails = properties.map((prop: any) => ({
-        propertyName: prop.property_name || "Unknown Property",
-        propertyId: prop._id,
-      }));
+      // If property names are missing from Property collection, fall back to job property_name
+      const jobPropertyMap = new Map<string, string>();
+      jobs.forEach((job) => {
+        if (job.property_id && job.property_name) {
+          jobPropertyMap.set(job.property_id.toString(), job.property_name);
+        }
+      });
+
+      // Map properties with current names from Property collection, fallback to job names
+      const propertyDetails = properties.map((prop: any) => {
+        const propertyName =
+          prop.property_name ||
+          jobPropertyMap.get(prop._id.toString()) ||
+          "Unknown Property";
+
+        return {
+          propertyName,
+          propertyId: prop._id,
+        };
+      });
 
       await dualLogInfo(
-        `Found ${propertyDetails.length} properties for portfolio ${portfolioName}:`,
+        `[getPortfolioAndPropertyDetails] Final result for portfolio ${portfolioName}:`,
         propertyDetails.map((p) => `${p.propertyName} (${p.propertyId})`)
       );
 
