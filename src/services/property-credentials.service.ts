@@ -119,7 +119,8 @@ class PropertyCredentialsService {
   }
 
   /**
-   * Update booking password for all properties in a portfolio using job_id (OPTIMIZED)
+   * Update booking password for ONLY the property associated with this specific job
+   * (Changed from updating all properties in portfolio)
    */
   async updateBookingPasswordByJobId(
     jobId: string,
@@ -128,72 +129,111 @@ class PropertyCredentialsService {
     try {
       await dualLogInfo(`Updating booking password for job ${jobId}...`);
 
-      // Step 1: Get portfolio_id from job_id
-      const portfolioId = await this.getPortfolioIdFromJobId(jobId);
+      // Step 1: Get job details to find the specific property_id
+      const job = await Job.findById(jobId).select("property_id").lean();
 
-      if (!portfolioId) {
-        await dualLogError(`Could not find portfolio_id for job ${jobId}`);
+      if (!job) {
+        await dualLogError(`Job not found with ID: ${jobId}`);
         return false;
       }
 
-      await dualLogInfo(`Found portfolio ${portfolioId} for job ${jobId}`);
-
-      // Step 2: Get all property IDs in this portfolio
-      const propertyIds = await this.getPropertyIdsByPortfolioId(portfolioId);
-
-      if (propertyIds.length === 0) {
-        await dualLogError(`No properties found for portfolio ${portfolioId}`);
+      if (!job.property_id) {
+        await dualLogError(`Job ${jobId} has no property_id`);
         return false;
       }
 
       await dualLogInfo(
-        `Updating booking password for ${propertyIds.length} properties in portfolio ${portfolioId}`
+        `Found property ${job.property_id} for job ${jobId}, updating password for THIS property only`
       );
 
-      // Step 3: Encrypt the password once (efficient - done only once)
+      // Step 2: Encrypt the password
       const encryptedPassword = encryptPassword(newPassword);
 
-      // Step 4: OPTIMIZED - Use updateMany for bulk update (single query)
-      const updateResult = await PropertyCredentials.updateMany(
-        { property_id: { $in: propertyIds } },
+      // Step 3: Update ONLY this property's password
+      const result = await PropertyCredentials.findOneAndUpdate(
+        { property_id: job.property_id },
         {
           $set: {
             bookingPassword: encryptedPassword,
           },
-        }
+        },
+        { new: true }
       );
 
-      const successCount = updateResult.modifiedCount;
-      const matchedCount = updateResult.matchedCount;
-
-      // Step 5: Log summary
-      await dualLogInfo(
-        `Password update complete: ${successCount} properties updated (${matchedCount} matched) out of ${propertyIds.length} in portfolio`
-      );
-
-      if (successCount === 0 && matchedCount === 0) {
+      if (!result) {
         await dualLogError(
-          `No property credentials found for any property in portfolio ${portfolioId}`
+          `Property credentials not found for property ${job.property_id} (job ${jobId})`
         );
         return false;
       }
 
-      if (successCount < propertyIds.length) {
-        await dualLogInfo(
-          `Note: ${
-            propertyIds.length - matchedCount
-          } properties don't have credentials records yet`
-        );
-      }
-
-      // Return true if at least one update succeeded
-      return successCount > 0;
+      await dualLogInfo(
+        `Successfully updated booking password for property ${job.property_id} (job ${jobId})`
+      );
+      return true;
     } catch (error) {
       await dualLogError(
         `Error updating booking password by job ID ${jobId}:`,
         error
       );
       return false;
+    }
+  }
+
+  /**
+   * Get single property details from a job ID
+   * Returns property and portfolio information for the specific job
+   */
+  async getPropertyDetailsFromJobId(jobId: string): Promise<{
+    propertyName: string;
+    portfolioName: string;
+    propertyId: Types.ObjectId;
+  } | null> {
+    try {
+      await dualLogInfo(
+        `[getPropertyDetailsFromJobId] Getting property details for job: ${jobId}`
+      );
+
+      // Get job details
+      const job = await Job.findById(jobId)
+        .select("property_id portfolio_id property_name portfolio_name")
+        .lean();
+
+      if (!job) {
+        await dualLogError(`Job not found with ID: ${jobId}`);
+        return null;
+      }
+
+      if (!job.property_id) {
+        await dualLogError(`Job ${jobId} has no property_id`);
+        return null;
+      }
+
+      // Get property details from Property collection
+      const property = await Property.findById(job.property_id)
+        .select("_id property_name")
+        .lean();
+
+      // Use property name from Property collection if available, fallback to job's property_name
+      const propertyName =
+        property?.property_name || job.property_name || "Unknown Property";
+      const portfolioName = job.portfolio_name || "Unknown Portfolio";
+
+      await dualLogInfo(
+        `[getPropertyDetailsFromJobId] Found property: ${propertyName} in portfolio: ${portfolioName}`
+      );
+
+      return {
+        propertyName,
+        portfolioName,
+        propertyId: job.property_id,
+      };
+    } catch (error) {
+      await dualLogError(
+        `Error getting property details for job ${jobId}:`,
+        error
+      );
+      return null;
     }
   }
 

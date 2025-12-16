@@ -3770,7 +3770,7 @@ export class BookingScraper extends BaseScraper {
   }
 
   /**
-   * Send batch password change notification email for multiple properties/portfolios
+   * Send password change notification email for ONLY this job's property
    */
   private async sendPasswordChangeEmail(
     newPassword: string,
@@ -3784,18 +3784,11 @@ export class BookingScraper extends BaseScraper {
         return;
       }
 
-      // Get job details to retrieve portfolio ID and watcher emails
+      // Get job details to retrieve watcher emails
       const job = await jobService.getJobById(this.jobId);
       if (!job) {
         await this.logError(
           `Cannot send password change email: Job not found for jobId: ${this.jobId}`
-        );
-        return;
-      }
-
-      if (!job.portfolio_id) {
-        await this.logError(
-          `Cannot send password change email: No portfolio_id in job ${this.jobId}`
         );
         return;
       }
@@ -3844,42 +3837,32 @@ export class BookingScraper extends BaseScraper {
 
       const recipients = Array.from(emailSet);
 
-      // Get detailed portfolio and property information
-      const portfolioDetails =
-        await propertyPasswordUpdateService.getPortfolioAndPropertyDetails(
-          job.portfolio_id
+      // Get property details for ONLY this job's property
+      const propertyDetails =
+        await propertyPasswordUpdateService.getPropertyDetailsFromJobId(
+          this.jobId
         );
 
-      if (!portfolioDetails || portfolioDetails.properties.length === 0) {
+      if (!propertyDetails) {
         await this.logError(
-          `Cannot send password change email: No properties found for portfolio ${job.portfolio_id}`
+          `Cannot send password change email: No property found for job ${this.jobId}`
         );
         return;
       }
 
-      // Prepare notification data with batch structure
+      // Prepare notification data for single property
       const notificationData = {
         jobId: this.jobId,
-        portfolios: [
-          {
-            portfolioName: portfolioDetails.portfolioName,
-            properties: portfolioDetails.properties.map((p) => ({
-              propertyName: p.propertyName,
-            })),
-          },
-        ],
+        propertyName: propertyDetails.propertyName,
+        portfolioName: propertyDetails.portfolioName,
         newPassword: newPassword,
         timestamp: new Date(),
         reason: reason,
-        totalPropertiesUpdated: portfolioDetails.properties.length,
       };
 
-      await emailNotifier.sendBatchPasswordChangeEmail(
-        recipients,
-        notificationData
-      );
+      await emailNotifier.sendPasswordChangeEmail(recipients, notificationData);
       await this.logInfo(
-        `Password change notification email sent to ${recipients.join(", ")} for ${portfolioDetails.properties.length} properties`
+        `Password change notification email sent to ${recipients.join(", ")} for property: ${propertyDetails.propertyName}`
       );
     } catch (error) {
       await this.logError(
