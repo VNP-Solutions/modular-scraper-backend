@@ -385,6 +385,265 @@ Please do not reply to this email.
 
     await this.sendErrorEmail(recipients, testData);
   }
+
+  /**
+   * Send banking information modal notification
+   * Sends email to both BANK_INFO_MODAL_RECIPIENTS from env and job's watcher_emails
+   */
+  async notifyBankingInfoRequired(
+    jobId: string,
+    propertyName?: string,
+    expediaId?: string
+  ): Promise<void> {
+    try {
+      if (!this.transporter) {
+        await dualLogWarn(
+          "Email transporter not available. Skipping banking info notification.",
+          { jobId }
+        );
+        return;
+      }
+
+      // Get job details including watcher emails
+      const job = await this.jobService.getJobById(jobId);
+      if (!job) {
+        await dualLogWarn(
+          `Job not found for banking info notification: ${jobId}`,
+          { jobId }
+        );
+        return;
+      }
+
+      // Collect all recipients
+      const recipients: string[] = [];
+
+      // Add watcher emails from job
+      const watcherEmails = job.watcher_emails || [];
+      recipients.push(...watcherEmails);
+
+      // Add recipients from environment variable
+      const envRecipients = process.env.BANK_INFO_MODAL_RECIPIENTS;
+      if (envRecipients) {
+        const envEmails = envRecipients
+          .split(",")
+          .map((email) => email.trim())
+          .filter((email) => email.length > 0);
+        recipients.push(...envEmails);
+      }
+
+      // Remove duplicates
+      const uniqueRecipients = [...new Set(recipients)];
+
+      if (uniqueRecipients.length === 0) {
+        await dualLogWarn(
+          `No recipients configured for banking info notification for job ${jobId}`,
+          { jobId }
+        );
+        return;
+      }
+
+      // Send the email
+      await this.sendBankingInfoEmail(
+        uniqueRecipients,
+        jobId,
+        job.name || `Job ${jobId}`,
+        propertyName || job.property_name || "Unknown Property",
+        expediaId || ""
+      );
+
+      await dualLogInfo(
+        `Banking info notification sent successfully for job ${jobId}`,
+        {
+          jobId,
+          recipientCount: uniqueRecipients.length,
+          recipients: uniqueRecipients,
+        }
+      );
+    } catch (error) {
+      await dualLogError(
+        `Failed to send banking info notification for job ${jobId}:`,
+        error,
+        { jobId }
+      );
+    }
+  }
+
+  /**
+   * Send banking information modal email
+   */
+  private async sendBankingInfoEmail(
+    recipients: string[],
+    jobId: string,
+    jobName: string,
+    propertyName: string,
+    expediaId: string
+  ): Promise<void> {
+    if (!this.transporter) {
+      throw new Error("Email transporter not initialized");
+    }
+
+    const validEmails = this.validateEmails(recipients);
+
+    if (validEmails.length === 0) {
+      throw new Error("No valid email addresses provided");
+    }
+
+    const subject = `🏦 Banking Information Required - ${jobName} (${jobId})`;
+    const htmlBody = this.generateBankingInfoEmailBody(
+      jobId,
+      jobName,
+      propertyName,
+      expediaId
+    );
+    const textBody = this.generateBankingInfoTextBody(
+      jobId,
+      jobName,
+      propertyName,
+      expediaId
+    );
+
+    const mailOptions = {
+      from: process.env.EMAIL_FROM || process.env.EMAIL_USER,
+      to: validEmails.join(", "),
+      subject,
+      text: textBody,
+      html: htmlBody,
+    };
+
+    await this.transporter.sendMail(mailOptions);
+  }
+
+  /**
+   * Generate HTML email body for banking info modal
+   */
+  private generateBankingInfoEmailBody(
+    jobId: string,
+    jobName: string,
+    propertyName: string,
+    expediaId: string
+  ): string {
+    const timestamp = new Date().toLocaleString("en-US", {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZoneName: "short",
+    });
+
+    return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <style>
+            body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+            .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+            .header { background-color: #ffc107; color: #000; padding: 20px; border-radius: 5px 5px 0 0; }
+            .content { background-color: #f8f9fa; padding: 20px; border-radius: 0 0 5px 5px; }
+            .warning-box { background-color: #fff; border-left: 4px solid #ffc107; padding: 15px; margin: 15px 0; }
+            .info-table { width: 100%; border-collapse: collapse; margin: 15px 0; }
+            .info-table th, .info-table td { padding: 8px; text-align: left; border-bottom: 1px solid #ddd; }
+            .info-table th { background-color: #e9ecef; font-weight: bold; }
+            .action-box { background-color: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; border-radius: 5px; margin: 15px 0; }
+            .footer { text-align: center; margin-top: 20px; color: #6c757d; font-size: 12px; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h2>🏦 Banking Information Required</h2>
+                <p>Expedia requires banking information to be added before requesting payment.</p>
+            </div>
+            <div class="content">
+                <div class="warning-box">
+                    <h3>⚠️ Action Required</h3>
+                    <p><strong>The scraping job has been stopped because Expedia is requesting banking information.</strong></p>
+                    <p>Before requesting payment, you need to provide your banking information to Expedia Partner Central.</p>
+                </div>
+                
+                <table class="info-table">
+                    <tr><th>Job ID</th><td>${jobId}</td></tr>
+                    <tr><th>Job Name</th><td>${jobName}</td></tr>
+                    <tr><th>Property</th><td>${propertyName}</td></tr>
+                    ${
+                      expediaId
+                        ? `<tr><th>Expedia ID</th><td>${expediaId}</td></tr>`
+                        : ""
+                    }
+                    <tr><th>Detected At</th><td>${timestamp}</td></tr>
+                    <tr><th>Job Status</th><td><strong>Failed</strong></td></tr>
+                </table>
+
+                <div class="action-box">
+                    <h4>📋 Next Steps</h4>
+                    <ol>
+                        <li><strong>Login to Expedia Partner Central</strong> with the property credentials</li>
+                        <li>Navigate to <strong>Finance Settings</strong></li>
+                        <li><strong>Add your banking information</strong> (account details where payments should be sent)</li>
+                        <li>Once banking information is added, <strong>update the job status to "Pending"</strong> in the system</li>
+                        <li><strong>Re-run the job</strong> to complete the payment request process</li>
+                    </ol>
+                </div>
+
+                <div style="background-color: #d1ecf1; border: 1px solid #bee5eb; padding: 15px; border-radius: 5px; margin: 15px 0;">
+                    <h4>💡 Important Notes</h4>
+                    <ul>
+                        <li>This is a one-time setup required by Expedia</li>
+                        <li>The job has been marked as <strong>Failed</strong> and needs manual intervention</li>
+                        <li>Future jobs for this property will work normally once banking info is added</li>
+                        <li>Contact your property manager if you need help with banking information</li>
+                    </ul>
+                </div>
+            </div>
+            <div class="footer">
+                <p>This is an automated notification from the Modular Scraper System.</p>
+                <p>Please do not reply to this email.</p>
+            </div>
+        </div>
+    </body>
+    </html>
+    `;
+  }
+
+  /**
+   * Generate plain text email body for banking info modal
+   */
+  private generateBankingInfoTextBody(
+    jobId: string,
+    jobName: string,
+    propertyName: string,
+    expediaId: string
+  ): string {
+    const timestamp = new Date().toLocaleString("en-US", {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZoneName: "short",
+    });
+
+    return `
+🏦 BANKING INFORMATION REQUIRED
+
+The scraping job has been stopped because Expedia is requesting banking information.
+
+⚠️ ACTION REQUIRED:
+Before requesting payment, you need to provide your banking information to Expedia Partner Central.
+
+JOB INFORMATION:
+- Job ID: ${jobId}
+- Job Name: ${jobName}
+- Property: ${propertyName}
+${expediaId ? `- Expedia ID: ${expediaId}` : ""}
+- Detected At: ${timestamp}
+- Job Status: Failed
+
+---
+This is an automated notification from the Modular Scraper System.
+Please do not reply to this email.
+    `;
+  }
 }
 
 // Export singleton instance

@@ -1,8 +1,15 @@
 import { Browser, Page } from "puppeteer";
 import { delay } from "../common/delay.js";
-import { dualLogError, dualLogInfo } from "../common/log-helper.js";
+import { emailNotifier } from "../common/email-notifier.js";
+import {
+  dualLogError,
+  dualLogInfo,
+  dualLogWarn,
+} from "../common/log-helper.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import { timeoutManager } from "../common/timeout-manager.js";
+import { JobStatus } from "../models/job.model.js";
+import { JobService } from "../services/job.service.js";
 
 /**
  * Click on "Request payment from Expedia Group" in Quick tasks section
@@ -84,8 +91,100 @@ export async function clickExpediaPaymentandsetDaterange(
         "Successfully navigated to Request payment from Expedia Group page"
       );
 
-      // Check if "Add more reservation IDs" link exists
+      // Check for banking information modal
       await delay(3000);
+
+      const bankingModalDetected = await page.evaluate(() => {
+        const modal = document.querySelector("#paymentRequestInterceptModal");
+        if (!modal) return false;
+
+        // Check if modal has "active" class and contains the banking info message
+        const isActive = modal.classList.contains("active");
+        const modalTitle = modal.querySelector(
+          "#paymentRequestInterceptModal-title"
+        );
+        const hasBankingTitle = modalTitle?.textContent?.includes(
+          "We need your banking information"
+        );
+
+        return isActive && hasBankingTitle;
+      });
+
+      if (bankingModalDetected) {
+        await dualLogWarn(
+          "⚠️ BANKING INFORMATION MODAL DETECTED! Expedia requires banking information to be added."
+        );
+        await dualLogInfo("Sending email notifications...");
+
+        // Get property info for the email
+        let propertyName = "Unknown Property";
+        let expediaId = "";
+
+        if (jobId) {
+          try {
+            const jobService = new JobService();
+            const job = await jobService.getJobById(jobId);
+            if (job) {
+              propertyName = job.property_name || propertyName;
+            }
+
+            // Get expedia_id from job's property
+            const jobData = await jobService.getExpediaIdFromJob(jobId);
+            if (jobData?.expediaId) {
+              expediaId = jobData.expediaId;
+            }
+          } catch (error) {
+            await dualLogWarn(
+              "Could not fetch job/property details for email",
+              { error }
+            );
+          }
+        }
+
+        // Send email notifications
+        if (jobId) {
+          try {
+            await emailNotifier.notifyBankingInfoRequired(
+              jobId,
+              propertyName,
+              expediaId
+            );
+            await dualLogInfo(
+              "✅ Banking info notification emails sent successfully"
+            );
+          } catch (emailError) {
+            await dualLogError(
+              "Failed to send banking info emails:",
+              emailError
+            );
+          }
+
+          // Update job status to Failed
+          try {
+            const jobService = new JobService();
+            await jobService.updateJobStatus(jobId, JobStatus.Failed);
+            await dualLogInfo("✅ Job status updated to Failed");
+          } catch (statusError) {
+            await dualLogError("Failed to update job status:", statusError);
+          }
+        }
+
+        // Throw error to stop the process (browser will be closed by parent function)
+        await dualLogError(
+          "❌ Job stopped due to missing banking information. Manual intervention required."
+        );
+
+        throw new Error(
+          "BANKING_INFO_REQUIRED: Banking information required. Expedia is requesting banking details to be added before payment can be requested. Job has been marked as Failed and notification emails have been sent."
+        );
+      }
+
+      await dualLogInfo(
+        "✅ No banking information modal detected, proceeding..."
+      );
+
+      // Check if "Add more reservation IDs" link exists
+      await delay(2000);
 
       const addMoreReservationExists = await page.evaluate(() => {
         const showSearchLink = document.querySelector("a.showSearch");
