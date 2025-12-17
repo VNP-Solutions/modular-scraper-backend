@@ -2973,7 +2973,7 @@ export class BookingScraper extends BaseScraper {
         }));
       });
 
-      await this.logInfo("Available menu items:", menuItems);
+      // await this.logInfo("Available menu items:", menuItems);
     }
 
     const subMenuSelectors = BOOKING_SELECTORS.navigation.subMenu(subSection);

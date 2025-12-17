@@ -208,10 +208,10 @@ export class VccsManagementService {
       const fullUrl = `${apiUrl}?${queryParams.toString()}`;
 
       // Log all cookies being sent
-      console.log("=== COOKIES BEING SENT TO API ===");
-      console.log("Cookie string length:", cookies.length);
-      console.log("Cookie string:", cookies);
-      console.log("=== END COOKIES ===");
+      // console.log("=== COOKIES BEING SENT TO API ===");
+      // console.log("Cookie string length:", cookies.length);
+      // console.log("Cookie string:", cookies);
+      // console.log("=== END COOKIES ===");
 
       // Log all headers being sent
       console.log("=== HEADERS BEING SENT TO API ===");
@@ -1280,7 +1280,7 @@ export class VccsManagementService {
       await new Promise((resolve) =>
         setTimeout(resolve, 1000 + Math.random() * 2000)
       );
-      console.log("Human-like delay completed");
+      // console.log("Human-like delay completed");
 
       // Simulate mouse movement to look more human (Puppeteer method)
       try {
@@ -1314,8 +1314,8 @@ export class VccsManagementService {
         "Cookie names:",
         cookies.map((c: any) => c.name)
       );
-      console.log("Cookie string:", cookieString);
-      console.log("=== END EXTRACTED COOKIES ===");
+      // console.log("Cookie string:", cookieString);
+      // console.log("=== END EXTRACTED COOKIES ===");
 
       // Extract headers from the page
       const headers: Record<string, string> = {};

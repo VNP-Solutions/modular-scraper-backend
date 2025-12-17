@@ -497,9 +497,9 @@ export class CaptchaService {
         continue;
       }
 
-      await logInfo(
-        `🎯 Clicking position ${position} at coordinates (${coords.x}, ${coords.y})`
-      );
+      // await logInfo(
+      //   `🎯 Clicking position ${position} at coordinates (${coords.x}, ${coords.y})`
+      // );
 
       try {
         // Add visual indicator - EXACT implementation from openai-booking

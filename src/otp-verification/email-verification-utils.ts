@@ -155,7 +155,7 @@ export async function getVerificationCode(): Promise<string | null> {
 }
 
 /**
- * Get multiple verification codes from recent emails (last 5 codes)
+ * Get multiple verification codes from recent Booking.com verification emails (last 5 codes)
  * Returns an array of verification codes found in recent emails
  */
 export async function getMultipleVerificationCodes(): Promise<string[]> {
@@ -168,43 +168,165 @@ export async function getMultipleVerificationCodes(): Promise<string[]> {
     }
 
     const gmail = google.gmail({ version: "v1", auth: oauth2Client });
-    const res = await gmail.users.messages.list({
-      userId: "me",
-      maxResults: 10, // Fetch more emails to ensure we get 5 codes
-    });
 
-    if (!res.data.messages) {
-      await dualLogInfo("No new emails found.");
-      return [];
-    }
+    // Filter for IFTTT SMS emails
+    // Emails come from: Android SMS via IFTTT <action@ifttt.com>
+    // Subject can be: "to verify" OR "Extranet code: XXXXXX (don't share)"
+    // Body contains: "Extranet code: XXXXXX (don't share)"
+    const queries = [
+      'from:action@ifttt.com subject:"to verify"',
+      'from:action@ifttt.com subject:"Extranet code"',
+      "from:action@ifttt.com",
+      'subject:"to verify"',
+      'subject:"Extranet code"',
+    ];
 
     const codes: string[] = [];
+    const processedMessageIds = new Set<string>();
 
-    for (const msg of res.data.messages) {
-      if (!msg.id) {
-        continue;
-      }
-
-      // Stop if we already have 5 codes
+    // Try each query pattern to find IFTTT verification emails
+    for (const query of queries) {
       if (codes.length >= 5) {
         break;
       }
 
-      const email = await gmail.users.messages.get({
-        userId: "me",
-        id: msg.id,
-      });
+      try {
+        const res = await gmail.users.messages.list({
+          userId: "me",
+          maxResults: 20, // Fetch more emails to ensure we get 5 codes
+          q: query,
+        });
 
-      const body = email.data.snippet || "";
-      const codeMatch = body.match(/\b\d{6,10}\b/);
+        if (!res.data.messages || res.data.messages.length === 0) {
+          continue;
+        }
 
-      if (codeMatch && !codes.includes(codeMatch[0])) {
-        codes.push(codeMatch[0]);
-        await dualLogInfo(`Found verification code: ${codeMatch[0]}`);
+        await dualLogInfo(
+          `Found ${res.data.messages.length} IFTTT emails matching: ${query}`
+        );
+
+        for (const msg of res.data.messages) {
+          if (!msg.id || processedMessageIds.has(msg.id)) {
+            continue;
+          }
+
+          // Stop if we already have 5 codes
+          if (codes.length >= 5) {
+            break;
+          }
+
+          processedMessageIds.add(msg.id);
+
+          // Get full email body
+          const email = await gmail.users.messages.get({
+            userId: "me",
+            id: msg.id,
+            format: "full",
+          });
+
+          // Get subject as well (code might be in subject)
+          const headers = email.data.payload?.headers || [];
+          const subjectHeader = headers.find((h: any) => h.name === "Subject");
+          const subject = subjectHeader?.value || "";
+
+          // Extract full email body
+          const emailBody = getEmailBodyText(email.data);
+          const snippet = email.data.snippet || "";
+          const bodyText = emailBody || snippet;
+
+          // Combine subject and body to search for code
+          const searchText = `${subject} ${bodyText}`;
+
+          // Look for "Extranet code: XXXXXX" pattern
+          // Pattern: "Extranet code: 166190" or "Extranet code: 166190 (don't share)"
+          // Can be in subject OR body
+          const extranetCodePattern = /Extranet\s+code:\s*(\d{6})/i;
+          const match = searchText.match(extranetCodePattern);
+
+          if (match && match[1]) {
+            const code = match[1];
+            // Validate it's a 6-digit code and not already in our list
+            if (code && code.length === 6 && !codes.includes(code)) {
+              codes.push(code);
+              await dualLogInfo(`Found Extranet code: ${code}`);
+              if (codes.length >= 5) {
+                break;
+              }
+            }
+          }
+        }
+      } catch (queryError: any) {
+        await dualLogError(
+          `Error querying emails with pattern "${query}":`,
+          queryError
+        );
+        continue;
       }
     }
 
-    await dualLogInfo(`Total verification codes found: ${codes.length}`, codes);
+    // If we still don't have 5 codes, try fallback: check all recent emails for Extranet code pattern
+    if (codes.length < 5) {
+      await dualLogInfo(
+        `Only found ${codes.length} codes, trying fallback: checking all recent emails for Extranet code pattern`
+      );
+
+      const res = await gmail.users.messages.list({
+        userId: "me",
+        maxResults: 50, // Fetch even more emails
+      });
+
+      if (res.data.messages) {
+        for (const msg of res.data.messages) {
+          if (!msg.id || processedMessageIds.has(msg.id)) {
+            continue;
+          }
+
+          if (codes.length >= 5) {
+            break;
+          }
+
+          processedMessageIds.add(msg.id);
+
+          try {
+            const email = await gmail.users.messages.get({
+              userId: "me",
+              id: msg.id,
+              format: "full",
+            });
+
+            // Get subject as well (code might be in subject)
+            const headers = email.data.payload?.headers || [];
+            const subjectHeader = headers.find(
+              (h: any) => h.name === "Subject"
+            );
+            const subject = subjectHeader?.value || "";
+
+            const emailBody = getEmailBodyText(email.data);
+            const snippet = email.data.snippet || "";
+            const bodyText = emailBody || snippet;
+
+            // Combine subject and body to search for code
+            const searchText = `${subject} ${bodyText}`;
+
+            // Look for "Extranet code: XXXXXX" pattern
+            const extranetCodePattern = /Extranet\s+code:\s*(\d{6})/i;
+            const match = searchText.match(extranetCodePattern);
+            if (match && match[1] && !codes.includes(match[1])) {
+              codes.push(match[1]);
+              await dualLogInfo(`Found Extranet code (fallback): ${match[1]}`);
+            }
+          } catch (emailError) {
+            // Skip this email if there's an error
+            continue;
+          }
+        }
+      }
+    }
+
+    await dualLogInfo(
+      `📧 Total verification codes found: ${codes.length}`,
+      codes
+    );
     return codes;
   } catch (error: any) {
     await dualLogError(
