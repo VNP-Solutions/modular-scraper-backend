@@ -535,9 +535,23 @@ async function handleBookingOtpVerification(
         // Continue to next attempt
         continue;
       } else {
-        // Success! No error message found
+        // Success! No error message found - page likely navigated or is on success page
         await dualLogInfo(`✅ Attempt ${attempt + 1} SUCCESS - OTP verified!`);
         otpSuccess = true;
+        // Check if page actually navigated by checking URL
+        try {
+          const currentUrl = page.url();
+          // If URL changed from verification page, navigation happened
+          if (
+            !currentUrl.includes("verification-sms") &&
+            !currentUrl.includes("verification")
+          ) {
+            navigationAlreadyHappened = true;
+          }
+        } catch (urlError) {
+          // If we can't check URL, assume navigation might have happened
+          navigationAlreadyHappened = true;
+        }
         break;
       }
     }
@@ -549,11 +563,16 @@ async function handleBookingOtpVerification(
 
     // Wait for successful verification navigation ONLY if it hasn't happened yet
     if (!navigationAlreadyHappened) {
+      await dualLogInfo("⏳ Waiting for navigation after OTP verification...");
       try {
-        await waitForNavigation(page, loadingTimeout);
+        // Use a shorter timeout since OTP verification should be quick
+        await waitForNavigation(page, Math.min(loadingTimeout, 10000)); // Max 10 seconds
       } catch (navError: any) {
-        // Navigation already completed
+        // Navigation already completed or timeout - that's fine
+        await dualLogInfo("Navigation completed or timeout reached");
       }
+    } else {
+      await dualLogInfo("✅ Navigation already completed, skipping wait");
     }
 
     await dualLogInfo("🎉 Booking.com OTP verification completed!");
