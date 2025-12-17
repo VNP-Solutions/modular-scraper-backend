@@ -444,13 +444,36 @@ async function handleBookingOtpVerification(
 
       // Click submit button
       await submitOtpForm(page);
-      await delay(2000);
 
-      // Check if OTP was correct by looking for error message
-      const hasError = await page.evaluate(() => {
-        const bodyText = document.body.innerText;
-        return bodyText.includes("Enter a valid verification code");
-      });
+      // Wait for navigation or a short period so page can update after submit
+      const navPromise = page
+        .waitForNavigation({ timeout: 2500 })
+        .catch(() => null);
+      await Promise.race([navPromise, delay(2000)]);
+
+      // Check if OTP was correct by looking for error message; guard against navigation destroying execution context
+      let hasError = false;
+      try {
+        hasError = await page.evaluate(() => {
+          const bodyText = document.body.innerText;
+          return bodyText.includes("Enter a valid verification code");
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        if (
+          msg.includes("Execution context was destroyed") ||
+          msg.includes("Cannot find context") ||
+          msg.includes("Target closed")
+        ) {
+          await dualLogInfo(
+            "Navigation occurred after submit; assuming OTP succeeded"
+          );
+          otpSuccess = true;
+          break;
+        }
+
+        throw e;
+      }
 
       if (hasError) {
         await dualLogInfo(`❌ Attempt ${attempt + 1} failed: Invalid OTP code`);
