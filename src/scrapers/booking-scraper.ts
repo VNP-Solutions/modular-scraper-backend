@@ -1,3 +1,4 @@
+import { Types } from "mongoose";
 import fetch from "node-fetch";
 import puppeteer, { Browser, Page } from "puppeteer";
 import readline from "readline";
@@ -26,6 +27,7 @@ import { generateRandomPassword } from "../common/password-generator.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import { SelectorUtils } from "../common/selector-utils.js";
 import { timeoutManager } from "../common/timeout-manager.js";
+import { Property } from "../models/property.model.js";
 import handleBookingOtpVerification from "../otp-verification/booking-otp-verification.js";
 import { getPasswordResetUrl } from "../otp-verification/email-verification-utils.js";
 import {
@@ -35,8 +37,6 @@ import {
 import { cookieStorageService } from "../services/cookie-storage.service.js";
 import { propertyCredentialsService } from "../services/job-credentials.service.js";
 import { jobService } from "../services/job.service.js";
-import { Types } from "mongoose";
-import { Property } from "../models/property.model.js";
 import { propertyCredentialsService as propertyPasswordUpdateService } from "../services/property-credentials.service.js";
 import { vccsManagementService } from "../services/vccs-management.service.js";
 import {
@@ -402,7 +402,7 @@ export class BookingScraper extends BaseScraper {
   private async handleSuccessfulLogin(propertyId?: string): Promise<void> {
     if (!this.page) throw new Error("Page not initialized");
 
-    await this.logInfo("Login successful");
+    await this.logInfo("✅ Login successful");
     const cookies = await this.page.cookies();
 
     // Save cookies to storage if we have a property ID
@@ -412,17 +412,9 @@ export class BookingScraper extends BaseScraper {
         PlatformsType.BOOKING,
         cookies
       );
-      if (success) {
-        await this.logInfo(
-          `Saved ${cookies.length} cookies to storage for property ${this.propertyIdForDb}`
-        );
-      } else {
-        await this.logError("Failed to save cookies to storage");
+      if (!success) {
+        await this.logWarn("Failed to save cookies to storage");
       }
-    } else {
-      await this.logInfo(
-        "No property ID available, cookies not saved to storage"
-      );
     }
 
     await this.takeScreenshot();
@@ -431,7 +423,9 @@ export class BookingScraper extends BaseScraper {
     let effectivePropertyId = propertyId;
     if (effectivePropertyId && Types.ObjectId.isValid(effectivePropertyId)) {
       try {
-        const propertyRecord = await Property.findById(effectivePropertyId).lean();
+        const propertyRecord = await Property.findById(
+          effectivePropertyId
+        ).lean();
         if (propertyRecord && propertyRecord.booking_id) {
           await this.logInfo(
             `Property id passed as MongoDB id. Mapping to booking id: ${propertyRecord.booking_id}`
@@ -457,7 +451,7 @@ export class BookingScraper extends BaseScraper {
   private async handleSuccessful2FA(propertyId?: string): Promise<void> {
     if (!this.page) throw new Error("Page not initialized");
 
-    await this.logInfo("2FA completed successfully");
+    await this.logInfo("✅ 2FA completed successfully");
     const cookies = await this.page.cookies();
 
     // Save cookies to storage if we have a property ID
@@ -467,17 +461,9 @@ export class BookingScraper extends BaseScraper {
         PlatformsType.BOOKING,
         cookies
       );
-      if (success) {
-        await this.logInfo(
-          `Saved ${cookies.length} cookies to storage after 2FA for property ${this.propertyIdForDb}`
-        );
-      } else {
-        await this.logError("Failed to save cookies to storage after 2FA");
+      if (!success) {
+        await this.logWarn("Failed to save cookies after 2FA");
       }
-    } else {
-      await this.logInfo(
-        "No property ID available, cookies not saved to storage after 2FA"
-      );
     }
 
     await this.takeScreenshot();
@@ -486,7 +472,9 @@ export class BookingScraper extends BaseScraper {
     let effectivePropertyId = propertyId;
     if (effectivePropertyId && Types.ObjectId.isValid(effectivePropertyId)) {
       try {
-        const propertyRecord = await Property.findById(effectivePropertyId).lean();
+        const propertyRecord = await Property.findById(
+          effectivePropertyId
+        ).lean();
         if (propertyRecord && propertyRecord.booking_id) {
           await this.logInfo(
             `Property id passed as MongoDB id. Mapping to booking id: ${propertyRecord.booking_id}`
@@ -544,14 +532,12 @@ export class BookingScraper extends BaseScraper {
 
       if (credentials?.bookingPassword) {
         const decryptedPassword = decryptPassword(credentials.bookingPassword);
-        await this.logInfo("Latest booking password fetched from database");
         return decryptedPassword;
       }
 
-      await this.logInfo("No booking password found in database");
       return null;
     } catch (error) {
-      await this.logError("Error fetching latest password from database:", error);
+      await this.logError("Failed to fetch password from database", error);
       return null;
     }
   }
@@ -577,24 +563,21 @@ export class BookingScraper extends BaseScraper {
         await this.logInfo(
           `Fetching latest Booking.com credentials from database for job ${this.jobId}...`
         );
-        const latest = await propertyCredentialsService.getBookingCredentialsFromJob(
-          this.jobId
-        );
+        const latest =
+          await propertyCredentialsService.getBookingCredentialsFromJob(
+            this.jobId
+          );
 
         if (latest?.bookingPassword) {
           effectiveCredentials = {
             email: latest.bookingUsername || effectiveCredentials.email,
             password: decryptPassword(latest.bookingPassword),
           };
-          await this.logInfo("Using latest Booking.com credentials from database");
-        } else {
-          await this.logInfo(
-            "No latest credentials found in database, using provided credentials"
-          );
+          // Using latest credentials from database
         }
       } catch (err) {
-        await this.logError(
-          "Failed to fetch latest Booking.com credentials, using provided credentials",
+        await this.logWarn(
+          "Using provided credentials (database fetch failed)",
           err
         );
       }
@@ -605,26 +588,24 @@ export class BookingScraper extends BaseScraper {
       await this.throwIfScrapingShouldStop("login");
 
       if (this.isAlreadyLoggedIn() && !skipAlreadyLogged) {
-        await this.logInfo("Already logged in");
+        await this.logInfo("✅ Already logged in");
 
         // Map MongoDB ObjectId (property _id) to actual Booking hotel id if needed
         let effectivePropertyId = propertyId;
-        if (effectivePropertyId && Types.ObjectId.isValid(effectivePropertyId)) {
+        if (
+          effectivePropertyId &&
+          Types.ObjectId.isValid(effectivePropertyId)
+        ) {
           try {
-            const propertyRecord = await Property.findById(effectivePropertyId).lean();
+            const propertyRecord = await Property.findById(
+              effectivePropertyId
+            ).lean();
             if (propertyRecord && propertyRecord.booking_id) {
-              await this.logInfo(
-                `Property id passed as MongoDB id. Mapping to booking id: ${propertyRecord.booking_id}`
-              );
               this.setPropertyIdForDb(effectivePropertyId);
               effectivePropertyId = propertyRecord.booking_id.toString();
-            } else {
-              await this.logInfo(
-                `Property id passed as MongoDB id but booking_id not found for ${effectivePropertyId}`
-              );
             }
           } catch (err) {
-            await this.logError(`Error mapping MongoDB id to booking id: ${err}`);
+            await this.logError("Failed to map MongoDB id to booking id", err);
           }
         }
 
@@ -632,7 +613,7 @@ export class BookingScraper extends BaseScraper {
         return;
       }
 
-      await this.logInfo("Starting login process");
+      await this.logInfo("🔐 Starting login process");
 
       await this.handleCaptcha({
         sessionUrl: this.sessionUrl,
@@ -730,35 +711,25 @@ export class BookingScraper extends BaseScraper {
       await this.takeScreenshot();
 
       // Wait for navigation
-      await this.logInfo("Waiting for login response");
       await this.page
         .waitForNavigation({ waitUntil: "networkidle2", timeout: 30000 })
         .catch(() => {});
 
       // Check for account locked OR password mismatch (mutually exclusive)
-      await this.logInfo("Checking for account locked status...");
       const accountWasLocked = await this.handleAccountLocked();
 
       if (accountWasLocked) {
-        await this.logInfo(
-          "Account locked flow completed - password reset and login retry done"
-        );
-        // handleAccountLocked already retries login with new password
-        // No need to check for password mismatch or errors - they're mutually exclusive
+        await this.logInfo("✅ Account unlocked - password reset completed");
         return; // Exit early, login retry already happened
       }
 
       // Only check password mismatch if account was NOT locked
-      await this.logInfo("Checking for password mismatch error...");
       const passwordWasReset = await this.handlePasswordMismatch(
         loginCredentials.email
       );
 
       if (passwordWasReset) {
-        await this.logInfo(
-          "Password mismatch flow completed - password reset and login retry done"
-        );
-        // handlePasswordMismatch already retries login with new password
+        await this.logInfo("✅ Password reset completed - login retry done");
         return; // Exit early, login retry already happened
       }
 
@@ -769,7 +740,7 @@ export class BookingScraper extends BaseScraper {
       if (this.isAlreadyLoggedIn()) {
         await this.handleSuccessfulLogin(propertyId);
       } else {
-        await this.logInfo("Login requires 2FA verification");
+        await this.logInfo("🔐 2FA required - starting verification");
 
         // Try to handle 2FA automatically
         const twoFASuccess = await this.handle2FA();
@@ -777,9 +748,7 @@ export class BookingScraper extends BaseScraper {
           await this.handleSuccessful2FA(propertyId);
         } else {
           await dualLogError(
-            `[${new Date().toISOString()}] ${getBookingErrorDescription(
-              BookingErrorType.TWO_FA_ERROR
-            )}`,
+            getBookingErrorDescription(BookingErrorType.TWO_FA_ERROR),
             {
               errorType: BookingErrorType.TWO_FA_ERROR,
               phase: BookingScrapingPhase.LOGIN,
@@ -792,9 +761,7 @@ export class BookingScraper extends BaseScraper {
       }
     } catch (error) {
       await dualLogError(
-        `[${new Date().toISOString()}] ${getBookingErrorDescription(
-          BookingErrorType.LOGIN_FAILED
-        )}`,
+        getBookingErrorDescription(BookingErrorType.LOGIN_FAILED),
         {
           errorType: BookingErrorType.LOGIN_FAILED,
           error: error,
@@ -3862,7 +3829,9 @@ export class BookingScraper extends BaseScraper {
 
       await emailNotifier.sendPasswordChangeEmail(recipients, notificationData);
       await this.logInfo(
-        `Password change notification email sent to ${recipients.join(", ")} for property: ${propertyDetails.propertyName}`
+        `Password change notification email sent to ${recipients.join(
+          ", "
+        )} for property: ${propertyDetails.propertyName}`
       );
     } catch (error) {
       await this.logError(

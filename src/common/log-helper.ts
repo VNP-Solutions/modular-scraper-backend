@@ -1,6 +1,18 @@
 import { jobService } from "../services/job.service.js";
 import { JobLogger } from "./logger.js";
 
+// ANSI Color codes for console output
+const COLORS = {
+  reset: '\x1b[0m',
+  cyan: '\x1b[36m',      // Info
+  yellow: '\x1b[33m',     // Warning
+  red: '\x1b[31m',        // Error
+  green: '\x1b[32m',      // Success
+  blue: '\x1b[34m',       // Debug
+  magenta: '\x1b[35m',    // Job ID
+  gray: '\x1b[90m',       // Thread ID
+};
+
 // Store the current job logger globally for the running job
 let currentJobLogger: JobLogger | null = null;
 let currentJobId: string | null = null;
@@ -144,15 +156,32 @@ export function isJobLoggingActive(): boolean {
 // These functions automatically handle both console and file logging
 
 /**
+ * Format log prefix with colors
+ */
+function formatLogPrefix(level: 'INFO' | 'WARN' | 'ERROR'): string {
+  const timestamp = new Date().toISOString();
+  const threadPart = currentWorkerId ? `${COLORS.gray}[${currentWorkerId}]${COLORS.reset}` : "";
+  const jobPart = currentJobId ? `${COLORS.magenta}[Job:${currentJobId.slice(-8)}]${COLORS.reset}` : "";
+  
+  let levelColor = COLORS.cyan;
+  if (level === 'WARN') levelColor = COLORS.yellow;
+  if (level === 'ERROR') levelColor = COLORS.red;
+  
+  const levelPart = `${levelColor}[${level}]${COLORS.reset}`;
+  
+  return `${threadPart}${jobPart}${levelPart}`;
+}
+
+/**
  * Dual info logging - writes to both console AND file (if job logging is active)
  */
 export async function dualLogInfo(
   message: string,
   metadata?: any
 ): Promise<void> {
-  const threadPrefix = currentWorkerId ? `${currentWorkerId} - ` : "";
+  const prefix = formatLogPrefix('INFO');
   console.log(
-    `${threadPrefix}${message}`,
+    `${prefix} ${COLORS.cyan}${message}${COLORS.reset}`,
     metadata ? JSON.stringify(metadata) : ""
   );
   if (currentJobLogger) {
@@ -176,9 +205,9 @@ export async function dualLogError(
       }
     : metadata;
 
-  const threadPrefix = currentWorkerId ? `${currentWorkerId} - ` : "";
+  const prefix = formatLogPrefix('ERROR');
   console.error(
-    `${threadPrefix}${message}`,
+    `${prefix} ${COLORS.red}${message}${COLORS.reset}`,
     errorDetails ? JSON.stringify(errorDetails) : ""
   );
   if (currentJobLogger) {
@@ -193,9 +222,9 @@ export async function dualLogWarn(
   message: string,
   metadata?: any
 ): Promise<void> {
-  const threadPrefix = currentWorkerId ? `${currentWorkerId} - ` : "";
+  const prefix = formatLogPrefix('WARN');
   console.warn(
-    `${threadPrefix}${message}`,
+    `${prefix} ${COLORS.yellow}${message}${COLORS.reset}`,
     metadata ? JSON.stringify(metadata) : ""
   );
   if (currentJobLogger) {

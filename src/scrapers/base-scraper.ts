@@ -4,7 +4,11 @@ import {
   BookingScrapingPhase,
   getBookingErrorDescription,
 } from "../common/booking-error-types.js";
-import { dualLogError, dualLogInfo } from "../common/log-helper.js";
+import {
+  dualLogError,
+  dualLogInfo,
+  dualLogWarn,
+} from "../common/log-helper.js";
 import { otpStatusManager } from "../common/otp-status-manager.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import { screenshotManager } from "../common/screenshot-manager.js";
@@ -114,16 +118,15 @@ export abstract class BaseScraper {
   }
 
   protected async logInfo(message: string, data?: any): Promise<void> {
-    const timestamp = new Date().toISOString();
-    console.log(`[${timestamp}] [${this.platform}] ${message}`, data || "");
+    await dualLogInfo(`[${this.platform}] ${message}`, data);
   }
 
   protected async logError(message: string, error?: any): Promise<void> {
-    const timestamp = new Date().toISOString();
-    console.error(
-      `[${timestamp}] [${this.platform}] ERROR: ${message}`,
-      error || ""
-    );
+    await dualLogError(`[${this.platform}] ${message}`, error);
+  }
+
+  protected async logWarn(message: string, data?: any): Promise<void> {
+    await dualLogWarn(`[${this.platform}] ${message}`, data);
   }
 
   public setPropertyIdForDb(propertyId: string): void {
