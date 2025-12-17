@@ -155,6 +155,67 @@ export async function getVerificationCode(): Promise<string | null> {
 }
 
 /**
+ * Get multiple verification codes from recent emails (last 5 codes)
+ * Returns an array of verification codes found in recent emails
+ */
+export async function getMultipleVerificationCodes(): Promise<string[]> {
+  try {
+    const credentialsLoaded = await loadCredentials();
+    if (!credentialsLoaded) {
+      throw new Error(
+        "Failed to load Gmail credentials. Please complete authentication setup first."
+      );
+    }
+
+    const gmail = google.gmail({ version: "v1", auth: oauth2Client });
+    const res = await gmail.users.messages.list({
+      userId: "me",
+      maxResults: 10, // Fetch more emails to ensure we get 5 codes
+    });
+
+    if (!res.data.messages) {
+      await dualLogInfo("No new emails found.");
+      return [];
+    }
+
+    const codes: string[] = [];
+
+    for (const msg of res.data.messages) {
+      if (!msg.id) {
+        continue;
+      }
+
+      // Stop if we already have 5 codes
+      if (codes.length >= 5) {
+        break;
+      }
+
+      const email = await gmail.users.messages.get({
+        userId: "me",
+        id: msg.id,
+      });
+
+      const body = email.data.snippet || "";
+      const codeMatch = body.match(/\b\d{6,10}\b/);
+
+      if (codeMatch && !codes.includes(codeMatch[0])) {
+        codes.push(codeMatch[0]);
+        await dualLogInfo(`Found verification code: ${codeMatch[0]}`);
+      }
+    }
+
+    await dualLogInfo(`Total verification codes found: ${codes.length}`, codes);
+    return codes;
+  } catch (error: any) {
+    await dualLogError(
+      "Error fetching multiple verification codes:",
+      error.message
+    );
+    return [];
+  }
+}
+
+/**
  * Get password reset URL from Booking.com email
  * Looks for email with subject "Booking.com - Reset your Booking.com password"
  * and extracts the reset URL from the email body

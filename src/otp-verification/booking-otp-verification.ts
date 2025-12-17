@@ -4,7 +4,7 @@ import { TWO_FA_TEXT_PATTERNS } from "../common/booking-selectors.js";
 import { delay } from "../common/delay.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
 import { notificationService } from "../services/notification.service.js";
-import { getVerificationCode } from "./email-verification-utils.js";
+import { getMultipleVerificationCodes } from "./email-verification-utils.js";
 import {
   getTimeoutConfig,
   initializeStateManager,
@@ -397,19 +397,20 @@ async function handleBookingOtpVerification(
       throw error;
     }
 
-    // Wait for SMS to arrive and get verification code from email
+    // Wait for SMS to arrive and get verification codes from email
     await dualLogInfo("Waiting for verification email...");
     await delay(15000); // Wait 15 seconds for email to arrive
 
-    const code = await getVerificationCode();
-    if (!code) {
-      const error = new Error("Failed to get verification code from email");
+    // Fetch last 5 OTP codes
+    const codes = await getMultipleVerificationCodes();
+    if (!codes || codes.length === 0) {
+      const error = new Error("Failed to get verification codes from email");
 
       // Send public notification for OTP verification failure
       try {
         await notificationService.sendPublicNotification({
           title: "Booking.com OTP Verification Failed",
-          message: `Booking.com OTP verification failed. Failed to get verification code from email. Manual intervention may be required`,
+          message: `Booking.com OTP verification failed. Failed to get verification codes from email. Manual intervention may be required`,
           metadata: {
             jobId,
             propertyId,
@@ -425,16 +426,103 @@ async function handleBookingOtpVerification(
 
       throw error;
     }
-    await dualLogInfo("Got verification code:", code);
+    await dualLogInfo(
+      `Got ${codes.length} verification codes, will try up to 3 attempts`
+    );
 
-    // Enter verification code
-    await page.type(otpInputSelector, code, { delay: 100 });
-    await delay(1000);
+    // Try up to 3 OTP codes (1st, 2nd, 3rd)
+    const maxAttempts = Math.min(3, codes.length);
+    let otpSuccess = false;
 
-    // Look for and click submit button
-    await submitOtpForm(page);
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const code = codes[attempt];
+      await dualLogInfo(
+        `Attempt ${attempt + 1}/${maxAttempts}: Trying OTP code: ${code}`
+      );
 
-    // Wait for successful verification
+      // Clear the input field before entering new code
+      if (attempt > 0) {
+        await dualLogInfo("Clearing previous OTP input...");
+        await page.evaluate((selector) => {
+          const input = document.querySelector(selector) as HTMLInputElement;
+          if (input) {
+            input.value = "";
+          }
+        }, otpInputSelector);
+        await delay(500);
+      }
+
+      // Enter verification code
+      await page.type(otpInputSelector, code, { delay: 100 });
+      await delay(1000);
+
+      // Look for and click submit button
+      await submitOtpForm(page);
+      await delay(3000); // Wait for validation
+
+      // Check for error message: "Enter a valid verification code"
+      const hasError = await page.evaluate(() => {
+        const bodyText = document.body.innerText;
+        return (
+          bodyText.includes("Enter a valid verification code") ||
+          bodyText.includes("enter a valid verification code") ||
+          bodyText.includes("invalid verification code") ||
+          bodyText.includes("Invalid verification code") ||
+          bodyText.includes("incorrect code") ||
+          bodyText.includes("Incorrect code")
+        );
+      });
+
+      if (hasError) {
+        await dualLogInfo(
+          `Attempt ${attempt + 1} failed: Invalid verification code`
+        );
+
+        // If this was the last attempt (3rd), throw error
+        if (attempt === maxAttempts - 1) {
+          const error = new Error(
+            `OTP verification failed after ${maxAttempts} attempts. All codes were invalid.`
+          );
+
+          // Send public notification for OTP verification failure
+          try {
+            await notificationService.sendPublicNotification({
+              title: "Booking.com OTP Verification Failed",
+              message: `Booking.com OTP verification failed after ${maxAttempts} attempts. All OTP codes were invalid. Manual intervention required.`,
+              metadata: {
+                jobId,
+                propertyId,
+                attemptsCount: maxAttempts,
+                codesTriedCount: maxAttempts,
+                error: error.message,
+                failedAt: new Date().toISOString(),
+              },
+            });
+          } catch (notificationError) {
+            await dualLogError(
+              `Error sending OTP verification failure notification: ${notificationError}`
+            );
+          }
+
+          throw error;
+        }
+
+        // Continue to next attempt
+        continue;
+      } else {
+        // Success! No error message found
+        await dualLogInfo(`Attempt ${attempt + 1} successful! OTP verified.`);
+        otpSuccess = true;
+        break;
+      }
+    }
+
+    if (!otpSuccess) {
+      const error = new Error("OTP verification failed unexpectedly");
+      throw error;
+    }
+
+    // Wait for successful verification navigation
     await waitForNavigation(page, loadingTimeout);
 
     await dualLogInfo("Booking.com OTP verification completed successfully!");
