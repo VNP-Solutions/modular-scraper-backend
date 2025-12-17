@@ -431,6 +431,7 @@ async function handleBookingOtpVerification(
     // Try up to 3 codes (1st, 2nd, 3rd)
     const maxAttempts = Math.min(3, codes.length);
     let otpSuccess = false;
+    let navDetected = false;
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       const code = codes[attempt];
@@ -447,7 +448,11 @@ async function handleBookingOtpVerification(
 
       // Wait for navigation or a short period so page can update after submit
       const navPromise = page
-        .waitForNavigation({ timeout: 2500 })
+        .waitForNavigation({ timeout: 2500, waitUntil: "domcontentloaded" })
+        .then(() => {
+          navDetected = true;
+          return true;
+        })
         .catch(() => null);
       await Promise.race([navPromise, delay(2000)]);
 
@@ -469,6 +474,7 @@ async function handleBookingOtpVerification(
             "Navigation occurred after submit; assuming OTP succeeded"
           );
           otpSuccess = true;
+          navDetected = true;
           break;
         }
 
@@ -535,8 +541,19 @@ async function handleBookingOtpVerification(
       throw error;
     }
 
-    // Wait for successful verification navigation
-    await waitForNavigation(page, loadingTimeout);
+    // If navigation already occurred during submit, wait briefly for the page to settle; otherwise do the normal navigation wait
+    if (navDetected) {
+      try {
+        await Promise.race([
+          page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: Math.min(loadingTimeout, 5000) }).catch(() => null),
+          delay(5000),
+        ]);
+      } catch (e) {
+        // ignore and continue
+      }
+    } else {
+      await waitForNavigation(page, loadingTimeout);
+    }
 
     await dualLogInfo("🎉 Booking.com OTP verification completed!");
   } catch (error) {
