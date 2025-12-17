@@ -458,20 +458,40 @@ async function handleBookingOtpVerification(
 
       // Look for and click submit button
       await submitOtpForm(page);
-      await delay(3000); // Wait for validation
 
-      // Check for error message: "Enter a valid verification code"
-      const hasError = await page.evaluate(() => {
-        const bodyText = document.body.innerText;
-        return (
-          bodyText.includes("Enter a valid verification code") ||
-          bodyText.includes("enter a valid verification code") ||
-          bodyText.includes("invalid verification code") ||
-          bodyText.includes("Invalid verification code") ||
-          bodyText.includes("incorrect code") ||
-          bodyText.includes("Incorrect code")
-        );
-      });
+      // Wait a bit for the response (error message or navigation)
+      await delay(2000);
+
+      // Check for error message OR successful navigation
+      // If page navigates, it means OTP was correct
+      let hasError = false;
+      try {
+        hasError = await page.evaluate(() => {
+          const bodyText = document.body.innerText;
+          return (
+            bodyText.includes("Enter a valid verification code") ||
+            bodyText.includes("enter a valid verification code") ||
+            bodyText.includes("invalid verification code") ||
+            bodyText.includes("Invalid verification code") ||
+            bodyText.includes("incorrect code") ||
+            bodyText.includes("Incorrect code")
+          );
+        });
+      } catch (evalError: any) {
+        // If we get "Execution context was destroyed", it means page navigated = SUCCESS!
+        if (
+          evalError.message &&
+          evalError.message.includes("Execution context was destroyed")
+        ) {
+          await dualLogInfo(
+            `Attempt ${attempt + 1} successful! Page navigated (OTP verified).`
+          );
+          otpSuccess = true;
+          break;
+        }
+        // Other errors should be rethrown
+        throw evalError;
+      }
 
       if (hasError) {
         await dualLogInfo(
@@ -511,7 +531,9 @@ async function handleBookingOtpVerification(
         continue;
       } else {
         // Success! No error message found
-        await dualLogInfo(`Attempt ${attempt + 1} successful! OTP verified.`);
+        await dualLogInfo(
+          `Attempt ${attempt + 1} successful! OTP verified (no error message).`
+        );
         otpSuccess = true;
         break;
       }
@@ -522,8 +544,13 @@ async function handleBookingOtpVerification(
       throw error;
     }
 
-    // Wait for successful verification navigation
-    await waitForNavigation(page, loadingTimeout);
+    // Wait for successful verification navigation (if not already navigated)
+    try {
+      await waitForNavigation(page, loadingTimeout);
+    } catch (navError: any) {
+      // If already navigated, that's fine
+      await dualLogInfo("Navigation already completed or page already loaded");
+    }
 
     await dualLogInfo("Booking.com OTP verification completed successfully!");
   } catch (error) {
