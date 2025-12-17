@@ -445,15 +445,37 @@ async function handleBookingOtpVerification(
         `🔑 Attempt ${attempt + 1}/${maxAttempts}: Trying OTP ${code}`
       );
 
-      // Clear the input field before entering new code
+      // Clear the input field before entering new code (for 2nd and 3rd attempts)
       if (attempt > 0) {
-        await page.evaluate((selector) => {
-          const input = document.querySelector(selector) as HTMLInputElement;
-          if (input) {
-            input.value = "";
-          }
-        }, otpInputSelector);
-        await delay(500);
+        await dualLogInfo("🧹 Clearing previous OTP input...");
+        try {
+          // Focus on the input field
+          await page.focus(otpInputSelector);
+          await delay(200);
+
+          // Select all text and delete it
+          await page.keyboard.down("Control");
+          await page.keyboard.press("KeyA");
+          await page.keyboard.up("Control");
+          await delay(100);
+
+          // Delete the selected text
+          await page.keyboard.press("Backspace");
+          await delay(200);
+
+          // Also try setting value directly as backup
+          await page.evaluate((selector) => {
+            const input = document.querySelector(selector) as HTMLInputElement;
+            if (input) {
+              input.value = "";
+              input.dispatchEvent(new Event("input", { bubbles: true }));
+              input.dispatchEvent(new Event("change", { bubbles: true }));
+            }
+          }, otpInputSelector);
+          await delay(300);
+        } catch (clearError) {
+          await dualLogWarn("Failed to clear input field, continuing anyway");
+        }
       }
 
       // Enter verification code
