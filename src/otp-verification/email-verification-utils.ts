@@ -155,6 +155,70 @@ export async function getVerificationCode(): Promise<string | null> {
 }
 
 /**
+ * Get last 5 verification codes for Booking.com
+ * Returns array of up to 5 OTP codes from most recent emails
+ */
+export async function getBookingVerificationCodes(): Promise<string[]> {
+  try {
+    const credentialsLoaded = await loadCredentials();
+    if (!credentialsLoaded) {
+      throw new Error(
+        "Failed to load Gmail credentials. Please complete authentication setup first."
+      );
+    }
+
+    const gmail = google.gmail({ version: "v1", auth: oauth2Client });
+
+    // Fetch more emails to ensure we get 5 codes
+    const res = await gmail.users.messages.list({
+      userId: "me",
+      maxResults: 10,
+    });
+
+    if (!res.data.messages) {
+      await dualLogInfo("No new emails found.");
+      return [];
+    }
+
+    const codes: string[] = [];
+
+    for (const msg of res.data.messages) {
+      if (!msg.id) {
+        continue;
+      }
+
+      // Stop if we already have 5 codes
+      if (codes.length >= 5) {
+        break;
+      }
+
+      const email = await gmail.users.messages.get({
+        userId: "me",
+        id: msg.id,
+      });
+
+      const body = email.data.snippet || "";
+      const codeMatch = body.match(/\b\d{6,10}\b/);
+
+      if (codeMatch && codeMatch[0]) {
+        const code = codeMatch[0];
+        // Only add if not already in list (avoid duplicates)
+        if (!codes.includes(code)) {
+          codes.push(code);
+          await dualLogInfo(`Found verification code: ${code}`);
+        }
+      }
+    }
+
+    await dualLogInfo(`Total verification codes found: ${codes.length}`);
+    return codes;
+  } catch (error: any) {
+    await dualLogError("Error fetching verification codes:", error.message);
+    return [];
+  }
+}
+
+/**
  * Get multiple verification codes from recent Booking.com verification emails (last 5 codes)
  * Returns an array of verification codes found in recent emails
  */
