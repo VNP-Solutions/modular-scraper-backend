@@ -1,3 +1,3 @@
 export const configs = {
-  headless_browser: false,
+  headless_browser: true,
 };
