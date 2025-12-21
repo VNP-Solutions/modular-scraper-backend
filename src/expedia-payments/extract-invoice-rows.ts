@@ -146,25 +146,34 @@ export async function extractInvoiceRows(
             billableAmountTd?.textContent?.trim() || "";
           const billableAmount = extractAmountAndCurrency(billableAmountText);
 
+          // Helper function to round to 2 decimal places
+          const roundToTwoDecimals = (value: number): number => {
+            return Math.round(value * 100) / 100;
+          };
+
           // Extract Requested Booking Amount (from input)
           const bookingAmountInput = row.querySelector(
             "input.bookingAmount"
           ) as HTMLInputElement;
           const requestedBookingAmountText =
             bookingAmountInput?.value.trim() || "0";
-          const requestedBookingAmount =
-            parseFloat(requestedBookingAmountText.replace(/,/g, "")) || 0;
+          const requestedBookingAmount = roundToTwoDecimals(
+            parseFloat(requestedBookingAmountText.replace(/,/g, "")) || 0
+          );
 
           // Extract Requested Taxes (from input)
           const taxAmountInput = row.querySelector(
             "input.taxAmount"
           ) as HTMLInputElement;
           const requestedTaxesText = taxAmountInput?.value.trim() || "0";
-          const requestedTaxes =
-            parseFloat(requestedTaxesText.replace(/,/g, "")) || 0;
+          const requestedTaxes = roundToTwoDecimals(
+            parseFloat(requestedTaxesText.replace(/,/g, "")) || 0
+          );
 
-          // Calculate Requested Total
-          const requestedTotal = requestedBookingAmount + requestedTaxes;
+          // Calculate Requested Total (rounded to 2 decimal places)
+          const requestedTotal = roundToTwoDecimals(
+            requestedBookingAmount + requestedTaxes
+          );
 
           // Get currency from billable amount or default to USD
           const requestedTotalCurrency =
