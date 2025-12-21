@@ -3,7 +3,9 @@ import { delay } from "../common/delay.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import { dbDataService } from "../services/db-data.service.js";
+import { dbEntryService } from "../services/db-entry.service.js";
 import { dbDatachecking } from "./db-data-checking.js";
+import { extractInvoiceRows } from "./extract-invoice-rows.js";
 
 /**
  * Convert date from MM/DD/YYYY to DD/MM/YYYY format
@@ -204,6 +206,26 @@ export async function splitDateRange(
         const hasData = await dbDatachecking(browser, page, jobId);
         await dualLogInfo(`Chunk ${chunkCount} data validation completed`);
 
+        // Extract invoice rows BEFORE creating invoice (to ensure table is accessible)
+        let invoiceRows: any[] = [];
+        if (hasData) {
+          try {
+            await dualLogInfo(
+              `Chunk ${chunkCount}: Extracting invoice rows before invoice creation...`
+            );
+            invoiceRows = await extractInvoiceRows(page, jobId);
+            await dualLogInfo(
+              `Chunk ${chunkCount}: Extracted ${invoiceRows.length} invoice row(s) before invoice creation`
+            );
+          } catch (extractError) {
+            await dualLogError(
+              `Chunk ${chunkCount}: Error extracting invoice rows before invoice creation:`,
+              extractError
+            );
+            // Continue even if extraction fails
+          }
+        }
+
         // Variable to store Gearbox Queue IDs
         let gearboxQueueIds: string[] = [];
         // Variable to store total invoice amount
@@ -365,13 +387,14 @@ export async function splitDateRange(
         }
 
         // Save to database (always save, even with no queue IDs)
+        let dbDataId: string | null = null;
         try {
           if (jobId && expediaId) {
             await dualLogInfo(
               `Chunk ${chunkCount}: Saving data to database...`
             );
 
-            await dbDataService.createDbData({
+            const dbData = await dbDataService.createDbData({
               job_id: jobId,
               property_name: propertyName || "Unknown Property",
               property_id: expediaId,
@@ -384,14 +407,75 @@ export async function splitDateRange(
               total_invoice_amount_currency: totalInvoiceAmountCurrency,
             });
 
+            dbDataId = dbData._id.toString();
+
             if (gearboxQueueIds.length > 0) {
               await dualLogInfo(
-                `Chunk ${chunkCount}: Data saved successfully to database with ${gearboxQueueIds.length} Gearbox Queue ID(s)`
+                `Chunk ${chunkCount}: Data saved successfully to database with ${gearboxQueueIds.length} Gearbox Queue ID(s). DB Data ID: ${dbDataId}`
               );
             } else {
               await dualLogInfo(
-                `Chunk ${chunkCount}: Data saved successfully to database with no Gearbox Queue IDs (no data found for this date range)`
+                `Chunk ${chunkCount}: Data saved successfully to database with no Gearbox Queue IDs (no data found for this date range). DB Data ID: ${dbDataId}`
               );
+            }
+
+            // Save invoice rows to db_entry if we have data and db_data_id
+            if (hasData && dbDataId && invoiceRows.length > 0) {
+              try {
+                await dualLogInfo(
+                  `Chunk ${chunkCount}: Saving ${invoiceRows.length} invoice row(s) to db_entry...`
+                );
+
+                // Prepare db_entry records
+                const dbEntries = invoiceRows.map((row) => ({
+                  job_id: jobId,
+                  property_name: propertyName || "Unknown Property",
+                  property_id: expediaId,
+                  db_data_id: dbDataId!,
+                  reservation_id: row.reservation_id,
+                  invoice_id: row.invoice_id,
+                  guest_name: row.guest_name,
+                  check_in_date: row.check_in_date,
+                  check_out_date: row.check_out_date,
+                  previously_paid_amount: row.previously_paid_amount,
+                  previously_paid_amount_currency:
+                    row.previously_paid_amount_currency,
+                  maximum_billable_amount: row.maximum_billable_amount,
+                  maximum_billable_amount_currency:
+                    row.maximum_billable_amount_currency,
+                  requested_booking_amount: row.requested_booking_amount,
+                  requested_taxes: row.requested_taxes,
+                  requested_total: row.requested_total,
+                  requested_total_currency: row.requested_total_currency,
+                }));
+
+                // Save all entries in bulk
+                await dbEntryService.createDbEntries(dbEntries);
+
+                await dualLogInfo(
+                  `Chunk ${chunkCount}: Successfully saved ${invoiceRows.length} row(s) to db_entry collection`
+                );
+              } catch (entryError) {
+                await dualLogError(
+                  `Chunk ${chunkCount}: Error saving invoice rows to db_entry:`,
+                  entryError
+                );
+                // Don't throw error, continue with next chunk
+              }
+            } else {
+              if (!hasData) {
+                await dualLogInfo(
+                  `Chunk ${chunkCount}: No data found, skipping db_entry save`
+                );
+              } else if (!dbDataId) {
+                await dualLogInfo(
+                  `Chunk ${chunkCount}: No db_data_id available, skipping db_entry save`
+                );
+              } else if (invoiceRows.length === 0) {
+                await dualLogInfo(
+                  `Chunk ${chunkCount}: No invoice rows extracted, skipping db_entry save`
+                );
+              }
             }
           } else {
             await dualLogInfo(
