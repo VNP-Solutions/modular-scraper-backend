@@ -1,6 +1,7 @@
 import { Page } from "puppeteer";
 import {
   getRetrievalJobId,
+  isOtpReleasedForRetrieval,
   markOtpReleasedForRetrieval,
 } from "../../agoda-retriveal.js";
 import { delay } from "../../common/delay.js";
@@ -334,8 +335,44 @@ export async function searchBookingAndNavigateToPayout(
           }
         } else {
           await dualLogInfo(
-            "No OTP verification required - proceeding to scrape UPC widget data"
+            "No OTP verification required - proceeding to scrape UPC widget data",
+            { jobId, bookingId }
           );
+
+          // Release OTP immediately since no payout OTP verification is needed
+          // This allows other jobs to start sooner
+          // IMPORTANT: Verify OTP is still owned by this job before releasing to avoid race conditions
+          const retrievalJobId = getRetrievalJobId();
+          if (retrievalJobId && !isOtpReleasedForRetrieval()) {
+            // Check if OTP is still owned by this job before attempting release
+            const isOwnedByThisJob = await otpStatusManager.isOtpOwnedByJob(
+              retrievalJobId
+            );
+
+            if (isOwnedByThisJob) {
+              await dualLogInfo(
+                "No payout OTP needed - verifying OTP ownership before release",
+                { jobId, bookingId }
+              );
+              if (markOtpReleasedForRetrieval()) {
+                otpCompletionNotifier.notifyOtpCompleted(retrievalJobId);
+                await dualLogInfo(
+                  "✅ OTP released (no payout OTP verification needed)",
+                  { jobId, bookingId }
+                );
+              }
+            } else {
+              await dualLogInfo(
+                "No payout OTP needed - OTP not owned by this job (job_id mismatch). OTP may have been released by another job.",
+                { jobId, bookingId }
+              );
+            }
+          } else if (retrievalJobId && isOtpReleasedForRetrieval()) {
+            await dualLogInfo(
+              "No payout OTP needed - OTP already released earlier",
+              { jobId, bookingId }
+            );
+          }
         }
       } else {
         // Handle OTP in iframe
