@@ -233,71 +233,70 @@ export async function splitDateRange(
         // Variable to store total invoice amount currency
         let totalInvoiceAmountCurrency: string | undefined = undefined;
 
-        // Extract total invoice amount and currency before clicking disclaimer checkbox
-        try {
-          await dualLogInfo(
-            `Chunk ${chunkCount}: Extracting total invoice amount and currency...`
-          );
-
-          const extractedData = await page.evaluate(() => {
-            const invoiceTotalElement = document.querySelector(".invoiceTotal");
-            if (invoiceTotalElement) {
-              const boldElement = invoiceTotalElement.querySelector("b");
-              if (boldElement) {
-                const text = boldElement.textContent || "";
-
-                // Extract currency code (typically 3 letters like USD, EUR, GBP, etc.)
-                // Look for currency code at the start (e.g., "USD 90.32") or end (e.g., "90.32 USD")
-                const currencyMatchStart = text.match(/^([A-Z]{3})\s/);
-                const currencyMatchEnd = text.match(/\s([A-Z]{3})$/);
-                const currency = currencyMatchStart
-                  ? currencyMatchStart[1]
-                  : currencyMatchEnd
-                  ? currencyMatchEnd[1]
-                  : undefined;
-
-                // Extract number from text like "USD 90.32", "-90.32", "90.32", or "90.32 USD"
-                // Regex now includes optional negative sign and preserves decimal points
-                const amountMatch = text.match(/-?[\d,]+\.?\d*/);
-                let amount = 0;
-                if (amountMatch) {
-                  // Remove commas and parse as float (preserves negative sign and decimals)
-                  const cleanedAmount = amountMatch[0].replace(/,/g, "");
-                  const parsedAmount = parseFloat(cleanedAmount);
-                  amount = isNaN(parsedAmount) ? 0 : parsedAmount;
-                }
-
-                return {
-                  amount,
-                  currency,
-                };
-              }
-            }
-            return { amount: 0, currency: undefined };
-          });
-
-          totalInvoiceAmount = extractedData.amount;
-          totalInvoiceAmountCurrency = extractedData.currency;
-          await dualLogInfo(
-            `Chunk ${chunkCount}: Extracted total invoice amount: ${totalInvoiceAmount} ${
-              totalInvoiceAmountCurrency || ""
-            }`
-          );
-        } catch (amountError) {
-          await dualLogError(
-            `Chunk ${chunkCount}: Error extracting total invoice amount:`,
-            amountError
-          );
-          // Continue with 0 if extraction fails
-          totalInvoiceAmount = 0;
-          totalInvoiceAmountCurrency = undefined;
-        }
-
         if (!hasData) {
           await dualLogInfo(
-            `Chunk ${chunkCount}: No data found for this date range, skipping invoice creation`
+            `Chunk ${chunkCount}: No data found for this date range, skipping invoice creation and amount extraction`
           );
         } else {
+          // Extract total invoice amount and currency only if data exists
+          try {
+            await dualLogInfo(
+              `Chunk ${chunkCount}: Extracting total invoice amount and currency...`
+            );
+
+            const extractedData = await page.evaluate(() => {
+              const invoiceTotalElement = document.querySelector(".invoiceTotal");
+              if (invoiceTotalElement) {
+                const boldElement = invoiceTotalElement.querySelector("b");
+                if (boldElement) {
+                  const text = boldElement.textContent || "";
+
+                  // Extract currency code (typically 3 letters like USD, EUR, GBP, etc.)
+                  // Look for currency code at the start (e.g., "USD 90.32") or end (e.g., "90.32 USD")
+                  const currencyMatchStart = text.match(/^([A-Z]{3})\s/);
+                  const currencyMatchEnd = text.match(/\s([A-Z]{3})$/);
+                  const currency = currencyMatchStart
+                    ? currencyMatchStart[1]
+                    : currencyMatchEnd
+                    ? currencyMatchEnd[1]
+                    : undefined;
+
+                  // Extract number from text like "USD 90.32", "-90.32", "90.32", or "90.32 USD"
+                  // Regex now includes optional negative sign and preserves decimal points
+                  const amountMatch = text.match(/-?[\d,]+\.?\d*/);
+                  let amount = 0;
+                  if (amountMatch) {
+                    // Remove commas and parse as float (preserves negative sign and decimals)
+                    const cleanedAmount = amountMatch[0].replace(/,/g, "");
+                    const parsedAmount = parseFloat(cleanedAmount);
+                    amount = isNaN(parsedAmount) ? 0 : parsedAmount;
+                  }
+
+                  return {
+                    amount,
+                    currency,
+                  };
+                }
+              }
+              return { amount: 0, currency: undefined };
+            });
+
+            totalInvoiceAmount = extractedData.amount;
+            totalInvoiceAmountCurrency = extractedData.currency;
+            await dualLogInfo(
+              `Chunk ${chunkCount}: Extracted total invoice amount: ${totalInvoiceAmount} ${
+                totalInvoiceAmountCurrency || ""
+              }`
+            );
+          } catch (amountError) {
+            await dualLogError(
+              `Chunk ${chunkCount}: Error extracting total invoice amount:`,
+              amountError
+            );
+            // Continue with 0 if extraction fails
+            totalInvoiceAmount = 0;
+            totalInvoiceAmountCurrency = undefined;
+          }
           // Check disclaimer checkbox and submit invoice
           await dualLogInfo(
             `Chunk ${chunkCount}: Checking disclaimer checkbox...`
