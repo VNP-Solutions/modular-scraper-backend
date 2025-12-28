@@ -352,6 +352,47 @@ export class OtpStatusManager extends EventEmitter {
   }
 
   /**
+   * Check if OTP is currently owned by a specific job
+   * Returns true if OTP is occupied by this job, false otherwise
+   */
+  public async isOtpOwnedByJob(jobId: string): Promise<boolean> {
+    if (!this.isInitialized) {
+      await this.initialize();
+    }
+
+    try {
+      // Extract valid ObjectId from jobId
+      let objectIdForCheck: mongoose.Types.ObjectId | null = null;
+
+      if (mongoose.Types.ObjectId.isValid(jobId)) {
+        objectIdForCheck = new mongoose.Types.ObjectId(jobId);
+      } else if (jobId.startsWith("retrieval_job_")) {
+        // Extract retrieval_id from jobId format: retrieval_job_${retrieval_id}_${Date.now()}
+        const parts = jobId.split("_");
+        if (parts.length >= 3 && mongoose.Types.ObjectId.isValid(parts[2])) {
+          objectIdForCheck = new mongoose.Types.ObjectId(parts[2]);
+        }
+      }
+
+      if (!objectIdForCheck) {
+        return false; // Can't verify ownership without valid ObjectId
+      }
+
+      // Check if OTP is occupied by this job
+      const otpStatus = await OtpStatus.findOne({
+        platform: this.getOtpPlatform(),
+        status: OtpStatusValue.Occupied,
+        job_id: objectIdForCheck,
+      }).lean();
+
+      return otpStatus !== null;
+    } catch (error) {
+      console.error(`Error checking OTP ownership for job ${jobId}:`, error);
+      return false;
+    }
+  }
+
+  /**
    * Get detailed status for debugging
    */
   public async getDetailedStatus(): Promise<IOtpStatus | null> {

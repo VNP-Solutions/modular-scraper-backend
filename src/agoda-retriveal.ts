@@ -12,6 +12,7 @@ import { browserSetupProduction } from "./browser-setup/browser-prod.js";
 import { emailNotifier } from "./common/email-notifier.js";
 import { dualLogError, dualLogInfo } from "./common/log-helper.js";
 import { progressManager } from "./common/progress-manager.js";
+import { scrapingStateManager } from "./common/scraping-state.js";
 import {
   takeErrorScreenshot,
   takeSuccessScreenshot,
@@ -19,7 +20,6 @@ import {
 import { timeManager } from "./common/time-manager.js";
 import { JobStatus } from "./models/job.model.js";
 import { jobService } from "./services/job.service.js";
-import { scrapingStateManager } from "./common/scraping-state.js";
 
 dotenv.config();
 
@@ -33,20 +33,57 @@ let currentRetrievalContext: {
   retrievalId: string;
   parentRetrievalId: string;
   jobId: string; // Add jobId to context
+  otpReleased: boolean; // Track if OTP has been released for this retrieval job
 } | null = null;
-
 
 export function setAgodaRetrievalContext(
   retrievalId: string,
   parentRetrievalId: string,
   jobId: string
 ) {
-  currentRetrievalContext = { retrievalId, parentRetrievalId, jobId };
+  currentRetrievalContext = {
+    retrievalId,
+    parentRetrievalId,
+    jobId,
+    otpReleased: false,
+  };
 }
-
 
 export function clearAgodaRetrievalContext() {
   currentRetrievalContext = null;
+}
+
+/**
+ * Check if we're currently in a retrieval job context
+ */
+export function isRetrievalJob(): boolean {
+  return currentRetrievalContext !== null;
+}
+
+/**
+ * Get the current retrieval job ID if in retrieval context
+ */
+export function getRetrievalJobId(): string | null {
+  return currentRetrievalContext?.jobId || null;
+}
+
+/**
+ * Mark OTP as released for the current retrieval job
+ * Returns true if OTP was released (first time), false if already released
+ */
+export function markOtpReleasedForRetrieval(): boolean {
+  if (currentRetrievalContext && !currentRetrievalContext.otpReleased) {
+    currentRetrievalContext.otpReleased = true;
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Check if OTP has already been released for the current retrieval job
+ */
+export function isOtpReleasedForRetrieval(): boolean {
+  return currentRetrievalContext?.otpReleased || false;
 }
 
 async function agodaRetrieval(

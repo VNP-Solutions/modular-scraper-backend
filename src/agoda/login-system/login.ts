@@ -1,9 +1,7 @@
 import { Browser, Page } from "puppeteer";
 import { delay } from "../../common/delay.js";
 import { dualLogError, dualLogInfo } from "../../common/log-helper.js";
-import { otpCompletionNotifier } from "../../common/otp-completion-notifier.js";
 import { progressManager } from "../../common/progress-manager.js";
-import { scrapingStateManager } from "../../common/scraping-state.js";
 import {
   takeErrorScreenshot,
   takeSuccessScreenshot,
@@ -238,9 +236,12 @@ async function agodaLogin(
         try {
           await handleDirectLinkFlow(page, jobId);
 
-          // Notify worker that OTP work is completed so other jobs can proceed
+          // For retrieval jobs, don't release OTP yet - wait for payout verification
+          // OTP will be released after payout verification completes
           if (jobId) {
-            otpCompletionNotifier.notifyOtpCompleted(jobId);
+            await dualLogInfo(
+              "OTP kept occupied - will release after payout verification (retrieval job)"
+            );
           }
         } catch (directLinkError) {
           await dualLogError(
@@ -260,9 +261,12 @@ async function agodaLogin(
             jobId
           );
 
-          // Notify worker that OTP work is completed so other jobs can proceed
+          // For retrieval jobs, don't release OTP yet - wait for payout verification
+          // OTP will be released after payout verification completes
           if (jobId) {
-            otpCompletionNotifier.notifyOtpCompleted(jobId);
+            await dualLogInfo(
+              "OTP kept occupied - will release after payout verification (retrieval job)"
+            );
           }
         } catch (otpError) {
           await dualLogError("Error during OTP flow:", otpError);
@@ -314,9 +318,12 @@ async function agodaLogin(
         }
       }
 
-      // Notify that OTP work is completed (on error) so other jobs can proceed
+      // For retrieval jobs, don't release OTP on error - let it be handled by cleanup
+      // OTP will be released after payout verification or job completion
       if (jobId) {
-        otpCompletionNotifier.notifyOtpCompleted(jobId);
+        await dualLogInfo(
+          "OTP kept occupied after login error - will be released after payout verification or job completion (retrieval job)"
+        );
       }
       throw pageError;
     }
@@ -339,9 +346,12 @@ async function agodaLogin(
       }
     }
 
-    // Notify that OTP work is completed (on error) so other jobs can proceed
+    // For retrieval jobs, don't release OTP on error - let it be handled by cleanup
+    // OTP will be released after payout verification or job completion
     if (jobId) {
-      otpCompletionNotifier.notifyOtpCompleted(jobId);
+      await dualLogInfo(
+        "OTP kept occupied after critical login error - will be released after payout verification or job completion (retrieval job)"
+      );
     }
     // Standardized cleanup on login error
     try {

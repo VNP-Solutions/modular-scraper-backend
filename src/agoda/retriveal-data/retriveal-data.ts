@@ -1,6 +1,12 @@
 import { Page } from "puppeteer";
+import {
+  getRetrievalJobId,
+  markOtpReleasedForRetrieval,
+} from "../../agoda-retriveal.js";
 import { delay } from "../../common/delay.js";
 import { dualLogError, dualLogInfo } from "../../common/log-helper.js";
+import { otpCompletionNotifier } from "../../common/otp-completion-notifier.js";
+import { otpStatusManager } from "../../common/otp-status-manager.js";
 import { retrievalService } from "../../services/retriveal-job.service.js";
 import { getYcsRetrievalOtpCode } from "../utils/retriveal-email.js";
 import {
@@ -618,6 +624,32 @@ async function handleOtpVerification(
     }
 
     await dualLogInfo("✅ OTP verification completed successfully");
+
+    // Release OTP immediately after payout verification completes (only once)
+    // This frees up OTP for other jobs as soon as payout verification is done
+    // IMPORTANT: Verify OTP is still owned by this job before releasing to avoid race conditions
+    const retrievalJobId = getRetrievalJobId();
+    if (retrievalJobId && markOtpReleasedForRetrieval()) {
+      // Check if OTP is still owned by this job before attempting release
+      const isOwnedByThisJob = await otpStatusManager.isOtpOwnedByJob(retrievalJobId);
+
+      if (isOwnedByThisJob) {
+        await dualLogInfo(
+          "Payout OTP verification completed - verifying OTP ownership before release"
+        );
+        otpCompletionNotifier.notifyOtpCompleted(retrievalJobId);
+        await dualLogInfo("✅ OTP released after payout verification (verified ownership)");
+      } else {
+        await dualLogInfo(
+          `Payout OTP verification completed - OTP not owned by this job (job_id mismatch). OTP may have been released by another job.`
+        );
+      }
+    } else if (retrievalJobId) {
+      await dualLogInfo(
+        "Payout OTP verification completed - OTP already released earlier"
+      );
+    }
+
     return true;
   } catch (error: any) {
     await dualLogError("Error in handleOtpVerification:", error);

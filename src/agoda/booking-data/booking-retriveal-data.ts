@@ -1,6 +1,13 @@
 import { Browser, Page } from "puppeteer";
+import {
+  getRetrievalJobId,
+  markOtpReleasedForRetrieval,
+  isOtpReleasedForRetrieval,
+} from "../../agoda-retriveal.js";
 import { delay } from "../../common/delay.js";
 import { dualLogError, dualLogInfo } from "../../common/log-helper.js";
+import { otpCompletionNotifier } from "../../common/otp-completion-notifier.js";
+import { otpStatusManager } from "../../common/otp-status-manager.js";
 import { progressManager } from "../../common/progress-manager.js";
 import { takeSuccessScreenshot } from "../../common/screenshot-helper.js";
 import { timeoutManager } from "../../common/timeout-manager.js";
@@ -334,6 +341,29 @@ export async function getAgodaRetrivealData(
       await dualLogInfo(
         "No reservations provided - will process all bookings in date range"
       );
+    }
+
+    // Release OTP at the end of retrieval job if it hasn't been released yet
+    // This ensures OTP is released even if no bookings were processed or payout verification wasn't needed
+    // IMPORTANT: Verify OTP is still owned by this job before releasing to avoid race conditions
+    const retrievalJobId = getRetrievalJobId();
+    if (retrievalJobId && !isOtpReleasedForRetrieval()) {
+      // Check if OTP is still owned by this job before attempting release
+      const isOwnedByThisJob = await otpStatusManager.isOtpOwnedByJob(retrievalJobId);
+
+      if (isOwnedByThisJob) {
+        await dualLogInfo("Retrieval job completed - verifying OTP ownership before release");
+        if (markOtpReleasedForRetrieval()) {
+          otpCompletionNotifier.notifyOtpCompleted(retrievalJobId);
+          await dualLogInfo("✅ OTP released at end of retrieval job (verified ownership)");
+        }
+      } else {
+        await dualLogInfo(
+          `Retrieval job completed - OTP not owned by this job (job_id mismatch). OTP may have been released by another job or never reserved.`
+        );
+      }
+    } else if (retrievalJobId && isOtpReleasedForRetrieval()) {
+      await dualLogInfo("Retrieval job completed - OTP already released after payout verification");
     }
 
     return [];
