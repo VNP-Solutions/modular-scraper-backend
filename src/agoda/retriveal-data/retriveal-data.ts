@@ -32,11 +32,18 @@ export async function searchBookingAndNavigateToPayout(
   userEmail?: string,
   retrievalId?: string
 ): Promise<boolean> {
+  const jobId = getRetrievalJobId();
   try {
-    await dualLogInfo(`Starting search for booking ID: ${bookingId}`);
+    await dualLogInfo(`Starting search for booking ID: ${bookingId}`, {
+      jobId,
+      bookingId,
+    });
 
     // Step 1: Find and fill the booking ID input field
-    await dualLogInfo("Looking for booking ID / Guest name input field...");
+    await dualLogInfo("Looking for booking ID / Guest name input field...", {
+      jobId,
+      bookingId,
+    });
 
     // Wait for the search input field to be available
     try {
@@ -53,7 +60,10 @@ export async function searchBookingAndNavigateToPayout(
     }
 
     // Clear existing value and type the booking ID
-    await dualLogInfo(`Entering booking ID: ${bookingId} in search field`);
+    await dualLogInfo(`Entering booking ID: ${bookingId} in search field`, {
+      jobId,
+      bookingId,
+    });
 
     // Click on the input field first
     await page.click(BOOKING_SEARCH.INPUT);
@@ -90,7 +100,8 @@ export async function searchBookingAndNavigateToPayout(
 
     if (currentValue && currentValue.length > 0) {
       await dualLogInfo(
-        `Input field still has value: "${currentValue}", force clearing...`
+        `Input field still has value: "${currentValue}", force clearing...`,
+        { jobId, bookingId }
       );
       // Force clear using $eval
       await page.$eval(BOOKING_SEARCH.INPUT, (input: HTMLInputElement) => {
@@ -100,7 +111,10 @@ export async function searchBookingAndNavigateToPayout(
       });
       await delay(300);
     } else {
-      await dualLogInfo("Input field cleared successfully");
+      await dualLogInfo("Input field cleared successfully", {
+        jobId,
+        bookingId,
+      });
     }
 
     // Now type the new booking ID
@@ -108,7 +122,7 @@ export async function searchBookingAndNavigateToPayout(
     await delay(1000);
 
     // Step 2: Click the Search button
-    await dualLogInfo("Clicking Search button...");
+    await dualLogInfo("Clicking Search button...", { jobId, bookingId });
 
     try {
       await page.waitForSelector(BOOKING_SEARCH.BUTTON, {
@@ -116,14 +130,20 @@ export async function searchBookingAndNavigateToPayout(
         timeout: 5000,
       });
       await page.click(BOOKING_SEARCH.BUTTON);
-      await dualLogInfo("Search button clicked");
+      await dualLogInfo("Search button clicked", { jobId, bookingId });
     } catch (error) {
-      await dualLogError("Search button not found or not clickable", error);
+      await dualLogError("Search button not found or not clickable", error, {
+        jobId,
+        bookingId,
+      });
       return false;
     }
 
     // Step 3: Wait for search results to load
-    await dualLogInfo("Waiting for search results to load...");
+    await dualLogInfo("Waiting for search results to load...", {
+      jobId,
+      bookingId,
+    });
     await delay(3000); // Initial wait
 
     // Wait for the booking result row to appear
@@ -134,14 +154,23 @@ export async function searchBookingAndNavigateToPayout(
         visible: true,
         timeout: 15000,
       });
-      await dualLogInfo(`Booking row found for ID: ${bookingId}`);
+      await dualLogInfo(`Booking row found for ID: ${bookingId}`, {
+        jobId,
+        bookingId,
+      });
     } catch (error) {
-      await dualLogError(`Booking row not found for ID: ${bookingId}`, error);
+      await dualLogError(`Booking row not found for ID: ${bookingId}`, error, {
+        jobId,
+        bookingId,
+      });
       return false;
     }
 
     // Step 4: Click on the booking row (preferably on the guest name)
-    await dualLogInfo("Clicking on booking row (guest name)...");
+    await dualLogInfo("Clicking on booking row (guest name)...", {
+      jobId,
+      bookingId,
+    });
 
     // Try to click on the guest name first, fallback to the row
     const guestNameSelector = BOOKING_RESULTS.GUEST_NAME(bookingId);
@@ -150,19 +179,25 @@ export async function searchBookingAndNavigateToPayout(
       const guestNameElement = await page.$(guestNameSelector);
       if (guestNameElement) {
         await guestNameElement.click();
-        await dualLogInfo("Clicked on guest name");
+        await dualLogInfo("Clicked on guest name", { jobId, bookingId });
       } else {
         // Fallback to clicking the row itself
         await page.click(bookingRowSelector);
-        await dualLogInfo("Clicked on booking row");
+        await dualLogInfo("Clicked on booking row", { jobId, bookingId });
       }
     } catch (error) {
-      await dualLogError("Failed to click on booking row", error);
+      await dualLogError("Failed to click on booking row", error, {
+        jobId,
+        bookingId,
+      });
       return false;
     }
 
     // Step 5: Wait for the right sidebar to appear
-    await dualLogInfo("Waiting for booking detail sidebar to appear...");
+    await dualLogInfo("Waiting for booking detail sidebar to appear...", {
+      jobId,
+      bookingId,
+    });
     await delay(2000);
 
     // Wait for the tab list to be visible (indicates sidebar is open)
@@ -171,14 +206,23 @@ export async function searchBookingAndNavigateToPayout(
         visible: true,
         timeout: 10000,
       });
-      await dualLogInfo("Booking detail sidebar appeared");
+      await dualLogInfo("Booking detail sidebar appeared", {
+        jobId,
+        bookingId,
+      });
     } catch (error) {
-      await dualLogError("Booking detail sidebar did not appear", error);
+      await dualLogError("Booking detail sidebar did not appear", error, {
+        jobId,
+        bookingId,
+      });
       return false;
     }
 
     // Step 6: Click on "Get payout (UPC)" tab
-    await dualLogInfo("Clicking on 'Get payout (UPC)' tab...");
+    await dualLogInfo("Clicking on 'Get payout (UPC)' tab...", {
+      jobId,
+      bookingId,
+    });
 
     try {
       await page.waitForSelector(BOOKING_DETAIL.PAYOUT_TAB, {
@@ -186,15 +230,24 @@ export async function searchBookingAndNavigateToPayout(
         timeout: 5000,
       });
       await page.click(BOOKING_DETAIL.PAYOUT_TAB);
-      await dualLogInfo("Successfully clicked on 'Get payout (UPC)' tab");
+      await dualLogInfo("Successfully clicked on 'Get payout (UPC)' tab", {
+        jobId,
+        bookingId,
+      });
       await delay(2000);
     } catch (error) {
-      await dualLogError("Failed to click on 'Get payout (UPC)' tab", error);
+      await dualLogError("Failed to click on 'Get payout (UPC)' tab", error, {
+        jobId,
+        bookingId,
+      });
       return false;
     }
 
     // Step 7: Check if OTP verification is required (iframe with login form)
-    await dualLogInfo("Checking if OTP verification is required...");
+    await dualLogInfo("Checking if OTP verification is required...", {
+      jobId,
+      bookingId,
+    });
 
     try {
       // Wait for iframe to appear (if it redirects to login)
@@ -219,7 +272,10 @@ export async function searchBookingAndNavigateToPayout(
 
           if (hasOtpForm) {
             otpFrame = frame;
-            await dualLogInfo("Found OTP verification iframe");
+            await dualLogInfo("Found OTP verification iframe", {
+              jobId,
+              bookingId,
+            });
             break;
           }
         } catch (frameError) {
@@ -230,7 +286,10 @@ export async function searchBookingAndNavigateToPayout(
 
       // If no iframe found, check the main page
       if (!otpFrame) {
-        await dualLogInfo("No OTP iframe found, checking main page...");
+        await dualLogInfo("No OTP iframe found, checking main page...", {
+          jobId,
+          bookingId,
+        });
         const hasOtpOnMainPage = await page.evaluate((selectors) => {
           const otpOptionEmail = document.querySelector(selectors.EMAIL_OPTION);
           const otpInputs = document.querySelector(selectors.FIRST_INPUT);
@@ -238,7 +297,10 @@ export async function searchBookingAndNavigateToPayout(
         }, OTP_CHECK_SELECTORS);
 
         if (hasOtpOnMainPage) {
-          await dualLogInfo("OTP form found on main page");
+          await dualLogInfo("OTP form found on main page", {
+            jobId,
+            bookingId,
+          });
           // Use main page for OTP handling
           const otpHandled = await handleOtpVerification(
             page,
@@ -252,7 +314,8 @@ export async function searchBookingAndNavigateToPayout(
 
           // After OTP verification, we need to search again and navigate to payout tab
           await dualLogInfo(
-            "OTP verification completed, re-searching for booking ID to access payout tab..."
+            "OTP verification completed, re-searching for booking ID to access payout tab...",
+            { jobId, bookingId }
           );
           await delay(3000); // Wait for page to settle after OTP submission
 
@@ -263,7 +326,9 @@ export async function searchBookingAndNavigateToPayout(
           );
           if (!reSearchSuccess) {
             await dualLogError(
-              "Failed to re-search and navigate to payout tab after OTP verification"
+              "Failed to re-search and navigate to payout tab after OTP verification",
+              undefined,
+              { jobId, bookingId }
             );
             return false;
           }
@@ -286,7 +351,8 @@ export async function searchBookingAndNavigateToPayout(
 
         // After OTP verification, we need to search again and navigate to payout tab
         await dualLogInfo(
-          "OTP verification completed, re-searching for booking ID to access payout tab..."
+          "OTP verification completed, re-searching for booking ID to access payout tab...",
+          { jobId, bookingId }
         );
         await delay(3000); // Wait for page to settle after OTP submission
 
@@ -297,19 +363,27 @@ export async function searchBookingAndNavigateToPayout(
         );
         if (!reSearchSuccess) {
           await dualLogError(
-            "Failed to re-search and navigate to payout tab after OTP verification"
+            "Failed to re-search and navigate to payout tab after OTP verification",
+            undefined,
+            { jobId, bookingId }
           );
           return false;
         }
       }
 
       // Step 8: If no OTP verification was needed, or after OTP is completed, scrape UPC widget data
-      await dualLogInfo("Checking for UPC widget data...");
+      await dualLogInfo("Checking for UPC widget data...", {
+        jobId,
+        bookingId,
+      });
       await delay(2000); // Wait for page/widget to load
 
       const upcData = await scrapeUpcWidgetData(page, bookingId);
       if (upcData) {
-        await dualLogInfo("✅ UPC widget data scraped successfully");
+        await dualLogInfo("✅ UPC widget data scraped successfully", {
+          jobId,
+          bookingId,
+        });
         console.log("=== UPC Widget Data ===");
         console.log("Card Holder Name:", upcData.cardHolderName);
         console.log("Card Number:", upcData.cardNumber);
@@ -347,25 +421,35 @@ export async function searchBookingAndNavigateToPayout(
 
             if (updatedItem) {
               await dualLogInfo(
-                `✅ Card info saved to database for booking ID: ${bookingId}`
+                `✅ Card info saved to database for booking ID: ${bookingId}`,
+                { jobId, bookingId }
               );
             } else {
               await dualLogError(
-                `Failed to save card info to database for booking ID: ${bookingId}. Item may not exist yet.`
+                `Failed to save card info to database for booking ID: ${bookingId}. Item may not exist yet.`,
+                undefined,
+                { jobId, bookingId }
               );
             }
           } catch (dbError: any) {
             await dualLogError(
               `Error saving card info to database for booking ID ${bookingId}:`,
-              dbError
+              dbError,
+              { jobId, bookingId }
             );
           }
         }
       } else {
-        await dualLogInfo("UPC widget data not found or not accessible");
+        await dualLogInfo("UPC widget data not found or not accessible", {
+          jobId,
+          bookingId,
+        });
       }
     } catch (error) {
-      await dualLogError("Error checking for OTP verification", error);
+      await dualLogError("Error checking for OTP verification", error, {
+        jobId,
+        bookingId,
+      });
       // Continue anyway - OTP might not be required
 
       // Try to scrape UPC data even if OTP check failed
@@ -413,34 +497,43 @@ export async function searchBookingAndNavigateToPayout(
 
               if (updatedItem) {
                 await dualLogInfo(
-                  `✅ Card info saved to database for booking ID: ${bookingId}`
+                  `✅ Card info saved to database for booking ID: ${bookingId}`,
+                  { jobId, bookingId }
                 );
               } else {
                 await dualLogError(
-                  `Failed to save card info to database for booking ID: ${bookingId}. Item may not exist yet.`
+                  `Failed to save card info to database for booking ID: ${bookingId}. Item may not exist yet.`,
+                  undefined,
+                  { jobId, bookingId }
                 );
               }
             } catch (dbError: any) {
               await dualLogError(
                 `Error saving card info to database for booking ID ${bookingId}:`,
-                dbError
+                dbError,
+                { jobId, bookingId }
               );
             }
           }
         }
       } catch (scrapeError) {
-        await dualLogError("Error scraping UPC widget data", scrapeError);
+        await dualLogError("Error scraping UPC widget data", scrapeError, {
+          jobId,
+          bookingId,
+        });
       }
     }
 
     await dualLogInfo(
-      `✅ Successfully navigated to Get payout (UPC) tab for booking ID: ${bookingId}`
+      `✅ Successfully navigated to Get payout (UPC) tab for booking ID: ${bookingId}`,
+      { jobId, bookingId }
     );
     return true;
   } catch (error: any) {
     await dualLogError(
       `Error in searchBookingAndNavigateToPayout for booking ID ${bookingId}:`,
-      error
+      error,
+      { jobId, bookingId }
     );
     return false;
   }
@@ -460,14 +553,21 @@ async function handleOtpVerification(
   bookingId: string,
   userEmail?: string
 ): Promise<boolean> {
+  const jobId = getRetrievalJobId();
   const targetPage = frame || page;
   const selectorTimeout = 30000;
 
   try {
-    await dualLogInfo("🔐 Processing OTP verification for Get payout (UPC)...");
+    await dualLogInfo(
+      "🔐 Processing OTP verification for Get payout (UPC)...",
+      { jobId, bookingId }
+    );
 
     // Step 1: Check if we need to select verification method (via Email)
-    await dualLogInfo("Checking for OTP verification method selection...");
+    await dualLogInfo("Checking for OTP verification method selection...", {
+      jobId,
+      bookingId,
+    });
 
     try {
       await targetPage.waitForSelector(OTP_VERIFICATION.EMAIL_OPTION, {
@@ -476,46 +576,55 @@ async function handleOtpVerification(
       });
 
       await dualLogInfo(
-        "Found OTP verification method selection, clicking 'via Email'..."
+        "Found OTP verification method selection, clicking 'via Email'...",
+        { jobId, bookingId }
       );
       await targetPage.click(OTP_VERIFICATION.EMAIL_OPTION);
       await delay(2000); // Wait for OTP form to appear
     } catch (error) {
       await dualLogInfo(
-        "No verification method selection found, OTP form may already be visible"
+        "No verification method selection found, OTP form may already be visible",
+        { jobId, bookingId }
       );
     }
 
     // Step 2: Wait for OTP input fields to be visible
-    await dualLogInfo("Waiting for OTP input fields...");
+    await dualLogInfo("Waiting for OTP input fields...", { jobId, bookingId });
 
     try {
       await targetPage.waitForSelector(OTP_VERIFICATION.FIRST_INPUT, {
         visible: true,
         timeout: selectorTimeout,
       });
-      await dualLogInfo("OTP input fields found");
+      await dualLogInfo("OTP input fields found", { jobId, bookingId });
     } catch (error) {
       await dualLogInfo(
-        "OTP input fields not found, OTP verification may not be required"
+        "OTP input fields not found, OTP verification may not be required",
+        { jobId, bookingId }
       );
       return true; // Not an error - OTP might not be needed
     }
 
     // Step 3: Wait 60 seconds for OTP email to arrive
-    await dualLogInfo("Waiting 60 seconds for OTP email delivery...");
+    await dualLogInfo("Waiting 60 seconds for OTP email delivery...", {
+      jobId,
+      bookingId,
+    });
     await delay(60000);
 
     // Step 4: Fetch OTP code from email
     if (!userEmail) {
       await dualLogError(
-        "User email (agodausername) is required for OTP verification"
+        "User email (agodausername) is required for OTP verification",
+        undefined,
+        { jobId, bookingId }
       );
       return false;
     }
 
     await dualLogInfo(
-      `Now fetching YCS retrieval OTP code from email for ${userEmail}...`
+      `Now fetching YCS retrieval OTP code from email for ${userEmail}...`,
+      { jobId, bookingId }
     );
 
     let otpResult: any = null;
@@ -523,7 +632,8 @@ async function handleOtpVerification(
 
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       await dualLogInfo(
-        `Attempt ${attempt}/${maxRetries} to fetch YCS retrieval OTP code...`
+        `Attempt ${attempt}/${maxRetries} to fetch YCS retrieval OTP code...`,
+        { jobId, bookingId }
       );
 
       // Fetch the OTP code from email using YCS retrieval email helper
@@ -531,33 +641,43 @@ async function handleOtpVerification(
 
       if (otpResult.otpCode) {
         await dualLogInfo(
-          `OTP code found on attempt ${attempt}: ${otpResult.otpCode}`
+          `OTP code found on attempt ${attempt}: ${otpResult.otpCode}`,
+          { jobId, bookingId }
         );
         break;
       }
 
       if (attempt < maxRetries) {
         await dualLogInfo(
-          `Attempt ${attempt} failed, waiting 10 seconds before retry...`
+          `Attempt ${attempt} failed, waiting 10 seconds before retry...`,
+          { jobId, bookingId }
         );
         await delay(10000);
       }
     }
 
     if (!otpResult || !otpResult.emailFound) {
-      await dualLogError("Failed to access email for OTP code");
+      await dualLogError("Failed to access email for OTP code", undefined, {
+        jobId,
+        bookingId,
+      });
       return false;
     }
 
     if (!otpResult.otpCode) {
       await dualLogError(
-        "OTP code not found in recent emails after all attempts"
+        "OTP code not found in recent emails after all attempts",
+        undefined,
+        { jobId, bookingId }
       );
       return false;
     }
 
     // Step 5: Fill OTP code into the input fields
-    await dualLogInfo(`Filling OTP code: ${otpResult.otpCode}`);
+    await dualLogInfo(`Filling OTP code: ${otpResult.otpCode}`, {
+      jobId,
+      bookingId,
+    });
 
     // Split the 6-digit code into individual digits
     const otpDigits = otpResult.otpCode.split("");
@@ -572,7 +692,10 @@ async function handleOtpVerification(
     // Fill each OTP input field (using data-cy="otp-0" to data-cy="otp-5")
     for (let i = 0; i < 6; i++) {
       const inputSelector = OTP_VERIFICATION.INPUT(i);
-      await dualLogInfo(`Filling OTP box ${i} with digit: ${otpDigits[i]}`);
+      await dualLogInfo(`Filling OTP box ${i} with digit: ${otpDigits[i]}`, {
+        jobId,
+        bookingId,
+      });
 
       try {
         // Wait for the input field
@@ -593,16 +716,22 @@ async function handleOtpVerification(
         // Type the digit
         await targetPage.type(inputSelector, otpDigits[i], { delay: 150 });
       } catch (inputError) {
-        await dualLogError(`Failed to fill OTP box ${i}`, inputError);
+        await dualLogError(`Failed to fill OTP box ${i}`, inputError, {
+          jobId,
+          bookingId,
+        });
         return false;
       }
     }
 
-    await dualLogInfo("All OTP digits filled successfully");
+    await dualLogInfo("All OTP digits filled successfully", {
+      jobId,
+      bookingId,
+    });
     await delay(1000);
 
     // Step 6: Click the Submit OTP button
-    await dualLogInfo("Looking for Submit OTP button...");
+    await dualLogInfo("Looking for Submit OTP button...", { jobId, bookingId });
 
     try {
       // Wait for button to be enabled
@@ -616,14 +745,23 @@ async function handleOtpVerification(
       );
 
       await targetPage.click(OTP_VERIFICATION.SUBMIT_BUTTON);
-      await dualLogInfo("Submit OTP button clicked successfully!");
+      await dualLogInfo("Submit OTP button clicked successfully!", {
+        jobId,
+        bookingId,
+      });
       await delay(3000); // Wait for submission to process
     } catch (error) {
-      await dualLogError("Failed to click Submit OTP button", error);
+      await dualLogError("Failed to click Submit OTP button", error, {
+        jobId,
+        bookingId,
+      });
       return false;
     }
 
-    await dualLogInfo("✅ OTP verification completed successfully");
+    await dualLogInfo("✅ OTP verification completed successfully", {
+      jobId,
+      bookingId,
+    });
 
     // Release OTP immediately after payout verification completes (only once)
     // This frees up OTP for other jobs as soon as payout verification is done
@@ -631,28 +769,39 @@ async function handleOtpVerification(
     const retrievalJobId = getRetrievalJobId();
     if (retrievalJobId && markOtpReleasedForRetrieval()) {
       // Check if OTP is still owned by this job before attempting release
-      const isOwnedByThisJob = await otpStatusManager.isOtpOwnedByJob(retrievalJobId);
+      const isOwnedByThisJob = await otpStatusManager.isOtpOwnedByJob(
+        retrievalJobId
+      );
 
       if (isOwnedByThisJob) {
         await dualLogInfo(
-          "Payout OTP verification completed - verifying OTP ownership before release"
+          "Payout OTP verification completed - verifying OTP ownership before release",
+          { jobId, bookingId }
         );
         otpCompletionNotifier.notifyOtpCompleted(retrievalJobId);
-        await dualLogInfo("✅ OTP released after payout verification (verified ownership)");
+        await dualLogInfo(
+          "✅ OTP released after payout verification (verified ownership)",
+          { jobId, bookingId }
+        );
       } else {
         await dualLogInfo(
-          `Payout OTP verification completed - OTP not owned by this job (job_id mismatch). OTP may have been released by another job.`
+          `Payout OTP verification completed - OTP not owned by this job (job_id mismatch). OTP may have been released by another job.`,
+          { jobId, bookingId }
         );
       }
     } else if (retrievalJobId) {
       await dualLogInfo(
-        "Payout OTP verification completed - OTP already released earlier"
+        "Payout OTP verification completed - OTP already released earlier",
+        { jobId, bookingId }
       );
     }
 
     return true;
   } catch (error: any) {
-    await dualLogError("Error in handleOtpVerification:", error);
+    await dualLogError("Error in handleOtpVerification:", error, {
+      jobId,
+      bookingId,
+    });
     return false;
   }
 }
@@ -668,13 +817,18 @@ async function reSearchAndNavigateToPayout(
   page: Page,
   bookingId: string
 ): Promise<boolean> {
+  const jobId = getRetrievalJobId();
   try {
     await dualLogInfo(
-      `Re-searching for booking ID: ${bookingId} after OTP verification`
+      `Re-searching for booking ID: ${bookingId} after OTP verification`,
+      { jobId, bookingId }
     );
 
     // Step 1: Find and fill the booking ID input field
-    await dualLogInfo("Looking for booking ID / Guest name input field...");
+    await dualLogInfo("Looking for booking ID / Guest name input field...", {
+      jobId,
+      bookingId,
+    });
 
     try {
       await page.waitForSelector(BOOKING_SEARCH.INPUT, {
@@ -684,13 +838,17 @@ async function reSearchAndNavigateToPayout(
     } catch (error) {
       await dualLogError(
         `Search input field not found: ${BOOKING_SEARCH.INPUT}`,
-        error
+        error,
+        { jobId, bookingId }
       );
       return false;
     }
 
     // Clear existing value and type the booking ID
-    await dualLogInfo(`Entering booking ID: ${bookingId} in search field`);
+    await dualLogInfo(`Entering booking ID: ${bookingId} in search field`, {
+      jobId,
+      bookingId,
+    });
 
     // Click on the input field first to focus it
     await page.click(BOOKING_SEARCH.INPUT);
@@ -791,7 +949,10 @@ async function reSearchAndNavigateToPayout(
         );
       }
     } else {
-      await dualLogInfo("Input field cleared successfully");
+      await dualLogInfo("Input field cleared successfully", {
+        jobId,
+        bookingId,
+      });
     }
 
     // Now type the new booking ID
@@ -799,7 +960,7 @@ async function reSearchAndNavigateToPayout(
     await delay(1000);
 
     // Step 2: Click the Search button
-    await dualLogInfo("Clicking Search button...");
+    await dualLogInfo("Clicking Search button...", { jobId, bookingId });
 
     try {
       await page.waitForSelector(BOOKING_SEARCH.BUTTON, {
@@ -807,14 +968,20 @@ async function reSearchAndNavigateToPayout(
         timeout: 5000,
       });
       await page.click(BOOKING_SEARCH.BUTTON);
-      await dualLogInfo("Search button clicked");
+      await dualLogInfo("Search button clicked", { jobId, bookingId });
     } catch (error) {
-      await dualLogError("Search button not found or not clickable", error);
+      await dualLogError("Search button not found or not clickable", error, {
+        jobId,
+        bookingId,
+      });
       return false;
     }
 
     // Step 3: Wait for search results to load
-    await dualLogInfo("Waiting for search results to load...");
+    await dualLogInfo("Waiting for search results to load...", {
+      jobId,
+      bookingId,
+    });
     await delay(3000);
 
     // Wait for the booking result row to appear
@@ -825,14 +992,23 @@ async function reSearchAndNavigateToPayout(
         visible: true,
         timeout: 15000,
       });
-      await dualLogInfo(`Booking row found for ID: ${bookingId}`);
+      await dualLogInfo(`Booking row found for ID: ${bookingId}`, {
+        jobId,
+        bookingId,
+      });
     } catch (error) {
-      await dualLogError(`Booking row not found for ID: ${bookingId}`, error);
+      await dualLogError(`Booking row not found for ID: ${bookingId}`, error, {
+        jobId,
+        bookingId,
+      });
       return false;
     }
 
     // Step 4: Click on the booking row (preferably on the guest name)
-    await dualLogInfo("Clicking on booking row (guest name)...");
+    await dualLogInfo("Clicking on booking row (guest name)...", {
+      jobId,
+      bookingId,
+    });
 
     const guestNameSelector = BOOKING_RESULTS.GUEST_NAME(bookingId);
 
@@ -840,18 +1016,24 @@ async function reSearchAndNavigateToPayout(
       const guestNameElement = await page.$(guestNameSelector);
       if (guestNameElement) {
         await guestNameElement.click();
-        await dualLogInfo("Clicked on guest name");
+        await dualLogInfo("Clicked on guest name", { jobId, bookingId });
       } else {
         await page.click(bookingRowSelector);
-        await dualLogInfo("Clicked on booking row");
+        await dualLogInfo("Clicked on booking row", { jobId, bookingId });
       }
     } catch (error) {
-      await dualLogError("Failed to click on booking row", error);
+      await dualLogError("Failed to click on booking row", error, {
+        jobId,
+        bookingId,
+      });
       return false;
     }
 
     // Step 5: Wait for the right sidebar to appear
-    await dualLogInfo("Waiting for booking detail sidebar to appear...");
+    await dualLogInfo("Waiting for booking detail sidebar to appear...", {
+      jobId,
+      bookingId,
+    });
     await delay(2000);
 
     try {
@@ -859,14 +1041,23 @@ async function reSearchAndNavigateToPayout(
         visible: true,
         timeout: 10000,
       });
-      await dualLogInfo("Booking detail sidebar appeared");
+      await dualLogInfo("Booking detail sidebar appeared", {
+        jobId,
+        bookingId,
+      });
     } catch (error) {
-      await dualLogError("Booking detail sidebar did not appear", error);
+      await dualLogError("Booking detail sidebar did not appear", error, {
+        jobId,
+        bookingId,
+      });
       return false;
     }
 
     // Step 6: Click on "Get payout (UPC)" tab
-    await dualLogInfo("Clicking on 'Get payout (UPC)' tab...");
+    await dualLogInfo("Clicking on 'Get payout (UPC)' tab...", {
+      jobId,
+      bookingId,
+    });
 
     try {
       await page.waitForSelector(BOOKING_DETAIL.PAYOUT_TAB, {
@@ -874,10 +1065,16 @@ async function reSearchAndNavigateToPayout(
         timeout: 5000,
       });
       await page.click(BOOKING_DETAIL.PAYOUT_TAB);
-      await dualLogInfo("Successfully clicked on 'Get payout (UPC)' tab");
+      await dualLogInfo("Successfully clicked on 'Get payout (UPC)' tab", {
+        jobId,
+        bookingId,
+      });
       await delay(2000);
     } catch (error) {
-      await dualLogError("Failed to click on 'Get payout (UPC)' tab", error);
+      await dualLogError("Failed to click on 'Get payout (UPC)' tab", error, {
+        jobId,
+        bookingId,
+      });
       return false;
     }
 
@@ -914,8 +1111,12 @@ async function scrapeUpcWidgetData(
   page: Page,
   bookingId: string
 ): Promise<UpcWidgetData | null> {
+  const jobId = getRetrievalJobId();
   try {
-    await dualLogInfo(`Scraping UPC widget data for booking ID: ${bookingId}`);
+    await dualLogInfo(`Scraping UPC widget data for booking ID: ${bookingId}`, {
+      jobId,
+      bookingId,
+    });
 
     // Wait for UPC widget to be visible
     try {
@@ -923,7 +1124,7 @@ async function scrapeUpcWidgetData(
         visible: true,
         timeout: 10000,
       });
-      await dualLogInfo("UPC widget found");
+      await dualLogInfo("UPC widget found", { jobId, bookingId });
     } catch (error) {
       await dualLogInfo(
         "UPC widget not found - may not be available for this booking"
@@ -971,10 +1172,16 @@ async function scrapeUpcWidgetData(
       return data;
     }, UPC_WIDGET);
 
-    await dualLogInfo("UPC widget data extracted successfully");
+    await dualLogInfo("UPC widget data extracted successfully", {
+      jobId,
+      bookingId,
+    });
     return upcData;
   } catch (error: any) {
-    await dualLogError("Error scraping UPC widget data:", error);
+    await dualLogError("Error scraping UPC widget data:", error, {
+      jobId,
+      bookingId,
+    });
     return null;
   }
 }

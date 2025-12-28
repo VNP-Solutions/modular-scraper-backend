@@ -1,19 +1,19 @@
 import { Browser, Page } from "puppeteer";
 import {
   getRetrievalJobId,
-  markOtpReleasedForRetrieval,
   isOtpReleasedForRetrieval,
+  markOtpReleasedForRetrieval,
 } from "../../agoda-retriveal.js";
 import { delay } from "../../common/delay.js";
 import { dualLogError, dualLogInfo } from "../../common/log-helper.js";
 import { otpCompletionNotifier } from "../../common/otp-completion-notifier.js";
 import { otpStatusManager } from "../../common/otp-status-manager.js";
 import { progressManager } from "../../common/progress-manager.js";
+import { scrapingStateManager } from "../../common/scraping-state.js";
 import { takeSuccessScreenshot } from "../../common/screenshot-helper.js";
 import { timeoutManager } from "../../common/timeout-manager.js";
 import { searchBookingAndNavigateToPayout } from "../retriveal-data/retriveal-data.js";
 import { PAGE_LOADING, RESERVATIONS_PAGE } from "../utils/selectors.js";
-import { scrapingStateManager } from "../../common/scraping-state.js";
 
 // Interface for reservation data
 interface Reservation {
@@ -93,7 +93,11 @@ export async function getAgodaRetrivealData(
     // Check if scraping is paused before starting
     await scrapingStateManager.waitWhilePaused();
     if (!scrapingStateManager.isRunning()) {
-      await dualLogError("Scraping was stopped during booking data retrieval");
+      await dualLogError(
+        "Scraping was stopped during booking data retrieval",
+        undefined,
+        { jobId }
+      );
       throw new Error("Scraping was stopped during booking data retrieval");
     }
 
@@ -126,7 +130,9 @@ export async function getAgodaRetrivealData(
 
     // Construct the booking URL with agoda_id and date range using converted dates
     const bookingUrl = `https://ycs.agoda.com/mldc/en-us/app/reporting/booking/${agodaId}?startDate=${formattedStartDate}&endDate=${formattedEndDate}`;
-    await dualLogInfo(`Navigating to booking data URL: ${bookingUrl}`);
+    await dualLogInfo(`Navigating to booking data URL: ${bookingUrl}`, {
+      jobId,
+    });
 
     await delay(5000);
 
@@ -141,7 +147,8 @@ export async function getAgodaRetrivealData(
       navigationAttempts++;
 
       await dualLogInfo(
-        `Navigation attempt ${navigationAttempts}/${maxNavigationAttempts} to booking data URL: ${bookingUrl}`
+        `Navigation attempt ${navigationAttempts}/${maxNavigationAttempts} to booking data URL: ${bookingUrl}`,
+        { jobId }
       );
 
       await newPage.goto(bookingUrl, {
@@ -158,7 +165,9 @@ export async function getAgodaRetrivealData(
 
       // Check for "Reservations" text on the page
       try {
-        await dualLogInfo("Checking for 'Reservations' text on the page...");
+        await dualLogInfo("Checking for 'Reservations' text on the page...", {
+          jobId,
+        });
 
         // Look for the Reservations heading using multiple selectors
         let reservationsElement = null;
@@ -193,7 +202,8 @@ export async function getAgodaRetrivealData(
 
             if (reservationsElement) {
               await dualLogInfo(
-                `Found Reservations element with selector: ${selector}`
+                `Found Reservations element with selector: ${selector}`,
+                { jobId }
               );
               break;
             }
@@ -211,7 +221,9 @@ export async function getAgodaRetrivealData(
             RESERVATIONS_PAGE.TEXT
           );
           if (pageText) {
-            await dualLogInfo("Found 'Reservations' text in page content");
+            await dualLogInfo("Found 'Reservations' text in page content", {
+              jobId,
+            });
             reservationsElement = true; // Mark as found
           }
         }
@@ -223,27 +235,32 @@ export async function getAgodaRetrivealData(
             "✅ Reservations text found - page loaded successfully!"
           );
           await dualLogInfo(
-            "✅ Reservations text found - page loaded successfully!"
+            "✅ Reservations text found - page loaded successfully!",
+            { jobId }
           );
           break;
         } else {
           await dualLogInfo(
-            `❌ Reservations text not found on attempt ${navigationAttempts}`
+            `❌ Reservations text not found on attempt ${navigationAttempts}`,
+            { jobId }
           );
 
           if (navigationAttempts < maxNavigationAttempts) {
-            await dualLogInfo(`Retrying navigation in 3 seconds...`);
+            await dualLogInfo(`Retrying navigation in 3 seconds...`, { jobId });
             await delay(3000);
           }
         }
       } catch (checkError: any) {
         await dualLogError(
           `Error checking for Reservations text on attempt ${navigationAttempts}:`,
-          checkError.message
+          checkError.message,
+          { jobId }
         );
 
         if (navigationAttempts < maxNavigationAttempts) {
-          await dualLogInfo(`Retrying navigation due to check error...`);
+          await dualLogInfo(`Retrying navigation due to check error...`, {
+            jobId,
+          });
           await delay(3000);
         }
       }
@@ -252,12 +269,13 @@ export async function getAgodaRetrivealData(
     // Final validation
     if (!reservationsFound) {
       const errorMessage = `Failed to find 'Reservations' text after ${maxNavigationAttempts} navigation attempts`;
-      await dualLogError(errorMessage);
+      await dualLogError(errorMessage, undefined, { jobId });
       throw new Error(errorMessage);
     }
 
     await dualLogInfo(
-      "Successfully navigated to booking data page and confirmed Reservations section"
+      "Successfully navigated to booking data page and confirmed Reservations section",
+      { jobId }
     );
 
     // Take screenshot after successful navigation to booking data page
@@ -279,7 +297,8 @@ export async function getAgodaRetrivealData(
     // Search by booking IDs if reservations are provided
     if (reservations && reservations.length > 0) {
       await dualLogInfo(
-        `Processing ${reservations.length} reservation group(s) with booking IDs`
+        `Processing ${reservations.length} reservation group(s) with booking IDs`,
+        { jobId }
       );
 
       // Extract all booking IDs from reservations array
@@ -293,12 +312,13 @@ export async function getAgodaRetrivealData(
       await dualLogInfo(
         `Found ${allBookingIds.length} booking IDs to search: ${allBookingIds
           .slice(0, 5)
-          .join(", ")}${allBookingIds.length > 5 ? "..." : ""}`
+          .join(", ")}${allBookingIds.length > 5 ? "..." : ""}`,
+        { jobId }
       );
 
       // Process each booking ID: search, click row, navigate to payout tab
       if (allBookingIds.length > 0) {
-        await dualLogInfo("Processing booking IDs...");
+        await dualLogInfo("Processing booking IDs...", { jobId });
 
         // Wait for the booking list/table to be visible
         await delay(3000);
@@ -306,7 +326,7 @@ export async function getAgodaRetrivealData(
         // Process each booking ID
         for (const bookingId of allBookingIds) {
           try {
-            await dualLogInfo(`Processing booking ID: ${bookingId}`);
+            await dualLogInfo(`Processing booking ID: ${bookingId}`, { jobId });
 
             // Use the dedicated function to search and navigate to payout tab
             const success = await searchBookingAndNavigateToPayout(
@@ -318,20 +338,24 @@ export async function getAgodaRetrivealData(
 
             if (success) {
               await dualLogInfo(
-                `✅ Successfully processed booking ID: ${bookingId}`
+                `✅ Successfully processed booking ID: ${bookingId}`,
+                { jobId }
               );
               // Add delay between processing different bookings
               await delay(2000);
             } else {
               await dualLogError(
-                `❌ Failed to process booking ID: ${bookingId}`
+                `❌ Failed to process booking ID: ${bookingId}`,
+                undefined,
+                { jobId }
               );
               // Continue with next booking ID even if this one failed
             }
           } catch (searchError: any) {
             await dualLogError(
               `Error processing booking ID ${bookingId}:`,
-              searchError.message
+              searchError.message,
+              { jobId }
             );
             // Continue with next booking ID
           }
@@ -339,7 +363,8 @@ export async function getAgodaRetrivealData(
       }
     } else {
       await dualLogInfo(
-        "No reservations provided - will process all bookings in date range"
+        "No reservations provided - will process all bookings in date range",
+        { jobId }
       );
     }
 
@@ -349,26 +374,38 @@ export async function getAgodaRetrivealData(
     const retrievalJobId = getRetrievalJobId();
     if (retrievalJobId && !isOtpReleasedForRetrieval()) {
       // Check if OTP is still owned by this job before attempting release
-      const isOwnedByThisJob = await otpStatusManager.isOtpOwnedByJob(retrievalJobId);
+      const isOwnedByThisJob = await otpStatusManager.isOtpOwnedByJob(
+        retrievalJobId
+      );
 
       if (isOwnedByThisJob) {
-        await dualLogInfo("Retrieval job completed - verifying OTP ownership before release");
+        await dualLogInfo(
+          "Retrieval job completed - verifying OTP ownership before release",
+          { jobId }
+        );
         if (markOtpReleasedForRetrieval()) {
           otpCompletionNotifier.notifyOtpCompleted(retrievalJobId);
-          await dualLogInfo("✅ OTP released at end of retrieval job (verified ownership)");
+          await dualLogInfo(
+            "✅ OTP released at end of retrieval job (verified ownership)",
+            { jobId }
+          );
         }
       } else {
         await dualLogInfo(
-          `Retrieval job completed - OTP not owned by this job (job_id mismatch). OTP may have been released by another job or never reserved.`
+          `Retrieval job completed - OTP not owned by this job (job_id mismatch). OTP may have been released by another job or never reserved.`,
+          { jobId }
         );
       }
     } else if (retrievalJobId && isOtpReleasedForRetrieval()) {
-      await dualLogInfo("Retrieval job completed - OTP already released after payout verification");
+      await dualLogInfo(
+        "Retrieval job completed - OTP already released after payout verification",
+        { jobId }
+      );
     }
 
     return [];
   } catch (error: any) {
-    await dualLogError("Error in getAgodaRetrivealData:", error);
+    await dualLogError("Error in getAgodaRetrivealData:", error, { jobId });
     throw error;
   }
 }
