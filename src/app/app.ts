@@ -2934,6 +2934,323 @@ app.post("/api/agoda/retrieval-run-job", (async (
 
 /**
  * @swagger
+ * /api/agoda/bulk-retrieval-run-job:
+ *   post:
+ *     tags:
+ *       - Agoda Scraping
+ *     summary: Execute multiple Agoda retrieval scraping jobs asynchronously
+ *     description: |
+ *       Executes scraping jobs for multiple Agoda retrieval records concurrently.
+ *       This endpoint processes an array of retrieval IDs and starts jobs for each
+ *       one asynchronously without waiting for completion.
+ *       This endpoint performs the following operations:
+ *
+ *       1. **Input Validation**: Validates that retrieval_ids array is provided and not empty
+ *       2. **Batch Processing**: Processes each retrieval_id independently and asynchronously
+ *       3. **Retrieval Validation**: Validates that each retrieval exists in the database
+ *       4. **Reservations Check**: Verifies that each retrieval contains reservation IDs
+ *       5. **Credential Retrieval**: Gets Agoda credentials for each retrieval's associated property
+ *       6. **Job Execution**: Starts worker threads for each valid retrieval
+ *       7. **Status Updates**: Updates retrieval statuses to Running for started jobs
+ *       8. **Error Handling**: Collects and reports errors for failed retrievals
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - retrieval_ids
+ *             properties:
+ *               retrieval_ids:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 example: ["6892f4bf9df8bc296bdcdff0", "6892f4bf9df8bc296bdcdff1"]
+ *                 description: Array of MongoDB ObjectIds of retrieval records to execute
+ *     responses:
+ *       200:
+ *         description: Bulk retrieval jobs processing initiated
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 200
+ *                 message:
+ *                   type: string
+ *                   example: "Bulk retrieval jobs processing completed"
+ *                 total:
+ *                   type: integer
+ *                   example: 5
+ *                 started:
+ *                   type: integer
+ *                   example: 4
+ *                 failed:
+ *                   type: integer
+ *                   example: 1
+ *                 results:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       retrieval_id:
+ *                         type: string
+ *                       status:
+ *                         type: string
+ *                         enum: [started, failed]
+ *                       message:
+ *                         type: string
+ *                       error:
+ *                         type: string
+ *       400:
+ *         description: Bad request - Invalid input parameters
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 400
+ *                 message:
+ *                   type: string
+ *                   example: "retrieval_ids array is required and must not be empty"
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 500
+ *                 message:
+ *                   type: string
+ *                   example: "Error processing bulk retrieval jobs"
+ *                 error:
+ *                   type: string
+ */
+app.post("/api/agoda/bulk-retrieval-run-job", (async (
+  req: express.Request,
+  res: express.Response
+) => {
+  try {
+    const { retrieval_ids } = req.body;
+
+    if (
+      !retrieval_ids ||
+      !Array.isArray(retrieval_ids) ||
+      retrieval_ids.length === 0
+    ) {
+      return res.status(400).json({
+        status: 400,
+        message: "retrieval_ids array is required and must not be empty",
+      });
+    }
+
+    console.log(
+      `Processing bulk retrieval jobs for ${retrieval_ids.length} retrieval IDs...`
+    );
+
+    // Helper function to process a single retrieval_id
+    const processRetrievalJob = async (
+      retrieval_id: string
+    ): Promise<{
+      retrieval_id: string;
+      status: "started" | "failed";
+      message: string;
+      error?: string;
+    }> => {
+      try {
+        console.log(`Processing retrieval ID: ${retrieval_id}...`);
+
+        // Get retrieval from database
+        const retrieval = await retrievalService.getRetrievalById(retrieval_id);
+
+        if (!retrieval) {
+          return {
+            retrieval_id,
+            status: "failed",
+            message: `Retrieval with ID ${retrieval_id} not found`,
+            error: "Retrieval not found",
+          };
+        }
+
+        // Get reservations array from retrieval
+        const reservations = retrieval.reservations || [];
+
+        if (reservations.length === 0) {
+          return {
+            retrieval_id,
+            status: "failed",
+            message: `No reservations found in retrieval ${retrieval_id}`,
+            error: "No reservations found",
+          };
+        }
+
+        console.log(
+          `Found ${reservations.length} reservations in retrieval ${retrieval_id}`
+        );
+
+        // Get property credentials for the retrieval
+        const retrievalData = await retrievalService.getAgodaIdFromRetrieval(
+          retrieval_id
+        );
+
+        if (!retrievalData || !retrievalData.agodaId) {
+          return {
+            retrieval_id,
+            status: "failed",
+            message: `Could not retrieve Agoda credentials for retrieval ${retrieval_id}`,
+            error: "Missing Agoda credentials",
+          };
+        }
+
+        console.log(
+          `✅ Found Agoda credentials for retrieval: ${retrieval_id}, agoda_id: ${retrievalData.agodaId}`
+        );
+
+        // Check if worker threads are available (non-blocking check)
+        if (
+          !otpAwareWorkerPool.hasAvailableWorkers() &&
+          otpAwareWorkerPool.isQueueFull()
+        ) {
+          return {
+            retrieval_id,
+            status: "failed",
+            message: `All server busy, cannot start job for retrieval ${retrieval_id}`,
+            error: "Worker pool full",
+          };
+        }
+
+        const plainReservations = reservations.map(String);
+        const formattedReservations = [
+          {
+            id: String(retrievalData.agodaId),
+            idList: plainReservations,
+          },
+        ];
+
+        const jobId = String(retrieval_id);
+
+        const workerJobData: WorkerJobData = {
+          jobType: "agoda-retrieval-run",
+          jobId,
+          retrievalId: String(retrieval_id),
+          reservations: formattedReservations,
+          agodaId: String(retrievalData.agodaId),
+          user_email: String(retrievalData.user_email || ""),
+          user_password: String(retrievalData.user_password || ""),
+        };
+
+        // Update retrieval status to Running
+        await retrievalService.updateRetrievalStatus(retrieval_id, "Running");
+
+        // Execute job in worker thread (fire and forget)
+        console.log(`Submitting retrieval job ${jobId} to worker pool...`);
+
+        // Execute job asynchronously without waiting for completion
+        otpAwareWorkerPool
+          .executeJob(workerJobData)
+          .then((result) => {
+            if (result.success) {
+              console.log(`Retrieval job ${jobId} completed successfully`);
+              retrievalService.updateRetrievalStatus(retrieval_id, "Completed");
+            } else {
+              const finalStatus = result.data?.finalStatus;
+              if (finalStatus !== "Stopped") {
+                console.log(`Retrieval job ${jobId} failed:`, result.error);
+                retrievalService.updateRetrievalStatus(retrieval_id, "Failed");
+              }
+            }
+          })
+          .catch((workerError) => {
+            console.error(
+              `Worker error for retrieval job ${jobId}:`,
+              workerError
+            );
+            const errorMessage =
+              workerError instanceof Error
+                ? workerError.message
+                : String(workerError);
+
+            if (
+              !errorMessage.includes("was stopped by user request") &&
+              !errorMessage.includes("was stopped")
+            ) {
+              retrievalService.updateRetrievalStatus(retrieval_id, "Failed");
+            }
+          });
+
+        return {
+          retrieval_id,
+          status: "started",
+          message: `Retrieval job ${retrieval_id} started successfully`,
+        };
+      } catch (error: any) {
+        console.error(`Error processing retrieval ${retrieval_id}:`, error);
+        return {
+          retrieval_id,
+          status: "failed",
+          message: `Error processing retrieval ${retrieval_id}`,
+          error: error.message || String(error),
+        };
+      }
+    };
+
+    // Process all retrieval IDs asynchronously
+    const results = await Promise.allSettled(
+      retrieval_ids.map((id: string) => processRetrievalJob(id))
+    );
+
+    // Process results
+    const processedResults = results.map((result, index) => {
+      if (result.status === "fulfilled") {
+        return result.value;
+      } else {
+        return {
+          retrieval_id: retrieval_ids[index],
+          status: "failed" as const,
+          message: `Error processing retrieval ${retrieval_ids[index]}`,
+          error: result.reason?.message || String(result.reason),
+        };
+      }
+    });
+
+    const started = processedResults.filter(
+      (r) => r.status === "started"
+    ).length;
+    const failed = processedResults.filter((r) => r.status === "failed").length;
+
+    console.log(
+      `Bulk retrieval jobs processing completed: ${started} started, ${failed} failed out of ${retrieval_ids.length} total`
+    );
+
+    return res.status(200).json({
+      status: 200,
+      message: "Bulk retrieval jobs processing completed",
+      total: retrieval_ids.length,
+      started,
+      failed,
+      results: processedResults,
+    });
+  } catch (err: any) {
+    console.error("Error in /api/agoda/bulk-retrieval-run-job:", err);
+
+    res.status(500).json({
+      status: 500,
+      message: "Error processing bulk retrieval jobs",
+      error: err.message,
+    });
+  }
+}) as any);
+
+/**
+ * @swagger
  * /api/scraping/stop:
  *   post:
  *     tags:
