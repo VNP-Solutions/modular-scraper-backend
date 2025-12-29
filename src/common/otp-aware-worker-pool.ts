@@ -469,13 +469,15 @@ export class OtpAwareWorkerPool extends EventEmitter {
     if (!availableWorker) {
       // No workers available, add to queue
       this.jobQueue.push(queuedJob);
-      // Update retrieval status to InQueue for agoda-retrieval-run jobs (non-blocking)
-      this.updateJobStatusToInQueue(queuedJob.jobData).catch((error) => {
+      // Update retrieval status to InQueue for agoda-retrieval-run jobs (await to ensure status is set before logging)
+      try {
+        await this.updateJobStatusToInQueue(queuedJob.jobData);
+      } catch (error) {
         console.error(
           `Failed to update retrieval ${queuedJob.jobData.jobId} status to InQueue:`,
           error
         );
-      });
+      }
       console.log(
         `\x1b[33mJob ${queuedJob.jobData.jobId} queued (no workers). Queue size: ${this.jobQueue.length}\x1b[0m`
       );
@@ -486,13 +488,15 @@ export class OtpAwareWorkerPool extends EventEmitter {
     if (queuedJob.requiresOtp && !this.otpManager.isOtpAvailable()) {
       // OTP not available, add to queue
       this.jobQueue.push(queuedJob);
-      // Update retrieval status to InQueue for agoda-retrieval-run jobs (non-blocking)
-      this.updateJobStatusToInQueue(queuedJob.jobData).catch((error) => {
+      // Update retrieval status to InQueue for agoda-retrieval-run jobs (await to ensure status is set before logging)
+      try {
+        await this.updateJobStatusToInQueue(queuedJob.jobData);
+      } catch (error) {
         console.error(
           `Failed to update retrieval ${queuedJob.jobData.jobId} status to InQueue:`,
           error
         );
-      });
+      }
       console.log(
         `\x1b[33mJob ${queuedJob.jobData.jobId} queued (OTP occupied). Queue size: ${this.jobQueue.length}\x1b[0m`
       );
@@ -510,13 +514,15 @@ export class OtpAwareWorkerPool extends EventEmitter {
       if (!otpReserved) {
         // Failed to reserve OTP (race condition), add to queue
         this.jobQueue.push(queuedJob);
-        // Update retrieval status to InQueue for agoda-retrieval-run jobs (non-blocking)
-        this.updateJobStatusToInQueue(queuedJob.jobData).catch((error) => {
+        // Update retrieval status to InQueue for agoda-retrieval-run jobs (await to ensure status is set before logging)
+        try {
+          await this.updateJobStatusToInQueue(queuedJob.jobData);
+        } catch (error) {
           console.error(
             `Failed to update retrieval ${queuedJob.jobData.jobId} status to InQueue:`,
             error
           );
-        });
+        }
         console.log(
           `Job ${queuedJob.jobData.jobId} queued (OTP reservation failed). Queue size: ${this.jobQueue.length}`
         );
