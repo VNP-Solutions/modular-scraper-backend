@@ -4,6 +4,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { Worker } from "worker_threads";
 import { OtpPlatform } from "../models/otp-status.model.js";
+import { retrievalService } from "../services/retrieval.service.js";
 import { otpStatusManager, OtpStatusManager } from "./otp-status-manager.js";
 import {
   WorkerInfo,
@@ -419,6 +420,36 @@ export class OtpAwareWorkerPool extends EventEmitter {
     ].includes(jobData.jobType);
   }
 
+  /**
+   * Update retrieval status if this is a retrieval job
+   */
+  private async updateRetrievalStatusIfNeeded(
+    jobData: WorkerJobData,
+    status: string
+  ): Promise<void> {
+    // Check if this is a retrieval job
+    const isRetrievalJob =
+      jobData.jobType === "retrieval-reservation-run" ||
+      jobData.jobType === "graphql-retrieval-run";
+
+    if (isRetrievalJob && jobData.retrievalId) {
+      try {
+        await retrievalService.updateRetrievalStatus(
+          jobData.retrievalId,
+          status
+        );
+        console.log(
+          `Updated retrieval ${jobData.retrievalId} status to ${status}`
+        );
+      } catch (error) {
+        console.error(
+          `Error updating retrieval ${jobData.retrievalId} status:`,
+          error
+        );
+      }
+    }
+  }
+
   private getJobPlatform(jobData: WorkerJobData): OtpPlatform {
     // Determine platform based on job type
     if (
@@ -453,6 +484,7 @@ export class OtpAwareWorkerPool extends EventEmitter {
     if (!availableWorker) {
       // No workers available, add to queue
       this.jobQueue.push(queuedJob);
+      await this.updateRetrievalStatusIfNeeded(queuedJob.jobData, "InQueue");
       console.log(
         `\x1b[33mJob ${queuedJob.jobData.jobId} queued (no workers). Queue size: ${this.jobQueue.length}\x1b[0m`
       );
@@ -463,6 +495,7 @@ export class OtpAwareWorkerPool extends EventEmitter {
     if (queuedJob.requiresOtp && !this.otpManager.isOtpAvailable()) {
       // OTP not available, add to queue
       this.jobQueue.push(queuedJob);
+      await this.updateRetrievalStatusIfNeeded(queuedJob.jobData, "InQueue");
       console.log(
         `\x1b[33mJob ${queuedJob.jobData.jobId} queued (OTP occupied). Queue size: ${this.jobQueue.length}\x1b[0m`
       );
@@ -480,6 +513,7 @@ export class OtpAwareWorkerPool extends EventEmitter {
       if (!otpReserved) {
         // Failed to reserve OTP (race condition), add to queue
         this.jobQueue.push(queuedJob);
+        await this.updateRetrievalStatusIfNeeded(queuedJob.jobData, "InQueue");
         console.log(
           `Job ${queuedJob.jobData.jobId} queued (OTP reservation failed). Queue size: ${this.jobQueue.length}`
         );
@@ -523,6 +557,14 @@ export class OtpAwareWorkerPool extends EventEmitter {
     activeWorker.info.startTime = new Date();
     activeWorker.resolve = resolve;
     activeWorker.reject = reject;
+
+    // Update retrieval status to Running if this is a retrieval job
+    this.updateRetrievalStatusIfNeeded(jobData, "Running").catch((error) => {
+      console.error(
+        `Error updating retrieval status for job ${jobData.jobId}:`,
+        error
+      );
+    });
 
     // Send job to worker
     try {

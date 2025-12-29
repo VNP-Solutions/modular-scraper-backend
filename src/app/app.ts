@@ -1679,10 +1679,8 @@ app.post("/api/expedia/retrieval-run-job", (async (
       user_password: String(retrievalData.user_password || ""), // Ensure plain string
     };
 
-    // Update retrieval status to Running
-    await retrievalService.updateRetrievalStatus(retrieval_id, "Running");
-
     // Execute job in worker thread
+    // Status will be updated by worker pool: InQueue when queued, Running when assigned
     try {
       console.log(`Submitting retrieval job ${jobId} to worker pool...`);
 
@@ -1932,10 +1930,8 @@ app.post("/api/expedia/graphql-retrieval-run-job", (async (
       user_password: String(retrievalData.user_password || ""), // Ensure plain string
     };
 
-    // Update retrieval status to Running
-    await retrievalService.updateRetrievalStatus(retrieval_id, "Running");
-
     // Execute job in worker thread
+    // Status will be updated by worker pool: InQueue when queued, Running when assigned
     try {
       console.log(
         `Submitting GraphQL retrieval job ${jobId} to worker pool...`
@@ -2210,10 +2206,8 @@ app.post("/api/expedia/bulk-retrieval-run-job", (async (
           user_password: String(retrievalData.user_password || ""),
         };
 
-        // Update retrieval status to Running
-        await retrievalService.updateRetrievalStatus(retrieval_id, "Running");
-
         // Execute job in worker thread (fire and forget)
+        // Status will be updated by worker pool: InQueue when queued, Running when assigned
         console.log(
           `Submitting Expedia retrieval job ${jobId} to worker pool...`
         );
@@ -2539,10 +2533,8 @@ app.post("/api/expedia/bulk-graphql-retrieval-run-job", (async (
           user_password: String(retrievalData.user_password || ""),
         };
 
-        // Update retrieval status to Running
-        await retrievalService.updateRetrievalStatus(retrieval_id, "Running");
-
         // Execute job in worker thread (fire and forget)
+        // Status will be updated by worker pool: InQueue when queued, Running when assigned
         console.log(
           `Submitting Expedia GraphQL retrieval job ${jobId} to worker pool...`
         );

@@ -172,9 +172,13 @@ export class RetrievalService {
         return { exists: false, canRun: false };
       }
 
-      const canRun = ["Pending", "Failed", "Partial", "Stopped"].includes(
-        retrieval.job_status
-      );
+      const canRun = [
+        "Pending",
+        "InQueue",
+        "Failed",
+        "Partial",
+        "Stopped",
+      ].includes(retrieval.job_status);
 
       return {
         exists: true,
