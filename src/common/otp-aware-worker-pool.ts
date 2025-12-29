@@ -4,6 +4,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { Worker } from "worker_threads";
 import { OtpPlatform } from "../models/otp-status.model.js";
+import { retrievalService } from "../services/retriveal-job.service.js";
 import { otpStatusManager, OtpStatusManager } from "./otp-status-manager.js";
 import {
   WorkerInfo,
@@ -440,12 +441,41 @@ export class OtpAwareWorkerPool extends EventEmitter {
     return OtpPlatform.Expedia;
   }
 
+  /**
+   * Update retrieval status to InQueue when job is queued (for agoda-retrieval-run jobs)
+   */
+  private async updateJobStatusToInQueue(
+    jobData: WorkerJobData
+  ): Promise<void> {
+    // Only update status for agoda-retrieval-run jobs
+    if (jobData.jobType === "agoda-retrieval-run" && jobData.jobId) {
+      try {
+        // For retrieval jobs, jobId is the retrieval_id
+        await retrievalService.updateRetrievalStatus(jobData.jobId, "InQueue");
+        console.log(`Updated retrieval ${jobData.jobId} status to InQueue`);
+      } catch (error) {
+        console.error(
+          `Failed to update retrieval ${jobData.jobId} status to InQueue:`,
+          error
+        );
+        // Don't throw - this is a non-critical operation
+      }
+    }
+  }
+
   private async tryAssignJob(queuedJob: QueuedJob): Promise<void> {
     // Check worker availability
     const availableWorker = this.getAvailableWorker();
     if (!availableWorker) {
       // No workers available, add to queue
       this.jobQueue.push(queuedJob);
+      // Update retrieval status to InQueue for agoda-retrieval-run jobs (non-blocking)
+      this.updateJobStatusToInQueue(queuedJob.jobData).catch((error) => {
+        console.error(
+          `Failed to update retrieval ${queuedJob.jobData.jobId} status to InQueue:`,
+          error
+        );
+      });
       console.log(
         `\x1b[33mJob ${queuedJob.jobData.jobId} queued (no workers). Queue size: ${this.jobQueue.length}\x1b[0m`
       );
@@ -456,6 +486,13 @@ export class OtpAwareWorkerPool extends EventEmitter {
     if (queuedJob.requiresOtp && !this.otpManager.isOtpAvailable()) {
       // OTP not available, add to queue
       this.jobQueue.push(queuedJob);
+      // Update retrieval status to InQueue for agoda-retrieval-run jobs (non-blocking)
+      this.updateJobStatusToInQueue(queuedJob.jobData).catch((error) => {
+        console.error(
+          `Failed to update retrieval ${queuedJob.jobData.jobId} status to InQueue:`,
+          error
+        );
+      });
       console.log(
         `\x1b[33mJob ${queuedJob.jobData.jobId} queued (OTP occupied). Queue size: ${this.jobQueue.length}\x1b[0m`
       );
@@ -473,6 +510,13 @@ export class OtpAwareWorkerPool extends EventEmitter {
       if (!otpReserved) {
         // Failed to reserve OTP (race condition), add to queue
         this.jobQueue.push(queuedJob);
+        // Update retrieval status to InQueue for agoda-retrieval-run jobs (non-blocking)
+        this.updateJobStatusToInQueue(queuedJob.jobData).catch((error) => {
+          console.error(
+            `Failed to update retrieval ${queuedJob.jobData.jobId} status to InQueue:`,
+            error
+          );
+        });
         console.log(
           `Job ${queuedJob.jobData.jobId} queued (OTP reservation failed). Queue size: ${this.jobQueue.length}`
         );
@@ -481,7 +525,7 @@ export class OtpAwareWorkerPool extends EventEmitter {
     }
 
     // Assign job to worker
-    this.assignJobToWorker(
+    await this.assignJobToWorker(
       availableWorker,
       queuedJob.jobData,
       queuedJob.resolve,
@@ -498,16 +542,33 @@ export class OtpAwareWorkerPool extends EventEmitter {
     return null;
   }
 
-  private assignJobToWorker(
+  private async assignJobToWorker(
     workerId: string,
     jobData: WorkerJobData,
     resolve: (value: WorkerResponse) => void,
     reject: (reason: any) => void
-  ): void {
+  ): Promise<void> {
     const activeWorker = this.workers.get(workerId);
     if (!activeWorker || !activeWorker.info.isAvailable) {
       reject(new Error("Worker not available"));
       return;
+    }
+
+    // Update retrieval status to Running when job is assigned (for agoda-retrieval-run jobs)
+    // This handles the case where job was queued with InQueue status
+    if (jobData.jobType === "agoda-retrieval-run" && jobData.jobId) {
+      try {
+        await retrievalService.updateRetrievalStatus(jobData.jobId, "Running");
+        console.log(
+          `Updated retrieval ${jobData.jobId} status to Running (job assigned to worker)`
+        );
+      } catch (error) {
+        console.error(
+          `Failed to update retrieval ${jobData.jobId} status to Running:`,
+          error
+        );
+        // Don't throw - this is a non-critical operation
+      }
     }
 
     // Mark worker as busy
