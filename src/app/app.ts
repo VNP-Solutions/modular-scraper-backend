@@ -1997,6 +1997,649 @@ app.post("/api/expedia/graphql-retrieval-run-job", (async (
 
 /**
  * @swagger
+ * /api/expedia/bulk-retrieval-run-job:
+ *   post:
+ *     tags:
+ *       - Expedia Scraping
+ *     summary: Execute multiple Expedia retrieval scraping jobs asynchronously
+ *     description: |
+ *       Executes scraping jobs for multiple Expedia retrieval records concurrently.
+ *       This endpoint processes an array of retrieval IDs and starts jobs for each
+ *       one asynchronously without waiting for completion.
+ *       This endpoint performs the following operations:
+ *
+ *       1. **Input Validation**: Validates that retrieval_ids array is provided and not empty
+ *       2. **Batch Processing**: Processes each retrieval_id independently and asynchronously
+ *       3. **Retrieval Validation**: Validates that each retrieval exists in the database
+ *       4. **Reservations Check**: Verifies that each retrieval contains reservation IDs
+ *       5. **Credential Retrieval**: Gets Expedia credentials for each retrieval's associated property
+ *       6. **Job Execution**: Starts worker threads for each valid retrieval
+ *       7. **Status Updates**: Updates retrieval statuses to Running for started jobs
+ *       8. **Error Handling**: Collects and reports errors for failed retrievals
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - retrieval_ids
+ *             properties:
+ *               retrieval_ids:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 example: ["6892f4bf9df8bc296bdcdff0", "6892f4bf9df8bc296bdcdff1"]
+ *                 description: Array of MongoDB ObjectIds of retrieval records to execute
+ *     responses:
+ *       200:
+ *         description: Bulk retrieval jobs processing initiated
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 200
+ *                 message:
+ *                   type: string
+ *                   example: "Bulk retrieval jobs processing completed"
+ *                 total:
+ *                   type: integer
+ *                   example: 5
+ *                 started:
+ *                   type: integer
+ *                   example: 4
+ *                 failed:
+ *                   type: integer
+ *                   example: 1
+ *                 results:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       retrieval_id:
+ *                         type: string
+ *                       status:
+ *                         type: string
+ *                         enum: [started, failed]
+ *                       message:
+ *                         type: string
+ *                       error:
+ *                         type: string
+ *       400:
+ *         description: Bad request - Invalid input parameters
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 400
+ *                 message:
+ *                   type: string
+ *                   example: "retrieval_ids array is required and must not be empty"
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 500
+ *                 message:
+ *                   type: string
+ *                   example: "Error processing bulk retrieval jobs"
+ *                 error:
+ *                   type: string
+ */
+app.post("/api/expedia/bulk-retrieval-run-job", (async (
+  req: express.Request,
+  res: express.Response
+) => {
+  try {
+    const { retrieval_ids } = req.body;
+
+    if (
+      !retrieval_ids ||
+      !Array.isArray(retrieval_ids) ||
+      retrieval_ids.length === 0
+    ) {
+      return res.status(400).json({
+        status: 400,
+        message: "retrieval_ids array is required and must not be empty",
+      });
+    }
+
+    console.log(
+      `Processing bulk Expedia retrieval jobs for ${retrieval_ids.length} retrieval IDs...`
+    );
+
+    // Helper function to process a single retrieval_id
+    const processRetrievalJob = async (
+      retrieval_id: string
+    ): Promise<{
+      retrieval_id: string;
+      status: "started" | "failed";
+      message: string;
+      error?: string;
+    }> => {
+      try {
+        console.log(`Processing Expedia retrieval ID: ${retrieval_id}...`);
+
+        // Get retrieval from database
+        const retrieval = await retrievalService.getRetrievalById(retrieval_id);
+
+        if (!retrieval) {
+          return {
+            retrieval_id,
+            status: "failed",
+            message: `Retrieval with ID ${retrieval_id} not found`,
+            error: "Retrieval not found",
+          };
+        }
+
+        // Get reservations array from retrieval
+        const reservations = retrieval.reservations || [];
+
+        if (reservations.length === 0) {
+          return {
+            retrieval_id,
+            status: "failed",
+            message: `No reservations found in retrieval ${retrieval_id}`,
+            error: "No reservations found",
+          };
+        }
+
+        console.log(
+          `Found ${reservations.length} reservations in retrieval ${retrieval_id}`
+        );
+
+        // Get property credentials for the retrieval
+        const retrievalData = await retrievalService.getExpediaIdFromRetrieval(
+          retrieval_id
+        );
+
+        if (!retrievalData || !retrievalData.expediaId) {
+          return {
+            retrieval_id,
+            status: "failed",
+            message: `Could not retrieve Expedia credentials for retrieval ${retrieval_id}`,
+            error: "Missing Expedia credentials",
+          };
+        }
+
+        console.log(
+          `✅ Found Expedia credentials for retrieval: ${retrieval_id}, expedia_id: ${retrievalData.expediaId}`
+        );
+
+        // Check if worker threads are available (non-blocking check)
+        if (
+          !otpAwareWorkerPool.hasAvailableWorkers() &&
+          otpAwareWorkerPool.isQueueFull()
+        ) {
+          return {
+            retrieval_id,
+            status: "failed",
+            message: `All server busy, cannot start job for retrieval ${retrieval_id}`,
+            error: "Worker pool full",
+          };
+        }
+
+        const plainReservations = reservations.map(String);
+        const formattedReservations = [
+          {
+            id: String(retrievalData.expediaId),
+            idList: plainReservations,
+          },
+        ];
+
+        const jobId = String(retrieval_id);
+
+        const workerJobData: WorkerJobData = {
+          jobType: "retrieval-reservation-run",
+          jobId,
+          retrievalId: String(retrieval_id),
+          reservations: formattedReservations,
+          expediaId: String(retrievalData.expediaId),
+          user_email: String(retrievalData.user_email || ""),
+          user_password: String(retrievalData.user_password || ""),
+        };
+
+        // Update retrieval status to Running
+        await retrievalService.updateRetrievalStatus(retrieval_id, "Running");
+
+        // Execute job in worker thread (fire and forget)
+        console.log(
+          `Submitting Expedia retrieval job ${jobId} to worker pool...`
+        );
+
+        // Execute job asynchronously without waiting for completion
+        otpAwareWorkerPool
+          .executeJob(workerJobData)
+          .then((result) => {
+            if (result.success) {
+              console.log(
+                `Expedia retrieval job ${jobId} completed successfully`
+              );
+              retrievalService.updateRetrievalStatus(retrieval_id, "Completed");
+            } else {
+              const finalStatus = result.data?.finalStatus;
+              if (finalStatus !== "Stopped") {
+                console.log(
+                  `Expedia retrieval job ${jobId} failed:`,
+                  result.error
+                );
+                retrievalService.updateRetrievalStatus(retrieval_id, "Failed");
+              }
+            }
+          })
+          .catch((workerError) => {
+            console.error(
+              `Worker error for Expedia retrieval job ${jobId}:`,
+              workerError
+            );
+            const errorMessage =
+              workerError instanceof Error
+                ? workerError.message
+                : String(workerError);
+
+            if (
+              !errorMessage.includes("was stopped by user request") &&
+              !errorMessage.includes("was stopped")
+            ) {
+              retrievalService.updateRetrievalStatus(retrieval_id, "Failed");
+            }
+          });
+
+        return {
+          retrieval_id,
+          status: "started",
+          message: `Expedia retrieval job ${retrieval_id} started successfully`,
+        };
+      } catch (error: any) {
+        console.error(
+          `Error processing Expedia retrieval ${retrieval_id}:`,
+          error
+        );
+        return {
+          retrieval_id,
+          status: "failed",
+          message: `Error processing Expedia retrieval ${retrieval_id}`,
+          error: error.message || String(error),
+        };
+      }
+    };
+
+    // Process all retrieval IDs asynchronously
+    const results = await Promise.allSettled(
+      retrieval_ids.map((id: string) => processRetrievalJob(id))
+    );
+
+    // Process results
+    const processedResults = results.map((result, index) => {
+      if (result.status === "fulfilled") {
+        return result.value;
+      } else {
+        return {
+          retrieval_id: retrieval_ids[index],
+          status: "failed" as const,
+          message: `Error processing Expedia retrieval ${retrieval_ids[index]}`,
+          error: result.reason?.message || String(result.reason),
+        };
+      }
+    });
+
+    const started = processedResults.filter(
+      (r) => r.status === "started"
+    ).length;
+    const failed = processedResults.filter((r) => r.status === "failed").length;
+
+    console.log(
+      `Bulk Expedia retrieval jobs processing completed: ${started} started, ${failed} failed out of ${retrieval_ids.length} total`
+    );
+
+    return res.status(200).json({
+      status: 200,
+      message: "Bulk Expedia retrieval jobs processing completed",
+      total: retrieval_ids.length,
+      started,
+      failed,
+      results: processedResults,
+    });
+  } catch (err: any) {
+    console.error("Error in /api/expedia/bulk-retrieval-run-job:", err);
+
+    res.status(500).json({
+      status: 500,
+      message: "Error processing bulk Expedia retrieval jobs",
+      error: err.message,
+    });
+  }
+}) as any);
+
+/**
+ * @swagger
+ * /api/expedia/bulk-graphql-retrieval-run-job:
+ *   post:
+ *     tags:
+ *       - Expedia Scraping
+ *     summary: Execute multiple Expedia GraphQL retrieval scraping jobs asynchronously
+ *     description: |
+ *       Executes GraphQL-based scraping jobs for multiple Expedia retrieval records concurrently.
+ *       This endpoint processes an array of retrieval IDs and starts GraphQL jobs for each
+ *       one asynchronously without waiting for completion.
+ *       This endpoint performs the following operations:
+ *
+ *       1. **Input Validation**: Validates that retrieval_ids array is provided and not empty
+ *       2. **Batch Processing**: Processes each retrieval_id independently and asynchronously
+ *       3. **Retrieval Validation**: Validates that each retrieval exists in the database
+ *       4. **Reservations Check**: Verifies that each retrieval contains reservation IDs
+ *       5. **Credential Retrieval**: Gets Expedia credentials for each retrieval's associated property
+ *       6. **Job Execution**: Starts GraphQL worker threads for each valid retrieval
+ *       7. **Status Updates**: Updates retrieval statuses to Running for started jobs
+ *       8. **Error Handling**: Collects and reports errors for failed retrievals
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - retrieval_ids
+ *             properties:
+ *               retrieval_ids:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 example: ["6892f4bf9df8bc296bdcdff0", "6892f4bf9df8bc296bdcdff1"]
+ *                 description: Array of MongoDB ObjectIds of retrieval records to execute
+ *     responses:
+ *       200:
+ *         description: Bulk GraphQL retrieval jobs processing initiated
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 200
+ *                 message:
+ *                   type: string
+ *                   example: "Bulk GraphQL retrieval jobs processing completed"
+ *                 total:
+ *                   type: integer
+ *                   example: 5
+ *                 started:
+ *                   type: integer
+ *                   example: 4
+ *                 failed:
+ *                   type: integer
+ *                   example: 1
+ *                 results:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       retrieval_id:
+ *                         type: string
+ *                       status:
+ *                         type: string
+ *                         enum: [started, failed]
+ *                       message:
+ *                         type: string
+ *                       error:
+ *                         type: string
+ *       400:
+ *         description: Bad request - Invalid input parameters
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 400
+ *                 message:
+ *                   type: string
+ *                   example: "retrieval_ids array is required and must not be empty"
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 500
+ *                 message:
+ *                   type: string
+ *                   example: "Error processing bulk GraphQL retrieval jobs"
+ *                 error:
+ *                   type: string
+ */
+app.post("/api/expedia/bulk-graphql-retrieval-run-job", (async (
+  req: express.Request,
+  res: express.Response
+) => {
+  try {
+    const { retrieval_ids } = req.body;
+
+    if (
+      !retrieval_ids ||
+      !Array.isArray(retrieval_ids) ||
+      retrieval_ids.length === 0
+    ) {
+      return res.status(400).json({
+        status: 400,
+        message: "retrieval_ids array is required and must not be empty",
+      });
+    }
+
+    console.log(
+      `Processing bulk Expedia GraphQL retrieval jobs for ${retrieval_ids.length} retrieval IDs...`
+    );
+
+    // Helper function to process a single retrieval_id
+    const processRetrievalJob = async (
+      retrieval_id: string
+    ): Promise<{
+      retrieval_id: string;
+      status: "started" | "failed";
+      message: string;
+      error?: string;
+    }> => {
+      try {
+        console.log(
+          `Processing Expedia GraphQL retrieval ID: ${retrieval_id}...`
+        );
+
+        // Get retrieval from database
+        const retrieval = await retrievalService.getRetrievalById(retrieval_id);
+
+        if (!retrieval) {
+          return {
+            retrieval_id,
+            status: "failed",
+            message: `Retrieval with ID ${retrieval_id} not found`,
+            error: "Retrieval not found",
+          };
+        }
+
+        // Get reservations array from retrieval
+        const reservations = retrieval.reservations || [];
+
+        if (reservations.length === 0) {
+          return {
+            retrieval_id,
+            status: "failed",
+            message: `No reservations found in retrieval ${retrieval_id}`,
+            error: "No reservations found",
+          };
+        }
+
+        console.log(
+          `Found ${reservations.length} reservations in retrieval ${retrieval_id}`
+        );
+
+        // Get property credentials for the retrieval
+        const retrievalData = await retrievalService.getExpediaIdFromRetrieval(
+          retrieval_id
+        );
+
+        if (!retrievalData || !retrievalData.expediaId) {
+          return {
+            retrieval_id,
+            status: "failed",
+            message: `Could not retrieve Expedia credentials for retrieval ${retrieval_id}`,
+            error: "Missing Expedia credentials",
+          };
+        }
+
+        console.log(
+          `✅ Found Expedia credentials for GraphQL retrieval: ${retrieval_id}, expedia_id: ${retrievalData.expediaId}`
+        );
+
+        // Check if worker threads are available (non-blocking check)
+        if (
+          !otpAwareWorkerPool.hasAvailableWorkers() &&
+          otpAwareWorkerPool.isQueueFull()
+        ) {
+          return {
+            retrieval_id,
+            status: "failed",
+            message: `All server busy, cannot start GraphQL job for retrieval ${retrieval_id}`,
+            error: "Worker pool full",
+          };
+        }
+
+        const plainReservations = reservations.map(String);
+        const formattedReservations = [
+          {
+            id: String(retrievalData.expediaId),
+            idList: plainReservations,
+          },
+        ];
+
+        const jobId = String(retrieval_id);
+
+        const workerJobData: WorkerJobData = {
+          jobType: "graphql-retrieval-run",
+          jobId,
+          retrievalId: String(retrieval_id),
+          reservations: formattedReservations,
+          expediaId: String(retrievalData.expediaId),
+          user_email: String(retrievalData.user_email || ""),
+          user_password: String(retrievalData.user_password || ""),
+        };
+
+        // Update retrieval status to Running
+        await retrievalService.updateRetrievalStatus(retrieval_id, "Running");
+
+        // Execute job in worker thread (fire and forget)
+        console.log(
+          `Submitting Expedia GraphQL retrieval job ${jobId} to worker pool...`
+        );
+
+        // Execute job asynchronously without waiting for completion
+        otpAwareWorkerPool
+          .executeJob(workerJobData)
+          .then((result) => {
+            if (result.success) {
+              console.log(
+                `Expedia GraphQL retrieval job ${jobId} completed successfully`
+              );
+              retrievalService.updateRetrievalStatus(retrieval_id, "Completed");
+            } else {
+              console.log(
+                `Expedia GraphQL retrieval job ${jobId} failed:`,
+                result.error
+              );
+              retrievalService.updateRetrievalStatus(retrieval_id, "Failed");
+            }
+          })
+          .catch((workerError) => {
+            console.error(
+              `Worker error for Expedia GraphQL retrieval job ${jobId}:`,
+              workerError
+            );
+            retrievalService.updateRetrievalStatus(retrieval_id, "Failed");
+          });
+
+        return {
+          retrieval_id,
+          status: "started",
+          message: `Expedia GraphQL retrieval job ${retrieval_id} started successfully`,
+        };
+      } catch (error: any) {
+        console.error(
+          `Error processing Expedia GraphQL retrieval ${retrieval_id}:`,
+          error
+        );
+        return {
+          retrieval_id,
+          status: "failed",
+          message: `Error processing Expedia GraphQL retrieval ${retrieval_id}`,
+          error: error.message || String(error),
+        };
+      }
+    };
+
+    // Process all retrieval IDs asynchronously
+    const results = await Promise.allSettled(
+      retrieval_ids.map((id: string) => processRetrievalJob(id))
+    );
+
+    // Process results
+    const processedResults = results.map((result, index) => {
+      if (result.status === "fulfilled") {
+        return result.value;
+      } else {
+        return {
+          retrieval_id: retrieval_ids[index],
+          status: "failed" as const,
+          message: `Error processing Expedia GraphQL retrieval ${retrieval_ids[index]}`,
+          error: result.reason?.message || String(result.reason),
+        };
+      }
+    });
+
+    const started = processedResults.filter(
+      (r) => r.status === "started"
+    ).length;
+    const failed = processedResults.filter((r) => r.status === "failed").length;
+
+    console.log(
+      `Bulk Expedia GraphQL retrieval jobs processing completed: ${started} started, ${failed} failed out of ${retrieval_ids.length} total`
+    );
+
+    return res.status(200).json({
+      status: 200,
+      message: "Bulk Expedia GraphQL retrieval jobs processing completed",
+      total: retrieval_ids.length,
+      started,
+      failed,
+      results: processedResults,
+    });
+  } catch (err: any) {
+    console.error("Error in /api/expedia/bulk-graphql-retrieval-run-job:", err);
+
+    res.status(500).json({
+      status: 500,
+      message: "Error processing bulk Expedia GraphQL retrieval jobs",
+      error: err.message,
+    });
+  }
+}) as any);
+
+/**
+ * @swagger
  * /api/jobs/{jobId}/progress:
  *   get:
  *     tags:
