@@ -581,7 +581,7 @@ class ScrapingWorker {
     let finalUserPassword = user_password;
 
     if (!finalBookingId || !finalUserEmail || !finalUserPassword) {
-      console.log(`Getting job data for booking job ${jobId}...`);
+      await dualLogInfo(`Getting job data for booking job ${jobId}...`);
       const jobData = await jobService.getBookingIdFromJob(jobId);
       const bookingCredentials =
         await propertyCredentialsService.getBookingCredentialsFromJob(jobId);
@@ -606,12 +606,12 @@ class ScrapingWorker {
       finalUserPassword = bookingCredentials.bookingPassword;
     }
 
-    console.log(
+    await dualLogInfo(
       `Worker: Using booking_id: ${finalBookingId} for booking scraping`
     );
 
     // 3. Update job status to Running
-    console.log(`Worker: Starting booking job ${jobId}...`);
+    await dualLogInfo(`Worker: Starting booking job ${jobId}...`);
     await jobService.startJob(jobId);
 
     // 4. Initialize job logging
@@ -667,7 +667,7 @@ class ScrapingWorker {
           }
         : null;
 
-      console.log(`Worker: Booking job ${jobId} completed successfully`);
+      await dualLogInfo(`Worker: Booking job ${jobId} completed successfully`);
 
       await dualLogInfo("Booking scraping completed successfully", {
         jobId,
