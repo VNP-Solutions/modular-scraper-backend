@@ -398,7 +398,7 @@ async function handleBookingOtpVerification(
     }
 
     // Wait for SMS to arrive and get verification codes from email
-    await dualLogInfo("⏳ Waiting 1 minute for verification email...");
+    await dualLogInfo("Waiting 1 minute for verification email...");
     await delay(60000); // Wait 1 minute for email to arrive
 
     // Get last 5 verification codes
@@ -426,7 +426,7 @@ async function handleBookingOtpVerification(
 
       throw error;
     }
-    await dualLogInfo(`📧 Got ${codes.length} verification codes`);
+    await dualLogInfo(`Got ${codes.length} verification codes`);
 
     // Try up to 3 codes (1st, 2nd, 3rd)
     const maxAttempts = Math.min(3, codes.length);
@@ -436,7 +436,7 @@ async function handleBookingOtpVerification(
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       const code = codes[attempt];
       await dualLogInfo(
-        `🔑 Attempt ${attempt + 1}/${maxAttempts}: Trying OTP ${code}`
+        `Attempt ${attempt + 1}/${maxAttempts}: Trying OTP ${code}`
       );
 
       // Enter verification code
@@ -482,7 +482,7 @@ async function handleBookingOtpVerification(
       }
 
       if (hasError) {
-        await dualLogInfo(`❌ Attempt ${attempt + 1} failed: Invalid OTP code`);
+        await dualLogInfo(`Attempt ${attempt + 1} failed: Invalid OTP code`);
 
         // If this was the 3rd attempt, fail the job
         if (attempt === 2) {
@@ -514,7 +514,7 @@ async function handleBookingOtpVerification(
         }
 
         // Clear input field after error detected, before trying next code
-        await dualLogInfo("🧹 Clearing input field for next attempt...");
+        await dualLogInfo("Clearing input field for next attempt...");
         await page.click(otpInputSelector);
         await delay(200);
 
@@ -530,7 +530,7 @@ async function handleBookingOtpVerification(
         continue;
       } else {
         // Success! No error message found
-        await dualLogInfo(`✅ Attempt ${attempt + 1} successful!`);
+        await dualLogInfo(`Attempt ${attempt + 1} successful!`);
         otpSuccess = true;
         break;
       }
@@ -555,7 +555,7 @@ async function handleBookingOtpVerification(
       await waitForNavigation(page, loadingTimeout);
     }
 
-    await dualLogInfo("🎉 Booking.com OTP verification completed!");
+    await dualLogInfo("Booking.com OTP verification completed!");
   } catch (error) {
     await dualLogError("Error in handleBookingOtpVerification:", error);
 

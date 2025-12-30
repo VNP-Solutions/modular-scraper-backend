@@ -3,14 +3,14 @@ import { JobLogger } from "./logger.js";
 
 // ANSI Color codes for console output
 const COLORS = {
-  reset: '\x1b[0m',
-  cyan: '\x1b[36m',      // Info
-  yellow: '\x1b[33m',     // Warning
-  red: '\x1b[31m',        // Error
-  green: '\x1b[32m',      // Success
-  blue: '\x1b[34m',       // Debug
-  magenta: '\x1b[35m',    // Job ID
-  gray: '\x1b[90m',       // Thread ID
+  reset: "\x1b[0m",
+  cyan: "\x1b[36m", // Info
+  yellow: "\x1b[33m", // Warning
+  red: "\x1b[31m", // Error
+  green: "\x1b[32m", // Success
+  blue: "\x1b[34m", // Debug
+  magenta: "\x1b[35m", // Job ID
+  gray: "\x1b[90m", // Thread ID
 };
 
 // Store the current job logger globally for the running job
@@ -158,17 +158,21 @@ export function isJobLoggingActive(): boolean {
 /**
  * Format log prefix with colors
  */
-function formatLogPrefix(level: 'INFO' | 'WARN' | 'ERROR'): string {
+function formatLogPrefix(level: "INFO" | "WARN" | "ERROR"): string {
   const timestamp = new Date().toISOString();
-  const threadPart = currentWorkerId ? `${COLORS.gray}[${currentWorkerId}]${COLORS.reset}` : "";
-  const jobPart = currentJobId ? `${COLORS.magenta}[Job:${currentJobId.slice(-8)}]${COLORS.reset}` : "";
-  
+  const threadPart = currentWorkerId
+    ? `${COLORS.gray}[${currentWorkerId}]${COLORS.reset}`
+    : "";
+  const jobPart = currentJobId
+    ? `${COLORS.magenta}[Job:${currentJobId.slice(-8)}]${COLORS.reset}`
+    : "";
+
   let levelColor = COLORS.cyan;
-  if (level === 'WARN') levelColor = COLORS.yellow;
-  if (level === 'ERROR') levelColor = COLORS.red;
-  
+  if (level === "WARN") levelColor = COLORS.yellow;
+  if (level === "ERROR") levelColor = COLORS.red;
+
   const levelPart = `${levelColor}[${level}]${COLORS.reset}`;
-  
+
   return `${threadPart}${jobPart}${levelPart}`;
 }
 
@@ -179,7 +183,7 @@ export async function dualLogInfo(
   message: string,
   metadata?: any
 ): Promise<void> {
-  const prefix = formatLogPrefix('INFO');
+  const prefix = formatLogPrefix("INFO");
   console.log(
     `${prefix} ${COLORS.cyan}${message}${COLORS.reset}`,
     metadata ? JSON.stringify(metadata) : ""
@@ -205,7 +209,7 @@ export async function dualLogError(
       }
     : metadata;
 
-  const prefix = formatLogPrefix('ERROR');
+  const prefix = formatLogPrefix("ERROR");
   console.error(
     `${prefix} ${COLORS.red}${message}${COLORS.reset}`,
     errorDetails ? JSON.stringify(errorDetails) : ""
@@ -222,7 +226,7 @@ export async function dualLogWarn(
   message: string,
   metadata?: any
 ): Promise<void> {
-  const prefix = formatLogPrefix('WARN');
+  const prefix = formatLogPrefix("WARN");
   console.warn(
     `${prefix} ${COLORS.yellow}${message}${COLORS.reset}`,
     metadata ? JSON.stringify(metadata) : ""
