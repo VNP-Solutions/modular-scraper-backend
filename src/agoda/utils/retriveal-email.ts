@@ -161,13 +161,17 @@ async function extractYcsRetrievalOtpCode(
 
   // Priority patterns for YCS retrieval OTP emails
   const otpPatterns = [
-    // HIGHEST PRIORITY: "Your one-time PIN code is:" followed by 6 digits
+    // ULTRA HIGH PRIORITY: "Your one-time PIN code is:" followed by 6 digits (exact format from email)
     /Your one-time PIN code is:\s*(\d{6})/gi,
     /one-time PIN code is:\s*(\d{6})/gi,
 
-    // HIGH PRIORITY: "Your PIN code for YCS login" followed by 6 digits
+    // HIGHEST PRIORITY: "Your PIN code for YCS login" followed by 6 digits
     /Your PIN code for YCS login[\s\S]*?(\d{6})/gi,
     /PIN code for YCS login[\s\S]*?(\d{6})/gi,
+
+    // HIGH PRIORITY: "Your PIN code for YCS login" with flexible spacing
+    /Your PIN code for YCS login[\s\S]*?(\d{3}\s*\d{3})/gi,
+    /PIN code for YCS login[\s\S]*?(\d{3}\s*\d{3})/gi,
 
     // MEDIUM PRIORITY: 6 digits after "PIN code" or "OTP"
     /PIN code[\s\S]{0,100}?(\d{6})/gi,
@@ -200,7 +204,18 @@ async function extractYcsRetrievalOtpCode(
 
         if (otpCode) {
           // Clean up the code (remove spaces if any)
-          const cleanOtp = otpCode.replace(/\s+/g, "");
+          let cleanOtp = otpCode.replace(/\s+/g, "");
+          
+          // Handle "3 digits + 3 digits" format (e.g., "068 913" -> "068913")
+          if (cleanOtp.length === 6 && /^\d{6}$/.test(cleanOtp)) {
+            // Already 6 digits, use as is
+          } else if (cleanOtp.length > 6) {
+            // Might have extra characters, try to extract just 6 digits
+            const digitMatch = cleanOtp.match(/(\d{6})/);
+            if (digitMatch) {
+              cleanOtp = digitMatch[1];
+            }
+          }
 
           // Validate it's 6 digits AND not a known template value
           if (/^\d{6}$/.test(cleanOtp)) {
@@ -251,11 +266,13 @@ async function extractYcsRetrievalOtpCode(
  * Get YCS Retrieval OTP code from recent emails
  * @param userEmail - The user's email address (agodausername) to filter emails
  * @param maxResults - Maximum number of emails to check (default: 5)
+ * @param referenceCode - Optional reference code (extracted from page for logging, but NOT used for email matching as it's not in the email)
  * @returns Promise<YcsRetrievalOtpResult> - OTP code and email information
  */
 export async function getYcsRetrievalOtpCode(
   userEmail: string,
-  maxResults: number = 5
+  maxResults: number = 5,
+  referenceCode?: string
 ): Promise<YcsRetrievalOtpResult> {
   try {
     // Load credentials before making API calls
@@ -295,6 +312,7 @@ export async function getYcsRetrievalOtpCode(
       `Found ${res.data.messages.length} potential YCS retrieval OTP emails (processing newest first)`
     );
 
+    // Note: Reference code is NOT included in payout OTP emails, so we only filter by recipient email
     // Check each email for OTP code (emails are already sorted newest first)
     for (let i = 0; i < res.data.messages.length; i++) {
       const msg = res.data.messages[i];
@@ -344,6 +362,14 @@ export async function getYcsRetrievalOtpCode(
 
         // Get full email body
         const fullBody = getEmailBody(email.data.payload);
+
+        // Log a preview of the email body for debugging
+        const bodyPreview = fullBody.substring(0, 200).replace(/\s+/g, " ");
+        await dualLogInfo(`📄 Email body preview: ${bodyPreview}...`);
+
+        // Note: Reference code is NOT included in payout OTP emails
+        // We only filter by recipient email address (already done in Gmail search query)
+        // So we proceed directly to extract OTP code
 
         // Extract OTP code
         const otpCode = await extractYcsRetrievalOtpCode(fullBody);

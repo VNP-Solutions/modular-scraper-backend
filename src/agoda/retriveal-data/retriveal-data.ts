@@ -654,6 +654,186 @@ async function handleOtpVerification(
       return true; // Not an error - OTP might not be needed
     }
 
+    // Extract reference code and email address from the page
+    await dualLogInfo("Extracting reference code and email address from payout OTP page...", {
+      jobId,
+      bookingId,
+    });
+    let referenceCode: string | null = null;
+    let recipientEmail: string | null = userEmail || null;
+
+    try {
+      // Extract reference code from [data-cy="otp-refcode"]
+      try {
+        await targetPage.waitForSelector('[data-cy="otp-refcode"]', {
+          timeout: selectorTimeout,
+        });
+
+        referenceCode = await targetPage.evaluate(() => {
+          const refElement = document.querySelector('[data-cy="otp-refcode"]');
+          if (refElement) {
+            const text = refElement.textContent?.trim() || "";
+            // Extract the code part (e.g., "Refcode: NVQLhK" -> "NVQLhK")
+            const match = text.match(/Refcode:\s*([A-Za-z0-9]+)/i);
+            return match ? match[1] : text.replace(/^Refcode:\s*/i, "").trim();
+          }
+          return null;
+        });
+
+        if (referenceCode) {
+          await dualLogInfo(`✅ Reference code extracted: ${referenceCode}`, {
+            jobId,
+            bookingId,
+          });
+        } else {
+          await dualLogInfo("⚠️ Could not extract reference code from page", {
+            jobId,
+            bookingId,
+          });
+        }
+      } catch (refError) {
+        await dualLogError(
+          "Error extracting reference code (will search without it):",
+          refError,
+          { jobId, bookingId }
+        );
+      }
+
+      // Extract email address from "OTP has been sent to {email}"
+      try {
+        const emailText = await targetPage.evaluate(() => {
+          // Look for the specific span element that contains "OTP has been sent to"
+          // The email is in a span with class "sc-iGgWBj ecoUic" that contains just this text
+          // According to the HTML: <span class="sc-iGgWBj ecoUic">OTP has been sent to chartwell@epchotels.com</span>
+          const spans = Array.from(document.querySelectorAll("span.sc-iGgWBj.ecoUic"));
+          for (const span of spans) {
+            const text = span.textContent?.trim() || "";
+            // Check if this span contains "OTP has been sent to" and is short (just the email line)
+            if (text.includes("OTP has been sent to") && text.length < 100) {
+              // Verify it doesn't contain other text like "OTP will expire" or "Refcode"
+              if (!text.includes("OTP will expire") && !text.includes("Refcode") && !text.includes("Submit")) {
+                return text;
+              }
+            }
+          }
+          
+          // Fallback: look for any element containing "OTP has been sent to" but exclude parent elements
+          const allElements = Array.from(document.querySelectorAll("*"));
+          for (const element of allElements) {
+            const text = element.textContent?.trim() || "";
+            if (text.includes("OTP has been sent to")) {
+              // Prefer elements that contain only the email sentence (shorter text, no other OTP-related text)
+              if (
+                text.length < 100 &&
+                !text.includes("OTP will expire") &&
+                !text.includes("Refcode") &&
+                !text.includes("Submit OTP") &&
+                !text.includes("Resend")
+              ) {
+                return text;
+              }
+            }
+          }
+          return null;
+        });
+
+        if (emailText) {
+          // Log the full text for debugging
+          await dualLogInfo(
+            `📄 Full email text extracted: ${emailText}`,
+            { jobId, bookingId }
+          );
+          
+          // More strict regex to match email address and stop at word boundary
+          // This prevents matching "OTP" or other text after the email
+          // Pattern: "OTP has been sent to " followed by email
+          // The email must end with TLD (2+ letters) followed by whitespace, end of string, or non-alphanumeric
+          // This ensures we don't match "comOTP" - we stop at "com"
+          const emailMatch = emailText.match(/OTP has been sent to\s+([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})(?=\s|$|[^a-zA-Z0-9])/i);
+          if (emailMatch && emailMatch[1]) {
+            recipientEmail = emailMatch[1].trim();
+            
+            // Additional validation: check if email ends with valid TLD (not followed by letters)
+            // If the extracted email has letters after the TLD (like "comOTP"), trim them
+            if (recipientEmail) {
+              const emailParts = recipientEmail.split("@");
+            if (emailParts.length === 2) {
+              const domain = emailParts[1];
+              // Find the last dot and extract what should be the TLD
+              const lastDotIndex = domain.lastIndexOf(".");
+              if (lastDotIndex !== -1) {
+                const afterDot = domain.substring(lastDotIndex + 1);
+                // TLD should be 2-4 letters. If there are more letters after a valid TLD, trim them
+                // Match TLD pattern: 2-4 letters, then check if there are more letters after
+                const tldMatch = afterDot.match(/^([a-zA-Z]{2,4})([a-zA-Z]+)?$/);
+                if (tldMatch && tldMatch[2]) {
+                  // There are extra letters after the TLD (like "comOTP" -> TLD is "com", extra is "OTP")
+                  const validTld = tldMatch[1];
+                  const correctedDomain = domain.substring(0, lastDotIndex + 1) + validTld;
+                  recipientEmail = emailParts[0] + "@" + correctedDomain;
+                  await dualLogInfo(
+                    `🔧 Trimmed invalid text after TLD (${afterDot} -> ${validTld}), corrected email: ${recipientEmail}`,
+                    { jobId, bookingId }
+                  );
+                }
+              }
+            }
+            }
+            
+            // Validate it's a proper email (doesn't contain "OTP" or other invalid characters)
+            if (recipientEmail && !recipientEmail.toLowerCase().includes("otp") && recipientEmail.includes("@")) {
+              await dualLogInfo(`✅ Recipient email extracted: ${recipientEmail}`, {
+                jobId,
+                bookingId,
+              });
+            } else {
+              await dualLogError(
+                `⚠️ Extracted email appears invalid (contains 'OTP' or invalid format): ${recipientEmail}`,
+                undefined,
+                { jobId, bookingId }
+              );
+              // Fall back to userEmail
+              recipientEmail = userEmail || null;
+              await dualLogInfo(
+                `Using provided userEmail instead: ${recipientEmail}`,
+                { jobId, bookingId }
+              );
+            }
+          } else {
+            await dualLogInfo(
+              `⚠️ Could not extract email from text: ${emailText.substring(0, 150)}`,
+              { jobId, bookingId }
+            );
+            // Fall back to userEmail
+            recipientEmail = userEmail || null;
+            await dualLogInfo(
+              `Using provided userEmail instead: ${recipientEmail}`,
+              { jobId, bookingId }
+            );
+          }
+        } else {
+          await dualLogInfo(
+            "Could not find 'OTP has been sent to' text on page, using provided userEmail",
+            { jobId, bookingId }
+          );
+          recipientEmail = userEmail || null;
+        }
+      } catch (emailError) {
+        await dualLogError(
+          "Error extracting recipient email (will use provided userEmail):",
+          emailError,
+          { jobId, bookingId }
+        );
+        recipientEmail = userEmail || null;
+      }
+    } catch (error) {
+      await dualLogError(
+        "Error extracting page information (will search without filters):",
+        error,
+        { jobId, bookingId }
+      );
+    }
+
     // Step 3: Wait 60 seconds for OTP email to arrive
     await dualLogInfo("Waiting 60 seconds for OTP email delivery...", {
       jobId,
@@ -662,7 +842,7 @@ async function handleOtpVerification(
     await delay(60000);
 
     // Step 4: Fetch OTP code from email
-    if (!userEmail) {
+    if (!recipientEmail) {
       await dualLogError(
         "User email (agodausername) is required for OTP verification",
         undefined,
@@ -672,7 +852,7 @@ async function handleOtpVerification(
     }
 
     await dualLogInfo(
-      `Now fetching YCS retrieval OTP code from email for ${userEmail}...`,
+      `Now fetching YCS retrieval OTP code from email for ${recipientEmail}...`,
       { jobId, bookingId }
     );
 
@@ -686,7 +866,13 @@ async function handleOtpVerification(
       );
 
       // Fetch the OTP code from email using YCS retrieval email helper
-      otpResult = await getYcsRetrievalOtpCode(userEmail, 5);
+      // Note: Reference code is passed for logging but NOT used for email matching
+      // (payout OTP emails don't contain the reference code)
+      otpResult = await getYcsRetrievalOtpCode(
+        recipientEmail,
+        10,
+        referenceCode || undefined
+      );
 
       if (otpResult.otpCode) {
         await dualLogInfo(
