@@ -68,13 +68,8 @@ export class OtpAwareWorkerPool extends EventEmitter {
       this.otpManager.on("otpReserved", this.onOtpReserved.bind(this));
 
       // Set up worker ready listener to process queue when worker becomes available
-      // Add a small delay to allow OTP release events to propagate first
       this.on("workerReady", () => {
-        // Delay queue processing slightly to allow OTP release events to complete
-        // This ensures OTP status is refreshed before processing the queue
-        setTimeout(() => {
-          this.processQueue();
-        }, 500);
+        this.processQueue();
       });
 
       // Initialize workers
@@ -275,11 +270,8 @@ export class OtpAwareWorkerPool extends EventEmitter {
       data: message.data,
     });
 
-    // Don't process queue immediately - let OTP release event handle it
-    // This allows the OTP release event to propagate first, ensuring proper queue processing
-    // The queue will be processed when OTP is released (via onOtpReleased event)
-    // If OTP was already released, the workerReady event will trigger queue processing
-    this.emit("workerReady", workerId);
+    // Process next job in queue
+    this.processQueue();
   }
 
   private async handleJobError(
@@ -320,9 +312,8 @@ export class OtpAwareWorkerPool extends EventEmitter {
       error: message.data,
     });
 
-    // Emit workerReady event to trigger queue processing
-    // The queue will be processed when OTP is released (if needed) or via workerReady event
-    this.emit("workerReady", workerId);
+    // Process next job in queue
+    this.processQueue();
   }
 
   private async handleWorkerError(
@@ -629,118 +620,40 @@ export class OtpAwareWorkerPool extends EventEmitter {
 
   private processQueue(): void {
     if (this.isProcessingQueue || this.jobQueue.length === 0) {
-      if (this.jobQueue.length > 0) {
-        console.log(
-          `Queue processing skipped: isProcessing=${this.isProcessingQueue}, queueSize=${this.jobQueue.length}`
-        );
-      }
       return;
     }
 
     this.isProcessingQueue = true;
-    console.log(
-      `Processing queue: ${this.jobQueue.length} job(s) waiting. Checking requirements...`
-    );
 
-    // Refresh OTP status before checking to ensure we have the latest status
-    // This is important after OTP release events
-    this.otpManager
-      .refreshStatus()
-      .then(() => {
-        // Find the next job that can be processed
-        for (let i = 0; i < this.jobQueue.length; i++) {
-          const queuedJob = this.jobQueue[i];
+    // Find the next job that can be processed
+    for (let i = 0; i < this.jobQueue.length; i++) {
+      const queuedJob = this.jobQueue[i];
 
-          // Check if requirements are met
-          const availableWorker = this.getAvailableWorker();
-          const otpAvailable =
-            !queuedJob.requiresOtp || this.otpManager.isOtpAvailable();
+      // Check if requirements are met
+      const availableWorker = this.getAvailableWorker();
+      const otpAvailable =
+        !queuedJob.requiresOtp || this.otpManager.isOtpAvailable();
 
-          console.log(
-            `Queue check for job ${
-              queuedJob.jobData.jobId
-            }: workerAvailable=${!!availableWorker}, otpAvailable=${otpAvailable}, requiresOtp=${
-              queuedJob.requiresOtp
-            }`
-          );
+      if (availableWorker && otpAvailable) {
+        // Remove job from queue
+        this.jobQueue.splice(i, 1);
 
-          if (availableWorker && otpAvailable) {
-            // Remove job from queue
-            this.jobQueue.splice(i, 1);
+        console.log(
+          `Processing queued job ${queuedJob.jobData.jobId}. Queue size: ${this.jobQueue.length}`
+        );
 
-            console.log(
-              `✅ Processing queued job ${queuedJob.jobData.jobId}. Queue size: ${this.jobQueue.length}`
-            );
+        // Try to assign the job
+        this.tryAssignJob(queuedJob);
+        break; // Process one job at a time
+      }
+    }
 
-            // Try to assign the job
-            this.tryAssignJob(queuedJob);
-            this.isProcessingQueue = false;
-            return; // Process one job at a time
-          } else {
-            console.log(
-              `⏸️ Job ${
-                queuedJob.jobData.jobId
-              } still waiting: workerAvailable=${!!availableWorker}, otpAvailable=${otpAvailable}`
-            );
-          }
-        }
-
-        this.isProcessingQueue = false;
-      })
-      .catch((error) => {
-        console.error("Error refreshing OTP status in processQueue:", error);
-        // Still try to process queue with current status
-        for (let i = 0; i < this.jobQueue.length; i++) {
-          const queuedJob = this.jobQueue[i];
-
-          const availableWorker = this.getAvailableWorker();
-          const otpAvailable =
-            !queuedJob.requiresOtp || this.otpManager.isOtpAvailable();
-
-          if (availableWorker && otpAvailable) {
-            this.jobQueue.splice(i, 1);
-            console.log(
-              `✅ Processing queued job ${queuedJob.jobData.jobId}. Queue size: ${this.jobQueue.length}`
-            );
-            this.tryAssignJob(queuedJob);
-            break;
-          }
-        }
-        this.isProcessingQueue = false;
-      });
+    this.isProcessingQueue = false;
   }
 
-  private onOtpReleased(jobId?: string | null): void {
-    console.log(
-      `OTP released event received${
-        jobId ? ` for job ${jobId}` : ""
-      }, processing queue...`
-    );
-    // Refresh OTP status from database to ensure we have the latest status
-    // This is important because the event might be emitted before the status is fully updated
-    this.otpManager
-      .refreshStatus()
-      .then(() => {
-        // Add a small delay to ensure OTP status is fully updated in the database
-        setTimeout(() => {
-          const isAvailable = this.otpManager.isOtpAvailable();
-          console.log(
-            `Checking OTP availability (after refresh): ${isAvailable}, queue size: ${this.jobQueue.length}`
-          );
-          this.processQueue();
-        }, 300);
-      })
-      .catch((error) => {
-        console.error("Error refreshing OTP status:", error);
-        // Still try to process queue even if refresh fails
-        setTimeout(() => {
-          const isAvailable = this.otpManager.isOtpAvailable();
-          console.log(
-            `Checking OTP availability (after error): ${isAvailable}, queue size: ${this.jobQueue.length}`
-          );
-          this.processQueue();
-        }, 300);
-      });
+  private onOtpReleased(): void {
+    console.log("OTP released event received, processing queue...");
+    this.processQueue();
   }
 
   private onOtpReserved(jobId: string | null, platform?: OtpPlatform): void {
