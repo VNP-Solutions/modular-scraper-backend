@@ -503,6 +503,88 @@ async function handleOtpFlow(
     timeout: selectorTimeout,
   });
 
+  // Extract reference code and email address from the page
+  await dualLogInfo("Extracting reference code and email address from page...");
+  let referenceCode: string | null = null;
+  let recipientEmail: string | null = null;
+
+  try {
+    // Extract reference code
+    try {
+      await frame.waitForSelector('[data-cy="unified-auth-otp-refcode"]', {
+        timeout: selectorTimeout,
+      });
+
+      referenceCode = await frame.evaluate(() => {
+        const refElement = document.querySelector(
+          '[data-cy="unified-auth-otp-refcode"]'
+        );
+        if (refElement) {
+          const text = refElement.textContent?.trim() || "";
+          // Extract the code part (e.g., "Ref #lwUsBf" -> "lwUsBf")
+          const patterns = [
+            /Ref\s*#\s*([A-Za-z0-9]+)/i, // "Ref #lwUsBf"
+            /#Ref:\s*([A-Za-z0-9]+)/i, // "#Ref: lwUsBf"
+            /#\s*([A-Za-z0-9]+)/i, // "#lwUsBf"
+          ];
+
+          for (const pattern of patterns) {
+            const match = text.match(pattern);
+            if (match && match[1]) {
+              return match[1];
+            }
+          }
+
+          // Fallback: remove "Ref" and "#" prefixes
+          return text.replace(/^Ref\s*#?\s*/i, "").trim();
+        }
+        return null;
+      });
+
+      if (referenceCode) {
+        await dualLogInfo(`✅ Reference code extracted: ${referenceCode}`);
+      } else {
+        await dualLogInfo("⚠️ Could not extract reference code from page");
+      }
+    } catch (refError) {
+      await dualLogError(
+        "Error extracting reference code (will search without it):",
+        refError
+      );
+    }
+
+    // Extract email address from sub-heading
+    try {
+      const subHeadingElement = await frame.$('[data-cy="form-sub-heading"]');
+      if (subHeadingElement) {
+        recipientEmail = await frame.evaluate((element: Element) => {
+          const text = element.textContent || "";
+          // Extract email from text like "Enter the OTP provided in the email sent to chartwell@epchotels.com."
+          const emailMatch = text.match(
+            /to\s+([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i
+          );
+          return emailMatch ? emailMatch[1] : null;
+        }, subHeadingElement);
+
+        if (recipientEmail) {
+          await dualLogInfo(`✅ Recipient email extracted: ${recipientEmail}`);
+        } else {
+          await dualLogInfo("⚠️ Could not extract recipient email from page");
+        }
+      }
+    } catch (emailError) {
+      await dualLogError(
+        "Error extracting recipient email (will search without it):",
+        emailError
+      );
+    }
+  } catch (error) {
+    await dualLogError(
+      "Error extracting page information (will search without filters):",
+      error
+    );
+  }
+
   // Wait 60 seconds for OTP email to arrive
   await dualLogInfo("Waiting 60 seconds for OTP email delivery...");
 
@@ -528,8 +610,13 @@ async function handleOtpFlow(
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     await dualLogInfo(`Attempt ${attempt}/${maxRetries} to fetch OTP code...`);
 
-    // Fetch the OTP code from email (check 5 recent emails)
-    otpResult = await getAgodaOtpCode(5);
+    // Fetch the OTP code from email (check 10 recent emails, with reference code and recipient email if available)
+    // Increased to 10 to ensure we catch the email even if it arrives slightly later
+    otpResult = await getAgodaOtpCode(
+      10,
+      referenceCode || undefined,
+      recipientEmail || undefined
+    );
 
     if (otpResult.otpCode) {
       await dualLogInfo(

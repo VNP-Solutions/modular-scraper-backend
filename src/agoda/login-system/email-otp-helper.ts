@@ -103,9 +103,11 @@ function isAgodaOtpEmail(headers: any[], snippet: string): boolean {
     subjectValue.includes("pin") ||
     subjectValue.includes("otp") ||
     subjectValue.includes("code") ||
+    subjectValue.includes("passcode") ||
     subjectValue.includes("ycs") ||
     snippet.includes("PIN code") ||
     snippet.includes("OTP") ||
+    snippet.includes("passcode") ||
     snippet.includes("logging into YCS");
 
   return isFromAgoda && isOtpEmail;
@@ -422,9 +424,14 @@ function getEmailBody(payload: any): string {
 
 /**
  * Get Agoda OTP code from recent emails
+ * @param maxResults Maximum number of emails to check
+ * @param referenceCode Optional reference code to match in email (e.g., "lwUsBf")
+ * @param recipientEmail Optional recipient email to filter by "to" field (e.g., "chartwell@epchotels.com")
  */
 export async function getAgodaOtpCode(
-  maxResults: number = 5
+  maxResults: number = 5,
+  referenceCode?: string,
+  recipientEmail?: string
 ): Promise<AgodaOtpResult> {
   try {
     // Load credentials before making API calls
@@ -438,8 +445,14 @@ export async function getAgodaOtpCode(
     const gmail = google.gmail({ version: "v1", auth: oauth2Client });
 
     // Search for emails from Agoda with OTP/PIN related content (sorted by newest first)
-    const searchQuery =
-      "from:agoda.com OR from:no-reply@account.agoda.com subject:(PIN OR OTP OR code OR YCS)";
+    // Include "passcode" to catch "One-time passcode for YCS login" emails
+    let searchQuery =
+      "from:agoda.com OR from:no-reply@account.agoda.com subject:(PIN OR OTP OR code OR passcode OR YCS)";
+    
+    // Add recipient email filter if provided
+    if (recipientEmail) {
+      searchQuery += ` to:${recipientEmail}`;
+    }
 
     const res = await gmail.users.messages.list({
       userId: "me",
@@ -459,6 +472,17 @@ export async function getAgodaOtpCode(
     await dualLogInfo(
       `Found ${res.data.messages.length} potential Agoda OTP emails (processing newest first)`
     );
+
+    if (referenceCode) {
+      await dualLogInfo(
+        `🔍 Searching for email with reference code: ${referenceCode}`
+      );
+    }
+    if (recipientEmail) {
+      await dualLogInfo(
+        `📧 Filtering emails sent to: ${recipientEmail}`
+      );
+    }
 
     // Check each email for OTP code (emails are already sorted newest first)
     for (let i = 0; i < res.data.messages.length; i++) {
@@ -506,6 +530,73 @@ export async function getAgodaOtpCode(
 
         // Get full email body
         const fullBody = getEmailBody(email.data.payload);
+
+        // Log a preview of the email body for debugging
+        const bodyPreview = fullBody.substring(0, 200).replace(/\s+/g, " ");
+        await dualLogInfo(`📄 Email body preview: ${bodyPreview}...`);
+
+        // If recipient email is provided, verify the email was sent to that address
+        if (recipientEmail) {
+          const toHeader = headers.find((h) => h.name?.toLowerCase() === "to");
+          const toValue = toHeader?.value?.toLowerCase() || "";
+          
+          if (!toValue.includes(recipientEmail.toLowerCase())) {
+            await dualLogInfo(
+              `⏭️ Skipping email - not sent to ${recipientEmail} (sent to: ${toHeader?.value || "unknown"})`
+            );
+            continue;
+          }
+          
+          await dualLogInfo(
+            `✅ Email recipient matches: ${recipientEmail}`
+          );
+        }
+
+        // If reference code is provided, check if this email contains it
+        if (referenceCode) {
+          // Escape special regex characters in reference code
+          const escapedRefCode = referenceCode.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          
+          // Look for reference code in email body
+          // Patterns: "#Ref: CODE", "Ref #CODE", "#CODE", or just "CODE" in context
+          const refPatterns = [
+            new RegExp(`#Ref:\\s*${escapedRefCode}`, "i"), // "#Ref: lwUsBf"
+            new RegExp(`Ref\\s*#\\s*${escapedRefCode}`, "i"), // "Ref #lwUsBf"
+            new RegExp(`#\\s*${escapedRefCode}`, "i"), // "#lwUsBf"
+            new RegExp(`\\b${escapedRefCode}\\b`, "i"), // "lwUsBf" as word boundary
+          ];
+
+          // Check each pattern and log which one matches
+          let matchedPattern = null;
+          for (let i = 0; i < refPatterns.length; i++) {
+            if (refPatterns[i].test(fullBody)) {
+              matchedPattern = i;
+              break;
+            }
+          }
+
+          if (matchedPattern === null) {
+            await dualLogInfo(
+              `⏭️ Skipping email - reference code ${referenceCode} not found in body`
+            );
+            // Log a snippet around where we'd expect to find the ref code
+            const refCodeIndex = fullBody.toLowerCase().indexOf("ref");
+            if (refCodeIndex !== -1) {
+              const snippet = fullBody.substring(
+                Math.max(0, refCodeIndex - 50),
+                Math.min(fullBody.length, refCodeIndex + 100)
+              );
+              await dualLogInfo(
+                `🔍 Reference code context in email: ${snippet.replace(/\s+/g, " ")}`
+              );
+            }
+            continue;
+          }
+
+          await dualLogInfo(
+            `✅ Email matches reference code: ${referenceCode} (pattern ${matchedPattern + 1})`
+          );
+        }
 
         // Extract OTP code
         const otpCode = await extractOtpCode(fullBody);
