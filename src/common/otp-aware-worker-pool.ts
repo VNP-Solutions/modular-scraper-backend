@@ -68,8 +68,13 @@ export class OtpAwareWorkerPool extends EventEmitter {
       this.otpManager.on("otpReserved", this.onOtpReserved.bind(this));
 
       // Set up worker ready listener to process queue when worker becomes available
+      // Add a small delay to allow OTP release events to propagate first
       this.on("workerReady", () => {
-        this.processQueue();
+        // Delay queue processing slightly to allow OTP release events to complete
+        // This ensures OTP status is refreshed before processing the queue
+        setTimeout(() => {
+          this.processQueue();
+        }, 500);
       });
 
       // Initialize workers
@@ -270,8 +275,11 @@ export class OtpAwareWorkerPool extends EventEmitter {
       data: message.data,
     });
 
-    // Process next job in queue
-    this.processQueue();
+    // Don't process queue immediately - let OTP release event handle it
+    // This allows the OTP release event to propagate first, ensuring proper queue processing
+    // The queue will be processed when OTP is released (via onOtpReleased event)
+    // If OTP was already released, the workerReady event will trigger queue processing
+    this.emit("workerReady", workerId);
   }
 
   private async handleJobError(
@@ -312,8 +320,9 @@ export class OtpAwareWorkerPool extends EventEmitter {
       error: message.data,
     });
 
-    // Process next job in queue
-    this.processQueue();
+    // Emit workerReady event to trigger queue processing
+    // The queue will be processed when OTP is released (if needed) or via workerReady event
+    this.emit("workerReady", workerId);
   }
 
   private async handleWorkerError(
