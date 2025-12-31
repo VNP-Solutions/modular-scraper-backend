@@ -355,11 +355,23 @@ export async function searchBookingAndNavigateToPayout(
                 { jobId, bookingId }
               );
               if (markOtpReleasedForRetrieval()) {
+                // Directly release OTP in the database
+                const released = await otpStatusManager.releaseOtp(retrievalJobId);
+                if (released) {
+                  await dualLogInfo(
+                    "✅ OTP released (no payout OTP verification needed)",
+                    { jobId, bookingId }
+                  );
+                } else {
+                  await dualLogError(
+                    "⚠️ Failed to release OTP (no payout OTP needed)",
+                    new Error("OTP release returned false"),
+                    { jobId, bookingId }
+                  );
+                }
+                
+                // Also notify the worker pool (for queue processing)
                 otpCompletionNotifier.notifyOtpCompleted(retrievalJobId);
-                await dualLogInfo(
-                  "✅ OTP released (no payout OTP verification needed)",
-                  { jobId, bookingId }
-                );
               }
             } else {
               await dualLogInfo(
@@ -815,11 +827,24 @@ async function handleOtpVerification(
           "Payout OTP verification completed - verifying OTP ownership before release",
           { jobId, bookingId }
         );
+        
+        // Directly release OTP in the database
+        const released = await otpStatusManager.releaseOtp(retrievalJobId);
+        if (released) {
+          await dualLogInfo(
+            "✅ OTP released after payout verification (verified ownership)",
+            { jobId, bookingId }
+          );
+        } else {
+          await dualLogError(
+            "⚠️ Failed to release OTP after payout verification",
+            new Error("OTP release returned false"),
+            { jobId, bookingId }
+          );
+        }
+        
+        // Also notify the worker pool (for queue processing)
         otpCompletionNotifier.notifyOtpCompleted(retrievalJobId);
-        await dualLogInfo(
-          "✅ OTP released after payout verification (verified ownership)",
-          { jobId, bookingId }
-        );
       } else {
         await dualLogInfo(
           `Payout OTP verification completed - OTP not owned by this job (job_id mismatch). OTP may have been released by another job.`,

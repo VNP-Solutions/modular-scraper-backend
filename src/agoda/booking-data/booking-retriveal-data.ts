@@ -384,11 +384,23 @@ export async function getAgodaRetrivealData(
           { jobId }
         );
         if (markOtpReleasedForRetrieval()) {
+          // Directly release OTP in the database
+          const released = await otpStatusManager.releaseOtp(retrievalJobId);
+          if (released) {
+            await dualLogInfo(
+              "✅ OTP released at end of retrieval job (verified ownership)",
+              { jobId }
+            );
+          } else {
+            await dualLogError(
+              "⚠️ Failed to release OTP at end of retrieval job",
+              new Error("OTP release returned false"),
+              { jobId }
+            );
+          }
+          
+          // Also notify the worker pool (for queue processing)
           otpCompletionNotifier.notifyOtpCompleted(retrievalJobId);
-          await dualLogInfo(
-            "✅ OTP released at end of retrieval job (verified ownership)",
-            { jobId }
-          );
         }
       } else {
         await dualLogInfo(
