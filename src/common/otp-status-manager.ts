@@ -86,6 +86,45 @@ export class OtpStatusManager extends EventEmitter {
   }
 
   /**
+   * Refresh OTP status from database (force refresh even if already initialized)
+   */
+  public async refreshStatus(): Promise<void> {
+    try {
+      // Get the latest OTP status from database
+      const otpStatusDoc = await OtpStatus.findOne({
+        platform: this.getOtpPlatform(),
+      }).lean();
+
+      if (otpStatusDoc) {
+        this.currentStatus = {
+          status: otpStatusDoc.status,
+          platform: otpStatusDoc.platform || this.getOtpPlatform(),
+          jobId: otpStatusDoc.job_id?.toString() || null,
+          lastUpdated: otpStatusDoc.updatedAt,
+        };
+        console.log("OTP Status refreshed:", this.currentStatus);
+      } else {
+        // If no document exists, create one with Released status
+        const newDoc = await OtpStatus.create({
+          status: OtpStatusValue.Released,
+          platform: this.getOtpPlatform(),
+          job_id: null,
+        });
+        this.currentStatus = {
+          status: newDoc.status,
+          platform: this.getOtpPlatform(),
+          jobId: null,
+          lastUpdated: newDoc.updatedAt,
+        };
+        console.log("OTP Status created and refreshed:", this.currentStatus);
+      }
+    } catch (error) {
+      console.error("Failed to refresh OTP status:", error);
+      throw error;
+    }
+  }
+
+  /**
    * Get current OTP status (from memory for performance)
    */
   public getCurrentStatus(): OtpStatusInfo | null {
