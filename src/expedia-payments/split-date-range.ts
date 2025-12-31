@@ -206,6 +206,39 @@ export async function splitDateRange(
           await dualLogInfo(
             `Chunk ${chunkCount}: Date range validation error detected - "The date range must occur within the last year". Skipping this chunk and moving to next date range.`
           );
+
+          // Save skipped chunk to database
+          if (jobId && expediaId) {
+            try {
+              await dualLogInfo(
+                `Chunk ${chunkCount}: Saving skipped chunk to database (validation error)...`
+              );
+
+              await dbDataService.createDbData({
+                job_id: jobId,
+                property_name: propertyName || "Unknown Property",
+                property_id: expediaId,
+                date_range: {
+                  start_date: fromDateExpedia,
+                  end_date: toDateExpedia,
+                },
+                gearbox_queue_ids: [], // Empty array indicates skipped/validation error
+                total_invoice_amount: 0, // Zero amount indicates no data processed
+                total_invoice_amount_currency: undefined,
+              });
+
+              await dualLogInfo(
+                `Chunk ${chunkCount}: Skipped chunk saved to database (validation error: date range must occur within the last year)`
+              );
+            } catch (dbError) {
+              await dualLogError(
+                `Chunk ${chunkCount}: Error saving skipped chunk to database:`,
+                dbError
+              );
+              // Continue anyway, don't throw error
+            }
+          }
+
           // Skip this chunk and move to next
           currentStart = addDays(chunkEnd, 1);
           if (currentStart > endDateObj) {
