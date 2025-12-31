@@ -398,7 +398,7 @@ export async function getAgodaRetrivealData(
               { jobId }
             );
           }
-          
+
           // Also notify the worker pool (for queue processing)
           otpCompletionNotifier.notifyOtpCompleted(retrievalJobId);
         }

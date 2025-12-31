@@ -62,6 +62,12 @@ export const OTP_VERIFICATION = {
 
   // Submit OTP button
   SUBMIT_BUTTON: '[data-cy="submit-otp-button"]',
+
+  // OTP verification panel (new unified auth form)
+  VERIFY_OTP_PANEL: '[data-cy="verify-otp-panel"]',
+
+  // OTP form container
+  VERIFY_OTP_FORM: '[data-cy="verify-otp"]',
 } as const;
 
 /**
@@ -91,6 +97,9 @@ export const UPC_WIDGET = {
 export const OTP_CHECK_SELECTORS = {
   EMAIL_OPTION: '[data-cy="otp-option-email"]',
   FIRST_INPUT: '[data-cy="otp-0"]',
+  // Also check for new unified auth OTP form
+  VERIFY_OTP_PANEL: '[data-cy="verify-otp-panel"]',
+  VERIFY_OTP_FORM: '[data-cy="verify-otp"]',
 } as const;
 
 /**

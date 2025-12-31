@@ -205,7 +205,7 @@ async function extractYcsRetrievalOtpCode(
         if (otpCode) {
           // Clean up the code (remove spaces if any)
           let cleanOtp = otpCode.replace(/\s+/g, "");
-          
+
           // Handle "3 digits + 3 digits" format (e.g., "068 913" -> "068913")
           if (cleanOtp.length === 6 && /^\d{6}$/.test(cleanOtp)) {
             // Already 6 digits, use as is

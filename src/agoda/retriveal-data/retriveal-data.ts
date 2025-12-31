@@ -251,8 +251,12 @@ export async function searchBookingAndNavigateToPayout(
     });
 
     try {
-      // Wait for iframe to appear (if it redirects to login)
+      // Wait for iframe to appear (if it redirects to login) or OTP form to appear on main page
       await delay(3000);
+
+      // Also wait a bit more for OTP form to potentially appear
+      // Sometimes the OTP form appears after clicking the payout tab
+      await delay(2000);
 
       // Check if there's an iframe with the login/OTP form
       const iframes = await page.frames();
@@ -262,13 +266,33 @@ export async function searchBookingAndNavigateToPayout(
         try {
           // Check if this frame contains the OTP verification form
           const hasOtpForm = await frame.evaluate((selectors) => {
-            // Check for OTP verification method selection
+            // Check for old OTP verification method selection
             const otpOptionEmail = document.querySelector(
               selectors.EMAIL_OPTION
             );
-            // Check for OTP input form
+            // Check for old OTP input form
             const otpInputs = document.querySelector(selectors.FIRST_INPUT);
-            return !!(otpOptionEmail || otpInputs);
+
+            // Check for new unified auth OTP form
+            const verifyOtpPanel = document.querySelector(
+              selectors.VERIFY_OTP_PANEL
+            );
+            const verifyOtpForm = document.querySelector(
+              selectors.VERIFY_OTP_FORM
+            );
+
+            // Also check for "OTP has been sent to" text which indicates OTP form is present
+            const otpSentText = Array.from(document.querySelectorAll("*")).some(
+              (el) => el.textContent?.includes("OTP has been sent to")
+            );
+
+            return !!(
+              otpOptionEmail ||
+              otpInputs ||
+              verifyOtpPanel ||
+              verifyOtpForm ||
+              otpSentText
+            );
           }, OTP_CHECK_SELECTORS);
 
           if (hasOtpForm) {
@@ -291,10 +315,47 @@ export async function searchBookingAndNavigateToPayout(
           jobId,
           bookingId,
         });
+
+        // Wait a bit more and check again - OTP form might appear with a delay
+        await delay(2000);
+
         const hasOtpOnMainPage = await page.evaluate((selectors) => {
+          // Check for old OTP form selectors
           const otpOptionEmail = document.querySelector(selectors.EMAIL_OPTION);
           const otpInputs = document.querySelector(selectors.FIRST_INPUT);
-          return !!(otpOptionEmail || otpInputs);
+
+          // Check for new unified auth OTP form
+          const verifyOtpPanel = document.querySelector(
+            selectors.VERIFY_OTP_PANEL
+          );
+          const verifyOtpForm = document.querySelector(
+            selectors.VERIFY_OTP_FORM
+          );
+
+          // Also check for "OTP has been sent to" text which indicates OTP form is present
+          const otpSentText = Array.from(document.querySelectorAll("*")).some(
+            (el) => el.textContent?.includes("OTP has been sent to")
+          );
+
+          // Log what we found for debugging
+          const found = !!(
+            otpOptionEmail ||
+            otpInputs ||
+            verifyOtpPanel ||
+            verifyOtpForm ||
+            otpSentText
+          );
+          if (found) {
+            console.log("OTP form detected on main page:", {
+              otpOptionEmail: !!otpOptionEmail,
+              otpInputs: !!otpInputs,
+              verifyOtpPanel: !!verifyOtpPanel,
+              verifyOtpForm: !!verifyOtpForm,
+              otpSentText: otpSentText,
+            });
+          }
+
+          return found;
         }, OTP_CHECK_SELECTORS);
 
         if (hasOtpOnMainPage) {
@@ -356,7 +417,9 @@ export async function searchBookingAndNavigateToPayout(
               );
               if (markOtpReleasedForRetrieval()) {
                 // Directly release OTP in the database
-                const released = await otpStatusManager.releaseOtp(retrievalJobId);
+                const released = await otpStatusManager.releaseOtp(
+                  retrievalJobId
+                );
                 if (released) {
                   await dualLogInfo(
                     "✅ OTP released (no payout OTP verification needed)",
@@ -369,7 +432,7 @@ export async function searchBookingAndNavigateToPayout(
                     { jobId, bookingId }
                   );
                 }
-                
+
                 // Also notify the worker pool (for queue processing)
                 otpCompletionNotifier.notifyOtpCompleted(retrievalJobId);
               }
@@ -655,10 +718,13 @@ async function handleOtpVerification(
     }
 
     // Extract reference code and email address from the page
-    await dualLogInfo("Extracting reference code and email address from payout OTP page...", {
-      jobId,
-      bookingId,
-    });
+    await dualLogInfo(
+      "Extracting reference code and email address from payout OTP page...",
+      {
+        jobId,
+        bookingId,
+      }
+    );
     let referenceCode: string | null = null;
     let recipientEmail: string | null = userEmail || null;
 
@@ -705,18 +771,24 @@ async function handleOtpVerification(
           // Look for the specific span element that contains "OTP has been sent to"
           // The email is in a span with class "sc-iGgWBj ecoUic" that contains just this text
           // According to the HTML: <span class="sc-iGgWBj ecoUic">OTP has been sent to chartwell@epchotels.com</span>
-          const spans = Array.from(document.querySelectorAll("span.sc-iGgWBj.ecoUic"));
+          const spans = Array.from(
+            document.querySelectorAll("span.sc-iGgWBj.ecoUic")
+          );
           for (const span of spans) {
             const text = span.textContent?.trim() || "";
             // Check if this span contains "OTP has been sent to" and is short (just the email line)
             if (text.includes("OTP has been sent to") && text.length < 100) {
               // Verify it doesn't contain other text like "OTP will expire" or "Refcode"
-              if (!text.includes("OTP will expire") && !text.includes("Refcode") && !text.includes("Submit")) {
+              if (
+                !text.includes("OTP will expire") &&
+                !text.includes("Refcode") &&
+                !text.includes("Submit")
+              ) {
                 return text;
               }
             }
           }
-          
+
           // Fallback: look for any element containing "OTP has been sent to" but exclude parent elements
           const allElements = Array.from(document.querySelectorAll("*"));
           for (const element of allElements) {
@@ -739,53 +811,65 @@ async function handleOtpVerification(
 
         if (emailText) {
           // Log the full text for debugging
-          await dualLogInfo(
-            `📄 Full email text extracted: ${emailText}`,
-            { jobId, bookingId }
-          );
-          
+          await dualLogInfo(`📄 Full email text extracted: ${emailText}`, {
+            jobId,
+            bookingId,
+          });
+
           // More strict regex to match email address and stop at word boundary
           // This prevents matching "OTP" or other text after the email
           // Pattern: "OTP has been sent to " followed by email
           // The email must end with TLD (2+ letters) followed by whitespace, end of string, or non-alphanumeric
           // This ensures we don't match "comOTP" - we stop at "com"
-          const emailMatch = emailText.match(/OTP has been sent to\s+([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})(?=\s|$|[^a-zA-Z0-9])/i);
+          const emailMatch = emailText.match(
+            /OTP has been sent to\s+([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})(?=\s|$|[^a-zA-Z0-9])/i
+          );
           if (emailMatch && emailMatch[1]) {
             recipientEmail = emailMatch[1].trim();
-            
+
             // Additional validation: check if email ends with valid TLD (not followed by letters)
             // If the extracted email has letters after the TLD (like "comOTP"), trim them
             if (recipientEmail) {
               const emailParts = recipientEmail.split("@");
-            if (emailParts.length === 2) {
-              const domain = emailParts[1];
-              // Find the last dot and extract what should be the TLD
-              const lastDotIndex = domain.lastIndexOf(".");
-              if (lastDotIndex !== -1) {
-                const afterDot = domain.substring(lastDotIndex + 1);
-                // TLD should be 2-4 letters. If there are more letters after a valid TLD, trim them
-                // Match TLD pattern: 2-4 letters, then check if there are more letters after
-                const tldMatch = afterDot.match(/^([a-zA-Z]{2,4})([a-zA-Z]+)?$/);
-                if (tldMatch && tldMatch[2]) {
-                  // There are extra letters after the TLD (like "comOTP" -> TLD is "com", extra is "OTP")
-                  const validTld = tldMatch[1];
-                  const correctedDomain = domain.substring(0, lastDotIndex + 1) + validTld;
-                  recipientEmail = emailParts[0] + "@" + correctedDomain;
-                  await dualLogInfo(
-                    `🔧 Trimmed invalid text after TLD (${afterDot} -> ${validTld}), corrected email: ${recipientEmail}`,
-                    { jobId, bookingId }
+              if (emailParts.length === 2) {
+                const domain = emailParts[1];
+                // Find the last dot and extract what should be the TLD
+                const lastDotIndex = domain.lastIndexOf(".");
+                if (lastDotIndex !== -1) {
+                  const afterDot = domain.substring(lastDotIndex + 1);
+                  // TLD should be 2-4 letters. If there are more letters after a valid TLD, trim them
+                  // Match TLD pattern: 2-4 letters, then check if there are more letters after
+                  const tldMatch = afterDot.match(
+                    /^([a-zA-Z]{2,4})([a-zA-Z]+)?$/
                   );
+                  if (tldMatch && tldMatch[2]) {
+                    // There are extra letters after the TLD (like "comOTP" -> TLD is "com", extra is "OTP")
+                    const validTld = tldMatch[1];
+                    const correctedDomain =
+                      domain.substring(0, lastDotIndex + 1) + validTld;
+                    recipientEmail = emailParts[0] + "@" + correctedDomain;
+                    await dualLogInfo(
+                      `🔧 Trimmed invalid text after TLD (${afterDot} -> ${validTld}), corrected email: ${recipientEmail}`,
+                      { jobId, bookingId }
+                    );
+                  }
                 }
               }
             }
-            }
-            
+
             // Validate it's a proper email (doesn't contain "OTP" or other invalid characters)
-            if (recipientEmail && !recipientEmail.toLowerCase().includes("otp") && recipientEmail.includes("@")) {
-              await dualLogInfo(`✅ Recipient email extracted: ${recipientEmail}`, {
-                jobId,
-                bookingId,
-              });
+            if (
+              recipientEmail &&
+              !recipientEmail.toLowerCase().includes("otp") &&
+              recipientEmail.includes("@")
+            ) {
+              await dualLogInfo(
+                `✅ Recipient email extracted: ${recipientEmail}`,
+                {
+                  jobId,
+                  bookingId,
+                }
+              );
             } else {
               await dualLogError(
                 `⚠️ Extracted email appears invalid (contains 'OTP' or invalid format): ${recipientEmail}`,
@@ -801,7 +885,10 @@ async function handleOtpVerification(
             }
           } else {
             await dualLogInfo(
-              `⚠️ Could not extract email from text: ${emailText.substring(0, 150)}`,
+              `⚠️ Could not extract email from text: ${emailText.substring(
+                0,
+                150
+              )}`,
               { jobId, bookingId }
             );
             // Fall back to userEmail
@@ -1013,7 +1100,7 @@ async function handleOtpVerification(
           "Payout OTP verification completed - verifying OTP ownership before release",
           { jobId, bookingId }
         );
-        
+
         // Directly release OTP in the database
         const released = await otpStatusManager.releaseOtp(retrievalJobId);
         if (released) {
@@ -1028,7 +1115,7 @@ async function handleOtpVerification(
             { jobId, bookingId }
           );
         }
-        
+
         // Also notify the worker pool (for queue processing)
         otpCompletionNotifier.notifyOtpCompleted(retrievalJobId);
       } else {
