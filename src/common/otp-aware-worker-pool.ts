@@ -220,23 +220,29 @@ export class OtpAwareWorkerPool extends EventEmitter {
 
     // Try to release OTP if it hasn't been released already
     // Note: OTP may have already been released directly in the worker (e.g., after payout verification)
-    // In that case, this will return false, but the otpReleased event should have already been emitted
+    // In that case, this will return false, but we need to refresh status from database
     const released = await this.otpManager.releaseOtp(jobId);
     if (released) {
       console.log(`OTP released for job ${jobId}, processing queue...`);
       // Process queue will be triggered by the otpReleased event
     } else {
       // OTP was already released (likely in the worker thread after payout verification)
+      // Refresh status from database to get the latest state (worker threads have isolated contexts)
+      // This is critical because the worker thread's otpStatusManager is a different instance
+      console.log(
+        `OTP already released for job ${jobId}, refreshing status from database...`
+      );
+      await this.otpManager.refreshStatus();
+
       // Check if OTP is available and process queue to start waiting jobs
-      // This ensures queue processing happens even if OTP was released before this handler was called
       if (this.otpManager.isOtpAvailable()) {
         console.log(
-          `OTP already released for job ${jobId}, processing queue to start waiting jobs...`
+          `✅ OTP is available after refresh, processing queue to start waiting jobs...`
         );
         this.processQueue();
       } else {
         console.log(
-          `OTP not available for job ${jobId} (may have been reserved by another job)`
+          `⏸️  OTP not available for job ${jobId} after refresh (may have been reserved by another job)`
         );
       }
     }

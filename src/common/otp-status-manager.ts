@@ -448,21 +448,30 @@ export class OtpStatusManager extends EventEmitter {
    */
   public async refreshFromDatabase(): Promise<void> {
     try {
+      // Get the platform from current status or use default
+      const platformToCheck = this.currentStatus?.platform || this.getOtpPlatform();
+      
       const otpStatusDoc = await OtpStatus.findOne({
-        platform: this.getOtpPlatform(),
+        platform: platformToCheck,
       }).lean();
+      
       if (otpStatusDoc) {
         const oldStatus = this.currentStatus?.status;
         this.currentStatus = {
           status: otpStatusDoc.status,
-          platform: otpStatusDoc.platform || this.getOtpPlatform(),
+          platform: otpStatusDoc.platform || platformToCheck,
           jobId: otpStatusDoc.job_id?.toString() || null,
           lastUpdated: otpStatusDoc.updatedAt,
         };
 
+        console.log(
+          `OTP status refreshed from database: ${otpStatusDoc.status} (was ${oldStatus || "unknown"})`
+        );
+
         // Emit event if status changed
         if (oldStatus !== this.currentStatus.status) {
           if (this.currentStatus.status === OtpStatusValue.Released) {
+            console.log(`OTP status changed to Released, emitting otpReleased event`);
             this.emit("otpReleased", this.currentStatus.jobId);
           } else {
             this.emit(
@@ -472,6 +481,8 @@ export class OtpStatusManager extends EventEmitter {
             );
           }
         }
+      } else {
+        console.log(`No OTP status document found for platform ${platformToCheck}`);
       }
     } catch (error) {
       console.error("Error refreshing OTP status from database:", error);
