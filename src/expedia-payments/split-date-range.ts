@@ -165,6 +165,59 @@ export async function splitDateRange(
 
         await delay(1000);
 
+        // Check for date validation error before clicking search
+        const hasValidationError = await page.evaluate(() => {
+          const validationElement = document.querySelector("#datesValidation");
+          if (validationElement) {
+            // Check if the validation element is visible (not hidden)
+            const style = window.getComputedStyle(validationElement);
+            const isVisible =
+              style.display !== "none" && style.visibility !== "hidden";
+
+            if (isVisible) {
+              // Check if it contains the "last year" error message
+              const messageElement =
+                validationElement.querySelector(".alert-message");
+              if (messageElement) {
+                const messageText = messageElement.textContent || "";
+                if (
+                  messageText.includes(
+                    "date range must occur within the last year"
+                  )
+                ) {
+                  return true;
+                }
+              }
+            }
+          }
+
+          // Also check if search button is disabled (indicates validation error)
+          const searchButton = document.querySelector(
+            "#searchButton"
+          ) as HTMLButtonElement;
+          if (searchButton && searchButton.disabled) {
+            return true;
+          }
+
+          return false;
+        });
+
+        if (hasValidationError) {
+          await dualLogInfo(
+            `Chunk ${chunkCount}: Date range validation error detected - "The date range must occur within the last year". Skipping this chunk and moving to next date range.`
+          );
+          // Skip this chunk and move to next
+          currentStart = addDays(chunkEnd, 1);
+          if (currentStart > endDateObj) {
+            await dualLogInfo(
+              "Reached end date, date range processing complete"
+            );
+            break;
+          }
+          await delay(1000);
+          continue; // Continue to next iteration of while loop
+        }
+
         // Click the Search button
         await dualLogInfo("Clicking Search button...");
         await page.click("#searchButton");
@@ -245,7 +298,8 @@ export async function splitDateRange(
             );
 
             const extractedData = await page.evaluate(() => {
-              const invoiceTotalElement = document.querySelector(".invoiceTotal");
+              const invoiceTotalElement =
+                document.querySelector(".invoiceTotal");
               if (invoiceTotalElement) {
                 const boldElement = invoiceTotalElement.querySelector("b");
                 if (boldElement) {
