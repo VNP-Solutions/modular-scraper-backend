@@ -2,6 +2,10 @@ import bodyParser from "body-parser";
 import cors from "cors";
 import express from "express";
 import createError from "../common/error.js";
+import {
+  getBrightDataSessionId,
+  getWindowSize,
+} from "../common/job-isolation.js";
 import { otpAwareWorkerPool } from "../common/otp-aware-worker-pool.js";
 import { progressManager } from "../common/progress-manager.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
@@ -2834,6 +2838,14 @@ app.post("/api/agoda/retrieval-run-job", (async (
 
     const jobId = String(retrieval_id);
 
+    // Generate Bright Data isolation config for this job
+    const brightDataSessionId = getBrightDataSessionId(jobId);
+    const windowSize = getWindowSize(jobId);
+
+    console.log(
+      `Job ${jobId}: brightDataSessionId=${brightDataSessionId}, windowSize=${windowSize.width}x${windowSize.height}`
+    );
+
     const workerJobData: WorkerJobData = {
       jobType: "agoda-retrieval-run",
       jobId,
@@ -2842,6 +2854,8 @@ app.post("/api/agoda/retrieval-run-job", (async (
       agodaId: String(retrievalData.agodaId),
       user_email: String(retrievalData.user_email || ""),
       user_password: String(retrievalData.user_password || ""),
+      brightDataSessionId,
+      windowSize,
     };
 
     // Update retrieval status to Running
@@ -3137,6 +3151,14 @@ app.post("/api/agoda/bulk-retrieval-run-job", (async (
 
         const jobId = String(retrieval_id);
 
+        // Generate Bright Data isolation config for this job
+        const brightDataSessionId = getBrightDataSessionId(jobId);
+        const windowSize = getWindowSize(jobId);
+
+        console.log(
+          `Job ${jobId}: brightDataSessionId=${brightDataSessionId}, windowSize=${windowSize.width}x${windowSize.height}`
+        );
+
         const workerJobData: WorkerJobData = {
           jobType: "agoda-retrieval-run",
           jobId,
@@ -3145,6 +3167,8 @@ app.post("/api/agoda/bulk-retrieval-run-job", (async (
           agodaId: String(retrievalData.agodaId),
           user_email: String(retrievalData.user_email || ""),
           user_password: String(retrievalData.user_password || ""),
+          brightDataSessionId,
+          windowSize,
         };
 
         // Update retrieval status to Running

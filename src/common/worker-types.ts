@@ -21,6 +21,9 @@ export interface WorkerJobData {
   reservations?: any[];
   retrievalId?: string;
   originalStatus?: string;
+  // Bright Data isolation config
+  brightDataSessionId?: string; // Session ID for Bright Data proxy
+  windowSize?: { width: number; height: number }; // Window size for browser
 }
 
 export interface WorkerMessage {

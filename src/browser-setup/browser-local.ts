@@ -8,12 +8,13 @@ import {
   dualLogWarn,
 } from "../common/log-helper.js";
 import { timeoutManager } from "../common/timeout-manager.js";
-import { configs } from "../config/index.js";
 dotenv.config();
 
 export async function browserSetupLocal(
   jobId?: string,
-  platform?: "expedia" | "agoda"
+  platform?: "expedia" | "agoda",
+  brightDataSessionId?: string,
+  windowSize?: { width: number; height: number }
 ): Promise<{
   browser: Browser;
   page: Page;
@@ -21,11 +22,29 @@ export async function browserSetupLocal(
   let browser: Browser | null = null;
 
   try {
+    // Prepare launch args
+    const launchArgs = [...BROWSER_CONFIG.LAUNCH_ARGS];
+
+    // Add window size if provided
+    if (windowSize) {
+      launchArgs.push(`--window-size=${windowSize.width},${windowSize.height}`);
+    }
+
+    // Add Bright Data proxy if session ID provided
+    if (brightDataSessionId && process.env.BRIGHT_DATA_PROXY_HOST) {
+      const proxyHost = process.env.BRIGHT_DATA_PROXY_HOST; // e.g., "brd.superproxy.io:22225"
+      launchArgs.push(`--proxy-server=${proxyHost}`);
+      await dualLogInfo(
+        `Using Bright Data proxy with session: ${brightDataSessionId}`,
+        { jobId, proxyHost, windowSize }
+      );
+    }
+
     try {
       browser = await puppeteer.launch({
-        headless: configs.headless_browser,
+        headless: false, // Always visible for Bright Data setup
         defaultViewport: null,
-        args: BROWSER_CONFIG.LAUNCH_ARGS,
+        args: launchArgs,
       });
     } catch (error: any) {
       await dualLogError("Error launching browser:", error);
@@ -48,48 +67,221 @@ export async function browserSetupLocal(
 
     const page: Page = await browser.newPage();
 
+    // Authenticate with Bright Data if session ID provided
+    if (
+      brightDataSessionId &&
+      process.env.BRIGHT_DATA_USERNAME &&
+      process.env.BRIGHT_DATA_PASSWORD
+    ) {
+      const brightDataUsername = process.env.BRIGHT_DATA_USERNAME;
+      const brightDataPassword = process.env.BRIGHT_DATA_PASSWORD;
+
+      // Get country code for this job (if available)
+      let countryCode: string | undefined;
+      let countryName: string | undefined;
+      try {
+        const { getBrightDataCountry, getBrightDataCountryName } = await import(
+          "../common/job-isolation.js"
+        );
+        countryCode = getBrightDataCountry(jobId || "");
+        countryName = getBrightDataCountryName(jobId || "");
+      } catch (error) {
+        // Country selection is optional
+      }
+
+      // Bright Data format: username-session-{sessionId}-country-{code}
+      // Country targeting ensures IP from specific country
+      let proxyUsername = `${brightDataUsername}-session-${brightDataSessionId}`;
+      if (countryCode) {
+        proxyUsername += `-country-${countryCode}`;
+      }
+
+      await page.authenticate({
+        username: proxyUsername,
+        password: brightDataPassword,
+      });
+
+      await dualLogInfo(`Authenticated with Bright Data proxy`, {
+        jobId,
+        sessionId: brightDataSessionId,
+        proxyUsername,
+        country: countryName || countryCode || "Auto",
+        countryCode: countryCode || "auto",
+      });
+    }
+
+    // Set viewport size if provided
+    if (windowSize) {
+      await page.setViewport({
+        width: windowSize.width,
+        height: windowSize.height,
+      });
+      await dualLogInfo(
+        `Set viewport size: ${windowSize.width}x${windowSize.height}`,
+        { jobId, windowSize }
+      );
+    }
+
+    // Detect IP address and country if using Bright Data proxy
+    if (brightDataSessionId) {
+      try {
+        await dualLogInfo("Detecting residential IP and location...", {
+          jobId,
+        });
+
+        // Get IP address
+        const ipResponse = await page.goto(
+          "https://api.ipify.org?format=json",
+          {
+            waitUntil: "networkidle0",
+            timeout: 10000,
+          }
+        );
+
+        if (ipResponse && ipResponse.ok()) {
+          const ipData = await ipResponse.json();
+          const ipAddress = ipData.ip;
+
+          // Get country/location info
+          try {
+            const geoResponse = await page.goto(
+              `https://ipapi.co/${ipAddress}/json/`,
+              { waitUntil: "networkidle0", timeout: 10000 }
+            );
+
+            if (geoResponse && geoResponse.ok()) {
+              const geoData = await geoResponse.json();
+              const country =
+                geoData.country_name || geoData.country || "Unknown";
+              const city = geoData.city || "Unknown";
+              const region = geoData.region || "Unknown";
+
+              await dualLogInfo(
+                `✅ Bright Data Residential IP Detected: ${ipAddress} | Country: ${country} | City: ${city}, ${region}`,
+                {
+                  jobId,
+                  sessionId: brightDataSessionId,
+                  ipAddress,
+                  country,
+                  city,
+                  region,
+                  countryCode: geoData.country_code,
+                  isp: geoData.org,
+                }
+              );
+            } else {
+              // Fallback: just log IP if geolocation fails
+              await dualLogInfo(
+                `✅ Bright Data Residential IP Detected: ${ipAddress}`,
+                { jobId, sessionId: brightDataSessionId, ipAddress }
+              );
+            }
+          } catch (geoError) {
+            // Fallback: just log IP if geolocation fails
+            await dualLogInfo(
+              `✅ Bright Data Residential IP Detected: ${ipAddress} (Country detection failed)`,
+              { jobId, sessionId: brightDataSessionId, ipAddress }
+            );
+          }
+        }
+      } catch (ipError: any) {
+        await dualLogWarn("Failed to detect IP address (non-critical)", {
+          jobId,
+          error: ipError.message,
+        });
+        // Don't throw - IP detection is not critical for scraping
+      }
+    }
+
+    // Get country-based configuration for anti-detection (realistic, not randomized)
+    let timezone: string | undefined;
+    let acceptLanguage: string | undefined;
+
+    if (jobId) {
+      try {
+        const { getTimezone, getAcceptLanguage } = await import(
+          "../common/job-isolation.js"
+        );
+        timezone = getTimezone(jobId);
+        acceptLanguage = getAcceptLanguage(jobId);
+      } catch (error) {
+        // Fallback if isolation helpers fail
+      }
+    }
+
+    // Set timezone via CDP (Chrome DevTools Protocol)
+    if (timezone) {
+      try {
+        const cdp = await page.target().createCDPSession();
+        await cdp.send("Emulation.setTimezoneOverride", {
+          timezoneId: timezone,
+        });
+        await dualLogInfo(`Set timezone: ${timezone}`, { jobId, timezone });
+      } catch (timezoneError: any) {
+        await dualLogWarn("Failed to set timezone (non-critical)", {
+          jobId,
+          error: timezoneError.message,
+        });
+      }
+    }
+
     // Set user agent to match GraphQL API headers exactly
     await page.setUserAgent(BROWSER_CONFIG.USER_AGENT);
 
-    // Set additional headers to match real browser behavior
-    await page.setExtraHTTPHeaders(BROWSER_CONFIG.HEADERS);
-
-    // Hide automation indicators
-    await page.evaluateOnNewDocument(() => {
-      // Remove webdriver property
-      delete (navigator as any).webdriver;
-
-      // Override the plugins property to use a real value
-      Object.defineProperty(navigator, "plugins", {
-        get: () => [1, 2, 3, 4, 5],
+    // Set additional headers with country-specific Accept-Language
+    const headers = { ...BROWSER_CONFIG.HEADERS };
+    if (acceptLanguage) {
+      headers["Accept-Language"] = acceptLanguage;
+      await dualLogInfo(`Set Accept-Language: ${acceptLanguage}`, {
+        jobId,
+        acceptLanguage,
       });
+    }
+    await page.setExtraHTTPHeaders(headers);
 
-      // Override the languages property to use a real value
-      Object.defineProperty(navigator, "languages", {
-        get: () => ["en-US", "en"],
-      });
+    // Hide automation indicators (minimal, realistic approach)
+    await page.evaluateOnNewDocument(
+      (config: { languages: string[] }) => {
+        // Remove webdriver property
+        delete (navigator as any).webdriver;
 
-      // Override chrome property
-      (window as any).chrome = {
-        runtime: {},
-      };
+        // Override the plugins property to use a real value
+        Object.defineProperty(navigator, "plugins", {
+          get: () => [1, 2, 3, 4, 5],
+        });
 
-      // Mock permissions
-      const originalQuery = window.navigator.permissions.query;
-      window.navigator.permissions.query = (parameters) => {
-        if (parameters.name === "notifications") {
-          return Promise.resolve({
-            state: Notification.permission,
-            name: "notifications",
-            onchange: null,
-            addEventListener: () => {},
-            removeEventListener: () => {},
-            dispatchEvent: () => false,
-          } as PermissionStatus);
-        }
-        return originalQuery(parameters);
-      };
-    });
+        // Override the languages property with country-specific languages (realistic)
+        Object.defineProperty(navigator, "languages", {
+          get: () => config.languages,
+        });
+
+        // Override chrome property
+        (window as any).chrome = {
+          runtime: {},
+        };
+
+        // Mock permissions
+        const originalQuery = window.navigator.permissions.query;
+        window.navigator.permissions.query = (parameters) => {
+          if (parameters.name === "notifications") {
+            return Promise.resolve({
+              state: Notification.permission,
+              name: "notifications",
+              onchange: null,
+              addEventListener: () => {},
+              removeEventListener: () => {},
+              dispatchEvent: () => false,
+            } as PermissionStatus);
+          }
+          return originalQuery(parameters);
+        };
+      },
+      {
+        languages: acceptLanguage
+          ? acceptLanguage.split(",").map((l) => l.trim().split(";")[0])
+          : ["en-US", "en"],
+      }
+    );
     // Set default timeouts based on job configuration
     await page.setDefaultNavigationTimeout(loadingTimeout);
     await page.setDefaultTimeout(selectorTimeout);

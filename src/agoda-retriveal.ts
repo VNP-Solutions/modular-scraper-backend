@@ -92,7 +92,9 @@ async function agodaRetrieval(
   agodaUsername?: string,
   agodaPassword?: string,
   reservations?: Reservation[],
-  retrievalId?: string
+  retrievalId?: string,
+  brightDataSessionId?: string,
+  windowSize?: { width: number; height: number }
 ): Promise<any[]> {
   let browser: Browser | null = null;
 
@@ -142,7 +144,10 @@ async function agodaRetrieval(
 
     // Browser setup
     const environment = process.env.ENVIRONMENT || CONFIG.ENVIRONMENT.DEFAULT;
-    await dualLogInfo(`Setting up browser for ${environment} environment`);
+    await dualLogInfo(`Setting up browser for ${environment} environment`, {
+      brightDataSessionId,
+      windowSize,
+    });
 
     let setupResult = null;
     if (environment === CONFIG.ENVIRONMENT.PRODUCTION) {
@@ -151,7 +156,13 @@ async function agodaRetrieval(
         CONFIG.OTA_PROVIDER.AGODA
       );
     } else {
-      setupResult = await browserSetupLocal(jobId, CONFIG.OTA_PROVIDER.AGODA);
+      // Use local browser with Bright Data proxy
+      setupResult = await browserSetupLocal(
+        jobId,
+        CONFIG.OTA_PROVIDER.AGODA,
+        brightDataSessionId,
+        windowSize
+      );
     }
 
     browser = setupResult.browser;

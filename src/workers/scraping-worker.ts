@@ -1000,6 +1000,8 @@ class ScrapingWorker {
       agodaId,
       user_email,
       user_password,
+      brightDataSessionId,
+      windowSize,
     } = jobData;
 
     if (!reservations || reservations.length === 0) {
@@ -1051,20 +1053,24 @@ class ScrapingWorker {
         parentRetrievalId: parentRetrievalId,
         reservationCount: reservations.length,
         hasCredentials: !!(user_email && user_password),
+        brightDataSessionId,
+        windowSize,
       }
     );
 
     scrapingStateManager.startScraping("retrieval-reservations", finalJobId);
 
     try {
-      // Pass credentials directly to the reservation function along with jobId
+      // Pass credentials and Bright Data isolation config to the reservation function
       await agodaRetrieval(
         agodaId,
         finalJobId,
         user_email,
         user_password,
         reservations,
-        retrievalId
+        retrievalId,
+        brightDataSessionId,
+        windowSize
       );
 
       // Mark scraping as completed
