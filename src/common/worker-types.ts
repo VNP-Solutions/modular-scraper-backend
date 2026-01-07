@@ -18,6 +18,11 @@ export interface WorkerJobData {
   agodaPassword?: string;
   reservations?: any[];
   originalStatus?: string;
+  // Bright Data isolation config
+  brightDataSessionId?: string; // Session ID for Bright Data proxy
+  windowSize?: { width: number; height: number }; // Window size for browser
+  timezone?: string; // Timezone for browser emulation
+  acceptLanguage?: string; // Accept-Language header for browser
 }
 
 export interface WorkerMessage {

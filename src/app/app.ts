@@ -2,6 +2,12 @@ import bodyParser from "body-parser";
 import cors from "cors";
 import express from "express";
 import createError from "../common/error.js";
+import {
+  getAcceptLanguage,
+  getBrightDataSessionId,
+  getTimezone,
+  getWindowSize,
+} from "../common/job-isolation.js";
 import { otpAwareWorkerPool } from "../common/otp-aware-worker-pool.js";
 import { progressManager } from "../common/progress-manager.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
@@ -77,7 +83,7 @@ app.use((req, res, next) => {
 app.get("/", (req, res, next) => {
   try {
     res.status(200).json({
-      messge: "Connection established on graphql-agoda-thread branch",
+      messge: "Connection established on agoda-thread-proxy branch",
     });
   } catch (err: any) {
     next(createError(err.status, err.message));
@@ -2426,6 +2432,16 @@ app.post("/api/agoda/property-run-job", (async (
 
     console.log(`Using agoda_id: ${agodaId} for scraping`);
 
+    // Generate Bright Data isolation config for this job
+    const brightDataSessionId = getBrightDataSessionId(jobId);
+    const windowSize = getWindowSize(jobId);
+    const timezone = getTimezone(jobId);
+    const acceptLanguage = getAcceptLanguage(jobId);
+
+    console.log(
+      `Job ${jobId}: brightDataSessionId=${brightDataSessionId}, windowSize=${windowSize.width}x${windowSize.height}, timezone=${timezone}, acceptLanguage=${acceptLanguage}`
+    );
+
     // 3. Prepare worker job data
     const workerJobData: WorkerJobData = {
       jobType: "agoda-property-run",
@@ -2435,6 +2451,10 @@ app.post("/api/agoda/property-run-job", (async (
       agodaId,
       agodaUsername,
       agodaPassword,
+      brightDataSessionId,
+      windowSize,
+      timezone,
+      acceptLanguage,
     };
 
     // 4. Execute job in worker thread

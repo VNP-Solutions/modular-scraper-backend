@@ -2,19 +2,19 @@ import dotenv from "dotenv";
 import { Browser } from "puppeteer";
 import { getAgodaBookingData } from "./agoda/booking-data/booking-data.js";
 import agodaLogin from "./agoda/login-system/login.js";
+import { cleanupOnError } from "./agoda/utils/error-cleanup.js";
 import { browserSetupLocal } from "./browser-setup/browser-local.js";
 import { browserSetupProduction } from "./browser-setup/browser-prod.js";
 import { emailNotifier } from "./common/email-notifier.js";
-import { cleanupOnError } from "./agoda/utils/error-cleanup.js";
 import { dualLogError, dualLogInfo } from "./common/log-helper.js";
 import { otpCompletionNotifier } from "./common/otp-completion-notifier.js";
 import { progressManager } from "./common/progress-manager.js";
 import { scrapingStateManager } from "./common/scraping-state.js";
-import { timeManager } from "./common/time-manager.js";
 import {
-  takeSuccessScreenshot,
   takeErrorScreenshot,
+  takeSuccessScreenshot,
 } from "./common/screenshot-helper.js";
+import { timeManager } from "./common/time-manager.js";
 import { JobStatus } from "./models/job.model.js";
 import { jobService } from "./services/job.service.js";
 
@@ -26,7 +26,11 @@ async function agoda(
   endDate?: string,
   jobId?: string,
   agodaUsername?: string,
-  agodaPassword?: string
+  agodaPassword?: string,
+  brightDataSessionId?: string,
+  windowSize?: { width: number; height: number },
+  timezone?: string, // Added for timezone spoofing
+  acceptLanguage?: string // Added for Accept-Language header
 ): Promise<any[]> {
   let browser: Browser | null = null;
 
@@ -106,13 +110,26 @@ async function agoda(
 
     // Browser setup
     const environment = process.env.ENVIRONMENT || "production";
-    await dualLogInfo(`Setting up browser for ${environment} environment`);
+    await dualLogInfo(`Setting up browser for ${environment} environment`, {
+      brightDataSessionId,
+      windowSize,
+      timezone,
+      acceptLanguage,
+    });
 
     let setupResult = null;
     if (environment === "production") {
       setupResult = await browserSetupProduction(jobId, "agoda");
     } else {
-      setupResult = await browserSetupLocal(jobId, "agoda");
+      // Use local browser with Bright Data proxy
+      setupResult = await browserSetupLocal(
+        jobId,
+        "agoda",
+        brightDataSessionId,
+        windowSize,
+        timezone,
+        acceptLanguage
+      );
     }
 
     browser = setupResult.browser;

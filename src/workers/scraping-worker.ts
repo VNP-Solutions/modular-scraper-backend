@@ -700,8 +700,18 @@ class ScrapingWorker {
   }
 
   private async handleAgodaPropertyRun(jobData: WorkerJobData): Promise<any> {
-    const { jobId, startDate, endDate, agodaId, agodaUsername, agodaPassword } =
-      jobData;
+    const {
+      jobId,
+      startDate,
+      endDate,
+      agodaId,
+      agodaUsername,
+      agodaPassword,
+      brightDataSessionId,
+      windowSize,
+      timezone,
+      acceptLanguage,
+    } = jobData;
 
     if (!startDate || !endDate || !jobId) {
       throw new Error(
@@ -770,20 +780,28 @@ class ScrapingWorker {
       agodaId: finalAgodaId,
       startDate,
       endDate,
+      brightDataSessionId,
+      windowSize,
+      timezone,
+      acceptLanguage,
     });
 
     // 5. Start scraping state manager
     scrapingStateManager.startScraping(finalAgodaId, jobId, startDate, endDate);
 
     try {
-      // 6. Run the main Agoda scraping function
+      // 6. Run the main Agoda scraping function with Bright Data isolation
       await agoda(
         finalAgodaId,
         startDate,
         endDate,
         jobId,
         finalAgodaUsername,
-        finalAgodaPassword
+        finalAgodaPassword,
+        brightDataSessionId,
+        windowSize,
+        timezone,
+        acceptLanguage
       );
 
       // 7. Get final job statistics
@@ -843,7 +861,14 @@ class ScrapingWorker {
   }
 
   private async handleAgodaRerunFailed(jobData: WorkerJobData): Promise<any> {
-    const { jobId, originalStatus } = jobData;
+    const {
+      jobId,
+      originalStatus,
+      brightDataSessionId,
+      windowSize,
+      timezone,
+      acceptLanguage,
+    } = jobData;
 
     if (!jobId) {
       throw new Error("jobId is required for agoda-rerun-failed jobs");
@@ -913,14 +938,43 @@ class ScrapingWorker {
     scrapingStateManager.startScraping(agodaId, jobId, startDate, endDate);
 
     try {
-      // 8. Run the main Agoda scraping function
+      // Generate Bright Data isolation config for rerun job if not provided
+      let rerunBrightDataSessionId = brightDataSessionId;
+      let rerunWindowSize = windowSize;
+      let rerunTimezone = timezone;
+      let rerunAcceptLanguage = acceptLanguage;
+
+      if (
+        !rerunBrightDataSessionId ||
+        !rerunWindowSize ||
+        !rerunTimezone ||
+        !rerunAcceptLanguage
+      ) {
+        const {
+          getBrightDataSessionId,
+          getWindowSize,
+          getTimezone,
+          getAcceptLanguage,
+        } = await import("../common/job-isolation.js");
+        rerunBrightDataSessionId =
+          rerunBrightDataSessionId || getBrightDataSessionId(jobId);
+        rerunWindowSize = rerunWindowSize || getWindowSize(jobId);
+        rerunTimezone = rerunTimezone || getTimezone(jobId);
+        rerunAcceptLanguage = rerunAcceptLanguage || getAcceptLanguage(jobId);
+      }
+
+      // 8. Run the main Agoda scraping function with Bright Data isolation
       await agoda(
         agodaId,
         startDate,
         endDate,
         jobId,
         agodaUsername,
-        agodaPassword
+        agodaPassword,
+        rerunBrightDataSessionId,
+        rerunWindowSize,
+        rerunTimezone,
+        rerunAcceptLanguage
       );
 
       // 9. Get final job statistics
