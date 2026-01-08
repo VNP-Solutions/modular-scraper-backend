@@ -1,3 +1,4 @@
+import dotenv from "dotenv";
 import { EventEmitter } from "events";
 import mongoose from "mongoose";
 import {
@@ -6,7 +7,6 @@ import {
   OtpStatus,
   OtpStatusValue,
 } from "../models/otp-status.model.js";
-import dotenv from "dotenv";
 
 dotenv.config();
 
@@ -93,10 +93,43 @@ export class OtpStatusManager extends EventEmitter {
   }
 
   /**
-   * Check if OTP is currently available (Released status)
+   * Check if OTP is currently available (Released status) for a specific platform
    */
-  public isOtpAvailable(): boolean {
-    return this.currentStatus?.status === OtpStatusValue.Released;
+  public isOtpAvailable(platform?: OtpPlatform): boolean {
+    if (!this.isInitialized || !this.currentStatus) {
+      return false;
+    }
+
+    // If platform is specified, check platform-specific availability
+    if (platform) {
+      // If the current in-memory status is for the requested platform, check its status
+      if (this.currentStatus.platform === platform) {
+        return this.currentStatus.status === OtpStatusValue.Released;
+      }
+
+      // If current status is for a different platform:
+      // - If it's Released, OTP is available for the requested platform
+      // - If it's Occupied for a different platform, the requested platform's OTP should be available
+      //   (assuming separate OTP resources per platform, or the database query will handle it)
+      if (this.currentStatus.status === OtpStatusValue.Released) {
+        return true;
+      }
+
+      // If occupied by a different platform, assume available for requested platform
+      // (the database query in reserveOtp will verify this)
+      if (
+        this.currentStatus.platform &&
+        this.currentStatus.platform !== platform
+      ) {
+        return true;
+      }
+
+      // Same platform and occupied, not available
+      return false;
+    }
+
+    // If no platform specified, check if OTP is released (backward compatibility)
+    return this.currentStatus.status === OtpStatusValue.Released;
   }
 
   /**
@@ -106,13 +139,25 @@ export class OtpStatusManager extends EventEmitter {
     jobId: string,
     platform: OtpPlatform
   ): Promise<boolean> {
-    platform = this.getOtpPlatform();
     if (!this.isInitialized) {
       await this.initialize();
     }
 
     try {
-      // Attempt to reserve OTP atomically
+      // First, ensure a document exists for this platform (create if it doesn't)
+      await OtpStatus.findOneAndUpdate(
+        { platform: platform },
+        {
+          $setOnInsert: {
+            status: OtpStatusValue.Released,
+            platform: platform,
+            job_id: null,
+          },
+        },
+        { upsert: true }
+      );
+
+      // Attempt to reserve OTP atomically (only if currently Released)
       const result = await OtpStatus.findOneAndUpdate(
         { status: OtpStatusValue.Released, platform: platform }, // Only update if currently Released
         {

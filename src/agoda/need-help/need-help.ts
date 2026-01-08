@@ -663,20 +663,20 @@ export async function automateNeedHelpProcess(
 
     // Step 9: Click final submit button
     // Only for production environment
-    if (process.env.AGODA_SUBMISSION === "true") {
-      await submitFinalCsv(page, jobId);
-    }
+    // if (process.env.AGODA_SUBMISSION === "true") {
+    //   await submitFinalCsv(page, jobId);
+    // }
 
-    if (jobId) {
-      // Update progress - Need Help process completed
-      await progressManager.updateJobProgress(
-        jobId,
-        undefined,
-        100,
-        "agoda_need_help_process_completed",
-        undefined
-      );
-    }
+    // if (jobId) {
+    //   // Update progress - Need Help process completed
+    //   await progressManager.updateJobProgress(
+    //     jobId,
+    //     undefined,
+    //     100,
+    //     "agoda_need_help_process_completed",
+    //     undefined
+    //   );
+    // }
 
     await dualLogInfo(
       "✅ Need Help automation process completed successfully",
