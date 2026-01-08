@@ -14,6 +14,8 @@ export interface CsvRecord {
   Customer_Name: string;
   RoomType: string;
   CancellationPolicyDescription?: string;
+  amount_to_charge_or_refund?: number; // From bookingSummaryPriceViewModel.price
+  amount_to_charge_or_refund_currency?: string; // From bookingSummaryPriceViewModel.currencyCode
   [key: string]: any; // For other CSV fields
 }
 
@@ -616,10 +618,11 @@ export async function mapApiResponseToCsvRecords(
     // Retry loop to ensure we get booking summary data
     while (retryAttempt < maxAttempts && !bookingSummary) {
       try {
-        // Add human-like random delay before booking summary API call (500ms to 3 seconds)
+        // Add human-like random delay before booking summary API call (1-5 seconds)
         // This simulates the time a human would take to click/interact with the UI
-        // Increased range to reduce rate limiting (429 errors)
-        const randomDelay = Math.floor(Math.random() * (3000 - 500 + 1)) + 500; // Random between 500ms and 3000ms
+        // Helps reduce rate limiting (429 errors)
+        const randomDelay =
+          Math.floor(Math.random() * (5000 - 1000 + 1)) + 1000; // Random between 1000ms (1s) and 5000ms (5s)
         await delay(randomDelay);
 
         // Fetch booking summary only (no booking details API needed)

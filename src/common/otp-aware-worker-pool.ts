@@ -447,17 +447,14 @@ export class OtpAwareWorkerPool extends EventEmitter {
       return;
     }
 
-    // If job requires OTP, check OTP availability for the specific platform
-    if (queuedJob.requiresOtp) {
-      const platform = this.getJobPlatform(queuedJob.jobData);
-      if (!this.otpManager.isOtpAvailable(platform)) {
-        // OTP not available for this platform, add to queue
-        this.jobQueue.push(queuedJob);
-        console.log(
-          `\x1b[33mJob ${queuedJob.jobData.jobId} queued (OTP occupied for platform ${platform}). Queue size: ${this.jobQueue.length}\x1b[0m`
-        );
-        return;
-      }
+    // If job requires OTP, check OTP availability
+    if (queuedJob.requiresOtp && !this.otpManager.isOtpAvailable()) {
+      // OTP not available, add to queue
+      this.jobQueue.push(queuedJob);
+      console.log(
+        `\x1b[33mJob ${queuedJob.jobData.jobId} queued (OTP occupied). Queue size: ${this.jobQueue.length}\x1b[0m`
+      );
+      return;
     }
 
     // Both worker and OTP (if needed) are available
@@ -550,9 +547,8 @@ export class OtpAwareWorkerPool extends EventEmitter {
 
       // Check if requirements are met
       const availableWorker = this.getAvailableWorker();
-      const platform = queuedJob.requiresOtp ? this.getJobPlatform(queuedJob.jobData) : undefined;
       const otpAvailable =
-        !queuedJob.requiresOtp || this.otpManager.isOtpAvailable(platform);
+        !queuedJob.requiresOtp || this.otpManager.isOtpAvailable();
 
       if (availableWorker && otpAvailable) {
         // Remove job from queue

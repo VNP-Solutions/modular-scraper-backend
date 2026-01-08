@@ -203,34 +203,125 @@ async function agodaLogin(
         );
       }
 
+      // Wait for page transition after clicking continue
+      // In headless mode, the iframe/page might need more time to update
+      await dualLogInfo("Waiting for page transition after continue click...");
+      await new Promise((resolve) => setTimeout(resolve, 2000)); // Wait 2 seconds for page to start transitioning
+
       // Wait for either "check your email" message or OTP form
       await dualLogInfo("Waiting for next page (email link or OTP form)...");
 
       // Use Promise.race to wait for either outcome
-      const nextPageResult = await Promise.race([
+      // Increased timeout and added better error handling for headless mode
+      let nextPageResult = await Promise.race([
         // Option 1: Check your email message (for direct link)
         frame
           .waitForSelector('div[data-cy="check-your-email"]', {
             timeout: loadingTimeout,
           })
-          .then(() => "email-link"),
+          .then(() => "email-link")
+          .catch(() => null),
 
         // Option 2: OTP form appears
         frame
           .waitForSelector('div[data-cy="unified-auth-otp-form"]', {
             timeout: loadingTimeout,
           })
-          .then(() => "otp-form"),
+          .then(() => "otp-form")
+          .catch(() => null),
 
         // Option 3: OTP heading appears
         frame
           .waitForSelector('h2:has-text("Sign in with OTP")', {
             timeout: loadingTimeout,
           })
-          .then(() => "otp-form"),
+          .then(() => "otp-form")
+          .catch(() => null),
+
+        // Option 4: Wait a bit longer and check iframe content changed
+        new Promise((resolve) => {
+          setTimeout(async () => {
+            try {
+              // Check if iframe content has changed by looking for any of the expected elements
+              const checkEmail = await frame.$(
+                'div[data-cy="check-your-email"]'
+              );
+              const otpForm = await frame.$(
+                'div[data-cy="unified-auth-otp-form"]'
+              );
+              const otpHeading = await frame.$(
+                'h2:has-text("Sign in with OTP")'
+              );
+
+              if (checkEmail) resolve("email-link");
+              else if (otpForm || otpHeading) resolve("otp-form");
+              else resolve(null);
+            } catch {
+              resolve(null);
+            }
+          }, 3000); // Wait 3 seconds then check
+        }),
       ]);
 
       await dualLogInfo(`Next page result: ${nextPageResult}`);
+
+      // If no result found, try to detect what's on the page
+      if (!nextPageResult) {
+        await dualLogInfo(
+          "No expected element found, checking current page state..."
+        );
+
+        // Take a screenshot to see what's on the page
+        if (jobId) {
+          await takeSuccessScreenshot(
+            page,
+            jobId,
+            "after_continue_click_state"
+          );
+        }
+
+        // Try to find any of the expected elements with a different approach
+        try {
+          const checkEmail = await frame.$('div[data-cy="check-your-email"]');
+          const otpForm = await frame.$('div[data-cy="unified-auth-otp-form"]');
+          const otpHeading = await frame.$('h2:has-text("Sign in with OTP")');
+
+          if (checkEmail) {
+            await dualLogInfo("Found check-your-email element on retry");
+            nextPageResult = "email-link";
+          } else if (otpForm || otpHeading) {
+            await dualLogInfo("Found OTP form element on retry");
+            nextPageResult = "otp-form";
+          } else {
+            // Check iframe content as text
+            const iframeContent = await frame.content();
+            if (
+              iframeContent.includes("check your email") ||
+              iframeContent.includes("Check your email")
+            ) {
+              await dualLogInfo(
+                "Found 'check your email' text in iframe content"
+              );
+              nextPageResult = "email-link";
+            } else if (
+              iframeContent.includes("OTP") ||
+              iframeContent.includes("otp")
+            ) {
+              await dualLogInfo("Found OTP text in iframe content");
+              nextPageResult = "otp-form";
+            } else {
+              throw new Error(
+                "Could not detect next page state after continue click. Iframe content may not have updated properly in headless mode."
+              );
+            }
+          }
+        } catch (detectionError: any) {
+          await dualLogError("Error detecting page state:", detectionError);
+          throw new Error(
+            `Failed to detect next page after continue click. This may be a headless mode issue. Error: ${detectionError.message}`
+          );
+        }
+      }
 
       // Handle different login flows based on next page result
       if (nextPageResult === "email-link") {
