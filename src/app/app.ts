@@ -2420,8 +2420,17 @@ app.post("/api/expedia/bulk-property-run-job", (async (
       // - Run immediately if OTP and worker available
       // - Queue and set InQueue status if OTP occupied or no worker available
       // Fire and forget - don't wait for completion
-      otpAwareWorkerPool.executeJob(workerJobData).catch((error) => {
+      otpAwareWorkerPool.executeJob(workerJobData).catch(async (error) => {
         console.error(`Error submitting job ${job.jobId}:`, error);
+        // Update job status to Failed if submission fails
+        try {
+          await jobService.updateJobStatus(job.jobId, JobStatus.Failed);
+        } catch (statusError) {
+          console.error(
+            `Error updating job ${job.jobId} status to Failed:`,
+            statusError
+          );
+        }
       });
 
       results.submitted.push({
@@ -2612,8 +2621,17 @@ app.post("/api/expedia/bulk-graphql-run-job", (async (
       // - Run immediately if OTP and worker available
       // - Queue and set InQueue status if OTP occupied or no worker available
       // Fire and forget - don't wait for completion
-      otpAwareWorkerPool.executeJob(workerJobData).catch((error) => {
+      otpAwareWorkerPool.executeJob(workerJobData).catch(async (error) => {
         console.error(`Error submitting GraphQL job ${job.jobId}:`, error);
+        // Update job status to Failed if submission fails
+        try {
+          await jobService.updateJobStatus(job.jobId, JobStatus.Failed);
+        } catch (statusError) {
+          console.error(
+            `Error updating job ${job.jobId} status to Failed:`,
+            statusError
+          );
+        }
       });
 
       results.submitted.push({
