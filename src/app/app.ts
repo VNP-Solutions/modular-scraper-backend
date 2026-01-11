@@ -9,6 +9,7 @@ import { WorkerJobData } from "../common/worker-types.js";
 import { specs, swaggerUi } from "../config/swagger.js";
 import { getAccess, getOauth2Callback } from "../get-access/access.js";
 import { JobStatus } from "../models/job.model.js";
+import { ScheduledJob } from "../models/scheduled-job.model.js";
 import { propertyCredentialsService } from "../services/job-credentials.service.js";
 import { jobService } from "../services/job.service.js";
 
@@ -2325,7 +2326,7 @@ app.post("/api/expedia/bulk-property-run-job", (async (
   res: express.Response
 ) => {
   try {
-    const { startDate, endDate, job_ids } = req.body;
+    const { startDate, endDate, job_ids, scheduler_id } = req.body;
 
     if (!startDate || !endDate) {
       return res.status(400).json({
@@ -2361,51 +2362,81 @@ app.post("/api/expedia/bulk-property-run-job", (async (
       })
     );
 
-    // Check for invalid jobs
+    // Separate valid and invalid jobs
+    const validJobs = jobValidations.filter(
+      (j) => j.validation.exists && j.validation.canRun
+    );
     const invalidJobs = jobValidations.filter(
       (j) => !j.validation.exists || !j.validation.canRun
     );
 
-    if (invalidJobs.length > 0) {
-      return res.status(400).json({
-        status: 400,
-        message: "Some jobs are invalid or cannot be run",
-        invalidJobs: invalidJobs.map((j) => ({
-          jobId: j.jobId,
-          exists: j.validation.exists,
-          canRun: j.validation.canRun,
-          currentStatus: j.validation.job?.job_status,
-        })),
-      });
-    }
-
-    // Get job data for all jobs
+    // Get job data for valid jobs only
     const jobsData = await Promise.all(
-      job_ids.map(async (jobId: string) => {
-        const jobData = await jobService.getExpediaIdFromJob(jobId);
-        if (!jobData || !jobData.expediaId) {
-          throw new Error(
-            `Cannot retrieve valid expedia_id for job ${jobId}. Property may not have expedia_id assigned or expedia_id is "0".`
-          );
+      validJobs.map(async ({ jobId }) => {
+        try {
+          const jobData = await jobService.getExpediaIdFromJob(jobId);
+          if (!jobData || !jobData.expediaId) {
+            return {
+              jobId,
+              error: `Cannot retrieve valid expedia_id for job ${jobId}. Property may not have expedia_id assigned or expedia_id is "0".`,
+            };
+          }
+          if (!jobData.user_email || !jobData.user_password) {
+            return {
+              jobId,
+              error: `Cannot retrieve valid user_email or user_password for job ${jobId}. Property may not have user_email or user_password assigned.`,
+            };
+          }
+          return { jobId, jobData };
+        } catch (error) {
+          return {
+            jobId,
+            error: error instanceof Error ? error.message : String(error),
+          };
         }
-        if (!jobData.user_email || !jobData.user_password) {
-          throw new Error(
-            `Cannot retrieve valid user_email or user_password for job ${jobId}. Property may not have user_email or user_password assigned.`
-          );
-        }
-        return { jobId, jobData };
       })
     );
+
+    // Separate jobs with valid data from those with errors
+    const validJobsData = jobsData.filter(
+      (j): j is { jobId: string; jobData: any } => !("error" in j)
+    );
+    const jobsWithErrors = jobsData.filter((j) => "error" in j);
 
     // Submit all jobs asynchronously without waiting - fire and forget
     const results: {
       submitted: Array<{ jobId: string; status: string; data?: any }>;
+      invalid: Array<{ jobId: string; reason: string; currentStatus?: string }>;
+      errors: Array<{ jobId: string; error: string }>;
     } = {
       submitted: [],
+      invalid: [],
+      errors: [],
     };
 
-    // Submit all jobs without awaiting - they run in the background
-    jobsData.forEach((job) => {
+    // Add invalid jobs to results
+    invalidJobs.forEach(({ jobId, validation }) => {
+      results.invalid.push({
+        jobId,
+        reason: !validation.exists
+          ? "Job not found"
+          : "Job is not in a runnable state",
+        currentStatus: validation.job?.job_status || undefined,
+      });
+    });
+
+    // Add jobs with errors to results
+    jobsWithErrors.forEach((job) => {
+      if ("error" in job && job.error) {
+        results.errors.push({
+          jobId: job.jobId,
+          error: job.error,
+        });
+      }
+    });
+
+    // Submit valid jobs without awaiting - they run in the background
+    validJobsData.forEach((job) => {
       const workerJobData: WorkerJobData = {
         jobType: "property-run",
         jobId: job.jobId,
@@ -2439,9 +2470,48 @@ app.post("/api/expedia/bulk-property-run-job", (async (
       });
     });
 
+    // Update scheduled job comment with invalid job IDs if scheduler_id is provided
+    if (scheduler_id) {
+      try {
+        const invalidJobIds = [
+          ...results.invalid.map((j) => j.jobId),
+          ...results.errors.map((j) => j.jobId),
+        ];
+
+        if (invalidJobIds.length > 0) {
+          const invalidJobIdsString = invalidJobIds.join(", ");
+          const scheduledJob = await ScheduledJob.findById(scheduler_id);
+
+          if (scheduledJob) {
+            const existingComment = scheduledJob.comment || "";
+            const newComment = existingComment
+              ? `${existingComment}\nInvalid job IDs: ${invalidJobIdsString}`
+              : `Invalid job IDs: ${invalidJobIdsString}`;
+
+            await ScheduledJob.findByIdAndUpdate(scheduler_id, {
+              comment: newComment,
+            });
+            console.log(
+              `Updated scheduled job ${scheduler_id} comment with invalid job IDs`
+            );
+          } else {
+            console.warn(
+              `Scheduled job ${scheduler_id} not found, skipping comment update`
+            );
+          }
+        }
+      } catch (schedulerError) {
+        console.error(
+          `Error updating scheduled job ${scheduler_id} comment:`,
+          schedulerError
+        );
+        // Don't fail the request if scheduler update fails
+      }
+    }
+
     return res.status(200).json({
       status: 200,
-      message: `Submitted ${job_ids.length} jobs. The worker pool will handle execution and queueing automatically.`,
+      message: `Processed ${job_ids.length} jobs. ${results.submitted.length} submitted, ${results.invalid.length} invalid, ${results.errors.length} with errors.`,
       results,
     });
   } catch (err: any) {
@@ -2526,7 +2596,7 @@ app.post("/api/expedia/bulk-graphql-run-job", (async (
   res: express.Response
 ) => {
   try {
-    const { startDate, endDate, job_ids } = req.body;
+    const { startDate, endDate, job_ids, scheduler_id } = req.body;
 
     if (!startDate || !endDate) {
       return res.status(400).json({
@@ -2562,51 +2632,81 @@ app.post("/api/expedia/bulk-graphql-run-job", (async (
       })
     );
 
-    // Check for invalid jobs
+    // Separate valid and invalid jobs
+    const validJobs = jobValidations.filter(
+      (j) => j.validation.exists && j.validation.canRun
+    );
     const invalidJobs = jobValidations.filter(
       (j) => !j.validation.exists || !j.validation.canRun
     );
 
-    if (invalidJobs.length > 0) {
-      return res.status(400).json({
-        status: 400,
-        message: "Some jobs are invalid or cannot be run",
-        invalidJobs: invalidJobs.map((j) => ({
-          jobId: j.jobId,
-          exists: j.validation.exists,
-          canRun: j.validation.canRun,
-          currentStatus: j.validation.job?.job_status,
-        })),
-      });
-    }
-
-    // Get job data for all jobs
+    // Get job data for valid jobs only
     const jobsData = await Promise.all(
-      job_ids.map(async (jobId: string) => {
-        const jobData = await jobService.getExpediaIdFromJob(jobId);
-        if (!jobData || !jobData.expediaId) {
-          throw new Error(
-            `Cannot retrieve valid expedia_id for job ${jobId}. Property may not have expedia_id assigned or expedia_id is "0".`
-          );
+      validJobs.map(async ({ jobId }) => {
+        try {
+          const jobData = await jobService.getExpediaIdFromJob(jobId);
+          if (!jobData || !jobData.expediaId) {
+            return {
+              jobId,
+              error: `Cannot retrieve valid expedia_id for job ${jobId}. Property may not have expedia_id assigned or expedia_id is "0".`,
+            };
+          }
+          if (!jobData.user_email || !jobData.user_password) {
+            return {
+              jobId,
+              error: `Cannot retrieve valid user_email or user_password for job ${jobId}. Property may not have user_email or user_password assigned.`,
+            };
+          }
+          return { jobId, jobData };
+        } catch (error) {
+          return {
+            jobId,
+            error: error instanceof Error ? error.message : String(error),
+          };
         }
-        if (!jobData.user_email || !jobData.user_password) {
-          throw new Error(
-            `Cannot retrieve valid user_email or user_password for job ${jobId}. Property may not have user_email or user_password assigned.`
-          );
-        }
-        return { jobId, jobData };
       })
     );
+
+    // Separate jobs with valid data from those with errors
+    const validJobsData = jobsData.filter(
+      (j): j is { jobId: string; jobData: any } => !("error" in j)
+    );
+    const jobsWithErrors = jobsData.filter((j) => "error" in j);
 
     // Submit all jobs asynchronously without waiting - fire and forget
     const results: {
       submitted: Array<{ jobId: string; status: string; data?: any }>;
+      invalid: Array<{ jobId: string; reason: string; currentStatus?: string }>;
+      errors: Array<{ jobId: string; error: string }>;
     } = {
       submitted: [],
+      invalid: [],
+      errors: [],
     };
 
-    // Submit all jobs without awaiting - they run in the background
-    jobsData.forEach((job) => {
+    // Add invalid jobs to results
+    invalidJobs.forEach(({ jobId, validation }) => {
+      results.invalid.push({
+        jobId,
+        reason: !validation.exists
+          ? "Job not found"
+          : "Job is not in a runnable state",
+        currentStatus: validation.job?.job_status || undefined,
+      });
+    });
+
+    // Add jobs with errors to results
+    jobsWithErrors.forEach((job) => {
+      if ("error" in job && job.error) {
+        results.errors.push({
+          jobId: job.jobId,
+          error: job.error,
+        });
+      }
+    });
+
+    // Submit valid jobs without awaiting - they run in the background
+    validJobsData.forEach((job) => {
       const workerJobData: WorkerJobData = {
         jobType: "graphql-run",
         jobId: job.jobId,
@@ -2640,9 +2740,48 @@ app.post("/api/expedia/bulk-graphql-run-job", (async (
       });
     });
 
+    // Update scheduled job comment with invalid job IDs if scheduler_id is provided
+    if (scheduler_id) {
+      try {
+        const invalidJobIds = [
+          ...results.invalid.map((j) => j.jobId),
+          ...results.errors.map((j) => j.jobId),
+        ];
+
+        if (invalidJobIds.length > 0) {
+          const invalidJobIdsString = invalidJobIds.join(", ");
+          const scheduledJob = await ScheduledJob.findById(scheduler_id);
+
+          if (scheduledJob) {
+            const existingComment = scheduledJob.comment || "";
+            const newComment = existingComment
+              ? `${existingComment}\nInvalid job IDs: ${invalidJobIdsString}`
+              : `Invalid job IDs: ${invalidJobIdsString}`;
+
+            await ScheduledJob.findByIdAndUpdate(scheduler_id, {
+              comment: newComment,
+            });
+            console.log(
+              `Updated scheduled job ${scheduler_id} comment with invalid job IDs`
+            );
+          } else {
+            console.warn(
+              `Scheduled job ${scheduler_id} not found, skipping comment update`
+            );
+          }
+        }
+      } catch (schedulerError) {
+        console.error(
+          `Error updating scheduled job ${scheduler_id} comment:`,
+          schedulerError
+        );
+        // Don't fail the request if scheduler update fails
+      }
+    }
+
     return res.status(200).json({
       status: 200,
-      message: `Submitted ${job_ids.length} jobs. The worker pool will handle execution and queueing automatically.`,
+      message: `Processed ${job_ids.length} jobs. ${results.submitted.length} submitted, ${results.invalid.length} invalid, ${results.errors.length} with errors.`,
       results,
     });
   } catch (err: any) {
