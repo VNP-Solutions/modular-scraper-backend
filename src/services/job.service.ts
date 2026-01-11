@@ -400,6 +400,7 @@ export class JobService {
 
     const canRun =
       job.job_status === JobStatus.Pending ||
+      job.job_status === JobStatus.InQueue ||
       job.job_status === JobStatus.Partial;
 
     return {

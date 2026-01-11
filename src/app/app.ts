@@ -2256,6 +2256,390 @@ app.post("/api/expedia/graphql-run-job", (async (
 
 /**
  * @swagger
+ * /api/expedia/bulk-property-run-job:
+ *   post:
+ *     tags:
+ *       - Scraping Jobs
+ *     summary: Bulk start property scraping jobs
+ *     description: |
+ *       Starts multiple property scraping jobs for the specified date range.
+ *       If OTP is available, runs the first job immediately and queues the rest.
+ *       If OTP is occupied, queues all jobs.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - startDate
+ *               - endDate
+ *               - job_ids
+ *             properties:
+ *               startDate:
+ *                 type: string
+ *                 format: date
+ *                 example: "01/01/2025"
+ *                 description: Start date for scraping (MM/DD/YYYY format)
+ *               endDate:
+ *                 type: string
+ *                 format: date
+ *                 example: "01/31/2025"
+ *                 description: End date for scraping (MM/DD/YYYY format)
+ *               job_ids:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 example: ["6892f4bf9df8bc296bdcdff0", "6892f4bf9df8bc296bdcdff1"]
+ *                 description: Array of job IDs to process
+ *     responses:
+ *       200:
+ *         description: Jobs processed successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: number
+ *                 message:
+ *                   type: string
+ *                 results:
+ *                   type: object
+ *                   properties:
+ *                     runImmediately:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                     queued:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *       400:
+ *         description: Invalid request parameters
+ *       500:
+ *         description: Error processing batch jobs
+ */
+app.post("/api/expedia/bulk-property-run-job", (async (
+  req: express.Request,
+  res: express.Response
+) => {
+  try {
+    const { startDate, endDate, job_ids } = req.body;
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({
+        status: 400,
+        message: "startDate and endDate are required in request body",
+      });
+    }
+    if (!job_ids || !Array.isArray(job_ids) || job_ids.length === 0) {
+      return res.status(400).json({
+        status: 400,
+        message:
+          "job_ids array is required and must contain at least one job ID",
+      });
+    }
+
+    // Check if worker threads are available
+    if (
+      !otpAwareWorkerPool.hasAvailableWorkers() &&
+      otpAwareWorkerPool.isQueueFull()
+    ) {
+      return res.status(200).json({
+        status: 200,
+        message: "All server busy, try again",
+        workerStatus: otpAwareWorkerPool.getStatus(),
+      });
+    }
+
+    // Validate all jobs exist and can be run
+    const jobValidations = await Promise.all(
+      job_ids.map(async (jobId: string) => {
+        const validation = await jobService.validateJob(jobId);
+        return { jobId, validation };
+      })
+    );
+
+    // Check for invalid jobs
+    const invalidJobs = jobValidations.filter(
+      (j) => !j.validation.exists || !j.validation.canRun
+    );
+
+    if (invalidJobs.length > 0) {
+      return res.status(400).json({
+        status: 400,
+        message: "Some jobs are invalid or cannot be run",
+        invalidJobs: invalidJobs.map((j) => ({
+          jobId: j.jobId,
+          exists: j.validation.exists,
+          canRun: j.validation.canRun,
+          currentStatus: j.validation.job?.job_status,
+        })),
+      });
+    }
+
+    // Get job data for all jobs
+    const jobsData = await Promise.all(
+      job_ids.map(async (jobId: string) => {
+        const jobData = await jobService.getExpediaIdFromJob(jobId);
+        if (!jobData || !jobData.expediaId) {
+          throw new Error(
+            `Cannot retrieve valid expedia_id for job ${jobId}. Property may not have expedia_id assigned or expedia_id is "0".`
+          );
+        }
+        if (!jobData.user_email || !jobData.user_password) {
+          throw new Error(
+            `Cannot retrieve valid user_email or user_password for job ${jobId}. Property may not have user_email or user_password assigned.`
+          );
+        }
+        return { jobId, jobData };
+      })
+    );
+
+    // Submit all jobs asynchronously without waiting - fire and forget
+    const results: {
+      submitted: Array<{ jobId: string; status: string; data?: any }>;
+    } = {
+      submitted: [],
+    };
+
+    // Submit all jobs without awaiting - they run in the background
+    jobsData.forEach((job) => {
+      const workerJobData: WorkerJobData = {
+        jobType: "property-run",
+        jobId: job.jobId,
+        startDate,
+        endDate,
+        expediaId: job.jobData.expediaId,
+        user_email: job.jobData.user_email,
+        user_password: job.jobData.user_password,
+      };
+
+      // executeJob will automatically:
+      // - Run immediately if OTP and worker available
+      // - Queue and set InQueue status if OTP occupied or no worker available
+      // Fire and forget - don't wait for completion
+      otpAwareWorkerPool.executeJob(workerJobData).catch((error) => {
+        console.error(`Error submitting job ${job.jobId}:`, error);
+      });
+
+      results.submitted.push({
+        jobId: job.jobId,
+        status: "submitted",
+      });
+    });
+
+    return res.status(200).json({
+      status: 200,
+      message: `Submitted ${job_ids.length} jobs. The worker pool will handle execution and queueing automatically.`,
+      results,
+    });
+  } catch (err: any) {
+    console.error("Error in /api/expedia/bulk-property-run-job:", err);
+
+    res.status(500).json({
+      status: 500,
+      message: "Error processing bulk property run jobs",
+      error: err.message,
+    });
+  }
+}) as any);
+
+/**
+ * @swagger
+ * /api/expedia/bulk-graphql-run-job:
+ *   post:
+ *     tags:
+ *       - Scraping Jobs
+ *     summary: Bulk start GraphQL scraping jobs
+ *     description: |
+ *       Starts multiple GraphQL scraping jobs for the specified date range.
+ *       If OTP is available, runs the first job immediately and queues the rest.
+ *       If OTP is occupied, queues all jobs.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - startDate
+ *               - endDate
+ *               - job_ids
+ *             properties:
+ *               startDate:
+ *                 type: string
+ *                 format: date
+ *                 example: "01/01/2025"
+ *                 description: Start date for scraping (MM/DD/YYYY format)
+ *               endDate:
+ *                 type: string
+ *                 format: date
+ *                 example: "01/31/2025"
+ *                 description: End date for scraping (MM/DD/YYYY format)
+ *               job_ids:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 example: ["6892f4bf9df8bc296bdcdff0", "6892f4bf9df8bc296bdcdff1"]
+ *                 description: Array of job IDs to process
+ *     responses:
+ *       200:
+ *         description: Jobs processed successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: number
+ *                 message:
+ *                   type: string
+ *                 results:
+ *                   type: object
+ *                   properties:
+ *                     runImmediately:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                     queued:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *       400:
+ *         description: Invalid request parameters
+ *       500:
+ *         description: Error processing batch jobs
+ */
+app.post("/api/expedia/bulk-graphql-run-job", (async (
+  req: express.Request,
+  res: express.Response
+) => {
+  try {
+    const { startDate, endDate, job_ids } = req.body;
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({
+        status: 400,
+        message: "startDate and endDate are required in request body",
+      });
+    }
+    if (!job_ids || !Array.isArray(job_ids) || job_ids.length === 0) {
+      return res.status(400).json({
+        status: 400,
+        message:
+          "job_ids array is required and must contain at least one job ID",
+      });
+    }
+
+    // Check if worker threads are available
+    if (
+      !otpAwareWorkerPool.hasAvailableWorkers() &&
+      otpAwareWorkerPool.isQueueFull()
+    ) {
+      return res.status(200).json({
+        status: 200,
+        message: "All server busy, try again",
+        workerStatus: otpAwareWorkerPool.getStatus(),
+      });
+    }
+
+    // Validate all jobs exist and can be run
+    const jobValidations = await Promise.all(
+      job_ids.map(async (jobId: string) => {
+        const validation = await jobService.validateJob(jobId);
+        return { jobId, validation };
+      })
+    );
+
+    // Check for invalid jobs
+    const invalidJobs = jobValidations.filter(
+      (j) => !j.validation.exists || !j.validation.canRun
+    );
+
+    if (invalidJobs.length > 0) {
+      return res.status(400).json({
+        status: 400,
+        message: "Some jobs are invalid or cannot be run",
+        invalidJobs: invalidJobs.map((j) => ({
+          jobId: j.jobId,
+          exists: j.validation.exists,
+          canRun: j.validation.canRun,
+          currentStatus: j.validation.job?.job_status,
+        })),
+      });
+    }
+
+    // Get job data for all jobs
+    const jobsData = await Promise.all(
+      job_ids.map(async (jobId: string) => {
+        const jobData = await jobService.getExpediaIdFromJob(jobId);
+        if (!jobData || !jobData.expediaId) {
+          throw new Error(
+            `Cannot retrieve valid expedia_id for job ${jobId}. Property may not have expedia_id assigned or expedia_id is "0".`
+          );
+        }
+        if (!jobData.user_email || !jobData.user_password) {
+          throw new Error(
+            `Cannot retrieve valid user_email or user_password for job ${jobId}. Property may not have user_email or user_password assigned.`
+          );
+        }
+        return { jobId, jobData };
+      })
+    );
+
+    // Submit all jobs asynchronously without waiting - fire and forget
+    const results: {
+      submitted: Array<{ jobId: string; status: string; data?: any }>;
+    } = {
+      submitted: [],
+    };
+
+    // Submit all jobs without awaiting - they run in the background
+    jobsData.forEach((job) => {
+      const workerJobData: WorkerJobData = {
+        jobType: "graphql-run",
+        jobId: job.jobId,
+        startDate,
+        endDate,
+        expediaId: job.jobData.expediaId,
+        user_email: job.jobData.user_email,
+        user_password: job.jobData.user_password,
+      };
+
+      // executeJob will automatically:
+      // - Run immediately if OTP and worker available
+      // - Queue and set InQueue status if OTP occupied or no worker available
+      // Fire and forget - don't wait for completion
+      otpAwareWorkerPool.executeJob(workerJobData).catch((error) => {
+        console.error(`Error submitting GraphQL job ${job.jobId}:`, error);
+      });
+
+      results.submitted.push({
+        jobId: job.jobId,
+        status: "submitted",
+      });
+    });
+
+    return res.status(200).json({
+      status: 200,
+      message: `Submitted ${job_ids.length} jobs. The worker pool will handle execution and queueing automatically.`,
+      results,
+    });
+  } catch (err: any) {
+    console.error("Error in /api/expedia/bulk-graphql-run-job:", err);
+
+    res.status(500).json({
+      status: 500,
+      message: "Error processing bulk GraphQL run jobs",
+      error: err.message,
+    });
+  }
+}) as any);
+
+/**
+ * @swagger
  * /api/agoda/property-run-job:
  *   post:
  *     tags:
