@@ -3,6 +3,7 @@ import mongoose, { Document, Schema, Types } from "mongoose";
 // Updated Enums based on user requirements
 export enum JobStatus {
   Pending = "Pending",
+  InQueue = "InQueue",
   Running = "Running",
   Completed = "Completed",
   Partial = "Partial",

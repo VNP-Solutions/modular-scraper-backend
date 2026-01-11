@@ -9,6 +9,7 @@ import { WorkerJobData } from "../common/worker-types.js";
 import { specs, swaggerUi } from "../config/swagger.js";
 import { getAccess, getOauth2Callback } from "../get-access/access.js";
 import { JobStatus } from "../models/job.model.js";
+import { ScheduledJob } from "../models/scheduled-job.model.js";
 import { propertyCredentialsService } from "../services/job-credentials.service.js";
 import { jobService } from "../services/job.service.js";
 
@@ -2793,6 +2794,532 @@ app.post("/api/expedia/db-api-run-job", (async (
     res.status(500).json({
       status: 500,
       message: "Error processing DB API property search",
+      error: err.message,
+    });
+  }
+}) as any);
+
+/**
+ * @swagger
+ * /api/expedia/bulk-db-run-job:
+ *   post:
+ *     tags:
+ *       - Scraping Jobs
+ *     summary: Bulk start DB scraping jobs
+ *     description: |
+ *       Starts multiple DB scraping jobs for the specified date range.
+ *       Jobs are submitted asynchronously and the worker pool handles OTP checking and queueing automatically.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - startDate
+ *               - endDate
+ *               - job_ids
+ *             properties:
+ *               startDate:
+ *                 type: string
+ *                 description: Start date for scraping (MM/DD/YYYY format)
+ *                 example: "01/01/2024"
+ *               endDate:
+ *                 type: string
+ *                 description: End date for scraping (MM/DD/YYYY format)
+ *                 example: "01/31/2024"
+ *               job_ids:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 example: ["6892f4bf9df8bc296bdcdff0", "6892f4bf9df8bc296bdcdff1"]
+ *                 description: Array of job IDs to process
+ *     responses:
+ *       200:
+ *         description: Jobs submitted successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: number
+ *                 message:
+ *                   type: string
+ *                 results:
+ *                   type: object
+ *                   properties:
+ *                     submitted:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *       400:
+ *         description: Invalid request parameters
+ *       500:
+ *         description: Error processing bulk jobs
+ */
+app.post("/api/expedia/bulk-db-run-job", (async (
+  req: express.Request,
+  res: express.Response
+) => {
+  try {
+    const { startDate, endDate, job_ids, scheduler_id } = req.body;
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({
+        status: 400,
+        message: "startDate and endDate are required in request body",
+      });
+    }
+    if (!job_ids || !Array.isArray(job_ids) || job_ids.length === 0) {
+      return res.status(400).json({
+        status: 400,
+        message:
+          "job_ids array is required and must contain at least one job ID",
+      });
+    }
+
+    // Check if worker threads are available
+    if (
+      !otpAwareWorkerPool.hasAvailableWorkers() &&
+      otpAwareWorkerPool.isQueueFull()
+    ) {
+      return res.status(200).json({
+        status: 200,
+        message: "All server busy, try again",
+        workerStatus: otpAwareWorkerPool.getStatus(),
+      });
+    }
+
+    // Validate all jobs exist and can be run
+    const jobValidations = await Promise.all(
+      job_ids.map(async (jobId: string) => {
+        const validation = await jobService.validateJob(jobId);
+        return { jobId, validation };
+      })
+    );
+
+    // Separate valid and invalid jobs
+    const validJobs = jobValidations.filter(
+      (j) => j.validation.exists && j.validation.canRun
+    );
+    const invalidJobs = jobValidations.filter(
+      (j) => !j.validation.exists || !j.validation.canRun
+    );
+
+    // Get job data for valid jobs only
+    const jobsData = await Promise.all(
+      validJobs.map(async ({ jobId }) => {
+        try {
+          const jobData = await jobService.getExpediaIdFromJob(jobId);
+          if (!jobData || !jobData.expediaId) {
+            return {
+              jobId,
+              error: `Cannot retrieve valid expedia_id for job ${jobId}. Property may not have expedia_id assigned or expedia_id is "0".`,
+            };
+          }
+          if (!jobData.user_email || !jobData.user_password) {
+            return {
+              jobId,
+              error: `Cannot retrieve valid user_email or user_password for job ${jobId}. Property may not have user_email or user_password assigned.`,
+            };
+          }
+          return { jobId, jobData };
+        } catch (error) {
+          return {
+            jobId,
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
+      })
+    );
+
+    // Separate jobs with valid data from those with errors
+    const validJobsData = jobsData.filter(
+      (j): j is { jobId: string; jobData: any } => !("error" in j)
+    );
+    const jobsWithErrors = jobsData.filter((j) => "error" in j);
+
+    // Submit all jobs asynchronously without waiting - fire and forget
+    const results: {
+      submitted: Array<{ jobId: string; status: string; data?: any }>;
+      invalid: Array<{ jobId: string; reason: string; currentStatus?: string }>;
+      errors: Array<{ jobId: string; error: string }>;
+    } = {
+      submitted: [],
+      invalid: [],
+      errors: [],
+    };
+
+    // Add invalid jobs to results
+    invalidJobs.forEach(({ jobId, validation }) => {
+      results.invalid.push({
+        jobId,
+        reason: !validation.exists
+          ? "Job not found"
+          : "Job is not in a runnable state",
+        currentStatus: validation.job?.job_status || undefined,
+      });
+    });
+
+    // Add jobs with errors to results
+    jobsWithErrors.forEach((job) => {
+      if ("error" in job && job.error) {
+        results.errors.push({
+          jobId: job.jobId,
+          error: job.error,
+        });
+      }
+    });
+
+    // Submit valid jobs without awaiting - they run in the background
+    validJobsData.forEach((job) => {
+      const workerJobData: WorkerJobData = {
+        jobType: "db-run",
+        jobId: job.jobId,
+        startDate,
+        endDate,
+        expediaId: job.jobData.expediaId,
+        user_email: job.jobData.user_email,
+        user_password: job.jobData.user_password,
+      };
+
+      // executeJob will automatically:
+      // - Run immediately if OTP and worker available
+      // - Queue and set InQueue status if OTP occupied or no worker available
+      // Fire and forget - don't wait for completion
+      otpAwareWorkerPool.executeJob(workerJobData).catch(async (error) => {
+        console.error(`Error submitting job ${job.jobId}:`, error);
+        // Update job status to Failed if submission fails
+        try {
+          await jobService.updateJobStatus(job.jobId, JobStatus.Failed);
+        } catch (statusError) {
+          console.error(
+            `Error updating job ${job.jobId} status to Failed:`,
+            statusError
+          );
+        }
+      });
+
+      results.submitted.push({
+        jobId: job.jobId,
+        status: "submitted",
+      });
+    });
+
+    // Update scheduled job comment with invalid job IDs if scheduler_id is provided
+    if (scheduler_id) {
+      try {
+        const invalidJobIds = [
+          ...results.invalid.map((j) => j.jobId),
+          ...results.errors.map((j) => j.jobId),
+        ];
+
+        if (invalidJobIds.length > 0) {
+          const invalidJobIdsString = invalidJobIds.join(", ");
+          const scheduledJob = await ScheduledJob.findById(scheduler_id);
+
+          if (scheduledJob) {
+            const existingComment = scheduledJob.comment || "";
+            const newComment = existingComment
+              ? `${existingComment}\nInvalid job IDs: ${invalidJobIdsString}`
+              : `Invalid job IDs: ${invalidJobIdsString}`;
+
+            await ScheduledJob.findByIdAndUpdate(scheduler_id, {
+              comment: newComment,
+            });
+            console.log(
+              `Updated scheduled job ${scheduler_id} comment with invalid job IDs`
+            );
+          } else {
+            console.warn(
+              `Scheduled job ${scheduler_id} not found, skipping comment update`
+            );
+          }
+        }
+      } catch (schedulerError) {
+        console.error(
+          `Error updating scheduled job ${scheduler_id} comment:`,
+          schedulerError
+        );
+        // Don't fail the request if scheduler update fails
+      }
+    }
+
+    return res.status(200).json({
+      status: 200,
+      message: `Processed ${job_ids.length} jobs. ${results.submitted.length} submitted, ${results.invalid.length} invalid, ${results.errors.length} with errors.`,
+      results,
+    });
+  } catch (err: any) {
+    console.error("Error in /api/expedia/bulk-db-run-job:", err);
+
+    res.status(500).json({
+      status: 500,
+      message: "Error processing bulk DB run jobs",
+      error: err.message,
+    });
+  }
+}) as any);
+
+/**
+ * @swagger
+ * /api/expedia/bulk-db-api-run-job:
+ *   post:
+ *     tags:
+ *       - Scraping Jobs
+ *     summary: Bulk start DB API scraping jobs
+ *     description: |
+ *       Starts multiple DB API scraping jobs for the specified date range.
+ *       Jobs are submitted asynchronously and the worker pool handles OTP checking and queueing automatically.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - startDate
+ *               - endDate
+ *               - job_ids
+ *             properties:
+ *               startDate:
+ *                 type: string
+ *                 description: Start date for scraping (MM/DD/YYYY format)
+ *                 example: "01/01/2024"
+ *               endDate:
+ *                 type: string
+ *                 description: End date for scraping (MM/DD/YYYY format)
+ *                 example: "01/31/2024"
+ *               job_ids:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 example: ["6892f4bf9df8bc296bdcdff0", "6892f4bf9df8bc296bdcdff1"]
+ *                 description: Array of job IDs to process
+ *     responses:
+ *       200:
+ *         description: Jobs submitted successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: number
+ *                 message:
+ *                   type: string
+ *                 results:
+ *                   type: object
+ *                   properties:
+ *                     submitted:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *       400:
+ *         description: Invalid request parameters
+ *       500:
+ *         description: Error processing bulk jobs
+ */
+app.post("/api/expedia/bulk-db-api-run-job", (async (
+  req: express.Request,
+  res: express.Response
+) => {
+  try {
+    const { startDate, endDate, job_ids, scheduler_id } = req.body;
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({
+        status: 400,
+        message: "startDate and endDate are required in request body",
+      });
+    }
+    if (!job_ids || !Array.isArray(job_ids) || job_ids.length === 0) {
+      return res.status(400).json({
+        status: 400,
+        message:
+          "job_ids array is required and must contain at least one job ID",
+      });
+    }
+
+    // Check if worker threads are available
+    if (
+      !otpAwareWorkerPool.hasAvailableWorkers() &&
+      otpAwareWorkerPool.isQueueFull()
+    ) {
+      return res.status(200).json({
+        status: 200,
+        message: "All server busy, try again",
+        workerStatus: otpAwareWorkerPool.getStatus(),
+      });
+    }
+
+    // Validate all jobs exist and can be run
+    const jobValidations = await Promise.all(
+      job_ids.map(async (jobId: string) => {
+        const validation = await jobService.validateJob(jobId);
+        return { jobId, validation };
+      })
+    );
+
+    // Separate valid and invalid jobs
+    const validJobs = jobValidations.filter(
+      (j) => j.validation.exists && j.validation.canRun
+    );
+    const invalidJobs = jobValidations.filter(
+      (j) => !j.validation.exists || !j.validation.canRun
+    );
+
+    // Get job data for valid jobs only
+    const jobsData = await Promise.all(
+      validJobs.map(async ({ jobId }) => {
+        try {
+          const jobData = await jobService.getExpediaIdFromJob(jobId);
+          if (!jobData || !jobData.expediaId) {
+            return {
+              jobId,
+              error: `Cannot retrieve valid expedia_id for job ${jobId}. Property may not have expedia_id assigned or expedia_id is "0".`,
+            };
+          }
+          if (!jobData.user_email || !jobData.user_password) {
+            return {
+              jobId,
+              error: `Cannot retrieve valid user_email or user_password for job ${jobId}. Property may not have user_email or user_password assigned.`,
+            };
+          }
+          return { jobId, jobData };
+        } catch (error) {
+          return {
+            jobId,
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
+      })
+    );
+
+    // Separate jobs with valid data from those with errors
+    const validJobsData = jobsData.filter(
+      (j): j is { jobId: string; jobData: any } => !("error" in j)
+    );
+    const jobsWithErrors = jobsData.filter((j) => "error" in j);
+
+    // Submit all jobs asynchronously without waiting - fire and forget
+    const results: {
+      submitted: Array<{ jobId: string; status: string; data?: any }>;
+      invalid: Array<{ jobId: string; reason: string; currentStatus?: string }>;
+      errors: Array<{ jobId: string; error: string }>;
+    } = {
+      submitted: [],
+      invalid: [],
+      errors: [],
+    };
+
+    // Add invalid jobs to results
+    invalidJobs.forEach(({ jobId, validation }) => {
+      results.invalid.push({
+        jobId,
+        reason: !validation.exists
+          ? "Job not found"
+          : "Job is not in a runnable state",
+        currentStatus: validation.job?.job_status || undefined,
+      });
+    });
+
+    // Add jobs with errors to results
+    jobsWithErrors.forEach((job) => {
+      if ("error" in job && job.error) {
+        results.errors.push({
+          jobId: job.jobId,
+          error: job.error,
+        });
+      }
+    });
+
+    // Submit valid jobs without awaiting - they run in the background
+    validJobsData.forEach((job) => {
+      const workerJobData: WorkerJobData = {
+        jobType: "db-api-run",
+        jobId: job.jobId,
+        startDate,
+        endDate,
+        expediaId: job.jobData.expediaId,
+        user_email: job.jobData.user_email,
+        user_password: job.jobData.user_password,
+      };
+
+      // executeJob will automatically:
+      // - Run immediately if OTP and worker available
+      // - Queue and set InQueue status if OTP occupied or no worker available
+      // Fire and forget - don't wait for completion
+      otpAwareWorkerPool.executeJob(workerJobData).catch(async (error) => {
+        console.error(`Error submitting DB API job ${job.jobId}:`, error);
+        // Update job status to Failed if submission fails
+        try {
+          await jobService.updateJobStatus(job.jobId, JobStatus.Failed);
+        } catch (statusError) {
+          console.error(
+            `Error updating job ${job.jobId} status to Failed:`,
+            statusError
+          );
+        }
+      });
+
+      results.submitted.push({
+        jobId: job.jobId,
+        status: "submitted",
+      });
+    });
+
+    // Update scheduled job comment with invalid job IDs if scheduler_id is provided
+    if (scheduler_id) {
+      try {
+        const invalidJobIds = [
+          ...results.invalid.map((j) => j.jobId),
+          ...results.errors.map((j) => j.jobId),
+        ];
+
+        if (invalidJobIds.length > 0) {
+          const invalidJobIdsString = invalidJobIds.join(", ");
+          const scheduledJob = await ScheduledJob.findById(scheduler_id);
+
+          if (scheduledJob) {
+            const existingComment = scheduledJob.comment || "";
+            const newComment = existingComment
+              ? `${existingComment}\nInvalid job IDs: ${invalidJobIdsString}`
+              : `Invalid job IDs: ${invalidJobIdsString}`;
+
+            await ScheduledJob.findByIdAndUpdate(scheduler_id, {
+              comment: newComment,
+            });
+            console.log(
+              `Updated scheduled job ${scheduler_id} comment with invalid job IDs`
+            );
+          } else {
+            console.warn(
+              `Scheduled job ${scheduler_id} not found, skipping comment update`
+            );
+          }
+        }
+      } catch (schedulerError) {
+        console.error(
+          `Error updating scheduled job ${scheduler_id} comment:`,
+          schedulerError
+        );
+        // Don't fail the request if scheduler update fails
+      }
+    }
+
+    return res.status(200).json({
+      status: 200,
+      message: `Processed ${job_ids.length} jobs. ${results.submitted.length} submitted, ${results.invalid.length} invalid, ${results.errors.length} with errors.`,
+      results,
+    });
+  } catch (err: any) {
+    console.error("Error in /api/expedia/bulk-db-api-run-job:", err);
+
+    res.status(500).json({
+      status: 500,
+      message: "Error processing bulk DB API run jobs",
       error: err.message,
     });
   }
