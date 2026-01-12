@@ -1,9 +1,12 @@
 import dotenv from "dotenv";
 import { EventEmitter } from "events";
+import { Types } from "mongoose";
 import path from "path";
 import { fileURLToPath } from "url";
 import { Worker } from "worker_threads";
+import { JobStatus } from "../models/job.model.js";
 import { OtpPlatform } from "../models/otp-status.model.js";
+import { jobService } from "../services/job.service.js";
 import { otpStatusManager, OtpStatusManager } from "./otp-status-manager.js";
 import {
   WorkerInfo,
@@ -434,6 +437,23 @@ export class OtpAwareWorkerPool extends EventEmitter {
     ].includes(jobData.jobType);
   }
 
+  /**
+   * Update job status to InQueue if jobId is a valid MongoDB ObjectId
+   * This is called when a job is added to the queue
+   */
+  private async updateJobStatusToInQueue(jobId: string): Promise<void> {
+    try {
+      // Only update status for valid MongoDB ObjectIds (database jobs)
+      // Some jobs like reservation-run use generated IDs and don't exist in database
+      if (Types.ObjectId.isValid(jobId)) {
+        await jobService.updateJobStatus(jobId, JobStatus.InQueue);
+      }
+    } catch (error) {
+      // Log error but don't fail the queue operation
+      console.error(`Error updating job ${jobId} status to InQueue:`, error);
+    }
+  }
+
   private getJobPlatform(jobData: WorkerJobData): OtpPlatform {
     // Determine platform based on job type
     if (
@@ -464,6 +484,7 @@ export class OtpAwareWorkerPool extends EventEmitter {
     if (!availableWorker) {
       // No workers available, add to queue
       this.jobQueue.push(queuedJob);
+      await this.updateJobStatusToInQueue(queuedJob.jobData.jobId);
       console.log(
         `\x1b[33mJob ${queuedJob.jobData.jobId} queued (no workers). Queue size: ${this.jobQueue.length}\x1b[0m`
       );
@@ -472,10 +493,11 @@ export class OtpAwareWorkerPool extends EventEmitter {
 
     // If job requires OTP, check OTP availability
     if (queuedJob.requiresOtp) {
-      const isOtpAvailable = await this.otpManager.isOtpAvailable();
+      const isOtpAvailable = this.otpManager.isOtpAvailable();
       if (!isOtpAvailable) {
         // OTP not available, add to queue
         this.jobQueue.push(queuedJob);
+        await this.updateJobStatusToInQueue(queuedJob.jobData.jobId);
         console.log(
           `\x1b[33mJob ${queuedJob.jobData.jobId} queued (OTP occupied). Queue size: ${this.jobQueue.length}\x1b[0m`
         );
@@ -491,6 +513,7 @@ export class OtpAwareWorkerPool extends EventEmitter {
       if (!otpReserved) {
         // Failed to reserve OTP (race condition), add to queue
         this.jobQueue.push(queuedJob);
+        await this.updateJobStatusToInQueue(queuedJob.jobData.jobId);
         console.log(
           `Job ${queuedJob.jobData.jobId} queued (OTP reservation failed). Queue size: ${this.jobQueue.length}`
         );

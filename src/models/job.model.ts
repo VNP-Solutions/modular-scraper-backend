@@ -9,6 +9,7 @@ export enum JobStatus {
   Failed = "Failed",
   Stopped = "Stopped",
   Cancelled = "Cancelled",
+  InQueue = "InQueue",
 }
 
 export enum PostingType {

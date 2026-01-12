@@ -12,6 +12,7 @@ import { JobType, WorkerJobData } from "../common/worker-types.js";
 import { specs, swaggerUi } from "../config/swagger.js";
 import { getAccess, getOauth2Callback } from "../get-access/access.js";
 import { JobStatus } from "../models/job.model.js";
+import { ScheduledJob } from "../models/scheduled-job.model.js";
 // import {
 //   CronConfig,
 //   ScheduleType,
@@ -919,6 +920,302 @@ app.post("/api/booking/property-run-job", (async (
     res.status(500).json({
       status: 500,
       message: "Error processing booking job",
+      error: err.message,
+    });
+  }
+}) as any);
+
+/**
+ * @swagger
+ * /api/booking/bulk-property-run-job:
+ *   post:
+ *     tags:
+ *       - Booking Jobs
+ *     summary: Bulk start booking scraping jobs
+ *     description: |
+ *       Starts multiple booking scraping jobs.
+ *       Jobs are submitted asynchronously and the worker pool handles OTP checking and queueing automatically.
+ *       Invalid jobs are reported in the response but do not prevent valid jobs from being processed.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - job_ids
+ *             properties:
+ *               job_ids:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 example: ["6892f4bf9df8bc296bdcdff0", "6892f4bf9df8bc296bdcdff1"]
+ *                 description: Array of job IDs to process
+ *               scheduler_id:
+ *                 type: string
+ *                 description: Optional scheduler ID to update with invalid job IDs
+ *                 example: "6892f4bf9df8bc296bdcdff2"
+ *     responses:
+ *       200:
+ *         description: Jobs submitted successfully, with details on valid and invalid jobs.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: number
+ *                 message:
+ *                   type: string
+ *                 results:
+ *                   type: object
+ *                   properties:
+ *                     submitted:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           jobId: { type: string }
+ *                           status: { type: string, enum: ["submitted", "failed"] }
+ *                     invalid:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           jobId: { type: string }
+ *                           reason: { type: string }
+ *                           currentStatus: { type: string }
+ *                     errors:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           jobId: { type: string }
+ *                           error: { type: string }
+ *       400:
+ *         description: Missing required parameters in request body
+ *       500:
+ *         description: Error processing bulk booking run jobs
+ */
+app.post("/api/booking/bulk-property-run-job", (async (
+  req: express.Request,
+  res: express.Response
+) => {
+  try {
+    const { job_ids, scheduler_id } = req.body;
+
+    if (!job_ids || !Array.isArray(job_ids) || job_ids.length === 0) {
+      return res.status(400).json({
+        status: 400,
+        message:
+          "job_ids array is required and must contain at least one job ID",
+      });
+    }
+
+    // Check if worker threads are available
+    if (
+      !otpAwareWorkerPool.hasAvailableWorkers() &&
+      otpAwareWorkerPool.isQueueFull()
+    ) {
+      return res.status(200).json({
+        status: 200,
+        message: "All server busy, try again",
+        workerStatus: otpAwareWorkerPool.getStatus(),
+      });
+    }
+
+    // Validate all jobs exist and can be run
+    const jobValidations = await Promise.all(
+      job_ids.map(async (jobId: string) => {
+        const validation = await jobService.validateJob(jobId);
+        return { jobId, validation };
+      })
+    );
+
+    // Separate valid and invalid jobs
+    const validJobs = jobValidations.filter(
+      (j) => j.validation.exists && j.validation.canRun
+    );
+    const invalidJobs = jobValidations.filter(
+      (j) => !j.validation.exists || !j.validation.canRun
+    );
+
+    // Get job data for valid jobs only
+    const jobsData = await Promise.all(
+      validJobs.map(async ({ jobId }) => {
+        try {
+          const jobData = await jobService.getBookingIdFromJob(jobId);
+          const bookingCredentials =
+            await propertyCredentialsService.getBookingCredentialsFromJob(
+              jobId
+            );
+
+          if (!jobData || !jobData.bookingId) {
+            return {
+              jobId,
+              error: `Cannot retrieve valid booking_id for job ${jobId}. Property may not have booking_id assigned or booking_id is "0".`,
+            };
+          }
+
+          if (
+            !bookingCredentials?.bookingUsername ||
+            !bookingCredentials?.bookingPassword
+          ) {
+            return {
+              jobId,
+              error: `Cannot retrieve valid bookingUsername or bookingPassword for job ${jobId}. Property may not have booking credentials assigned.`,
+            };
+          }
+
+          if (!jobData.propertyId) {
+            return {
+              jobId,
+              error: `Cannot retrieve valid portfolioId or propertyId for job ${jobId}. Job may be missing required references.`,
+            };
+          }
+
+          return { jobId, jobData, bookingCredentials };
+        } catch (error) {
+          return {
+            jobId,
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
+      })
+    );
+
+    // Separate jobs with valid data from those with errors
+    const validJobsData = jobsData.filter(
+      (
+        j
+      ): j is {
+        jobId: string;
+        jobData: any;
+        bookingCredentials: any;
+      } => !("error" in j)
+    );
+    const jobsWithErrors = jobsData.filter((j) => "error" in j);
+
+    // Submit all jobs asynchronously without waiting - fire and forget
+    const results: {
+      submitted: Array<{ jobId: string; status: string; data?: any }>;
+      invalid: Array<{ jobId: string; reason: string; currentStatus?: string }>;
+      errors: Array<{ jobId: string; error: string }>;
+    } = {
+      submitted: [],
+      invalid: [],
+      errors: [],
+    };
+
+    // Add invalid jobs to results
+    invalidJobs.forEach(({ jobId, validation }) => {
+      results.invalid.push({
+        jobId,
+        reason: !validation.exists
+          ? "Job not found"
+          : "Job is not in a runnable state",
+        currentStatus: validation.job?.job_status || undefined,
+      });
+    });
+
+    // Add jobs with errors to results
+    jobsWithErrors.forEach((job) => {
+      if ("error" in job && job.error) {
+        results.errors.push({
+          jobId: job.jobId,
+          error: job.error,
+        });
+      }
+    });
+
+    // Submit valid jobs without awaiting - they run in the background
+    validJobsData.forEach((job) => {
+      const { bookingId, portfolioId, propertyId } = job.jobData;
+      const { bookingUsername, bookingPassword } = job.bookingCredentials;
+
+      const workerJobData: WorkerJobData = {
+        jobType: JobType.BookingRun,
+        jobId: job.jobId,
+        portfolioId,
+        propertyId,
+        bookingId,
+        user_email: bookingUsername,
+        user_password: bookingPassword,
+      };
+
+      // executeJob will automatically:
+      // - Run immediately if OTP and worker available
+      // - Queue and set InQueue status if OTP occupied or no worker available
+      // Fire and forget - don't wait for completion
+      otpAwareWorkerPool.executeJob(workerJobData).catch(async (error) => {
+        console.error(`Error submitting booking job ${job.jobId}:`, error);
+        // Update job status to Failed if submission fails
+        try {
+          await jobService.updateJobStatus(job.jobId, JobStatus.Failed);
+        } catch (statusError) {
+          console.error(
+            `Error updating job ${job.jobId} status to Failed:`,
+            statusError
+          );
+        }
+      });
+
+      results.submitted.push({
+        jobId: job.jobId,
+        status: "submitted",
+      });
+    });
+
+    // Update scheduled job comment with invalid job IDs if scheduler_id is provided
+    if (scheduler_id) {
+      try {
+        const invalidJobIds = [
+          ...results.invalid.map((j) => j.jobId),
+          ...results.errors.map((j) => j.jobId),
+        ];
+
+        if (invalidJobIds.length > 0) {
+          const invalidJobIdsString = invalidJobIds.join(", ");
+          const scheduledJob = await ScheduledJob.findById(scheduler_id);
+
+          if (scheduledJob) {
+            const existingComment = scheduledJob.comment || "";
+            const newComment = existingComment
+              ? `${existingComment}\nInvalid job IDs: ${invalidJobIdsString}`
+              : `Invalid job IDs: ${invalidJobIdsString}`;
+
+            await ScheduledJob.findByIdAndUpdate(scheduler_id, {
+              comment: newComment,
+            });
+            console.log(
+              `Updated scheduled job ${scheduler_id} comment with invalid job IDs`
+            );
+          } else {
+            console.warn(
+              `Scheduled job ${scheduler_id} not found, skipping comment update`
+            );
+          }
+        }
+      } catch (schedulerError) {
+        console.error(
+          `Error updating scheduled job ${scheduler_id} comment:`,
+          schedulerError
+        );
+        // Don't fail the request if scheduler update fails
+      }
+    }
+
+    return res.status(200).json({
+      status: 200,
+      message: `Processed ${job_ids.length} jobs. ${results.submitted.length} submitted, ${results.invalid.length} invalid, ${results.errors.length} with errors.`,
+      results,
+    });
+  } catch (err: any) {
+    console.error("Error in /api/booking/bulk-property-run-job:", err);
+
+    res.status(500).json({
+      status: 500,
+      message: "Error processing bulk booking run jobs",
       error: err.message,
     });
   }

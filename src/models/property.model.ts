@@ -49,7 +49,7 @@ const PropertySchema = new Schema<IProperty>(
   {
     expedia_id: {
       type: String,
-      required: true,
+      required: false,
     },
     booking_id: {
       type: Number,
