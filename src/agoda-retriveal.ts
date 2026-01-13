@@ -93,7 +93,7 @@ async function agodaRetrieval(
   agodaPassword?: string,
   reservations?: Reservation[],
   retrievalId?: string,
-  brightDataSessionId?: string,
+  // brightDataSessionId?: string, // COMMENTED OUT: Bright Data temporarily disabled
   windowSize?: { width: number; height: number }
 ): Promise<any[]> {
   let browser: Browser | null = null;
@@ -145,7 +145,7 @@ async function agodaRetrieval(
     // Browser setup
     const environment = process.env.ENVIRONMENT || CONFIG.ENVIRONMENT.DEFAULT;
     await dualLogInfo(`Setting up browser for ${environment} environment`, {
-      brightDataSessionId,
+      // brightDataSessionId, // COMMENTED OUT: Bright Data temporarily disabled
       windowSize,
     });
 
@@ -156,11 +156,12 @@ async function agodaRetrieval(
         CONFIG.OTA_PROVIDER.AGODA
       );
     } else {
+      // COMMENTED OUT: Bright Data proxy temporarily disabled
       // Use local browser with Bright Data proxy
       setupResult = await browserSetupLocal(
         jobId,
         CONFIG.OTA_PROVIDER.AGODA,
-        brightDataSessionId,
+        // brightDataSessionId, // COMMENTED OUT: Bright Data temporarily disabled
         windowSize
       );
     }
