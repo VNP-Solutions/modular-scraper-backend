@@ -8,13 +8,12 @@ import {
   dualLogWarn,
 } from "../common/log-helper.js";
 import { timeoutManager } from "../common/timeout-manager.js";
-import { configs } from "../config/index.js";
 dotenv.config();
 
 export async function browserSetupLocal(
   jobId?: string,
   platform?: "expedia" | "agoda",
-  // brightDataSessionId?: string, // COMMENTED OUT: Bright Data temporarily disabled
+  brightDataSessionId?: string,
   windowSize?: { width: number; height: number }
 ): Promise<{
   browser: Browser;
@@ -31,20 +30,19 @@ export async function browserSetupLocal(
       launchArgs.push(`--window-size=${windowSize.width},${windowSize.height}`);
     }
 
-    // COMMENTED OUT: Bright Data proxy setup temporarily disabled
     // Add Bright Data proxy if session ID provided
-    // if (brightDataSessionId && process.env.BRIGHT_DATA_PROXY_HOST) {
-    //   const proxyHost = process.env.BRIGHT_DATA_PROXY_HOST; // e.g., "brd.superproxy.io:22225"
-    //   launchArgs.push(`--proxy-server=${proxyHost}`);
-    //   await dualLogInfo(
-    //     `Using Bright Data proxy with session: ${brightDataSessionId}`,
-    //     { jobId, proxyHost, windowSize }
-    //   );
-    // }
+    if (brightDataSessionId && process.env.BRIGHT_DATA_PROXY_HOST) {
+      const proxyHost = process.env.BRIGHT_DATA_PROXY_HOST; // e.g., "brd.superproxy.io:22225"
+      launchArgs.push(`--proxy-server=${proxyHost}`);
+      await dualLogInfo(
+        `Using Bright Data proxy with session: ${brightDataSessionId}`,
+        { jobId, proxyHost, windowSize }
+      );
+    }
 
     try {
       browser = await puppeteer.launch({
-        headless: configs.headless_browser as any, // "new" headless mode supported by Puppeteer but not in type definitions
+        headless: false, // Always visible for Bright Data setup
         defaultViewport: null,
         args: launchArgs,
       });
@@ -69,49 +67,48 @@ export async function browserSetupLocal(
 
     const page: Page = await browser.newPage();
 
-    // COMMENTED OUT: Bright Data authentication temporarily disabled
     // Authenticate with Bright Data if session ID provided
-    // if (
-    //   brightDataSessionId &&
-    //   process.env.BRIGHT_DATA_USERNAME &&
-    //   process.env.BRIGHT_DATA_PASSWORD
-    // ) {
-    //   const brightDataUsername = process.env.BRIGHT_DATA_USERNAME;
-    //   const brightDataPassword = process.env.BRIGHT_DATA_PASSWORD;
+    if (
+      brightDataSessionId &&
+      process.env.BRIGHT_DATA_USERNAME &&
+      process.env.BRIGHT_DATA_PASSWORD
+    ) {
+      const brightDataUsername = process.env.BRIGHT_DATA_USERNAME;
+      const brightDataPassword = process.env.BRIGHT_DATA_PASSWORD;
 
-    //   // Get country code for this job (if available)
-    //   let countryCode: string | undefined;
-    //   let countryName: string | undefined;
-    //   try {
-    //     const { getBrightDataCountry, getBrightDataCountryName } = await import(
-    //       "../common/job-isolation.js"
-    //     );
-    //     countryCode = getBrightDataCountry(jobId || "");
-    //     countryName = getBrightDataCountryName(jobId || "");
-    //   } catch (error) {
-    //     // Country selection is optional
-    //   }
+      // Get country code for this job (if available)
+      let countryCode: string | undefined;
+      let countryName: string | undefined;
+      try {
+        const { getBrightDataCountry, getBrightDataCountryName } = await import(
+          "../common/job-isolation.js"
+        );
+        countryCode = getBrightDataCountry(jobId || "");
+        countryName = getBrightDataCountryName(jobId || "");
+      } catch (error) {
+        // Country selection is optional
+      }
 
-    //   // Bright Data format: username-session-{sessionId}-country-{code}
-    //   // Country targeting ensures IP from specific country
-    //   let proxyUsername = `${brightDataUsername}-session-${brightDataSessionId}`;
-    //   if (countryCode) {
-    //     proxyUsername += `-country-${countryCode}`;
-    //   }
+      // Bright Data format: username-session-{sessionId}-country-{code}
+      // Country targeting ensures IP from specific country
+      let proxyUsername = `${brightDataUsername}-session-${brightDataSessionId}`;
+      if (countryCode) {
+        proxyUsername += `-country-${countryCode}`;
+      }
 
-    //   await page.authenticate({
-    //     username: proxyUsername,
-    //     password: brightDataPassword,
-    //   });
+      await page.authenticate({
+        username: proxyUsername,
+        password: brightDataPassword,
+      });
 
-    //   await dualLogInfo(`Authenticated with Bright Data proxy`, {
-    //     jobId,
-    //     sessionId: brightDataSessionId,
-    //     proxyUsername,
-    //     country: countryName || countryCode || "Auto",
-    //     countryCode: countryCode || "auto",
-    //   });
-    // }
+      await dualLogInfo(`Authenticated with Bright Data proxy`, {
+        jobId,
+        sessionId: brightDataSessionId,
+        proxyUsername,
+        country: countryName || countryCode || "Auto",
+        countryCode: countryCode || "auto",
+      });
+    }
 
     // Set viewport size if provided
     if (windowSize) {
@@ -125,77 +122,76 @@ export async function browserSetupLocal(
       );
     }
 
-    // COMMENTED OUT: Bright Data IP detection temporarily disabled
     // Detect IP address and country if using Bright Data proxy
-    // if (brightDataSessionId) {
-    //   try {
-    //     await dualLogInfo("Detecting residential IP and location...", {
-    //       jobId,
-    //     });
+    if (brightDataSessionId) {
+      try {
+        await dualLogInfo("Detecting residential IP and location...", {
+          jobId,
+        });
 
-    //     // Get IP address
-    //     const ipResponse = await page.goto(
-    //       "https://api.ipify.org?format=json",
-    //       {
-    //         waitUntil: "networkidle0",
-    //         timeout: 10000,
-    //       }
-    //     );
+        // Get IP address
+        const ipResponse = await page.goto(
+          "https://api.ipify.org?format=json",
+          {
+            waitUntil: "networkidle0",
+            timeout: 10000,
+          }
+        );
 
-    //     if (ipResponse && ipResponse.ok()) {
-    //       const ipData = await ipResponse.json();
-    //       const ipAddress = ipData.ip;
+        if (ipResponse && ipResponse.ok()) {
+          const ipData = await ipResponse.json();
+          const ipAddress = ipData.ip;
 
-    //       // Get country/location info
-    //       try {
-    //         const geoResponse = await page.goto(
-    //           `https://ipapi.co/${ipAddress}/json/`,
-    //           { waitUntil: "networkidle0", timeout: 10000 }
-    //         );
+          // Get country/location info
+          try {
+            const geoResponse = await page.goto(
+              `https://ipapi.co/${ipAddress}/json/`,
+              { waitUntil: "networkidle0", timeout: 10000 }
+            );
 
-    //         if (geoResponse && geoResponse.ok()) {
-    //           const geoData = await geoResponse.json();
-    //           const country =
-    //             geoData.country_name || geoData.country || "Unknown";
-    //           const city = geoData.city || "Unknown";
-    //           const region = geoData.region || "Unknown";
+            if (geoResponse && geoResponse.ok()) {
+              const geoData = await geoResponse.json();
+              const country =
+                geoData.country_name || geoData.country || "Unknown";
+              const city = geoData.city || "Unknown";
+              const region = geoData.region || "Unknown";
 
-    //           await dualLogInfo(
-    //             `✅ Bright Data Residential IP Detected: ${ipAddress} | Country: ${country} | City: ${city}, ${region}`,
-    //             {
-    //               jobId,
-    //               sessionId: brightDataSessionId,
-    //               ipAddress,
-    //               country,
-    //               city,
-    //               region,
-    //               countryCode: geoData.country_code,
-    //               isp: geoData.org,
-    //             }
-    //           );
-    //         } else {
-    //           // Fallback: just log IP if geolocation fails
-    //           await dualLogInfo(
-    //             `✅ Bright Data Residential IP Detected: ${ipAddress}`,
-    //             { jobId, sessionId: brightDataSessionId, ipAddress }
-    //           );
-    //         }
-    //       } catch (geoError) {
-    //         // Fallback: just log IP if geolocation fails
-    //         await dualLogInfo(
-    //           `✅ Bright Data Residential IP Detected: ${ipAddress} (Country detection failed)`,
-    //           { jobId, sessionId: brightDataSessionId, ipAddress }
-    //         );
-    //       }
-    //     }
-    //   } catch (ipError: any) {
-    //     await dualLogWarn("Failed to detect IP address (non-critical)", {
-    //       jobId,
-    //       error: ipError.message,
-    //     });
-    //     // Don't throw - IP detection is not critical for scraping
-    //   }
-    // }
+              await dualLogInfo(
+                `✅ Bright Data Residential IP Detected: ${ipAddress} | Country: ${country} | City: ${city}, ${region}`,
+                {
+                  jobId,
+                  sessionId: brightDataSessionId,
+                  ipAddress,
+                  country,
+                  city,
+                  region,
+                  countryCode: geoData.country_code,
+                  isp: geoData.org,
+                }
+              );
+            } else {
+              // Fallback: just log IP if geolocation fails
+              await dualLogInfo(
+                `✅ Bright Data Residential IP Detected: ${ipAddress}`,
+                { jobId, sessionId: brightDataSessionId, ipAddress }
+              );
+            }
+          } catch (geoError) {
+            // Fallback: just log IP if geolocation fails
+            await dualLogInfo(
+              `✅ Bright Data Residential IP Detected: ${ipAddress} (Country detection failed)`,
+              { jobId, sessionId: brightDataSessionId, ipAddress }
+            );
+          }
+        }
+      } catch (ipError: any) {
+        await dualLogWarn("Failed to detect IP address (non-critical)", {
+          jobId,
+          error: ipError.message,
+        });
+        // Don't throw - IP detection is not critical for scraping
+      }
+    }
 
     // Get country-based configuration for anti-detection (realistic, not randomized)
     let timezone: string | undefined;

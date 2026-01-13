@@ -2838,13 +2838,12 @@ app.post("/api/agoda/retrieval-run-job", (async (
 
     const jobId = String(retrieval_id);
 
-    // COMMENTED OUT: Bright Data isolation config temporarily disabled
     // Generate Bright Data isolation config for this job
-    // const brightDataSessionId = getBrightDataSessionId(jobId);
+    const brightDataSessionId = getBrightDataSessionId(jobId);
     const windowSize = getWindowSize(jobId);
 
     console.log(
-      `Job ${jobId}: windowSize=${windowSize.width}x${windowSize.height}`
+      `Job ${jobId}: brightDataSessionId=${brightDataSessionId}, windowSize=${windowSize.width}x${windowSize.height}`
     );
 
     const workerJobData: WorkerJobData = {
@@ -2855,7 +2854,7 @@ app.post("/api/agoda/retrieval-run-job", (async (
       agodaId: String(retrievalData.agodaId),
       user_email: String(retrievalData.user_email || ""),
       user_password: String(retrievalData.user_password || ""),
-      // brightDataSessionId, // COMMENTED OUT: Bright Data temporarily disabled
+      brightDataSessionId,
       windowSize,
     };
 
@@ -3152,13 +3151,12 @@ app.post("/api/agoda/bulk-retrieval-run-job", (async (
 
         const jobId = String(retrieval_id);
 
-        // COMMENTED OUT: Bright Data isolation config temporarily disabled
         // Generate Bright Data isolation config for this job
-        // const brightDataSessionId = getBrightDataSessionId(jobId);
+        const brightDataSessionId = getBrightDataSessionId(jobId);
         const windowSize = getWindowSize(jobId);
 
         console.log(
-          `Job ${jobId}: windowSize=${windowSize.width}x${windowSize.height}`
+          `Job ${jobId}: brightDataSessionId=${brightDataSessionId}, windowSize=${windowSize.width}x${windowSize.height}`
         );
 
         const workerJobData: WorkerJobData = {
@@ -3169,7 +3167,7 @@ app.post("/api/agoda/bulk-retrieval-run-job", (async (
           agodaId: String(retrievalData.agodaId),
           user_email: String(retrievalData.user_email || ""),
           user_password: String(retrievalData.user_password || ""),
-          // brightDataSessionId, // COMMENTED OUT: Bright Data temporarily disabled
+          brightDataSessionId,
           windowSize,
         };
 

@@ -1000,7 +1000,7 @@ class ScrapingWorker {
       agodaId,
       user_email,
       user_password,
-      // brightDataSessionId, // COMMENTED OUT: Bright Data temporarily disabled
+      brightDataSessionId,
       windowSize,
     } = jobData;
 
@@ -1053,7 +1053,7 @@ class ScrapingWorker {
         parentRetrievalId: parentRetrievalId,
         reservationCount: reservations.length,
         hasCredentials: !!(user_email && user_password),
-        // brightDataSessionId, // COMMENTED OUT: Bright Data temporarily disabled
+        brightDataSessionId,
         windowSize,
       }
     );
@@ -1061,7 +1061,6 @@ class ScrapingWorker {
     scrapingStateManager.startScraping("retrieval-reservations", finalJobId);
 
     try {
-      // COMMENTED OUT: Bright Data isolation config temporarily disabled
       // Pass credentials and Bright Data isolation config to the reservation function
       await agodaRetrieval(
         agodaId,
@@ -1070,7 +1069,7 @@ class ScrapingWorker {
         user_password,
         reservations,
         retrievalId,
-        // brightDataSessionId, // COMMENTED OUT: Bright Data temporarily disabled
+        brightDataSessionId,
         windowSize
       );
 
