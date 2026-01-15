@@ -64,6 +64,8 @@ export interface IJob extends Document {
   batch_execution_id?: string;
   createdAt: Date;
   updatedAt: Date;
+  start_date?: string;
+  end_date?: string;
 }
 
 // Mongoose Schema (read-only, updates only)
@@ -204,6 +206,14 @@ const JobSchema = new Schema<IJob>(
       type: Boolean,
       required: false,
       default: false,
+    },
+    start_date: {
+      type: String,
+      required: false,
+    },
+    end_date: {
+      type: String,
+      required: false,
     },
   },
   {
