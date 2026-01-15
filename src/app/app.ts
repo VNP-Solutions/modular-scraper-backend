@@ -15,6 +15,7 @@ import { WorkerJobData } from "../common/worker-types.js";
 import { specs, swaggerUi } from "../config/swagger.js";
 import { getAccess, getOauth2Callback } from "../get-access/access.js";
 import { JobStatus } from "../models/job.model.js";
+import { ScheduledJob } from "../models/scheduled-job.model.js";
 import { propertyCredentialsService } from "../services/job-credentials.service.js";
 import { jobService } from "../services/job.service.js";
 
@@ -2508,6 +2509,339 @@ app.post("/api/agoda/property-run-job", (async (
     res.status(500).json({
       status: 500,
       message: "Error processing Agoda property search",
+      error: err.message,
+    });
+  }
+}) as any);
+
+/**
+ * @swagger
+ * /api/agoda/bulk-property-run-job:
+ *   post:
+ *     tags:
+ *       - Agoda Scraping
+ *     summary: Bulk start Agoda property scraping jobs
+ *     description: |
+ *       Starts multiple Agoda property scraping jobs asynchronously.
+ *       If OTP is available, runs the first job and queues the rest.
+ *       If OTP is occupied, queues all jobs.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - job_ids
+ *             properties:
+ *               job_ids:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 description: Array of job IDs to process
+ *                 example: ["507f1f77bcf86cd799439011", "507f1f77bcf86cd799439012"]
+ *               scheduler_id:
+ *                 type: string
+ *                 description: Optional scheduler ID to update with invalid job IDs
+ *                 example: "507f1f77bcf86cd799439013"
+ *     responses:
+ *       200:
+ *         description: Jobs processed successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 200
+ *                 message:
+ *                   type: string
+ *                   example: "Processed 5 jobs. 3 submitted, 1 invalid, 1 with errors."
+ *                 results:
+ *                   type: object
+ *                   properties:
+ *                     submitted:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           jobId:
+ *                             type: string
+ *                           status:
+ *                             type: string
+ *                     invalid:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           jobId:
+ *                             type: string
+ *                           reason:
+ *                             type: string
+ *                           currentStatus:
+ *                             type: string
+ *                     errors:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           jobId:
+ *                             type: string
+ *                           error:
+ *                             type: string
+ *       400:
+ *         description: Missing required fields
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
+app.post("/api/agoda/bulk-property-run-job", (async (
+  req: express.Request,
+  res: express.Response
+) => {
+  try {
+    const { job_ids, scheduler_id } = req.body;
+
+    if (!job_ids || !Array.isArray(job_ids) || job_ids.length === 0) {
+      return res.status(400).json({
+        status: 400,
+        message: "job_ids array is required and must not be empty",
+      });
+    }
+
+    // Validate all jobs
+    const validationResults = await Promise.all(
+      job_ids.map(async (jobId: string) => ({
+        jobId,
+        validation: await jobService.validateJob(jobId),
+      }))
+    );
+
+    // Separate valid and invalid jobs
+    const validJobs = validationResults.filter(
+      (result) => result.validation.exists && result.validation.canRun
+    );
+    const invalidJobs = validationResults.filter(
+      (result) => !result.validation.exists || !result.validation.canRun
+    );
+
+    // Get job data for valid jobs (including dates from job document)
+    const jobsData = await Promise.all(
+      validJobs.map(async (result) => {
+        try {
+          // Get full job document to extract dates
+          const job = await jobService.getJobById(result.jobId);
+          if (!job) {
+            return {
+              jobId: result.jobId,
+              error: `Job ${result.jobId} not found`,
+            };
+          }
+
+          // Extract startDate and endDate from job document
+          // Assuming these are stored as properties on the job (even if not in schema)
+          const startDate =  (job as any).start_date;
+          const endDate =  (job as any).end_date;
+
+          if (!startDate || !endDate) {
+            return {
+              jobId: result.jobId,
+              error: `Job ${result.jobId} does not have startDate and endDate assigned`,
+            };
+          }
+
+          const propertyData = await jobService.getAgodaIdFromJob(result.jobId);
+          const propertyCredentials =
+            await propertyCredentialsService.getCredentialsByJobId(
+              result.jobId
+            );
+
+          if (!propertyData || !propertyData.agodaId) {
+            return {
+              jobId: result.jobId,
+              error: `Cannot retrieve valid agoda_id for job ${result.jobId}. Property may not have agoda_id assigned or agoda_id is "0".`,
+            };
+          }
+
+          if (
+            !propertyCredentials?.agodaUsername ||
+            !propertyCredentials?.agodaPassword
+          ) {
+            return {
+              jobId: result.jobId,
+              error: `Cannot retrieve valid agodaUsername or agodaPassword for job ${result.jobId}. Property may not have agodaUsername or agodaPassword assigned.`,
+            };
+          }
+
+          return {
+            jobId: result.jobId,
+            startDate,
+            endDate,
+            propertyData,
+            propertyCredentials,
+          };
+        } catch (error: any) {
+          return {
+            jobId: result.jobId,
+            error: error.message || String(error),
+          };
+        }
+      })
+    );
+
+    // Separate jobs with data and jobs with errors
+    const validJobsData = jobsData.filter((job) => {
+      return (
+        "propertyData" in job &&
+        "propertyCredentials" in job &&
+        "startDate" in job &&
+        "endDate" in job &&
+        !("error" in job)
+      );
+    }) as Array<{
+      jobId: string;
+      startDate: string;
+      endDate: string;
+      propertyData: { agodaId: string };
+      propertyCredentials: { agodaUsername: string; agodaPassword: string };
+    }>;
+    const jobsWithErrors = jobsData.filter(
+      (job): job is { jobId: string; error: string } => "error" in job
+    );
+
+    // Build results
+    const results: {
+      submitted: Array<{ jobId: string; status: string }>;
+      invalid: Array<{ jobId: string; reason: string; currentStatus?: string }>;
+      errors: Array<{ jobId: string; error: string }>;
+    } = { submitted: [], invalid: [], errors: [] };
+
+    // Add invalid jobs to results
+    invalidJobs.forEach(({ jobId, validation }) => {
+      results.invalid.push({
+        jobId,
+        reason: !validation.exists
+          ? "Job not found"
+          : "Job is not in a runnable state",
+        currentStatus: validation.job?.job_status || undefined,
+      });
+    });
+
+    // Add jobs with errors to results
+    jobsWithErrors.forEach((job) => {
+      if ("error" in job && job.error) {
+        results.errors.push({ jobId: job.jobId, error: job.error });
+      }
+    });
+
+    // Submit valid jobs without awaiting - they run in the background
+    validJobsData.forEach((job) => {
+      const agodaId = job.propertyData?.agodaId;
+      const agodaUsername = job.propertyCredentials?.agodaUsername;
+      const agodaPassword = job.propertyCredentials?.agodaPassword;
+      const startDate = job.startDate;
+      const endDate = job.endDate;
+
+      if (
+        !agodaId ||
+        !agodaUsername ||
+        !agodaPassword ||
+        !startDate ||
+        !endDate
+      ) {
+        console.error(
+          `Missing required data for job ${job.jobId}, skipping submission`
+        );
+        return;
+      }
+
+      // Generate Bright Data isolation config for this job
+      const brightDataSessionId = getBrightDataSessionId(job.jobId);
+      const windowSize = getWindowSize(job.jobId);
+      const timezone = getTimezone(job.jobId);
+      const acceptLanguage = getAcceptLanguage(job.jobId);
+
+      const workerJobData: WorkerJobData = {
+        jobType: "agoda-property-run",
+        jobId: job.jobId,
+        startDate,
+        endDate,
+        agodaId,
+        agodaUsername,
+        agodaPassword,
+        brightDataSessionId,
+        windowSize,
+        timezone,
+        acceptLanguage,
+      };
+
+      // executeJob will automatically:
+      // - Run immediately if OTP and worker available
+      // - Queue and set InQueue status if OTP occupied or no worker available
+      // Fire and forget - don't wait for completion
+      otpAwareWorkerPool.executeJob(workerJobData).catch(async (error) => {
+        console.error(`Error submitting Agoda job ${job.jobId}:`, error);
+        // Update job status to Failed if submission fails
+        try {
+          await jobService.updateJobStatus(job.jobId, JobStatus.Failed);
+        } catch (statusError) {
+          console.error(
+            `Error updating job ${job.jobId} status to Failed:`,
+            statusError
+          );
+        }
+      });
+
+      results.submitted.push({
+        jobId: job.jobId,
+        status: "submitted",
+      });
+    });
+
+    // Update scheduled job comment with invalid job IDs if scheduler_id is provided
+    if (scheduler_id) {
+      try {
+        const invalidJobIds = [
+          ...results.invalid.map((j) => j.jobId),
+          ...results.errors.map((j) => j.jobId),
+        ];
+
+        if (invalidJobIds.length > 0) {
+          const scheduledJob = await ScheduledJob.findById(scheduler_id);
+          if (scheduledJob) {
+            const invalidJobIdsStr = invalidJobIds.join(", ");
+            const commentPrefix = scheduledJob.comment
+              ? `${scheduledJob.comment}\n`
+              : "";
+            const newComment = `${commentPrefix}Invalid job IDs: ${invalidJobIdsStr}`;
+
+            await ScheduledJob.findByIdAndUpdate(scheduler_id, {
+              comment: newComment,
+            });
+          } else {
+            console.warn(
+              `ScheduledJob with ID ${scheduler_id} not found, skipping comment update`
+            );
+          }
+        }
+      } catch (schedulerError) {
+        console.error(`Error updating scheduled job comment:`, schedulerError);
+        // Don't fail the request if scheduler update fails
+      }
+    }
+
+    return res.status(200).json({
+      status: 200,
+      message: `Processed ${job_ids.length} jobs. ${results.submitted.length} submitted, ${results.invalid.length} invalid, ${results.errors.length} with errors.`,
+      results,
+    });
+  } catch (err: any) {
+    console.error("Error in /api/agoda/bulk-property-run-job:", err);
+    res.status(500).json({
+      status: 500,
+      message: "Error processing bulk Agoda property run jobs",
       error: err.message,
     });
   }

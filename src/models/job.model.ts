@@ -8,6 +8,7 @@ export enum JobStatus {
   Partial = "Partial",
   Failed = "Failed",
   Stopped = "Stopped",
+  InQueue = "InQueue",
 }
 
 export enum PostingType {
@@ -61,6 +62,8 @@ export interface IJob extends Document {
   queue_name?: string;
   worker_assigned?: string;
   batch_execution_id?: string;
+  start_date?: string;
+  end_date?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -203,6 +206,14 @@ const JobSchema = new Schema<IJob>(
       type: Boolean,
       required: false,
       default: false,
+    },
+    start_date: {
+      type: String,
+      required: false,
+    },
+    end_date: {
+      type: String,
+      required: false,
     },
   },
   {
