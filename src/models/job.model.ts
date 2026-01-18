@@ -3,6 +3,7 @@ import mongoose, { Document, Schema, Types } from "mongoose";
 // Updated Enums based on user requirements
 export enum JobStatus {
   Pending = "Pending",
+  InQueue = "InQueue",
   Running = "Running",
   Completed = "Completed",
   Partial = "Partial",
@@ -63,6 +64,8 @@ export interface IJob extends Document {
   batch_execution_id?: string;
   createdAt: Date;
   updatedAt: Date;
+  start_date?: string;
+  end_date?: string;
 }
 
 // Mongoose Schema (read-only, updates only)
@@ -203,6 +206,14 @@ const JobSchema = new Schema<IJob>(
       type: Boolean,
       required: false,
       default: false,
+    },
+    start_date: {
+      type: String,
+      required: false,
+    },
+    end_date: {
+      type: String,
+      required: false,
     },
   },
   {

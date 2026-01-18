@@ -1,3 +1,4 @@
+import dotenv from "dotenv";
 import { EventEmitter } from "events";
 import mongoose from "mongoose";
 import {
@@ -6,7 +7,6 @@ import {
   OtpStatus,
   OtpStatusValue,
 } from "../models/otp-status.model.js";
-import dotenv from "dotenv";
 
 dotenv.config();
 
@@ -86,17 +86,39 @@ export class OtpStatusManager extends EventEmitter {
   }
 
   /**
-   * Get current OTP status (from memory for performance)
+   * Get current OTP status (fetched directly from database)
    */
-  public getCurrentStatus(): OtpStatusInfo | null {
-    return this.currentStatus;
+  public async getCurrentStatus(): Promise<OtpStatusInfo | null> {
+    try {
+      const otpStatusDoc = await OtpStatus.findOne({
+        platform: this.getOtpPlatform(),
+      }).lean();
+
+      if (!otpStatusDoc) {
+        return null;
+      }
+
+      this.currentStatus = {
+        status: otpStatusDoc.status,
+        platform: otpStatusDoc.platform || this.getOtpPlatform(),
+        jobId: otpStatusDoc.job_id?.toString() || null,
+        lastUpdated: otpStatusDoc.updatedAt,
+      };
+
+      return this.currentStatus;
+    } catch (error) {
+      console.error("Error getting current OTP status from database:", error);
+      return null;
+    }
   }
 
   /**
    * Check if OTP is currently available (Released status)
+   * Fetches current status from database first
    */
-  public isOtpAvailable(): boolean {
-    return this.currentStatus?.status === OtpStatusValue.Released;
+  public async isOtpAvailable(): Promise<boolean> {
+    const currentStatus = await this.getCurrentStatus();
+    return currentStatus?.status === OtpStatusValue.Released;
   }
 
   /**
@@ -239,7 +261,7 @@ export class OtpStatusManager extends EventEmitter {
   public async waitForOtpAvailable(
     timeoutMs: number = 60000
   ): Promise<boolean> {
-    if (this.isOtpAvailable()) {
+    if (await this.isOtpAvailable()) {
       return true;
     }
 
