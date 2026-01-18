@@ -63,6 +63,8 @@ export interface IJob extends Document {
   queue_name?: string;
   worker_assigned?: string;
   batch_execution_id?: string;
+  start_date?: string;
+  end_date?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -202,6 +204,14 @@ const JobSchema = new Schema<IJob>(
       required: false,
     },
     batch_execution_id: {
+      type: String,
+      required: false,
+    },
+    start_date: {
+      type: String,
+      required: false,
+    },
+    end_date: {
       type: String,
       required: false,
     },

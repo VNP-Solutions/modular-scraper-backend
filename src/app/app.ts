@@ -2807,7 +2807,7 @@ app.post("/api/expedia/db-api-run-job", (async (
  *       - Scraping Jobs
  *     summary: Bulk start DB scraping jobs
  *     description: |
- *       Starts multiple DB scraping jobs for the specified date range.
+ *       Starts multiple DB scraping jobs. Start and end dates are taken from each job's start_date and end_date fields.
  *       Jobs are submitted asynchronously and the worker pool handles OTP checking and queueing automatically.
  *     requestBody:
  *       required: true
@@ -2816,24 +2816,18 @@ app.post("/api/expedia/db-api-run-job", (async (
  *           schema:
  *             type: object
  *             required:
- *               - startDate
- *               - endDate
  *               - job_ids
  *             properties:
- *               startDate:
- *                 type: string
- *                 description: Start date for scraping (MM/DD/YYYY format)
- *                 example: "01/01/2024"
- *               endDate:
- *                 type: string
- *                 description: End date for scraping (MM/DD/YYYY format)
- *                 example: "01/31/2024"
  *               job_ids:
  *                 type: array
  *                 items:
  *                   type: string
  *                 example: ["6892f4bf9df8bc296bdcdff0", "6892f4bf9df8bc296bdcdff1"]
- *                 description: Array of job IDs to process
+ *                 description: Array of job IDs to process. Each job must have start_date and end_date fields.
+ *               scheduler_id:
+ *                 type: string
+ *                 description: Optional scheduler ID for tracking invalid jobs
+ *                 example: "6892f4bf9df8bc296bdcdff2"
  *     responses:
  *       200:
  *         description: Jobs submitted successfully
@@ -2863,14 +2857,8 @@ app.post("/api/expedia/bulk-db-run-job", (async (
   res: express.Response
 ) => {
   try {
-    const { startDate, endDate, job_ids, scheduler_id } = req.body;
+    const { job_ids, scheduler_id } = req.body;
 
-    if (!startDate || !endDate) {
-      return res.status(400).json({
-        status: 400,
-        message: "startDate and endDate are required in request body",
-      });
-    }
     if (!job_ids || !Array.isArray(job_ids) || job_ids.length === 0) {
       return res.status(400).json({
         status: 400,
@@ -2891,25 +2879,26 @@ app.post("/api/expedia/bulk-db-run-job", (async (
       });
     }
 
-    // Validate all jobs exist and can be run
+    // Validate all jobs exist and can be run, and get full job objects
     const jobValidations = await Promise.all(
       job_ids.map(async (jobId: string) => {
         const validation = await jobService.validateJob(jobId);
-        return { jobId, validation };
+        const job = validation.job ? await jobService.getJobById(jobId) : null;
+        return { jobId, validation, job };
       })
     );
 
     // Separate valid and invalid jobs
     const validJobs = jobValidations.filter(
-      (j) => j.validation.exists && j.validation.canRun
+      (j) => j.validation.exists && j.validation.canRun && j.job
     );
     const invalidJobs = jobValidations.filter(
-      (j) => !j.validation.exists || !j.validation.canRun
+      (j) => !j.validation.exists || !j.validation.canRun || !j.job
     );
 
     // Get job data for valid jobs only
     const jobsData = await Promise.all(
-      validJobs.map(async ({ jobId }) => {
+      validJobs.map(async ({ jobId, job }) => {
         try {
           const jobData = await jobService.getExpediaIdFromJob(jobId);
           if (!jobData || !jobData.expediaId) {
@@ -2924,7 +2913,19 @@ app.post("/api/expedia/bulk-db-run-job", (async (
               error: `Cannot retrieve valid user_email or user_password for job ${jobId}. Property may not have user_email or user_password assigned.`,
             };
           }
-          return { jobId, jobData };
+          
+          // Get startDate and endDate from job
+          const startDate = (job as any).start_date;
+          const endDate = (job as any).end_date;
+          
+          if (!startDate || !endDate) {
+            return {
+              jobId,
+              error: `Job ${jobId} does not have start_date and end_date fields`,
+            };
+          }
+          
+          return { jobId, jobData, startDate, endDate };
         } catch (error) {
           return {
             jobId,
@@ -2936,7 +2937,7 @@ app.post("/api/expedia/bulk-db-run-job", (async (
 
     // Separate jobs with valid data from those with errors
     const validJobsData = jobsData.filter(
-      (j): j is { jobId: string; jobData: any } => !("error" in j)
+      (j): j is { jobId: string; jobData: any; startDate: string; endDate: string } => !("error" in j)
     );
     const jobsWithErrors = jobsData.filter((j) => "error" in j);
 
@@ -2977,8 +2978,8 @@ app.post("/api/expedia/bulk-db-run-job", (async (
       const workerJobData: WorkerJobData = {
         jobType: "db-run",
         jobId: job.jobId,
-        startDate,
-        endDate,
+        startDate: job.startDate,
+        endDate: job.endDate,
         expediaId: job.jobData.expediaId,
         user_email: job.jobData.user_email,
         user_password: job.jobData.user_password,
