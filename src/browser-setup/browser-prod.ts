@@ -25,7 +25,7 @@ export async function browserSetupProduction(
     const selectorTimeout = await timeoutManager.getSelectorTimeout(jobId);
 
     const launchArgs = {
-      headless: true,
+      headless: false,
       stealth: false,
       args: ["--window-size=1920,1080"],
     };

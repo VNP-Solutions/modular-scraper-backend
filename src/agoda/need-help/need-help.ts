@@ -1,13 +1,12 @@
 import fs from "fs";
 import path from "path";
 import { Page } from "puppeteer";
-import { cleanupOnError } from "../utils/error-cleanup.js";
 import { dualLogError, dualLogInfo } from "../../common/log-helper.js";
 import { progressManager } from "../../common/progress-manager.js";
 import { scrapingStateManager } from "../../common/scraping-state.js";
 import { timeManager } from "../../common/time-manager.js";
 import { JobService } from "../../services/job.service.js";
-import { submitFinalCsv } from "./submit-final-csv.js";
+import { cleanupOnError } from "../utils/error-cleanup.js";
 import {
   getStandardFilePaths,
   validateFileForProcessing,
@@ -130,13 +129,7 @@ Revenue Control Team`;
     // Return fallback message
     return `Dear Agoda Team,
 
-Thank you in advance for your continued support and cooperation.
-
-We are currently reviewing the Agoda transactions for the attached property. In accordance with the new guidelines provided by Agoda, we have followed all the required steps. During this process, we identified certain reservations where the full booking amount has not yet been collected.
-
-We have attempted to charge the remaining amounts as per our Accounts Receivable report; however, the VCCs are being declined. We kindly request that you reissue the VCCs for the outstanding amounts reflected in our report so we can reconcile these balances accordingly.
-
-We would greatly appreciate your assistance in providing the remaining amounts.
+Thank you in advance for your continued support and cooperation. We are currently reviewing the Agoda transactions for the attached property. In accordance with the new guidelines provided by Agoda, we have followed all the required steps. During this process, we identified certain reservations where the full booking amount has not yet been collected. We have attempted to charge the remaining amounts as per our Accounts Receivable report; however, the VCCs are being declined. We kindly request that you reissue the VCCs for the outstanding amounts reflected in our report so we can reconcile these balances accordingly. We would greatly appreciate your assistance in providing us the payment report with Booking payment status.
 
 Best regards,
 Revenue Control Team`;
@@ -196,33 +189,94 @@ export async function automateNeedHelpProcess(
       'button[data-element-name*="get-help"]',
     ];
 
+    let needHelpClicked = false;
+
+    // Try standard Need Help buttons first
     for (const selector of needHelpSelectors) {
       try {
-        await page.waitForSelector(selector, { visible: true, timeout: 10000 });
+        await page.waitForSelector(selector, { visible: true, timeout: 5000 });
         await page.click(selector);
         await dualLogInfo(
           `✅ Clicked 'Need Help' button with selector: ${selector}`,
           { jobId }
         );
-
-        // Update progress - Need Help button clicked
-        if (jobId) {
-          await progressManager.updateJobProgress(
-            jobId,
-            undefined,
-            96,
-            "agoda_need_help_button_clicked",
-            undefined
-          );
-        }
+        needHelpClicked = true;
         break;
       } catch (error) {
         continue;
       }
     }
 
+    // Fallback: If Need Help not found, try Inbox -> Need Help
+    if (!needHelpClicked) {
+      await dualLogInfo(
+        "Standard 'Need Help' button not found, trying fallback via Inbox...",
+        { jobId }
+      );
+
+      try {
+        const inboxSelector = 'a[data-testid="ycs-inbox-icon"]';
+        // Wait for inbox icon
+        await page.waitForSelector(inboxSelector, {
+          visible: true,
+          timeout: 10000,
+        });
+        await page.click(inboxSelector);
+
+        await dualLogInfo("✅ Clicked Inbox icon, waiting for sidebar...", {
+          jobId,
+        });
+        await delay(3000);
+
+        const secondaryNeedHelpSelectors = [
+          'div[data-testid="widget-with-vivr-old"]',
+          'div[data-element-name="ycs-private-layout-need-help-button"]',
+          'div:has-text("Need Help")',
+        ];
+
+        for (const selector of secondaryNeedHelpSelectors) {
+          try {
+            await page.waitForSelector(selector, {
+              visible: true,
+              timeout: 10000,
+            });
+            await page.click(selector);
+            await dualLogInfo(
+              `✅ Clicked Secondary 'Need Help' button with selector: ${selector}`,
+              { jobId }
+            );
+            needHelpClicked = true;
+            break;
+          } catch (error) {
+            continue;
+          }
+        }
+      } catch (fallbackError: any) {
+        await dualLogError(
+          "Error in fallback Need Help flow:",
+          fallbackError.message,
+          { jobId }
+        );
+      }
+    }
+
+    if (needHelpClicked && jobId) {
+      await progressManager.updateJobProgress(
+        jobId,
+        undefined,
+        96,
+        "agoda_need_help_button_clicked",
+        undefined
+      );
+    } else if (!needHelpClicked) {
+      await dualLogError(
+        "Failed to click 'Need Help' button (standard and fallback)",
+        { jobId }
+      );
+    }
+
     // Step 2: Wait for sidebar to load and handle chat input
-    await delay(3000);
+    await delay(10000); // Increased delay
     await dualLogInfo("Waiting for chat sidebar to load...", { jobId });
 
     try {
@@ -255,26 +309,69 @@ export async function automateNeedHelpProcess(
         // Wait a bit more for the input to be fully interactive
         await delay(2000);
 
-        // Type "contact agoda" in the input field
-        await dualLogInfo("Typing 'contact agoda' in chat input...", { jobId });
+        // Type "submit a support request" in the input field
+        await dualLogInfo(
+          "Typing 'submit a support request' in chat input...",
+          { jobId }
+        );
 
         const inputFieldSelectors = [
+          'fieldset[data-testid="ChatWidgetInputFieldset"] div[role="textbox"]', // More specific targeting
+          'div[role="textbox"][aria-multiline="true"]',
           'fieldset[data-testid="ChatWidgetInputFieldset"]',
           'div[class*="IRISCwMessenger__Bottomm"] fieldset',
         ];
 
+        let typingSuccess = false;
+        const expectedText = "submit a support request";
+
         for (const selector of inputFieldSelectors) {
           try {
+            await page.waitForSelector(selector, {
+              visible: true,
+              timeout: 5000,
+            });
             await page.click(selector);
-            await page.type(selector, "contact agoda");
+            // Clear existing text if any (optional but safer)
+            await page.evaluate((sel) => {
+               const el = document.querySelector(sel);
+               if (el) {
+                 if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
+                   (el as HTMLInputElement).value = '';
+                 } else {
+                   el.innerHTML = ''; // For contenteditable divs
+                 }
+               }
+            }, selector);
+            
+            await page.type(selector, expectedText);
+
+            // Verification Step
+            const actualText = await page.$eval(selector, (el) => {
+                if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') {
+                    return (el as HTMLInputElement).value;
+                }
+                return el.textContent || (el as HTMLElement).innerText;
+            });
+
+            if (!actualText || !actualText.toLowerCase().includes(expectedText.toLowerCase())) {
+                 throw new Error(`Verification failed: Expected '${expectedText}', found '${actualText}'`);
+            }
+
             await dualLogInfo(
-              `✅ Typed 'contact agoda' with selector: ${selector}`,
+              `✅ Typed and Verified '${expectedText}' with selector: ${selector}`,
               { jobId }
             );
+            typingSuccess = true;
             break;
           } catch (error) {
+            await dualLogInfo(`⚠️ Typing failed with selector ${selector}: ${(error as Error).message}`, { jobId });
             continue;
           }
+        }
+
+        if (!typingSuccess) {
+            throw new Error("Critical Error: Failed to type 'submit a support request' into any chat input. Process cannot continue.");
         }
 
         // Wait a moment for the send button to become enabled
@@ -317,7 +414,7 @@ export async function automateNeedHelpProcess(
         }
 
         // Wait for the chat response to load
-        await delay(3000);
+        await delay(10000); // Increased delay
       } else {
         await dualLogError(
           "Chat input field not found after clicking Need Help",
@@ -330,73 +427,38 @@ export async function automateNeedHelpProcess(
       });
     }
 
-    // Step 4: Type "submit a support request" and click send
-    await delay(3000);
-    await dualLogInfo("Typing 'submit a support request' in chat input...", {
-      jobId,
-    });
-
-    const inputFieldSelectorsStep4 = [
-      'fieldset[data-testid="ChatWidgetInputFieldset"]',
-      'div[class*="IRISCwMessenger__Bottomm"] fieldset',
+    // Step 4: Click "submit a support request" button (Restored)
+    await delay(10000); // Increased delay
+    await dualLogInfo("Looking for 'Submit request' button...", { jobId });
+    const submitRequestSelectors = [
+      'button[data-element-value="Submit request"]',
+      'button[data-testid="suggestion-text-button"][data-element-value="Submit request"]',
+      'button:has-text("Submit request")',
     ];
 
-    let step4InputFound = false;
-    for (const selector of inputFieldSelectorsStep4) {
+    for (const selector of submitRequestSelectors) {
       try {
         await page.waitForSelector(selector, { visible: true, timeout: 10000 });
         await page.click(selector);
-        await page.type(selector, "submit a support request");
         await dualLogInfo(
-          `✅ Typed 'submit a support request' with selector: ${selector}`,
+          `✅ Clicked 'Submit request' button with selector: ${selector}`,
           { jobId }
         );
-        step4InputFound = true;
+
+        // Update progress - Submit request button clicked
+        if (jobId) {
+          await progressManager.updateJobProgress(
+            jobId,
+            undefined,
+            97,
+            "agoda_submit_request_clicked",
+            undefined
+          );
+        }
         break;
       } catch (error) {
         continue;
       }
-    }
-
-    if (step4InputFound) {
-      // Wait a moment for the send button to become enabled
-      await delay(1000);
-
-      const sendButtonSelectorsStep4 = [
-        'button[leadingicon="fill.symbol.send"]',
-        'button[class*="a9c57-bg-generic-base-transparent"]:has(svg[role="img"])',
-        'div[class*="IRISCwMessenger__Bottomm"] button:last-child',
-      ];
-
-      for (const selector of sendButtonSelectorsStep4) {
-        try {
-          await page.waitForSelector(selector, {
-            visible: true,
-            timeout: 10000,
-          });
-          await page.click(selector);
-          await dualLogInfo(
-            `✅ Clicked send button (for submit request) with selector: ${selector}`,
-            { jobId }
-          );
-
-          // Update progress - Submit request sent
-          if (jobId) {
-            await progressManager.updateJobProgress(
-              jobId,
-              undefined,
-              97,
-              "agoda_submit_request_sent",
-              undefined
-            );
-          }
-          break;
-        } catch (error) {
-          continue;
-        }
-      }
-    } else {
-      await dualLogError("Chat input field not found for Step 4", { jobId });
     }
 
     // Step 5: Wait for form to load and select "Other" from issue type dropdown
@@ -698,20 +760,20 @@ export async function automateNeedHelpProcess(
 
     // Step 9: Click final submit button
     // Only for production environment
-    if (process.env.AGODA_SUBMISSION === "true") {
-      await submitFinalCsv(page, jobId);
-    }
+    // if (process.env.AGODA_SUBMISSION === "true") {
+    //   await submitFinalCsv(page, jobId);
+    // }
 
-    if (jobId) {
-      // Update progress - Need Help process completed
-      await progressManager.updateJobProgress(
-        jobId,
-        undefined,
-        100,
-        "agoda_need_help_process_completed",
-        undefined
-      );
-    }
+    // if (jobId) {
+    //   // Update progress - Need Help process completed
+    //   await progressManager.updateJobProgress(
+    //     jobId,
+    //     undefined,
+    //     100,
+    //     "agoda_need_help_process_completed",
+    //     undefined
+    //   );
+    // }
 
     await dualLogInfo(
       "✅ Need Help automation process completed successfully",
