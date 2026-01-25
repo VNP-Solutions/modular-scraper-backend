@@ -330,38 +330,73 @@ export async function automateNeedHelpProcess(
       });
     }
 
-    // Step 4: Click "Submit request" button
+    // Step 4: Type "submit a support request" and click send
     await delay(3000);
-    await dualLogInfo("Looking for 'Submit request' button...", { jobId });
-    const submitRequestSelectors = [
-      'button[data-element-value="Submit request"]',
-      'button[data-testid="suggestion-text-button"][data-element-value="Submit request"]',
-      'button:has-text("Submit request")',
+    await dualLogInfo("Typing 'submit a support request' in chat input...", {
+      jobId,
+    });
+
+    const inputFieldSelectorsStep4 = [
+      'fieldset[data-testid="ChatWidgetInputFieldset"]',
+      'div[class*="IRISCwMessenger__Bottomm"] fieldset',
     ];
 
-    for (const selector of submitRequestSelectors) {
+    let step4InputFound = false;
+    for (const selector of inputFieldSelectorsStep4) {
       try {
         await page.waitForSelector(selector, { visible: true, timeout: 10000 });
         await page.click(selector);
+        await page.type(selector, "submit a support request");
         await dualLogInfo(
-          `✅ Clicked 'Submit request' button with selector: ${selector}`,
+          `✅ Typed 'submit a support request' with selector: ${selector}`,
           { jobId }
         );
-
-        // Update progress - Submit request button clicked
-        if (jobId) {
-          await progressManager.updateJobProgress(
-            jobId,
-            undefined,
-            97,
-            "agoda_submit_request_clicked",
-            undefined
-          );
-        }
+        step4InputFound = true;
         break;
       } catch (error) {
         continue;
       }
+    }
+
+    if (step4InputFound) {
+      // Wait a moment for the send button to become enabled
+      await delay(1000);
+
+      const sendButtonSelectorsStep4 = [
+        'button[leadingicon="fill.symbol.send"]',
+        'button[class*="a9c57-bg-generic-base-transparent"]:has(svg[role="img"])',
+        'div[class*="IRISCwMessenger__Bottomm"] button:last-child',
+      ];
+
+      for (const selector of sendButtonSelectorsStep4) {
+        try {
+          await page.waitForSelector(selector, {
+            visible: true,
+            timeout: 10000,
+          });
+          await page.click(selector);
+          await dualLogInfo(
+            `✅ Clicked send button (for submit request) with selector: ${selector}`,
+            { jobId }
+          );
+
+          // Update progress - Submit request sent
+          if (jobId) {
+            await progressManager.updateJobProgress(
+              jobId,
+              undefined,
+              97,
+              "agoda_submit_request_sent",
+              undefined
+            );
+          }
+          break;
+        } catch (error) {
+          continue;
+        }
+      }
+    } else {
+      await dualLogError("Chat input field not found for Step 4", { jobId });
     }
 
     // Step 5: Wait for form to load and select "Other" from issue type dropdown
