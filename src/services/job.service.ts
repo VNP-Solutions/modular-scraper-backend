@@ -434,17 +434,40 @@ export class JobService {
         "property_id"
       );
 
-      const jobItem = new JobItem({
-        ...itemData,
+      // Use upsert to avoid duplicate key errors. If a job item with the same job_id and reservation_id exists,
+      // update it with the new data instead of inserting a new document.
+      const filter = {
         job_id: jobObjectId,
-        property_id: propertyObjectId,
-        has_card_info: itemData.has_card_info || false,
-        has_payment_info: itemData.has_payment_info || false,
-      });
+        reservation_id: itemData.reservation_id,
+      };
 
-      return await jobItem.save();
+      const update = {
+        $set: {
+          ...itemData,
+          job_id: jobObjectId,
+          property_id: propertyObjectId,
+          has_card_info: itemData.has_card_info || false,
+          has_payment_info: itemData.has_payment_info || false,
+        },
+      };
+
+      const options = { upsert: true, new: true };
+
+      const updatedItem = await JobItem.findOneAndUpdate(filter, update, options);
+      if (!updatedItem) {
+        // This should not happen, but fallback to creating a new item.
+        const jobItem = new JobItem({
+          ...itemData,
+          job_id: jobObjectId,
+          property_id: propertyObjectId,
+          has_card_info: itemData.has_card_info || false,
+          has_payment_info: itemData.has_payment_info || false,
+        });
+        return await jobItem.save();
+      }
+      return updatedItem as IJobItem;
     } catch (error) {
-      console.error(`Error creating job item: ${error}`);
+      console.error(`Error creating/updating job item: ${error}`);
       throw error;
     }
   }

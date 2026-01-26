@@ -117,10 +117,16 @@ function mapCsvToJobItem(
   const checkInDate = parseCsvDate(csvRecord.StayDateFrom);
   const checkOutDate = parseCsvDate(csvRecord.StayDateTo);
   const bookedDate = parseCsvDate(csvRecord.BookedDate);
-  const amountToChargeOrRefund = calculateAmountToChargeOrRefund(
-    checkInDate,
-    checkOutDate
-  );
+  // Use provided amount if available, otherwise calculate it
+  let amountToChargeOrRefund: number;
+  if (csvRecord.amount_to_charge_or_refund !== undefined) {
+    amountToChargeOrRefund = csvRecord.amount_to_charge_or_refund;
+  } else {
+    amountToChargeOrRefund = calculateAmountToChargeOrRefund(
+        checkInDate,
+        checkOutDate
+    );
+  }
 
   const paymentInfo: PaymentInfo = {
     // total_guest_payment: 0,
@@ -415,10 +421,10 @@ function convertDateFormat(dateString: string): string {
   let year: string, month: string, day: string;
 
   if (dateString.includes("/")) {
-    // MM/DD/YYYY format
+    // MM/DD/YYYY format (User input) -> DD-MM-YYYY (Agoda API)
     const parts = dateString.split("/");
-    month = parts[0].padStart(2, "0");
-    day = parts[1].padStart(2, "0");
+    month = parts[0].padStart(2, "0"); // First part is Month
+    day = parts[1].padStart(2, "0");   // Second part is Day
     year = parts[2];
   } else if (dateString.includes("-")) {
     // YYYY-MM-DD format
@@ -632,94 +638,230 @@ export async function getAgodaBookingData(
       throw new Error("Scraping was stopped during booking data retrieval");
     }
 
-    // Fetch booking data from API instead of downloading CSV
-    await dualLogInfo("Fetching booking data from Agoda API...");
-
-    // Update progress - API call initiated
-    if (jobId) {
-      await progressManager.updateJobProgress(
-        jobId,
-        undefined,
-        50,
-        "agoda_api_call_initiated",
-        undefined
-      );
-    }
-
-    // Fetch booking data from API
-    let apiResponse: any;
+    // PRIMARY METHOD: Try to download CSV file from UI
+    let downloadSuccess = false;
     let formattedRecords: CsvRecord[] = [];
 
     try {
-      apiResponse = await fetchBookingDataFromAPI(
-        newPage,
-        agodaId,
-        startDate,
-        endDate,
-        jobId
-      );
+      // Wait for booking table to load per user requirement
+      await dualLogInfo("Waiting for booking table to load...");
+      try {
+        await newPage.waitForSelector('div[data-testid="booking-list-box"]', { visible: true, timeout: 15000 });
+        await dualLogInfo("✅ Booking table loaded (verified via data-testid='booking-list-box')");
+      } catch (e) {
+        await dualLogInfo("⚠️ Booking table container not immediately found, proceeding...");
+      }
 
-      // Map API response to CsvRecord format (fetches additional details for each booking)
-      // Pass formatted dates (DD-MM-YYYY) for Referer header in API calls
-      formattedRecords = await mapApiResponseToCsvRecords(
-        apiResponse,
-        newPage,
-        agodaId,
-        formattedStartDate, // DD-MM-YYYY format for Referer header
-        formattedEndDate, // DD-MM-YYYY format for Referer header
-        jobId
-      );
+      await dualLogInfo("Attempting to download CSV file via UI button...");
+      
+      const downloadButtonSelectors = [
+        'button[data-element-name="ycs-booking-list-download"]',
+        'button:has-text("Download (.csv)")',
+        'div[data-testid="excel-box"] button'
+      ];
 
-      // Filter out records that don't have a valid BookingIDExternal_reference_ID
-      formattedRecords = formattedRecords.filter((record) => {
-        const hasValidBookingId =
-          record.BookingIDExternal_reference_ID &&
-          record.BookingIDExternal_reference_ID.trim() !== "";
+      let downloadButton = null;
+      for (const selector of downloadButtonSelectors) {
+         try {
+           downloadButton = await newPage.waitForSelector(selector, { visible: true, timeout: 5000 });
+           if (downloadButton) {
+             await dualLogInfo(`Found download button with selector: ${selector}`);
+             break;
+           }
+         } catch(e) { continue; }
+      }
 
-        if (!hasValidBookingId) {
-          console.log(
-            "Skipping invalid record:",
-            JSON.stringify(record, null, 2)
-          );
+      if (downloadButton) {
+        // Set up download listener
+        const downloadPath = path.resolve(process.cwd(), 'downloads', jobId || 'temp');
+        if (fs.existsSync(downloadPath)) {
+            fs.rmSync(downloadPath, { recursive: true, force: true });
+        }
+        fs.mkdirSync(downloadPath, { recursive: true });
+
+        const client = await newPage.target().createCDPSession();
+        await client.send('Page.setDownloadBehavior', {
+          behavior: 'allow',
+          downloadPath: downloadPath,
+        });
+
+        await downloadButton.click();
+        await dualLogInfo("Clicked download button, waiting for file...");
+
+        // Wait for download
+        let downloadedFile = null;
+        let attempts = 0;
+        while (attempts < 30 && !downloadedFile) { // Wait up to 30 seconds
+            await delay(1000);
+            const files = fs.readdirSync(downloadPath);
+            downloadedFile = files.find(f => f.endsWith('.csv'));
+            attempts++;
         }
 
-        return hasValidBookingId;
-      });
+        if (downloadedFile) {
+             const originalPath = path.join(downloadPath, downloadedFile);
+             
+             // Rename file to {jobId}.csv for easier tracking
+             let finalFilePath = originalPath;
+             if (jobId) {
+                 const newFileName = `${jobId}.csv`;
+                 const newPath = path.join(downloadPath, newFileName);
+                 try {
+                     fs.renameSync(originalPath, newPath);
+                     finalFilePath = newPath;
+                     await dualLogInfo(`Renamed downloaded file to: ${newFileName}`);
+                 } catch (renameError) {
+                     await dualLogError(`Failed to rename file, using original: ${downloadedFile}`);
+                 }
+             }
 
-      await dualLogInfo(
-        `Successfully fetched ${formattedRecords.length} booking records from API`
-      );
+             await dualLogInfo(`Processing downloaded file: ${finalFilePath}`);
+             
+             // Validate file
+             const fileStats = fs.statSync(finalFilePath);
+             if (fileStats.size > 0) {
+                 // Read and Parse CSV
+                 const fileContent = fs.readFileSync(finalFilePath, 'utf-8');
+                 // Standardize CSV: Remove Byte Order Mark (BOM) if present (common in Agoda exports)
+                 const cleanContent = fileContent.replace(/^\uFEFF/, '');
+                 
+                 const parsed = Papa.parse(cleanContent, { header: true, skipEmptyLines: true });
+                 
+                 if (parsed.data && parsed.data.length > 0) {
+                     // Map CSV data to CsvRecord format
+                     formattedRecords = parsed.data.map((row: any) => ({
+                         BookingIDExternal_reference_ID: row['BookingIDExternal_reference_ID'] || row['Booking ID'] || row['Booking ID (External reference ID)'] || '',
+                         Status: row['Status'] || '',
+                         StayDateFrom: row['StayDateFrom'] || row['Stay Date From'] || row['Check-in date'] || '',
+                         StayDateTo: row['StayDateTo'] || row['Stay Date To'] || row['Check-out date'] || '',
+                         BookedDate: row['BookedDate'] || row['Booked Date'] || '',
+                         Customer_Name: row['Customer_Name'] || row['Customer Name'] || '',
+                         RoomType: row['RoomType'] || row['Room Type'] || '',
+                         CancellationPolicyDescription: row['CancellationPolicyDescription'] || row['Cancellation Policy'] || ''
+                     })).filter((r: any) => r.BookingIDExternal_reference_ID !== ''); // Basic filter
+                     
+                     if (formattedRecords.length > 0) {
+                        downloadSuccess = true;
+                        await dualLogInfo(`Successfully loaded ${formattedRecords.length} records from CSV`);
+                        
+                         // Update progress - Download completed
+                        if (jobId) {
+                            await progressManager.updateJobProgress(
+                            jobId,
+                            undefined,
+                            90,
+                            "agoda_csv_download_completed",
+                            undefined
+                            );
+                        }
+                     }
+                 }
+             }
+        } else {
+            await dualLogInfo("Download timed out or file verification failed.");
+        }
+      } else {
+         await dualLogInfo("Download button not found in UI.");
+      }
 
-      // Update progress - API call completed
-      if (jobId) {
+    } catch (downloadError: any) {
+         await dualLogError("Error during UI download flow (falling back to API):", downloadError.message, { jobId });
+         downloadSuccess = false;
+    }
+
+
+    // FALLBACK METHOD: API Fetch
+    if (!downloadSuccess) {
+        await dualLogInfo("⚠️ Standard download failed or button missing. Falling back to direct API fetch...");
+
+        // Fetch booking data from API instead of downloading CSV
+        await dualLogInfo("Fetching booking data from Agoda API...");
+
+        // Update progress - API call initiated
+        if (jobId) {
         await progressManager.updateJobProgress(
-          jobId,
-          undefined,
-          90,
-          "agoda_api_call_completed",
-          undefined
+            jobId,
+            undefined,
+            50,
+            "agoda_api_call_initiated",
+            undefined
         );
-      }
-
-      // Take screenshot after API call
-      if (jobId) {
-        await takeSuccessScreenshot(newPage, jobId, "api_call_completed");
-      }
-    } catch (apiError: any) {
-      await dualLogError(
-        "Error fetching booking data from API:",
-        apiError.message,
-        {
-          jobId,
         }
-      );
 
-      // Take error screenshot
-      if (jobId) {
-        await takeErrorScreenshot(newPage, jobId, "api_call_failed");
-      }
+        // Fetch booking data from API
+        let apiResponse: any;
 
-      throw apiError;
+        try {
+        apiResponse = await fetchBookingDataFromAPI(
+            newPage,
+            agodaId,
+            startDate,
+            endDate,
+            jobId
+        );
+
+        // Map API response to CsvRecord format (fetches additional details for each booking)
+        // Pass formatted dates (DD-MM-YYYY) for Referer header in API calls
+        formattedRecords = await mapApiResponseToCsvRecords(
+            apiResponse,
+            newPage,
+            agodaId,
+            formattedStartDate, // DD-MM-YYYY format for Referer header
+            formattedEndDate, // DD-MM-YYYY format for Referer header
+            jobId
+        );
+
+        // Filter out records that don't have a valid BookingIDExternal_reference_ID
+        formattedRecords = formattedRecords.filter((record) => {
+            const hasValidBookingId =
+            record.BookingIDExternal_reference_ID &&
+            record.BookingIDExternal_reference_ID.trim() !== "";
+
+            if (!hasValidBookingId) {
+            console.log(
+                "Skipping invalid record:",
+                JSON.stringify(record, null, 2)
+            );
+            }
+
+            return hasValidBookingId;
+        });
+
+        await dualLogInfo(
+            `Successfully fetched ${formattedRecords.length} booking records from API`
+        );
+
+        // Update progress - API call completed
+        if (jobId) {
+            await progressManager.updateJobProgress(
+            jobId,
+            undefined,
+            90,
+            "agoda_api_call_completed",
+            undefined
+            );
+        }
+
+        // Take screenshot after API call
+        if (jobId) {
+            await takeSuccessScreenshot(newPage, jobId, "api_call_completed");
+        }
+        } catch (apiError: any) {
+        await dualLogError(
+            "Error fetching booking data from API:",
+            apiError.message,
+            {
+            jobId,
+            }
+        );
+
+        // Take error screenshot
+        if (jobId) {
+            await takeErrorScreenshot(newPage, jobId, "api_call_failed");
+        }
+
+        throw apiError;
+        }
     }
 
     // Log the data for debugging
