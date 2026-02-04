@@ -515,16 +515,45 @@ async function handleBookingOtpVerification(
 
         // Clear input field after error detected, before trying next code
         await dualLogInfo("Clearing input field for next attempt...");
-        await page.click(otpInputSelector);
-        await delay(200);
 
-        // Select all and delete
-        await page.keyboard.down("Control");
-        await page.keyboard.press("KeyA");
-        await page.keyboard.up("Control");
-        await delay(100);
-        await page.keyboard.press("Backspace");
-        await delay(300);
+        // More robust clearing approach - try multiple methods
+        try {
+          // Method 1: Triple-click to select all, then delete
+          await page.click(otpInputSelector, { clickCount: 3 });
+          await delay(200);
+          await page.keyboard.press("Backspace");
+          await delay(200);
+
+          // Method 2: Use evaluate to clear the value directly
+          await page.evaluate((selector) => {
+            const input = document.querySelector(selector) as HTMLInputElement;
+            if (input) {
+              input.value = "";
+              input.dispatchEvent(new Event("input", { bubbles: true }));
+              input.dispatchEvent(new Event("change", { bubbles: true }));
+            }
+          }, otpInputSelector);
+          await delay(200);
+
+          // Verify the field is actually empty
+          const isEmpty = await page.evaluate((selector) => {
+            const input = document.querySelector(selector) as HTMLInputElement;
+            return input ? input.value === "" : false;
+          }, otpInputSelector);
+
+          if (isEmpty) {
+            await dualLogInfo("✅ Input field cleared successfully");
+          } else {
+            await dualLogInfo(
+              "⚠️ Input field may not be fully cleared, but continuing..."
+            );
+          }
+        } catch (clearError) {
+          await dualLogInfo(
+            `Warning: Error during field clearing: ${clearError}`
+          );
+          // Continue anyway - sometimes the field clears even if we get an error
+        }
 
         // Continue to next attempt
         continue;
@@ -545,7 +574,12 @@ async function handleBookingOtpVerification(
     if (navDetected) {
       try {
         await Promise.race([
-          page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: Math.min(loadingTimeout, 5000) }).catch(() => null),
+          page
+            .waitForNavigation({
+              waitUntil: "domcontentloaded",
+              timeout: Math.min(loadingTimeout, 5000),
+            })
+            .catch(() => null),
           delay(5000),
         ]);
       } catch (e) {

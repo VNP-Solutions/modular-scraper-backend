@@ -58,6 +58,7 @@ export class BookingScraper extends BaseScraper {
   protected currentPropertyName?: string;
   private context?: ScraperContext;
   private captchaService: CaptchaService;
+  private sessionParams?: { ses: string; lang: string }; // Store session and language parameters
 
   constructor(context?: ScraperContext) {
     super("booking", "https://admin.booking.com");
@@ -403,6 +404,10 @@ export class BookingScraper extends BaseScraper {
     if (!this.page) throw new Error("Page not initialized");
 
     await this.logInfo("✅ Login successful");
+
+    // Extract session parameters from URL
+    await this.extractSessionParams();
+
     const cookies = await this.page.cookies();
 
     // Save cookies to storage if we have a property ID
@@ -442,7 +447,14 @@ export class BookingScraper extends BaseScraper {
       }
     }
 
-    await this.handlePropertySearch(effectivePropertyId);
+    // Skip property search if we have session parameters (will use direct navigation)
+    if (this.sessionParams) {
+      await this.logInfo(
+        "Session parameters available - skipping property search (will use direct navigation)"
+      );
+    } else {
+      await this.handlePropertySearch(effectivePropertyId);
+    }
   }
 
   /**
@@ -452,6 +464,10 @@ export class BookingScraper extends BaseScraper {
     if (!this.page) throw new Error("Page not initialized");
 
     await this.logInfo("✅ 2FA completed successfully");
+
+    // Extract session parameters from URL
+    await this.extractSessionParams();
+
     const cookies = await this.page.cookies();
 
     // Save cookies to storage if we have a property ID
@@ -491,7 +507,14 @@ export class BookingScraper extends BaseScraper {
       }
     }
 
-    await this.handlePropertySearch(effectivePropertyId);
+    // Skip property search if we have session parameters (will use direct navigation)
+    if (this.sessionParams) {
+      await this.logInfo(
+        "Session parameters available - skipping property search (will use direct navigation)"
+      );
+    } else {
+      await this.handlePropertySearch(effectivePropertyId);
+    }
   }
 
   /**
@@ -510,6 +533,100 @@ export class BookingScraper extends BaseScraper {
     );
 
     return isIncluded && !isExcluded;
+  }
+
+  /**
+   * Extract session (ses) and language (lang) parameters from current URL
+   */
+  private async extractSessionParams(): Promise<void> {
+    if (!this.page) {
+      await this.logWarn("Page not initialized, cannot extract session params");
+      return;
+    }
+
+    try {
+      const currentUrl = this.page.url();
+      await this.logInfo(
+        `Extracting session parameters from URL: ${currentUrl}`
+      );
+
+      const urlObj = new URL(currentUrl);
+      const ses = urlObj.searchParams.get("ses");
+      const lang = urlObj.searchParams.get("lang");
+
+      if (ses && lang) {
+        this.sessionParams = { ses, lang };
+        await this.logInfo(
+          `✅ Session parameters extracted - ses: ${ses}, lang: ${lang}`
+        );
+      } else {
+        await this.logWarn(
+          `Session parameters not found in URL. ses: ${ses}, lang: ${lang}`
+        );
+      }
+    } catch (error) {
+      await this.logError("Error extracting session parameters", error);
+    }
+  }
+
+  /**
+   * Navigate directly to VCCS management page using session parameters
+   * This bypasses the need to click through menus
+   *
+   * @param hotelId - The booking.com hotel ID (property ID)
+   * @returns Promise<boolean> - True if navigation successful
+   */
+  private async navigateDirectlyToVCCS(hotelId: string): Promise<boolean> {
+    if (!this.page) {
+      await this.logError("Page not initialized");
+      return false;
+    }
+
+    if (!this.sessionParams) {
+      await this.logWarn(
+        "Session parameters not available, cannot use direct navigation"
+      );
+      return false;
+    }
+
+    try {
+      const { ses, lang } = this.sessionParams;
+
+      // Construct the direct VCCS management URL
+      // Format: https://admin.booking.com/hotel/hoteladmin/extranet_ng/manage/vccs_management.html?lang=xu&hotel_id=10520417&ses=103bcbd7ad55834afa468b7fcf2c108c
+      const vccsUrl = `https://admin.booking.com/hotel/hoteladmin/extranet_ng/manage/vccs_management.html?lang=${lang}&hotel_id=${hotelId}&ses=${ses}`;
+
+      await this.logInfo(
+        `🚀 Navigating directly to VCCS management: ${vccsUrl}`
+      );
+
+      // Navigate to the URL
+      await this.page.goto(vccsUrl, {
+        waitUntil: "networkidle2",
+        timeout: 60000,
+      });
+
+      await this.delay(2000);
+      await this.takeScreenshot();
+
+      // Verify we're on the VCCS management page
+      const currentUrl = this.page.url();
+      if (
+        currentUrl.includes("vccs_management") ||
+        currentUrl.includes("vccs")
+      ) {
+        await this.logInfo("✅ Successfully navigated to VCCS management page");
+        return true;
+      } else {
+        await this.logWarn(
+          `Navigation may have failed. Current URL: ${currentUrl}`
+        );
+        return false;
+      }
+    } catch (error) {
+      await this.logError("Error during direct VCCS navigation", error);
+      return false;
+    }
   }
 
   /**
@@ -590,6 +707,9 @@ export class BookingScraper extends BaseScraper {
       if (this.isAlreadyLoggedIn() && !skipAlreadyLogged) {
         await this.logInfo("✅ Already logged in");
 
+        // Extract session parameters from current URL
+        await this.extractSessionParams();
+
         // Map MongoDB ObjectId (property _id) to actual Booking hotel id if needed
         let effectivePropertyId = propertyId;
         if (
@@ -609,7 +729,14 @@ export class BookingScraper extends BaseScraper {
           }
         }
 
-        await this.handlePropertySearch(effectivePropertyId);
+        // Skip property search if we have session parameters (will use direct navigation)
+        if (this.sessionParams) {
+          await this.logInfo(
+            "Session parameters available - skipping property search (will use direct navigation)"
+          );
+        } else {
+          await this.handlePropertySearch(effectivePropertyId);
+        }
         return;
       }
 
@@ -3139,11 +3266,35 @@ export class BookingScraper extends BaseScraper {
       });
 
       // Step 1: Navigate to VCCS Management
-      const navigationSuccess = await this.navigateToMenuSection(
-        "finance",
-        "vccs_management",
-        "vccs_management"
-      );
+      // Try direct navigation first if session params are available
+      let navigationSuccess = false;
+
+      if (this.sessionParams && params.propertyId) {
+        await this.logInfo(
+          "Attempting direct navigation to VCCS Management using session parameters"
+        );
+        navigationSuccess = await this.navigateDirectlyToVCCS(
+          params.propertyId
+        );
+
+        if (!navigationSuccess) {
+          await this.logWarn(
+            "Direct navigation failed, falling back to menu navigation"
+          );
+        }
+      }
+
+      // Fallback to traditional menu navigation if direct navigation not available or failed
+      if (!navigationSuccess) {
+        await this.logInfo(
+          "Using traditional menu navigation to VCCS Management"
+        );
+        navigationSuccess = await this.navigateToMenuSection(
+          "finance",
+          "vccs_management",
+          "vccs_management"
+        );
+      }
 
       if (!navigationSuccess) {
         throw new Error("Failed to navigate to VCCS Management page");
