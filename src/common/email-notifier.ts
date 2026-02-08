@@ -26,6 +26,9 @@ export interface PasswordChangeNotificationData {
   newPassword: string;
   timestamp: Date;
   reason?: string;
+  username?: string;
+  affectedProperties?: Array<{ propertyId: string; propertyName: string }>;
+  totalUpdated?: number;
 }
 
 export interface BatchPasswordChangeNotificationData {
@@ -499,7 +502,9 @@ Please do not reply to this email.
       throw new Error("No valid email addresses provided");
     }
 
-    const subject = `🔐 Password Changed - ${data.propertyName} (${data.portfolioName})`;
+    const subject = data.affectedProperties && data.affectedProperties.length > 1
+      ? `🔐 Password Changed - ${data.affectedProperties.length} Properties (${data.portfolioName})`
+      : `🔐 Password Changed - ${data.propertyName} (${data.portfolioName})`;
     const htmlBody = this.generatePasswordChangeHtmlBody(data);
     const textBody = this.generatePasswordChangeTextBody(data);
 
@@ -724,6 +729,35 @@ Please do not reply to this email.
       });
     };
 
+    // Generate properties list HTML if multiple properties are affected
+    const propertiesListHtml = data.affectedProperties && data.affectedProperties.length > 1
+      ? `
+        <div class="info-box">
+          <h3>🏨 Affected Properties (${data.affectedProperties.length})</h3>
+          <table class="info-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Property Name</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${data.affectedProperties
+                .map(
+                  (prop, index) => `
+                <tr>
+                  <td>${index + 1}</td>
+                  <td>${prop.propertyName}</td>
+                </tr>
+              `
+                )
+                .join("")}
+            </tbody>
+          </table>
+        </div>
+      `
+      : "";
+
     return `
     <!DOCTYPE html>
     <html>
@@ -739,6 +773,7 @@ Please do not reply to this email.
             .info-table { width: 100%; border-collapse: collapse; margin: 15px 0; }
             .info-table th, .info-table td { padding: 8px; text-align: left; border-bottom: 1px solid #ddd; }
             .info-table th { background-color: #e9ecef; font-weight: bold; width: 150px; }
+            .info-table thead th { width: auto; }
             .footer { text-align: center; margin-top: 20px; color: #6c757d; font-size: 12px; }
             .warning { background-color: #fff3cd; border: 1px solid #ffc107; padding: 15px; border-radius: 5px; margin: 15px 0; }
         </style>
@@ -747,11 +782,11 @@ Please do not reply to this email.
         <div class="container">
             <div class="header">
                 <h2>🔐 Password Change Notification</h2>
-                <p>Your Booking.com property password has been changed automatically.</p>
+                <p>Your Booking.com ${data.affectedProperties && data.affectedProperties.length > 1 ? "properties' passwords have" : "property password has"} been changed automatically.</p>
             </div>
             <div class="content">
                 <div class="info-box">
-                    <h3>Property Information</h3>
+                    <h3>Change Information</h3>
                     <table class="info-table">
                         <tr><th>Property Name</th><td>${
                           data.propertyName
@@ -759,6 +794,16 @@ Please do not reply to this email.
                         <tr><th>Portfolio Name</th><td>${
                           data.portfolioName
                         }</td></tr>
+                        ${
+                          data.username
+                            ? `<tr><th>Username</th><td>${data.username}</td></tr>`
+                            : ""
+                        }
+                        ${
+                          data.totalUpdated
+                            ? `<tr><th>Total Properties Updated</th><td><strong>${data.totalUpdated}</strong></td></tr>`
+                            : ""
+                        }
                         <tr><th>Job ID</th><td>${data.jobId}</td></tr>
                         <tr><th>Changed At</th><td>${formatDate(
                           data.timestamp
@@ -770,6 +815,7 @@ Please do not reply to this email.
                         }
                     </table>
                 </div>
+                ${propertiesListHtml}
                 <div class="password-box">
                     <h3>⚠️ New Password</h3>
                     <p>Please save this password securely. You will need it to login to Booking.com:</p>
@@ -779,8 +825,13 @@ Please do not reply to this email.
                     <h4>📋 Important Notes</h4>
                     <ul>
                         <li>This password change was performed automatically by the scraping system</li>
+                        ${
+                          data.affectedProperties && data.affectedProperties.length > 1
+                            ? `<li><strong>All ${data.affectedProperties.length} properties listed above</strong> now share this same password</li>`
+                            : ""
+                        }
                         <li>Please update your password manager or secure storage with this new password</li>
-                        <li>The old password will no longer work for this property</li>
+                        <li>The old password will no longer work for ${data.affectedProperties && data.affectedProperties.length > 1 ? "these properties" : "this property"}</li>
                         <li>Use this password for your next manual login to Booking.com</li>
                     </ul>
                 </div>
@@ -812,25 +863,38 @@ Please do not reply to this email.
       });
     };
 
+    // Generate properties list text if multiple properties are affected
+    const propertiesListText = data.affectedProperties && data.affectedProperties.length > 1
+      ? `
+AFFECTED PROPERTIES (${data.affectedProperties.length}):
+${data.affectedProperties
+  .map((prop, index) => `${index + 1}. ${prop.propertyName}`)
+  .join("\n")}
+`
+      : "";
+
     return `
 🔐 PASSWORD CHANGE NOTIFICATION
 
-Your Booking.com property password has been changed automatically.
+Your Booking.com ${data.affectedProperties && data.affectedProperties.length > 1 ? "properties' passwords have" : "property password has"} been changed automatically.
 
-PROPERTY INFORMATION:
+CHANGE INFORMATION:
 - Property Name: ${data.propertyName}
 - Portfolio Name: ${data.portfolioName}
+${data.username ? `- Username: ${data.username}` : ""}
+${data.totalUpdated ? `- Total Properties Updated: ${data.totalUpdated}` : ""}
 - Job ID: ${data.jobId}
 - Changed At: ${formatDate(data.timestamp)}
 ${data.reason ? `- Reason: ${data.reason}` : ""}
-
+${propertiesListText}
 NEW PASSWORD:
 ${data.newPassword}
 
 IMPORTANT NOTES:
 - This password change was performed automatically by the scraping system
+${data.affectedProperties && data.affectedProperties.length > 1 ? `- All ${data.affectedProperties.length} properties listed above now share this same password` : ""}
 - Please update your password manager or secure storage with this new password
-- The old password will no longer work for this property
+- The old password will no longer work for ${data.affectedProperties && data.affectedProperties.length > 1 ? "these properties" : "this property"}
 - Use this password for your next manual login to Booking.com
 
 ---

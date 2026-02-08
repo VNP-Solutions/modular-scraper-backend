@@ -103,7 +103,7 @@ export class OtpStatusManager extends EventEmitter {
    */
   public async reserveOtp(
     jobId: string,
-    platform: OtpPlatform
+    platform: OtpPlatform,
   ): Promise<boolean> {
     if (!this.isInitialized) {
       await this.initialize();
@@ -119,7 +119,7 @@ export class OtpStatusManager extends EventEmitter {
           platform: platform,
           job_id: new mongoose.Types.ObjectId(jobId),
         },
-        { new: true }
+        { new: true },
       );
 
       if (result) {
@@ -137,7 +137,7 @@ export class OtpStatusManager extends EventEmitter {
       } else {
         // OTP is already occupied
         console.log(
-          `Failed to reserve OTP for job ${jobId} on platform ${platform} - already occupied`
+          `Failed to reserve OTP for job ${jobId} on platform ${platform} - already occupied`,
         );
         return false;
       }
@@ -166,7 +166,7 @@ export class OtpStatusManager extends EventEmitter {
           status: OtpStatusValue.Released,
           job_id: null,
         },
-        { new: true }
+        { new: true },
       );
 
       if (result) {
@@ -183,7 +183,7 @@ export class OtpStatusManager extends EventEmitter {
         return true;
       } else {
         console.log(
-          `\x1b[33mFailed to release OTP for job ${jobId} - not currently owner\x1b[0m`
+          `\x1b[33mFailed to release OTP for job ${jobId} - not currently owner\x1b[0m`,
         );
         return true;
       }
@@ -210,7 +210,7 @@ export class OtpStatusManager extends EventEmitter {
           status: OtpStatusValue.Released,
           job_id: null,
         },
-        { new: true, upsert: true }
+        { new: true, upsert: true },
       );
 
       if (result) {
@@ -222,7 +222,7 @@ export class OtpStatusManager extends EventEmitter {
         };
 
         console.log(
-          `\x1b[32m[OTP] OTP force released - emitting 'otpReleased' event\x1b[0m`
+          `\x1b[32m[OTP] OTP force released - emitting 'otpReleased' event\x1b[0m`,
         );
         this.emit("otpReleased", null);
         return true;
@@ -238,7 +238,7 @@ export class OtpStatusManager extends EventEmitter {
    * Wait for OTP to become available
    */
   public async waitForOtpAvailable(
-    timeoutMs: number = 60000
+    timeoutMs: number = 60000,
   ): Promise<boolean> {
     const isOtpAvailable = await this.isOtpAvailable();
     if (isOtpAvailable) {
@@ -296,7 +296,7 @@ export class OtpStatusManager extends EventEmitter {
             this.emit(
               "otpReserved",
               this.currentStatus.jobId,
-              this.currentStatus.platform
+              this.currentStatus.platform,
             );
           }
         }

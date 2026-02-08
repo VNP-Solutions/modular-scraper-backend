@@ -1680,23 +1680,31 @@ export class BookingScraper extends BaseScraper {
       // Step 7.5: Update password in database if jobId is available
       if (this.jobId) {
         await this.logInfo(
-          "Updating booking password in database for job " + this.jobId
+          "Updating booking password in database for all properties with same username (job " +
+            this.jobId +
+            ")"
         );
-        const passwordUpdated =
+        const updateResult =
           await propertyPasswordUpdateService.updateBookingPasswordByJobId(
             this.jobId,
             newPassword
           );
 
-        if (passwordUpdated) {
+        if (updateResult.success) {
           await this.logInfo(
-            "Booking password updated successfully in database"
+            `Booking password updated successfully for ${updateResult.totalUpdated} properties in database`
+          );
+          await this.logInfo(
+            `Affected properties: ${updateResult.affectedProperties
+              .map((p) => p.propertyName)
+              .join(", ")}`
           );
 
-          // Send password change notification email
+          // Send password change notification email with all affected properties
           await this.sendPasswordChangeEmail(
             newPassword,
-            "Account was locked - password reset required"
+            "Account was locked - password reset required",
+            updateResult
           );
         } else {
           await this.logError(
@@ -2283,23 +2291,31 @@ export class BookingScraper extends BaseScraper {
       // Step 9.5: Update password in database if jobId is available
       if (this.jobId) {
         await this.logInfo(
-          "Updating booking password in database for job " + this.jobId
+          "Updating booking password in database for all properties with same username (job " +
+            this.jobId +
+            ")"
         );
-        const passwordUpdated =
+        const updateResult =
           await propertyPasswordUpdateService.updateBookingPasswordByJobId(
             this.jobId,
             newPassword
           );
 
-        if (passwordUpdated) {
+        if (updateResult.success) {
           await this.logInfo(
-            "Booking password updated successfully in database"
+            `Booking password updated successfully for ${updateResult.totalUpdated} properties in database`
+          );
+          await this.logInfo(
+            `Affected properties: ${updateResult.affectedProperties
+              .map((p) => p.propertyName)
+              .join(", ")}`
           );
 
-          // Send password change notification email
+          // Send password change notification email with all affected properties
           await this.sendPasswordChangeEmail(
             newPassword,
-            "Password mismatch detected - password reset required"
+            "Password mismatch detected - password reset required",
+            updateResult
           );
         } else {
           await this.logError(
@@ -3888,11 +3904,17 @@ export class BookingScraper extends BaseScraper {
   }
 
   /**
-   * Send password change notification email for ONLY this job's property
+   * Send password change notification email for all properties with the same username
    */
   private async sendPasswordChangeEmail(
     newPassword: string,
-    reason: string
+    reason: string,
+    updateResult: {
+      success: boolean;
+      affectedProperties: Array<{ propertyId: string; propertyName: string }>;
+      username: string;
+      totalUpdated: number;
+    }
   ): Promise<void> {
     try {
       if (!this.jobId) {
@@ -3955,7 +3977,7 @@ export class BookingScraper extends BaseScraper {
 
       const recipients = Array.from(emailSet);
 
-      // Get property details for ONLY this job's property
+      // Get property details for this job's property (the one that triggered the change)
       const propertyDetails =
         await propertyPasswordUpdateService.getPropertyDetailsFromJobId(
           this.jobId
@@ -3968,7 +3990,7 @@ export class BookingScraper extends BaseScraper {
         return;
       }
 
-      // Prepare notification data for single property
+      // Prepare notification data with all affected properties
       const notificationData = {
         jobId: this.jobId,
         propertyName: propertyDetails.propertyName,
@@ -3976,14 +3998,28 @@ export class BookingScraper extends BaseScraper {
         newPassword: newPassword,
         timestamp: new Date(),
         reason: reason,
+        username: updateResult.username,
+        affectedProperties: updateResult.affectedProperties,
+        totalUpdated: updateResult.totalUpdated,
       };
 
       await emailNotifier.sendPasswordChangeEmail(recipients, notificationData);
-      await this.logInfo(
-        `Password change notification email sent to ${recipients.join(
-          ", "
-        )} for property: ${propertyDetails.propertyName}`
-      );
+      
+      if (updateResult.affectedProperties.length > 1) {
+        await this.logInfo(
+          `Password change notification email sent to ${recipients.join(
+            ", "
+          )} for ${updateResult.affectedProperties.length} properties: ${updateResult.affectedProperties
+            .map((p) => p.propertyName)
+            .join(", ")}`
+        );
+      } else {
+        await this.logInfo(
+          `Password change notification email sent to ${recipients.join(
+            ", "
+          )} for property: ${propertyDetails.propertyName}`
+        );
+      }
     } catch (error) {
       await this.logError(
         "Failed to send password change notification email:",
