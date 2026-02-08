@@ -1677,46 +1677,6 @@ export class BookingScraper extends BaseScraper {
       const newPassword = generateRandomPassword(12);
       await this.logInfo("Generated new random password");
 
-      // Step 7.5: Update password in database if jobId is available
-      if (this.jobId) {
-        await this.logInfo(
-          "Updating booking password in database for all properties with same username (job " +
-            this.jobId +
-            ")"
-        );
-        const updateResult =
-          await propertyPasswordUpdateService.updateBookingPasswordByJobId(
-            this.jobId,
-            newPassword
-          );
-
-        if (updateResult.success) {
-          await this.logInfo(
-            `Booking password updated successfully for ${updateResult.totalUpdated} properties in database`
-          );
-          await this.logInfo(
-            `Affected properties: ${updateResult.affectedProperties
-              .map((p) => p.propertyName)
-              .join(", ")}`
-          );
-
-          // Send password change notification email with all affected properties
-          await this.sendPasswordChangeEmail(
-            newPassword,
-            "Account was locked - password reset required",
-            updateResult
-          );
-        } else {
-          await this.logError(
-            "Failed to update booking password in database, but continuing with reset"
-          );
-        }
-      } else {
-        await this.logInfo(
-          "No jobId available, skipping password database update"
-        );
-      }
-
       // Step 8: Enter new password
       await this.logInfo("Entering new password...");
       const newPasswordEntered = await SelectorUtils.findAndType(
@@ -1765,7 +1725,48 @@ export class BookingScraper extends BaseScraper {
       await this.logInfo("Clicked 'Set new password' button");
       await this.delay(3000);
 
-      // Step 11: Close the reset tab
+      // Step 11: Password successfully changed on Booking.com
+      // NOW update database and send email
+      if (this.jobId) {
+        await this.logInfo(
+          "Password successfully changed on Booking.com, now updating database for all properties with same username (job " +
+            this.jobId +
+            ")"
+        );
+        const updateResult =
+          await propertyPasswordUpdateService.updateBookingPasswordByJobId(
+            this.jobId,
+            newPassword
+          );
+
+        if (updateResult.success) {
+          await this.logInfo(
+            `Booking password updated successfully for ${updateResult.totalUpdated} properties in database`
+          );
+          await this.logInfo(
+            `Affected properties: ${updateResult.affectedProperties
+              .map((p) => p.propertyName)
+              .join(", ")}`
+          );
+
+          // Send password change notification email with all affected properties
+          await this.sendPasswordChangeEmail(
+            newPassword,
+            "Account was locked - password reset required",
+            updateResult
+          );
+        } else {
+          await this.logError(
+            "Failed to update booking password in database after successful Booking.com password change"
+          );
+        }
+      } else {
+        await this.logInfo(
+          "No jobId available, skipping password database update"
+        );
+      }
+
+      // Step 12: Close the reset tab
       await this.logInfo("Closing password reset tab...");
       await resetPage.close();
 
@@ -2288,46 +2289,6 @@ export class BookingScraper extends BaseScraper {
       const newPassword = generateRandomPassword(12);
       await this.logInfo("Generated new random password");
 
-      // Step 9.5: Update password in database if jobId is available
-      if (this.jobId) {
-        await this.logInfo(
-          "Updating booking password in database for all properties with same username (job " +
-            this.jobId +
-            ")"
-        );
-        const updateResult =
-          await propertyPasswordUpdateService.updateBookingPasswordByJobId(
-            this.jobId,
-            newPassword
-          );
-
-        if (updateResult.success) {
-          await this.logInfo(
-            `Booking password updated successfully for ${updateResult.totalUpdated} properties in database`
-          );
-          await this.logInfo(
-            `Affected properties: ${updateResult.affectedProperties
-              .map((p) => p.propertyName)
-              .join(", ")}`
-          );
-
-          // Send password change notification email with all affected properties
-          await this.sendPasswordChangeEmail(
-            newPassword,
-            "Password mismatch detected - password reset required",
-            updateResult
-          );
-        } else {
-          await this.logError(
-            "Failed to update booking password in database, but continuing with reset"
-          );
-        }
-      } else {
-        await this.logInfo(
-          "No jobId available, skipping password database update"
-        );
-      }
-
       // Step 10: Enter new password
       await this.logInfo("Entering new password...");
       const newPasswordEntered = await SelectorUtils.findAndType(
@@ -2376,7 +2337,48 @@ export class BookingScraper extends BaseScraper {
       await this.logInfo("Clicked 'Set new password' button");
       await this.delay(3000);
 
-      // Step 13: Close the reset tab
+      // Step 13: Password successfully changed on Booking.com
+      // NOW update database and send email
+      if (this.jobId) {
+        await this.logInfo(
+          "Password successfully changed on Booking.com, now updating database for all properties with same username (job " +
+            this.jobId +
+            ")"
+        );
+        const updateResult =
+          await propertyPasswordUpdateService.updateBookingPasswordByJobId(
+            this.jobId,
+            newPassword
+          );
+
+        if (updateResult.success) {
+          await this.logInfo(
+            `Booking password updated successfully for ${updateResult.totalUpdated} properties in database`
+          );
+          await this.logInfo(
+            `Affected properties: ${updateResult.affectedProperties
+              .map((p) => p.propertyName)
+              .join(", ")}`
+          );
+
+          // Send password change notification email with all affected properties
+          await this.sendPasswordChangeEmail(
+            newPassword,
+            "Password mismatch detected - password reset required",
+            updateResult
+          );
+        } else {
+          await this.logError(
+            "Failed to update booking password in database after successful Booking.com password change"
+          );
+        }
+      } else {
+        await this.logInfo(
+          "No jobId available, skipping password database update"
+        );
+      }
+
+      // Step 14: Close the reset tab
       await this.logInfo("Closing password reset tab...");
       await resetPage.close();
 
