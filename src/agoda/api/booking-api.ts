@@ -20,8 +20,9 @@ export interface CsvRecord {
 }
 
 /**
- * Parses date from various formats to JavaScript Date object
+ * Parses date from various formats to JavaScript Date object in UTC
  * Handles both YYYY-MM-DD and MM/DD/YYYY formats
+ * Uses Date.UTC() to avoid timezone offset issues
  */
 function parseCsvDate(dateString: string): Date {
   if (!dateString) return new Date();
@@ -44,10 +45,28 @@ function parseCsvDate(dateString: string): Date {
     throw new Error(`Unsupported date format: ${dateString}`);
   }
 
+  // OLD METHOD (COMMENTED OUT): Local timezone parsing
+  // This caused timezone offset issues (e.g., Sep 1 became Aug 31 in UTC+6 timezone)
+  /*
   const parsed = new Date(
     `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`
   );
   return isNaN(parsed.getTime()) ? new Date() : parsed;
+  */
+
+  // NEW METHOD: Use Date.UTC() to create date in UTC timezone (avoiding local timezone offset)
+  // Note: Month is 0-indexed in Date.UTC (0 = January, 11 = December)
+  const yearNum = parseInt(year, 10);
+  const monthNum = parseInt(month, 10) - 1; // Convert to 0-indexed (1-12 -> 0-11)
+  const dayNum = parseInt(day, 10);
+
+  const timestamp = Date.UTC(yearNum, monthNum, dayNum, 0, 0, 0, 0);
+  
+  if (isNaN(timestamp)) {
+    return new Date();
+  }
+  
+  return new Date(timestamp);
 }
 
 /**
