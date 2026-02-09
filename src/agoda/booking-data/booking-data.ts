@@ -638,20 +638,24 @@ export async function getAgodaBookingData(
       throw new Error("Scraping was stopped during booking data retrieval");
     }
 
-    // PRIMARY METHOD: Try to download CSV file from UI
-    let downloadSuccess = false;
+    // Wait for booking table to load before calling API
     let formattedRecords: CsvRecord[] = [];
 
+    // Wait for booking table to load per user requirement
+    await dualLogInfo("Waiting for booking table to load...");
     try {
-      // Wait for booking table to load per user requirement
-      await dualLogInfo("Waiting for booking table to load...");
-      try {
-        await newPage.waitForSelector('div[data-testid="booking-list-box"]', { visible: true, timeout: 15000 });
-        await dualLogInfo("✅ Booking table loaded (verified via data-testid='booking-list-box')");
-      } catch (e) {
-        await dualLogInfo("⚠️ Booking table container not immediately found, proceeding...");
-      }
+      await newPage.waitForSelector('div[data-testid="booking-list-box"]', { visible: true, timeout: 15000 });
+      await dualLogInfo("✅ Booking table loaded (verified via data-testid='booking-list-box')");
+    } catch (e) {
+      await dualLogInfo("⚠️ Booking table container not immediately found, proceeding...");
+    }
 
+    // OLD METHOD (COMMENTED OUT): CSV Download via UI Button Click
+    // This method is no longer used - we now directly call the API instead
+    /*
+    let downloadSuccess = false;
+
+    try {
       await dualLogInfo("Attempting to download CSV file via UI button...");
       
       const downloadButtonSelectors = [
@@ -768,100 +772,95 @@ export async function getAgodaBookingData(
          await dualLogError("Error during UI download flow (falling back to API):", downloadError.message, { jobId });
          downloadSuccess = false;
     }
+    */
 
+    // PRIMARY METHOD: Direct API Fetch (after table loads)
+    await dualLogInfo("Fetching booking data directly from API...");
 
-    // FALLBACK METHOD: API Fetch
-    if (!downloadSuccess) {
-        await dualLogInfo("⚠️ Standard download failed or button missing. Falling back to direct API fetch...");
+    // Update progress - API call initiated
+    if (jobId) {
+      await progressManager.updateJobProgress(
+        jobId,
+        undefined,
+        50,
+        "agoda_api_call_initiated",
+        undefined
+      );
+    }
 
-        // Fetch booking data from API instead of downloading CSV
-        await dualLogInfo("Fetching booking data from Agoda API...");
+    // Fetch booking data from API
+    let apiResponse: any;
 
-        // Update progress - API call initiated
-        if (jobId) {
+    try {
+      apiResponse = await fetchBookingDataFromAPI(
+        newPage,
+        agodaId,
+        startDate,
+        endDate,
+        jobId
+      );
+
+      // Map API response to CsvRecord format (fetches additional details for each booking)
+      // Pass formatted dates (DD-MM-YYYY) for Referer header in API calls
+      formattedRecords = await mapApiResponseToCsvRecords(
+        apiResponse,
+        newPage,
+        agodaId,
+        formattedStartDate, // DD-MM-YYYY format for Referer header
+        formattedEndDate, // DD-MM-YYYY format for Referer header
+        jobId
+      );
+
+      // Filter out records that don't have a valid BookingIDExternal_reference_ID
+      formattedRecords = formattedRecords.filter((record) => {
+        const hasValidBookingId =
+          record.BookingIDExternal_reference_ID &&
+          record.BookingIDExternal_reference_ID.trim() !== "";
+
+        if (!hasValidBookingId) {
+          console.log(
+            "Skipping invalid record:",
+            JSON.stringify(record, null, 2)
+          );
+        }
+
+        return hasValidBookingId;
+      });
+
+      await dualLogInfo(
+        `Successfully fetched ${formattedRecords.length} booking records from API`
+      );
+
+      // Update progress - API call completed
+      if (jobId) {
         await progressManager.updateJobProgress(
-            jobId,
-            undefined,
-            50,
-            "agoda_api_call_initiated",
-            undefined
+          jobId,
+          undefined,
+          90,
+          "agoda_api_call_completed",
+          undefined
         );
+      }
+
+      // Take screenshot after API call
+      if (jobId) {
+        await takeSuccessScreenshot(newPage, jobId, "api_call_completed");
+      }
+    } catch (apiError: any) {
+      await dualLogError(
+        "Error fetching booking data from API:",
+        apiError.message,
+        {
+          jobId,
         }
+      );
 
-        // Fetch booking data from API
-        let apiResponse: any;
+      // Take error screenshot
+      if (jobId) {
+        await takeErrorScreenshot(newPage, jobId, "api_call_failed");
+      }
 
-        try {
-        apiResponse = await fetchBookingDataFromAPI(
-            newPage,
-            agodaId,
-            startDate,
-            endDate,
-            jobId
-        );
-
-        // Map API response to CsvRecord format (fetches additional details for each booking)
-        // Pass formatted dates (DD-MM-YYYY) for Referer header in API calls
-        formattedRecords = await mapApiResponseToCsvRecords(
-            apiResponse,
-            newPage,
-            agodaId,
-            formattedStartDate, // DD-MM-YYYY format for Referer header
-            formattedEndDate, // DD-MM-YYYY format for Referer header
-            jobId
-        );
-
-        // Filter out records that don't have a valid BookingIDExternal_reference_ID
-        formattedRecords = formattedRecords.filter((record) => {
-            const hasValidBookingId =
-            record.BookingIDExternal_reference_ID &&
-            record.BookingIDExternal_reference_ID.trim() !== "";
-
-            if (!hasValidBookingId) {
-            console.log(
-                "Skipping invalid record:",
-                JSON.stringify(record, null, 2)
-            );
-            }
-
-            return hasValidBookingId;
-        });
-
-        await dualLogInfo(
-            `Successfully fetched ${formattedRecords.length} booking records from API`
-        );
-
-        // Update progress - API call completed
-        if (jobId) {
-            await progressManager.updateJobProgress(
-            jobId,
-            undefined,
-            90,
-            "agoda_api_call_completed",
-            undefined
-            );
-        }
-
-        // Take screenshot after API call
-        if (jobId) {
-            await takeSuccessScreenshot(newPage, jobId, "api_call_completed");
-        }
-        } catch (apiError: any) {
-        await dualLogError(
-            "Error fetching booking data from API:",
-            apiError.message,
-            {
-            jobId,
-            }
-        );
-
-        // Take error screenshot
-        if (jobId) {
-            await takeErrorScreenshot(newPage, jobId, "api_call_failed");
-        }
-
-        throw apiError;
-        }
+      throw apiError;
     }
 
     // Log the data for debugging
