@@ -387,40 +387,96 @@ export async function searchBookingAndNavigateToPayout(
     });
 
     try {
-      // Wait for iframe content to be fully loaded if iframe was detected
-      // Use waitForFunction to ensure iframe content is accessible
-      await page
-        .waitForFunction(
-          () => {
-            const iframe = document.querySelector(
-              'iframe[data-cy="ul-app-frame"]'
-            );
-            if (!iframe) return true; // No iframe, continue
+      // CRITICAL: Wait longer to ensure iframe has time to appear
+      // Some pages load iframe after initial content, so we need to be patient
+      await dualLogInfo(
+        "Waiting additional time for potential iframe to appear...",
+        { jobId, bookingId }
+      );
 
-            // Check if iframe is loaded and has content
-            try {
-              const iframeDoc = (iframe as HTMLIFrameElement).contentDocument;
-              return (
-                iframeDoc &&
-                iframeDoc.readyState === "complete" &&
-                iframeDoc.body &&
-                iframeDoc.body.children.length > 0
+      // Wait up to 8 seconds for iframe to appear OR UPC widget to appear
+      const iframeOrWidgetCheck = await Promise.race([
+        // Check if iframe appears
+        page
+          .waitForSelector('iframe[data-cy="ul-app-frame"]', {
+            visible: true,
+            timeout: 8000,
+          })
+          .then(() => ({ type: "iframe", found: true }))
+          .catch(() => ({ type: "iframe", found: false })),
+
+        // Check if UPC widget appears (no OTP needed)
+        page
+          .waitForSelector(UPC_WIDGET.CONTAINER, {
+            visible: true,
+            timeout: 8000,
+          })
+          .then(() => ({ type: "widget", found: true }))
+          .catch(() => ({ type: "widget", found: false })),
+
+        // Minimum wait to ensure page settles
+        delay(6000).then(() => ({ type: "timeout", found: false })),
+      ]);
+
+      await dualLogInfo("Iframe/Widget check result:", {
+        jobId,
+        bookingId,
+        result: iframeOrWidgetCheck,
+      });
+
+      // If iframe was detected, wait for it to fully load
+      if (iframeOrWidgetCheck.type === "iframe" && iframeOrWidgetCheck.found) {
+        await dualLogInfo("Iframe detected, waiting for content to load...", {
+          jobId,
+          bookingId,
+        });
+
+        await page
+          .waitForFunction(
+            () => {
+              const iframe = document.querySelector(
+                'iframe[data-cy="ul-app-frame"]'
               );
-            } catch {
-              return false; // Iframe not accessible yet
-            }
-          },
-          { timeout: 5000 }
-        )
-        .then(() =>
-          dualLogInfo("Iframe content fully loaded", { jobId, bookingId })
-        )
-        .catch(() =>
-          dualLogInfo(
-            "Iframe load check timeout (continuing anyway - may not be present)",
-            { jobId, bookingId }
+              if (!iframe) return false;
+
+              try {
+                const iframeDoc = (iframe as HTMLIFrameElement).contentDocument;
+                return (
+                  iframeDoc &&
+                  iframeDoc.readyState === "complete" &&
+                  iframeDoc.body &&
+                  iframeDoc.body.children.length > 0
+                );
+              } catch {
+                return false;
+              }
+            },
+            { timeout: 10000 }
           )
+          .then(() =>
+            dualLogInfo("✅ Iframe content fully loaded", { jobId, bookingId })
+          )
+          .catch(() =>
+            dualLogError(
+              "Iframe detected but content failed to load",
+              undefined,
+              { jobId, bookingId }
+            )
+          );
+      } else if (
+        iframeOrWidgetCheck.type === "widget" &&
+        iframeOrWidgetCheck.found
+      ) {
+        await dualLogInfo("✅ UPC widget detected, no OTP required", {
+          jobId,
+          bookingId,
+        });
+      } else {
+        await dualLogInfo(
+          "No iframe or widget detected after waiting, checking page state...",
+          { jobId, bookingId }
         );
+      }
 
       // First, check if the universal login iframe exists on the main page
       const hasUniversalLoginIframe = await page.evaluate(() => {
@@ -454,6 +510,43 @@ export async function searchBookingAndNavigateToPayout(
             jobId,
             bookingId,
           });
+
+          // CRITICAL: Wait for frame content to be ready before checking
+          // This prevents false negatives when iframe is still loading
+          // MFA iframe URL pattern: /iam/mfa?mfaOperation=0&redirect=...
+          // Universal Login iframe: /ul/login?appId=ycs&initialPath=verifyOtp
+          if (
+            frameUrl.includes("iam/mfa") ||
+            frameUrl.includes("ul/login") ||
+            frameUrl.includes("mfaOperation")
+          ) {
+            await dualLogInfo(
+              `MFA/Login iframe detected (URL: ${frameUrl.substring(0, 100)}...), waiting for content to stabilize...`,
+              { jobId, bookingId }
+            );
+
+            // Wait for iframe body to have content
+            await frame
+              .waitForFunction(
+                () => {
+                  return (
+                    document.body &&
+                    document.body.children.length > 0 &&
+                    document.readyState === "complete"
+                  );
+                },
+                { timeout: 8000 }
+              )
+              .then(() =>
+                dualLogInfo("Frame content stabilized", { jobId, bookingId })
+              )
+              .catch(() =>
+                dualLogInfo("Frame stabilization timeout", { jobId, bookingId })
+              );
+
+            // Additional wait for React/dynamic content to render
+            await delay(2000);
+          }
 
           // Check if this frame contains the OTP verification form
           const hasOtpForm = await frame.evaluate((selectors) => {
