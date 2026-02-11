@@ -880,7 +880,7 @@ async function handleOtpVerification(
     const loadingTimeout = await timeoutManager.getLoadingTimeout(jobId);
     try {
       await page.waitForNavigation({
-        waitUntil: "networkidle0",
+        waitUntil: "domcontentloaded",
         timeout: loadingTimeout,
       });
       console.log("Login successful!");
