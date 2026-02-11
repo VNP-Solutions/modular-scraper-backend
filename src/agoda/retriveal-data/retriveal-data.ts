@@ -120,7 +120,9 @@ export async function searchBookingAndNavigateToPayout(
 
     // Now type the new booking ID
     await page.type(BOOKING_SEARCH.INPUT, bookingId, { delay: 100 });
-    await delay(1000);
+
+    // Wait for input to be fully processed (React debouncing)
+    await delay(500);
 
     // Step 2: Click the Search button
     await dualLogInfo("Clicking Search button...", { jobId, bookingId });
@@ -140,22 +142,54 @@ export async function searchBookingAndNavigateToPayout(
       return false;
     }
 
-    // Step 3: Wait for search results to load
+    // Step 3: Wait for search results to load using smart waiting
     await dualLogInfo("Waiting for search results to load...", {
       jobId,
       bookingId,
     });
-    await delay(3000); // Initial wait
 
-    // Wait for the booking result row to appear
+    // Wait for network idle or booking row to appear
     const bookingRowSelector = BOOKING_RESULTS.ROW(bookingId);
 
     try {
+      // Use Promise.race to wait for either network idle or booking row
+      await Promise.race([
+        // Wait for network idle (search completed)
+        page
+          .waitForNetworkIdle({ idleTime: 500, timeout: 10000 })
+          .then(() =>
+            dualLogInfo("Network idle after search", { jobId, bookingId })
+          ),
+
+        // Wait for booking row to appear
+        page
+          .waitForSelector(bookingRowSelector, {
+            visible: true,
+            timeout: 15000,
+          })
+          .then(() =>
+            dualLogInfo("Booking row appeared", { jobId, bookingId })
+          ),
+
+        // Minimum wait as fallback
+        delay(2000).then(() =>
+          dualLogInfo("Minimum search wait completed", { jobId, bookingId })
+        ),
+      ]);
+    } catch (error) {
+      await dualLogInfo("Network idle timeout (continuing to check for row)", {
+        jobId,
+        bookingId,
+      });
+    }
+
+    // Now verify the booking row is actually present
+    try {
       await page.waitForSelector(bookingRowSelector, {
         visible: true,
-        timeout: 15000,
+        timeout: 5000,
       });
-      await dualLogInfo(`Booking row found for ID: ${bookingId}`, {
+      await dualLogInfo(`✅ Booking row found for ID: ${bookingId}`, {
         jobId,
         bookingId,
       });
@@ -199,15 +233,48 @@ export async function searchBookingAndNavigateToPayout(
       jobId,
       bookingId,
     });
-    await delay(2000);
+
+    // Use smart waiting instead of static delay
+    try {
+      // Wait for either network idle or tab list to appear
+      await Promise.race([
+        // Wait for network idle (sidebar loaded)
+        page
+          .waitForNetworkIdle({ idleTime: 500, timeout: 8000 })
+          .then(() =>
+            dualLogInfo("Network idle after clicking booking row", {
+              jobId,
+              bookingId,
+            })
+          ),
+
+        // Wait for tab list to appear
+        page
+          .waitForSelector(BOOKING_DETAIL.TAB_LIST, {
+            visible: true,
+            timeout: 10000,
+          })
+          .then(() => dualLogInfo("Tab list appeared", { jobId, bookingId })),
+
+        // Minimum wait
+        delay(1000).then(() =>
+          dualLogInfo("Minimum sidebar wait completed", { jobId, bookingId })
+        ),
+      ]);
+    } catch (error) {
+      await dualLogInfo("Sidebar wait race completed (checking for tab list)", {
+        jobId,
+        bookingId,
+      });
+    }
 
     // Wait for the tab list to be visible (indicates sidebar is open)
     try {
       await page.waitForSelector(BOOKING_DETAIL.TAB_LIST, {
         visible: true,
-        timeout: 10000,
+        timeout: 5000,
       });
-      await dualLogInfo("Booking detail sidebar appeared", {
+      await dualLogInfo("✅ Booking detail sidebar appeared", {
         jobId,
         bookingId,
       });
@@ -235,7 +302,76 @@ export async function searchBookingAndNavigateToPayout(
         jobId,
         bookingId,
       });
-      await delay(2000);
+
+      // Wait for network activity to settle after clicking payout tab
+      await dualLogInfo("Waiting for payout content to load...", {
+        jobId,
+        bookingId,
+      });
+
+      // Use Promise.race to wait for either:
+      // 1. Network becomes idle (content loaded)
+      // 2. UPC widget appears (no OTP required)
+      // 3. Iframe appears (OTP required)
+      // 4. Timeout after 10 seconds
+      await Promise.race([
+        // Wait for network idle
+        page
+          .waitForNetworkIdle({ idleTime: 500, timeout: 10000 })
+          .then(() =>
+            dualLogInfo("Network idle detected after payout tab click", {
+              jobId,
+              bookingId,
+            })
+          )
+          .catch(() =>
+            dualLogInfo(
+              "Network idle timeout (continuing anyway - content may still be loading)",
+              { jobId, bookingId }
+            )
+          ),
+
+        // Wait for UPC widget (if no OTP required)
+        page
+          .waitForSelector(UPC_WIDGET.CONTAINER, {
+            visible: true,
+            timeout: 10000,
+          })
+          .then(() =>
+            dualLogInfo("UPC widget appeared (no OTP required)", {
+              jobId,
+              bookingId,
+            })
+          )
+          .catch(() => {}), // Silent fail - OTP might be required
+
+        // Wait for iframe (if OTP required)
+        page
+          .waitForSelector('iframe[data-cy="ul-app-frame"]', {
+            visible: true,
+            timeout: 10000,
+          })
+          .then(() =>
+            dualLogInfo("Universal Login iframe appeared (OTP required)", {
+              jobId,
+              bookingId,
+            })
+          )
+          .catch(() => {}), // Silent fail - direct UPC might appear
+
+        // Fallback: minimum wait
+        delay(2000).then(() =>
+          dualLogInfo("Minimum wait completed", { jobId, bookingId })
+        ),
+      ]);
+
+      await dualLogInfo("Payout content loading phase completed", {
+        jobId,
+        bookingId,
+      });
+
+      // Small additional delay to ensure DOM is fully updated
+      await delay(500);
     } catch (error) {
       await dualLogError("Failed to click on 'Get payout (UPC)' tab", error, {
         jobId,
@@ -251,12 +387,40 @@ export async function searchBookingAndNavigateToPayout(
     });
 
     try {
-      // Wait for iframe to appear (if it redirects to login) or OTP form to appear on main page
-      await delay(3000);
+      // Wait for iframe content to be fully loaded if iframe was detected
+      // Use waitForFunction to ensure iframe content is accessible
+      await page
+        .waitForFunction(
+          () => {
+            const iframe = document.querySelector(
+              'iframe[data-cy="ul-app-frame"]'
+            );
+            if (!iframe) return true; // No iframe, continue
 
-      // Also wait a bit more for OTP form to potentially appear
-      // Sometimes the OTP form appears after clicking the payout tab
-      await delay(2000);
+            // Check if iframe is loaded and has content
+            try {
+              const iframeDoc = (iframe as HTMLIFrameElement).contentDocument;
+              return (
+                iframeDoc &&
+                iframeDoc.readyState === "complete" &&
+                iframeDoc.body &&
+                iframeDoc.body.children.length > 0
+              );
+            } catch {
+              return false; // Iframe not accessible yet
+            }
+          },
+          { timeout: 5000 }
+        )
+        .then(() =>
+          dualLogInfo("Iframe content fully loaded", { jobId, bookingId })
+        )
+        .catch(() =>
+          dualLogInfo(
+            "Iframe load check timeout (continuing anyway - may not be present)",
+            { jobId, bookingId }
+          )
+        );
 
       // First, check if the universal login iframe exists on the main page
       const hasUniversalLoginIframe = await page.evaluate(() => {
@@ -1504,7 +1668,9 @@ async function reSearchAndNavigateToPayout(
 
     // Now type the new booking ID
     await page.type(BOOKING_SEARCH.INPUT, bookingId, { delay: 100 });
-    await delay(1000);
+
+    // Wait for input to be fully processed (React debouncing)
+    await delay(500);
 
     // Step 2: Click the Search button
     await dualLogInfo("Clicking Search button...", { jobId, bookingId });
@@ -1524,22 +1690,54 @@ async function reSearchAndNavigateToPayout(
       return false;
     }
 
-    // Step 3: Wait for search results to load
+    // Step 3: Wait for search results to load using smart waiting
     await dualLogInfo("Waiting for search results to load...", {
       jobId,
       bookingId,
     });
-    await delay(3000);
 
-    // Wait for the booking result row to appear
+    // Wait for network idle or booking row to appear
     const bookingRowSelector = BOOKING_RESULTS.ROW(bookingId);
 
     try {
+      // Use Promise.race to wait for either network idle or booking row
+      await Promise.race([
+        // Wait for network idle (search completed)
+        page
+          .waitForNetworkIdle({ idleTime: 500, timeout: 10000 })
+          .then(() =>
+            dualLogInfo("Network idle after search", { jobId, bookingId })
+          ),
+
+        // Wait for booking row to appear
+        page
+          .waitForSelector(bookingRowSelector, {
+            visible: true,
+            timeout: 15000,
+          })
+          .then(() =>
+            dualLogInfo("Booking row appeared", { jobId, bookingId })
+          ),
+
+        // Minimum wait as fallback
+        delay(2000).then(() =>
+          dualLogInfo("Minimum search wait completed", { jobId, bookingId })
+        ),
+      ]);
+    } catch (error) {
+      await dualLogInfo("Network idle timeout (continuing to check for row)", {
+        jobId,
+        bookingId,
+      });
+    }
+
+    // Now verify the booking row is actually present
+    try {
       await page.waitForSelector(bookingRowSelector, {
         visible: true,
-        timeout: 15000,
+        timeout: 5000,
       });
-      await dualLogInfo(`Booking row found for ID: ${bookingId}`, {
+      await dualLogInfo(`✅ Booking row found for ID: ${bookingId}`, {
         jobId,
         bookingId,
       });
@@ -1581,14 +1779,50 @@ async function reSearchAndNavigateToPayout(
       jobId,
       bookingId,
     });
-    await delay(2000);
 
+    // Use smart waiting instead of static delay
+    try {
+      // Wait for either network idle or tab list to appear
+      await Promise.race([
+        // Wait for network idle (sidebar loaded)
+        page
+          .waitForNetworkIdle({ idleTime: 500, timeout: 8000 })
+          .then(() =>
+            dualLogInfo("Network idle after clicking booking row", {
+              jobId,
+              bookingId,
+            })
+          ),
+
+        // Wait for tab list to appear
+        page
+          .waitForSelector(BOOKING_DETAIL.TAB_LIST, {
+            visible: true,
+            timeout: 10000,
+          })
+          .then(() =>
+            dualLogInfo("Tab list appeared", { jobId, bookingId })
+          ),
+
+        // Minimum wait
+        delay(1000).then(() =>
+          dualLogInfo("Minimum sidebar wait completed", { jobId, bookingId })
+        ),
+      ]);
+    } catch (error) {
+      await dualLogInfo("Sidebar wait race completed (checking for tab list)", {
+        jobId,
+        bookingId,
+      });
+    }
+
+    // Verify tab list is present
     try {
       await page.waitForSelector(BOOKING_DETAIL.TAB_LIST, {
         visible: true,
-        timeout: 10000,
+        timeout: 5000,
       });
-      await dualLogInfo("Booking detail sidebar appeared", {
+      await dualLogInfo("✅ Booking detail sidebar appeared", {
         jobId,
         bookingId,
       });
