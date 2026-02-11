@@ -258,12 +258,39 @@ export async function searchBookingAndNavigateToPayout(
       // Sometimes the OTP form appears after clicking the payout tab
       await delay(2000);
 
+      // First, check if the universal login iframe exists on the main page
+      const hasUniversalLoginIframe = await page.evaluate(() => {
+        const ulFrame = document.querySelector(
+          'iframe[data-cy="ul-app-frame"]'
+        );
+        return !!ulFrame;
+      });
+
+      if (hasUniversalLoginIframe) {
+        await dualLogInfo(
+          "✅ Universal Login iframe detected (data-cy='ul-app-frame')",
+          { jobId, bookingId }
+        );
+      }
+
       // Check if there's an iframe with the login/OTP form
       const iframes = await page.frames();
       let otpFrame = null;
 
+      await dualLogInfo(`Found ${iframes.length} frames on the page`, {
+        jobId,
+        bookingId,
+      });
+
       for (const frame of iframes) {
         try {
+          // Get frame URL for debugging
+          const frameUrl = frame.url();
+          await dualLogInfo(`Checking frame: ${frameUrl}`, {
+            jobId,
+            bookingId,
+          });
+
           // Check if this frame contains the OTP verification form
           const hasOtpForm = await frame.evaluate((selectors) => {
             // Check for old OTP verification method selection
@@ -286,25 +313,51 @@ export async function searchBookingAndNavigateToPayout(
               (el) => el.textContent?.includes("OTP has been sent to")
             );
 
-            return !!(
-              otpOptionEmail ||
-              otpInputs ||
-              verifyOtpPanel ||
-              verifyOtpForm ||
-              otpSentText
-            );
+            // Check for "Please verify your identity" which indicates verification method selection
+            const verifyIdentityText = Array.from(
+              document.querySelectorAll("*")
+            ).some((el) => el.textContent?.includes("Please verify your identity"));
+
+            return {
+              hasOtpOptionEmail: !!otpOptionEmail,
+              hasOtpInputs: !!otpInputs,
+              hasVerifyOtpPanel: !!verifyOtpPanel,
+              hasVerifyOtpForm: !!verifyOtpForm,
+              hasOtpSentText: otpSentText,
+              hasVerifyIdentityText: verifyIdentityText,
+              hasAnyOtpElements:
+                !!otpOptionEmail ||
+                !!otpInputs ||
+                !!verifyOtpPanel ||
+                !!verifyOtpForm ||
+                otpSentText ||
+                verifyIdentityText,
+            };
           }, OTP_CHECK_SELECTORS);
 
-          if (hasOtpForm) {
+          await dualLogInfo(`Frame OTP check result:`, {
+            jobId,
+            bookingId,
+            frameUrl,
+            hasOtpForm,
+          });
+
+          if (hasOtpForm.hasAnyOtpElements) {
             otpFrame = frame;
-            await dualLogInfo("Found OTP verification iframe", {
+            await dualLogInfo("✅ Found OTP verification iframe", {
               jobId,
               bookingId,
+              frameUrl,
+              hasOtpForm,
             });
             break;
           }
         } catch (frameError) {
           // Frame might not be accessible, continue checking other frames
+          await dualLogInfo(`Frame check error (continuing): ${frameError}`, {
+            jobId,
+            bookingId,
+          });
           continue;
         }
       }
@@ -668,18 +721,60 @@ async function handleOtpVerification(
   const jobId = getRetrievalJobId();
   const targetPage = frame || page;
   const selectorTimeout = 30000;
+  const isIframe = !!frame;
 
   try {
     await dualLogInfo(
-      "🔐 Processing OTP verification for Get payout (UPC)...",
-      { jobId, bookingId }
+      `🔐 Processing OTP verification for Get payout (UPC)... ${
+        isIframe ? "(inside iframe)" : "(on main page)"
+      }`,
+      { jobId, bookingId, isIframe, frameUrl: frame?.url() || "N/A" }
     );
 
     // Step 1: Check if we need to select verification method (via Email)
-    await dualLogInfo("Checking for OTP verification method selection...", {
-      jobId,
-      bookingId,
-    });
+    await dualLogInfo(
+      `Checking for OTP verification method selection... ${
+        isIframe ? "(inside iframe)" : "(on main page)"
+      }`,
+      {
+        jobId,
+        bookingId,
+      }
+    );
+
+    // Debug: Check what elements are present in the iframe/page
+    try {
+      const pageElements = await targetPage.evaluate(() => {
+        return {
+          hasVerifyOtpPanel: !!document.querySelector(
+            '[data-cy="verify-otp-panel"]'
+          ),
+          hasEmailOption: !!document.querySelector(
+            '[data-cy="otp-option-email"]'
+          ),
+          hasSmsOption: !!document.querySelector('[data-cy="otp-option-phone"]'),
+          hasOtpInputs: !!document.querySelector('[data-cy="otp-0"]'),
+          hasVerifyIdentity: Array.from(document.querySelectorAll("*")).some(
+            (el) => el.textContent?.includes("Please verify your identity")
+          ),
+          hasViaEmail: Array.from(document.querySelectorAll("*")).some((el) =>
+            el.textContent?.includes("via Email")
+          ),
+          bodyTextPreview: document.body.textContent?.substring(0, 200) || "",
+        };
+      });
+
+      await dualLogInfo(`Elements present in ${isIframe ? "iframe" : "page"}:`, {
+        jobId,
+        bookingId,
+        pageElements,
+      });
+    } catch (debugError) {
+      await dualLogError("Debug check failed:", debugError, {
+        jobId,
+        bookingId,
+      });
+    }
 
     // Try multiple selectors and click methods for the email option
     const emailOptionSelectors = [
