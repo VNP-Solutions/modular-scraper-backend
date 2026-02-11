@@ -681,19 +681,90 @@ async function handleOtpVerification(
       bookingId,
     });
 
-    try {
-      await targetPage.waitForSelector(OTP_VERIFICATION.EMAIL_OPTION, {
-        visible: true,
-        timeout: 5000,
-      });
+    // Try multiple selectors and click methods for the email option
+    const emailOptionSelectors = [
+      '[data-cy="otp-option-email"]',
+      '[data-cy="email-option"]',
+      'div[data-cy="otp-option-email"]',
+      'button:has-text("via Email")',
+      'span:has-text("via Email")',
+    ];
 
-      await dualLogInfo(
-        "Found OTP verification method selection, clicking 'via Email'...",
-        { jobId, bookingId }
-      );
-      await targetPage.click(OTP_VERIFICATION.EMAIL_OPTION);
-      await delay(2000); // Wait for OTP form to appear
-    } catch (error) {
+    let emailOptionClicked = false;
+
+    for (const selector of emailOptionSelectors) {
+      try {
+        await targetPage.waitForSelector(selector, {
+          visible: true,
+          timeout: 5000,
+        });
+
+        await dualLogInfo(
+          `Found OTP verification method selection with selector: ${selector}, clicking 'via Email'...`,
+          { jobId, bookingId }
+        );
+
+        // Try multiple click methods for better reliability
+        try {
+          // Method 1: Regular Puppeteer click
+          await targetPage.click(selector);
+          await dualLogInfo("Email option clicked using regular click", {
+            jobId,
+            bookingId,
+          });
+          emailOptionClicked = true;
+        } catch (clickError) {
+          await dualLogInfo(
+            "Regular click failed, trying JavaScript click...",
+            { jobId, bookingId }
+          );
+
+          // Method 2: JavaScript click with comprehensive event simulation
+          await targetPage.evaluate((sel: string) => {
+            const element = document.querySelector(sel) as HTMLElement;
+            if (element) {
+              // Try direct click
+              element.click();
+
+              // Also try clicking on parent elements (sometimes the whole div needs to be clicked)
+              const parent = element.parentElement;
+              if (parent) {
+                parent.click();
+              }
+
+              // Dispatch comprehensive mouse events
+              const events = [
+                new MouseEvent("mouseover", { bubbles: true, cancelable: true }),
+                new MouseEvent("mousedown", { bubbles: true, cancelable: true }),
+                new MouseEvent("mouseup", { bubbles: true, cancelable: true }),
+                new MouseEvent("click", { bubbles: true, cancelable: true }),
+              ];
+
+              events.forEach((event) => {
+                element.dispatchEvent(event);
+                if (parent) {
+                  parent.dispatchEvent(event);
+                }
+              });
+            }
+          }, selector);
+
+          await dualLogInfo("Email option clicked using JavaScript click", {
+            jobId,
+            bookingId,
+          });
+          emailOptionClicked = true;
+        }
+
+        await delay(3000); // Wait longer for OTP form to appear after selection
+        break; // Exit loop if successful
+      } catch (error) {
+        // Continue to next selector
+        continue;
+      }
+    }
+
+    if (!emailOptionClicked) {
       await dualLogInfo(
         "No verification method selection found, OTP form may already be visible",
         { jobId, bookingId }
@@ -703,13 +774,59 @@ async function handleOtpVerification(
     // Step 2: Wait for OTP input fields to be visible
     await dualLogInfo("Waiting for OTP input fields...", { jobId, bookingId });
 
+    // If email option was clicked, give extra time for the form to appear
+    if (emailOptionClicked) {
+      await dualLogInfo(
+        "Email option was clicked, waiting for OTP form to appear...",
+        { jobId, bookingId }
+      );
+      await delay(2000);
+    }
+
     try {
       await targetPage.waitForSelector(OTP_VERIFICATION.FIRST_INPUT, {
         visible: true,
         timeout: selectorTimeout,
       });
-      await dualLogInfo("OTP input fields found", { jobId, bookingId });
+      await dualLogInfo("✅ OTP input fields found", { jobId, bookingId });
     } catch (error) {
+      await dualLogError(
+        "OTP input fields not found after waiting. Checking page state...",
+        error,
+        { jobId, bookingId }
+      );
+
+      // Debug: Check what's on the page
+      const pageDebug = await targetPage.evaluate(() => {
+        return {
+          hasVerifyOtpPanel: !!document.querySelector(
+            '[data-cy="verify-otp-panel"]'
+          ),
+          hasEmailOption: !!document.querySelector(
+            '[data-cy="otp-option-email"]'
+          ),
+          hasSmsOption: !!document.querySelector('[data-cy="otp-option-phone"]'),
+          hasOtpInputs: !!document.querySelector('[data-cy="otp-0"]'),
+          bodyText: document.body.textContent?.substring(0, 500) || "",
+        };
+      });
+
+      await dualLogInfo("Page state debug info:", {
+        jobId,
+        bookingId,
+        pageDebug,
+      });
+
+      // If the verification panel is still visible but inputs are not, something went wrong
+      if (pageDebug.hasVerifyOtpPanel && !pageDebug.hasOtpInputs) {
+        await dualLogError(
+          "Verification panel exists but OTP inputs not found. The email option may not have been clicked properly.",
+          undefined,
+          { jobId, bookingId }
+        );
+        return false;
+      }
+
       await dualLogInfo(
         "OTP input fields not found, OTP verification may not be required",
         { jobId, bookingId }
