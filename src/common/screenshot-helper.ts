@@ -12,12 +12,12 @@ export class ScreenshotHelper {
 
   /**
    * Ensures the screenshot folder structure exists
-   * screenshots/agoda/{jobId}/success/
-   * screenshots/agoda/{jobId}/error/
+   * screenshots/expedia/{jobId}/success/
+   * screenshots/expedia/{jobId}/error/
    */
   private static async ensureFolderStructure(
     jobId: string,
-    platform: string = "agoda"
+    platform: string = "expedia"
   ): Promise<{
     successDir: string;
     errorDir: string;
@@ -41,7 +41,7 @@ export class ScreenshotHelper {
     page: Page,
     jobId: string,
     stepName: string,
-    platform: string = "agoda",
+    platform: string = "expedia",
     options: {
       fullPage?: boolean;
       quality?: number;
@@ -97,7 +97,7 @@ export class ScreenshotHelper {
     page: Page | null,
     jobId: string,
     errorContext: string,
-    platform: string = "agoda",
+    platform: string = "expedia",
     options: {
       fullPage?: boolean;
       quality?: number;
@@ -157,7 +157,7 @@ export class ScreenshotHelper {
     jobId: string,
     filename: string,
     subfolder: "success" | "error" = "success",
-    platform: string = "agoda",
+    platform: string = "expedia",
     options: {
       fullPage?: boolean;
       quality?: number;
@@ -222,7 +222,7 @@ export class ScreenshotHelper {
    */
   public static async cleanupOldScreenshots(
     jobId: string,
-    platform: string = "agoda",
+    platform: string = "expedia",
     maxAge: number = 7 * 24 * 60 * 60 * 1000 // 7 days in milliseconds
   ): Promise<void> {
     try {

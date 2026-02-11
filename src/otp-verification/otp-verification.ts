@@ -139,6 +139,245 @@ async function getVerificationCode() {
   }
 }
 
+/**
+ * Helper function to clear OTP input field
+ */
+async function clearOtpInput(page: Page, inputSelector: string): Promise<void> {
+  try {
+    await dualLogInfo("Clearing input field for next attempt...");
+    
+    // Click the input to focus it
+    await page.click(inputSelector);
+    await delay(200);
+
+    // Select all text
+    await page.keyboard.down("Control");
+    await page.keyboard.press("KeyA");
+    await page.keyboard.up("Control");
+    await delay(100);
+    
+    // Delete selected text
+    await page.keyboard.press("Backspace");
+    await delay(300);
+  } catch (error) {
+    await dualLogError("Error clearing OTP input:", error);
+  }
+}
+
+/**
+ * Helper function to check if OTP verification failed
+ * Looks for the error message: "Your verification code failed or has expired"
+ */
+async function hasOtpError(page: Page): Promise<boolean> {
+  try {
+    const errorExists = await page.evaluate(() => {
+      const errorElement = document.querySelector('[data-testid="passcode-input-error"]');
+      if (errorElement) {
+        const errorText = errorElement.textContent || "";
+        return errorText.includes("Your verification code failed or has expired") ||
+               errorText.includes("verification code failed") ||
+               errorText.includes("has expired");
+      }
+      return false;
+    });
+    return errorExists;
+  } catch (error) {
+    await dualLogError("Error checking for OTP error:", error);
+    return false;
+  }
+}
+
+/**
+ * Try multiple OTP codes with retry logic
+ * Returns true if any code succeeds, false if all fail
+ */
+async function tryMultipleOtpCodes(
+  page: Page,
+  codes: string[],
+  selectorTimeout: number
+): Promise<boolean> {
+  const maxAttempts = Math.min(3, codes.length);
+  let otpSuccess = false;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const code = codes[attempt];
+    await dualLogInfo(
+      `Attempt ${attempt + 1}/${maxAttempts}: Trying OTP ${code}`
+    );
+
+    // Enter verification code
+    await page.type('input[name="passcode-input"]', code, { delay: 100 });
+    await delay(1000);
+
+    // Click verify button
+    const verifyButtonHandle = await page.$(
+      'button[data-testid="passcode-submit-button"]'
+    );
+
+    if (!verifyButtonHandle) {
+      await dualLogError("Verify button not found");
+      return false;
+    }
+
+    // Check if the button is disabled
+    const isDisabled = await page.evaluate(
+      (button) => button.disabled,
+      verifyButtonHandle
+    );
+
+    if (isDisabled) {
+      await dualLogError("Verify button is disabled");
+      return false;
+    }
+
+    // Click the verify button
+    await verifyButtonHandle.click();
+    await dualLogInfo("Clicked the verify button");
+
+    // Wait for response (either navigation or error message)
+    await delay(2000);
+
+    // Check if there's an error message
+    const hasError = await hasOtpError(page);
+
+    if (hasError) {
+      await dualLogInfo(`Attempt ${attempt + 1} failed: Invalid or expired OTP code`);
+
+      // If this was the 3rd attempt, fail
+      if (attempt === 2) {
+        await dualLogError(
+          "OTP verification failed after 3 attempts. All codes were invalid or expired."
+        );
+        return false;
+      }
+
+      // Clear input field for next attempt
+      await clearOtpInput(page, 'input[name="passcode-input"]');
+
+      // Continue to next attempt
+      continue;
+    } else {
+      // Success! No error message found
+      await dualLogInfo(`Attempt ${attempt + 1} successful!`);
+      otpSuccess = true;
+      break;
+    }
+  }
+
+  return otpSuccess;
+}
+
+/**
+ * Get last 3 verification codes for Expedia Partner Central
+ * Returns array of up to 3 OTP codes from most recent emails
+ */
+async function getMultipleVerificationCodes(): Promise<string[]> {
+  try {
+    // Load credentials before making API calls
+    const credentialsLoaded = await loadCredentials();
+    if (!credentialsLoaded) {
+      throw new Error(
+        "Failed to load Gmail credentials. Please complete authentication setup first."
+      );
+    }
+
+    const gmail = google.gmail({ version: "v1", auth: oauth2Client });
+    const res = await gmail.users.messages.list({
+      userId: "me",
+      maxResults: 10,
+      q: "subject:Login attempt from SANJOSE, US to Partner Central Your verification code is", // Search by subject pattern
+    });
+
+    if (!res.data.messages) {
+      await dualLogInfo(
+        "No verification emails found with Partner Central verification code."
+      );
+      return [];
+    }
+
+    const codes: string[] = [];
+
+    for (const msg of res.data.messages) {
+      if (!msg.id) {
+        continue;
+      }
+
+      // Stop if we already have 3 codes
+      if (codes.length >= 3) {
+        break;
+      }
+
+      const email = await gmail.users.messages.get({
+        userId: "me",
+        id: msg.id,
+        format: "full", // Get full email content instead of just snippet
+      });
+
+      // Check if email is from the correct sender
+      const headers = email.data.payload?.headers || [];
+      const subjectHeader = headers.find(
+        (header) => header.name?.toLowerCase() === "subject"
+      );
+
+      const subject = subjectHeader?.value || "";
+
+      // Verify it has the correct subject pattern
+      if (!subject.includes("Login attempt from SANJOSE, US to Partner Central Your verification code is")) {
+        continue;
+      }
+
+      // Get email body content
+      let emailBody = "";
+
+      // Try to get the email body from different payload structures
+      if (email.data.payload?.body?.data) {
+        emailBody = Buffer.from(
+          email.data.payload.body.data,
+          "base64"
+        ).toString();
+      } else if (email.data.payload?.parts) {
+        // Handle multipart emails
+        for (const part of email.data.payload.parts) {
+          if (part.mimeType === "text/plain" && part.body?.data) {
+            emailBody = Buffer.from(part.body.data, "base64").toString();
+            break;
+          }
+        }
+      }
+
+      // If no body found, try snippet as fallback
+      if (!emailBody) {
+        emailBody = email.data.snippet || "";
+      }
+
+      // Look for verification code pattern: "Your verification code is XXXXXX"
+      const codeMatch = emailBody.match(/Your verification code is (\d{6})/i);
+
+      if (codeMatch && codeMatch[1]) {
+        const code = codeMatch[1];
+        // Only add if not already in list (avoid duplicates)
+        if (!codes.includes(code)) {
+          codes.push(code);
+          await dualLogInfo(`Found verification code: ${code}`);
+        }
+      } else {
+        // Fallback: look for any 6-digit code in the email
+        const fallbackMatch = emailBody.match(/\b\d{6}\b/);
+        if (fallbackMatch && !codes.includes(fallbackMatch[0])) {
+          codes.push(fallbackMatch[0]);
+          await dualLogInfo(`Found fallback code: ${fallbackMatch[0]}`);
+        }
+      }
+    }
+
+    await dualLogInfo(`Total verification codes found: ${codes.length}`);
+    return codes;
+  } catch (error: any) {
+    await dualLogError("Error fetching multiple verification codes:", error.message);
+    return [];
+  }
+}
+
 async function handleOtpVerification(
   browser: Browser,
   page: Page,
@@ -208,11 +447,11 @@ async function handleOtpVerification(
       await dualLogInfo("Waiting for verification email...");
       await delay(30000); // Wait 30 seconds for email to arrive
 
-      // Get verification code
+      // Get verification codes (up to 3)
       try {
-        const code = await getVerificationCode();
-        if (!code) {
-          const error = new Error("Failed to get verification code from email");
+        const codes = await getMultipleVerificationCodes();
+        if (!codes || codes.length === 0) {
+          const error = new Error("Failed to get verification codes from email");
 
           // Send email notification for verification code error
           if (jobId) {
@@ -227,25 +466,20 @@ async function handleOtpVerification(
 
           throw error;
         }
-        await dualLogInfo("Got verification code:", code);
+        await dualLogInfo(`Got ${codes.length} verification code(s)`);
 
-        // Enter verification code using the correct selector
-        await page.type('input[name="passcode-input"]', code, { delay: 100 });
-        await delay(1000);
+        // Try up to 3 codes with retry logic
+        const success = await tryMultipleOtpCodes(page, codes, selectorTimeout);
+        
+        if (!success) {
+          const error = new Error("OTP verification failed after all attempts");
 
-        const verifyButtonHandle = await page.$(
-          'button[data-testid="passcode-submit-button"]'
-        );
-
-        if (!verifyButtonHandle) {
-          const error = new Error("Verify button not found");
-
-          // Send email notification for verify button error
+          // Send email notification for verification failure
           if (jobId) {
             try {
             } catch (emailError) {
               await dualLogError(
-                "Failed to send verify button error notification:",
+                "Failed to send verification failure notification:",
                 emailError
               );
             }
@@ -254,32 +488,7 @@ async function handleOtpVerification(
           throw error;
         }
 
-        // Check if the button is disabled
-        const isDisabled = await page.evaluate(
-          (button) => button.disabled,
-          verifyButtonHandle
-        );
-
-        if (isDisabled) {
-          const error = new Error("Verify button is disabled");
-
-          // Send email notification for disabled button error
-          if (jobId) {
-            try {
-            } catch (emailError) {
-              await dualLogError(
-                "Failed to send disabled button error notification:",
-                emailError
-              );
-            }
-          }
-
-          throw error;
-        }
-
-        // Click the button
-        await verifyButtonHandle.click();
-        await dualLogInfo("Clicked the verify button successfully!");
+        await dualLogInfo("OTP verification completed successfully!");
       } catch (error: any) {
         await dualLogError("Error in primary verification flow:", error);
 
@@ -522,34 +731,20 @@ async function handleOtpVerification(
             );
             await delay(30000);
 
-            const code = await getVerificationCode();
-            if (!code) {
-              throw new Error("Failed to get verification code from email");
+            const codes = await getMultipleVerificationCodes();
+            if (!codes || codes.length === 0) {
+              throw new Error("Failed to get verification codes from email");
             }
-            await dualLogInfo("Got verification code:", code);
+            await dualLogInfo(`Got ${codes.length} verification code(s)`);
 
-            await page.type('input[name="passcode-input"]', code, {
-              delay: 100,
-            });
-            await delay(1000);
-
-            const verifyButtonHandle = await page.$(
-              'button[data-testid="passcode-submit-button"]'
-            );
-            if (!verifyButtonHandle) {
-              throw new Error("Verify button not found");
+            // Try up to 3 codes with retry logic
+            const success = await tryMultipleOtpCodes(page, codes, selectorTimeout);
+            
+            if (!success) {
+              throw new Error("OTP verification failed after all attempts");
             }
 
-            const isDisabled = await page.evaluate(
-              (button) => button.disabled,
-              verifyButtonHandle
-            );
-            if (isDisabled) {
-              throw new Error("Verify button is disabled");
-            }
-
-            await verifyButtonHandle.click();
-            await dualLogInfo("Clicked the verify button successfully!");
+            await dualLogInfo("OTP verification completed successfully!");
           } else {
             throw new Error(
               `Both primary and alternative approaches failed: ${alternativeClick.error}`
@@ -623,37 +818,20 @@ async function handleOtpVerification(
           // Add delay before fetching verification code
           await delay(30000); // Wait 30 seconds for email to arrive
 
-          const code = await getVerificationCode();
-          if (!code) {
-            throw new Error("Failed to get verification code from email");
+          const codes = await getMultipleVerificationCodes();
+          if (!codes || codes.length === 0) {
+            throw new Error("Failed to get verification codes from email");
           }
-          console.log("Got verification code:", code);
+          await dualLogInfo(`Got ${codes.length} verification code(s)`);
 
-          // Enter verification code using the correct selector
-          await page.type('input[name="passcode-input"]', code, { delay: 100 });
-          await delay(1000);
-
-          const verifyButtonHandle = await page.$(
-            'button[data-testid="passcode-submit-button"]'
-          );
-
-          if (!verifyButtonHandle) {
-            throw new Error("Verify button not found");
+          // Try up to 3 codes with retry logic
+          const success = await tryMultipleOtpCodes(page, codes, selectorTimeout);
+          
+          if (!success) {
+            throw new Error("OTP verification failed after all attempts");
           }
 
-          // Check if the button is disabled
-          const isDisabled = await page.evaluate(
-            (button) => button.disabled,
-            verifyButtonHandle
-          );
-
-          if (isDisabled) {
-            throw new Error("Verify button is disabled");
-          }
-
-          // Click the button
-          await verifyButtonHandle.click();
-          console.log("Clicked the verify button successfully!");
+          await dualLogInfo("OTP verification completed successfully!");
         } else {
           throw new Error(
             `No matching phone number found in fallback options. Expected ending with ${ourLastThree}. Available options: ${

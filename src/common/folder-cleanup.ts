@@ -60,7 +60,7 @@ export async function cleanupFoldersOnError(
   agodaId?: string,
   propertyName?: string,
   jobId?: string,
-  options: Partial<FolderCleanupOptions> = {}
+  options: Partial<FolderCleanupOptions> = {},
 ): Promise<CleanupResult> {
   const cleanupOptions: FolderCleanupOptions = {
     agodaId,
@@ -111,7 +111,7 @@ export async function cleanupFoldersOnError(
  * Perform the actual folder cleanup operations
  */
 async function performFolderCleanup(
-  options: FolderCleanupOptions
+  options: FolderCleanupOptions,
 ): Promise<CleanupResult> {
   const result: CleanupResult = {
     downloadsCleanedCount: 0,
@@ -159,7 +159,7 @@ async function performFolderCleanup(
  * Pattern: {agodaId}_*.csv or {propertyName}-{agodaId}.csv
  */
 async function cleanDownloadsFolder(
-  options: FolderCleanupOptions
+  options: FolderCleanupOptions,
 ): Promise<{ cleanedCount: number; errors: string[]; totalProcessed: number }> {
   const result: {
     cleanedCount: number;
@@ -179,7 +179,7 @@ async function cleanDownloadsFolder(
         "Downloads directory does not exist, skipping cleanup",
         {
           jobId: options.jobId,
-        }
+        },
       );
       return result;
     }
@@ -190,12 +190,12 @@ async function cleanDownloadsFolder(
       if (fs.existsSync(jobDownloadsDir)) {
         await dualLogInfo(
           `Cleaning job-specific downloads folder: ${jobDownloadsDir}`,
-          { jobId: options.jobId }
+          { jobId: options.jobId },
         );
 
         const jobFolderResult = await cleanDownloadsFolderContent(
           jobDownloadsDir,
-          options
+          options,
         );
         result.cleanedCount += jobFolderResult.cleanedCount;
         result.errors.push(...jobFolderResult.errors);
@@ -211,25 +211,25 @@ async function cleanDownloadsFolder(
           await dualLogError(
             `Warning: Could not remove job folder: ${removeDirError.message}`,
             removeDirError,
-            { jobId: options.jobId }
+            { jobId: options.jobId },
           );
         }
       } else {
         await dualLogInfo(
           `Job-specific downloads folder does not exist: ${jobDownloadsDir}`,
-          { jobId: options.jobId }
+          { jobId: options.jobId },
         );
       }
     } else {
       // Only clean main downloads folder if no jobId (legacy mode)
       await dualLogInfo(
         "No jobId provided - cleaning main downloads folder (legacy mode)",
-        { jobId: options.jobId }
+        { jobId: options.jobId },
       );
 
       const mainFolderResult = await cleanDownloadsFolderContent(
         baseDownloadsDir,
-        options
+        options,
       );
       result.cleanedCount += mainFolderResult.cleanedCount;
       result.errors.push(...mainFolderResult.errors);
@@ -248,7 +248,7 @@ async function cleanDownloadsFolder(
  */
 async function cleanDownloadsFolderContent(
   downloadsDir: string,
-  options: FolderCleanupOptions
+  options: FolderCleanupOptions,
 ): Promise<{ cleanedCount: number; errors: string[]; totalProcessed: number }> {
   const result: {
     cleanedCount: number;
@@ -266,7 +266,7 @@ async function cleanDownloadsFolderContent(
       `Found ${files.length} files in downloads directory: ${downloadsDir}`,
       {
         jobId: options.jobId,
-      }
+      },
     );
 
     for (const file of files) {
@@ -286,11 +286,11 @@ async function cleanDownloadsFolderContent(
       if (options.agodaId) {
         const oldAgodaPattern = new RegExp(
           `^${escapeRegExp(options.agodaId)}_.*\\.csv$`,
-          "i"
+          "i",
         );
         const newAgodaPattern = new RegExp(
           `.*-${escapeRegExp(options.agodaId)}\\.csv$`,
-          "i"
+          "i",
         );
 
         if (!oldAgodaPattern.test(file) && !newAgodaPattern.test(file)) {
@@ -333,7 +333,7 @@ async function cleanDownloadsFolderContent(
  * Pattern: {propertyName}-{agodaId}.csv or any CSV containing agodaId
  */
 async function cleanImportFolder(
-  options: FolderCleanupOptions
+  options: FolderCleanupOptions,
 ): Promise<{ cleanedCount: number; errors: string[]; totalProcessed: number }> {
   const result: {
     cleanedCount: number;
@@ -364,18 +364,18 @@ async function cleanImportFolder(
           fs.rmSync(jobImportDir, { recursive: true, force: true });
           await dualLogInfo(
             `✅ Deleted job-specific import folder: ${jobImportDir}`,
-            { jobId: options.jobId }
+            { jobId: options.jobId },
           );
           result.cleanedCount = 1; // Count as 1 folder cleaned
           return result;
         } catch (error: any) {
           result.errors.push(
-            `Failed to delete job folder ${jobImportDir}: ${error.message}`
+            `Failed to delete job folder ${jobImportDir}: ${error.message}`,
           );
           await dualLogError(
             `Failed to delete job-specific import folder: ${jobImportDir}`,
             error.message,
-            { jobId: options.jobId }
+            { jobId: options.jobId },
           );
         }
       }
@@ -411,9 +411,9 @@ async function cleanImportFolder(
       if (options.propertyName && options.agodaId) {
         const propertyPattern = new RegExp(
           `^${escapeRegExp(options.propertyName)}-${escapeRegExp(
-            options.agodaId
+            options.agodaId,
           )}\\.csv$`,
-          "i"
+          "i",
         );
         if (propertyPattern.test(file)) {
           shouldDelete = true;
@@ -515,7 +515,7 @@ export async function autoDetectCleanupParams(jobId?: string): Promise<{
         (file) =>
           file.endsWith(".csv") &&
           !file.includes(".gitkeep") &&
-          file.includes("-")
+          file.includes("-"),
       );
 
       if (csvFile) {
@@ -527,7 +527,7 @@ export async function autoDetectCleanupParams(jobId?: string): Promise<{
               jobId,
               agodaId: info.agodaId,
               propertyName: info.propertyName,
-            }
+            },
           );
           return info;
         }
@@ -542,12 +542,12 @@ export async function autoDetectCleanupParams(jobId?: string): Promise<{
         (file) =>
           file.endsWith(".csv") &&
           !file.includes(".gitkeep") &&
-          file.includes("_")
+          file.includes("_"),
       );
 
       if (csvFile) {
         const info = extractCleanupInfoFromPath(
-          path.join(downloadsDir, csvFile)
+          path.join(downloadsDir, csvFile),
         );
         if (info.agodaId) {
           await dualLogInfo(
@@ -555,7 +555,7 @@ export async function autoDetectCleanupParams(jobId?: string): Promise<{
             {
               jobId,
               agodaId: info.agodaId,
-            }
+            },
           );
           return info;
         }
@@ -569,7 +569,7 @@ export async function autoDetectCleanupParams(jobId?: string): Promise<{
       error.message,
       {
         jobId,
-      }
+      },
     );
     return {};
   }
@@ -586,7 +586,7 @@ function escapeRegExp(string: string): string {
  * Clean all CSV files from both folders (emergency cleanup)
  */
 export async function emergencyCleanupAllCsvFiles(
-  jobId?: string
+  jobId?: string,
 ): Promise<CleanupResult> {
   await dualLogInfo("🚨 Starting emergency cleanup of all CSV files...", {
     jobId,

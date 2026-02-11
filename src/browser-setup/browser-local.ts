@@ -13,7 +13,7 @@ dotenv.config();
 
 export async function browserSetupLocal(
   jobId?: string,
-  platform?: "expedia" | "agoda"
+  platform?: "expedia"
 ): Promise<{
   browser: Browser;
   page: Page;
@@ -95,7 +95,7 @@ export async function browserSetupLocal(
     await page.setDefaultTimeout(selectorTimeout);
 
     // Navigate to partner central with retry logic
-    const platformName = platform === "agoda" ? "Agoda" : "Expedia";
+    const platformName = "Expedia";
     await dualLogInfo(`Navigating to ${platformName} platform...`);
 
     const maxRetries = 3;
@@ -108,30 +108,13 @@ export async function browserSetupLocal(
           maxRetries,
         });
 
-        if (platform === "expedia") {
-          await page.goto(
-            "https://www.expediapartnercentral.com/Account/Logon?signedOff=true",
-            {
-              waitUntil: "domcontentloaded",
-              timeout: loadingTimeout,
-            }
-          );
-        } else if (platform === "agoda") {
-          await page.goto("https://ycs.agoda.com", {
+        await page.goto(
+          "https://www.expediapartnercentral.com/Account/Logon?signedOff=true",
+          {
             waitUntil: "domcontentloaded",
             timeout: loadingTimeout,
-          });
-          await page.waitForNavigation({ waitUntil: "networkidle0" });
-        } else {
-          // Default to Expedia for backward compatibility
-          await page.goto(
-            "https://www.expediapartnercentral.com/Account/Logon?signedOff=true",
-            {
-              waitUntil: "domcontentloaded",
-              timeout: loadingTimeout,
-            }
-          );
-        }
+          }
+        );
 
         // Wait for page to stabilize
         await delay(3000);

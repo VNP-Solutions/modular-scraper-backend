@@ -414,7 +414,6 @@ export class OtpAwareWorkerPool extends EventEmitter {
     return [
       "property-run",
       "graphql-run",
-      "agoda-property-run",
       "retrieval-reservation-run",
       "graphql-retrieval-run",
     ].includes(jobData.jobType);
@@ -467,12 +466,6 @@ export class OtpAwareWorkerPool extends EventEmitter {
       )
     ) {
       return OtpPlatform.ExpediaRetrieval;
-    } else if (jobData.jobType === "agoda-retrieval-run") {
-      return OtpPlatform.AgodaRetrieval;
-    } else if (
-      ["agoda-property-run", "agoda-rerun-failed"].includes(jobData.jobType)
-    ) {
-      return OtpPlatform.Agoda;
     }
     // Default to Expedia for unknown job types
     return OtpPlatform.Expedia;

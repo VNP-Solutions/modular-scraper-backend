@@ -104,7 +104,7 @@ const PropertySchema = new Schema<IProperty>(
   {
     timestamps: true,
     collection: "properties",
-  }
+  },
 );
 
 // Indexes

@@ -71,7 +71,7 @@ const PropertyCredentialsSchema = new Schema<IPropertyCredentials>(
   {
     timestamps: true,
     collection: "property_credentials",
-  }
+  },
 );
 
 // Indexes
@@ -80,5 +80,5 @@ PropertyCredentialsSchema.index({ property_id: 1 }, { unique: true }); // Ensure
 
 export const PropertyCredentials = mongoose.model<IPropertyCredentials>(
   "PropertyCredentials",
-  PropertyCredentialsSchema
+  PropertyCredentialsSchema,
 );

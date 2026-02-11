@@ -12,7 +12,7 @@ export class PropertyCredentialsService {
    * Looks up the property associated with the job and returns its credentials
    */
   async getCredentialsByJobId(
-    jobId: string
+    jobId: string,
   ): Promise<IPropertyCredentials | null> {
     try {
       await dualLogInfo(`Getting credentials for job ${jobId}`, { jobId });
@@ -23,7 +23,7 @@ export class PropertyCredentialsService {
         await dualLogError(
           `Job not found or no property associated with job ${jobId}`,
           undefined,
-          { jobId }
+          { jobId },
         );
         return null;
       }
@@ -36,7 +36,7 @@ export class PropertyCredentialsService {
       if (!credentials) {
         await dualLogInfo(
           `No credentials found for property ${job.property_id} (job ${jobId})`,
-          { jobId, propertyId: job.property_id }
+          { jobId, propertyId: job.property_id },
         );
         return null;
       }
@@ -65,7 +65,7 @@ export class PropertyCredentialsService {
    * Get credentials by property ID
    */
   async getCredentialsByPropertyId(
-    propertyId: string | Types.ObjectId
+    propertyId: string | Types.ObjectId,
   ): Promise<IPropertyCredentials | null> {
     try {
       const credentials = await PropertyCredentials.findOne({
@@ -77,7 +77,7 @@ export class PropertyCredentialsService {
       await dualLogError(
         `Error getting credentials for property ${propertyId}:`,
         error,
-        { propertyId }
+        { propertyId },
       );
       throw error;
     }
@@ -93,13 +93,13 @@ export class PropertyCredentialsService {
       expediaPassword: string;
       agodaUsername: string;
       agodaPassword: string;
-    }>
+    }>,
   ): Promise<IPropertyCredentials> {
     try {
       const result = await PropertyCredentials.findOneAndUpdate(
         { property_id: propertyId },
         { $set: credentials },
-        { upsert: true, new: true }
+        { upsert: true, new: true },
       ).exec();
 
       await dualLogInfo(`Credentials upserted for property ${propertyId}`, {
@@ -115,7 +115,7 @@ export class PropertyCredentialsService {
       await dualLogError(
         `Error upserting credentials for property ${propertyId}:`,
         error,
-        { propertyId }
+        { propertyId },
       );
       throw error;
     }
@@ -125,7 +125,7 @@ export class PropertyCredentialsService {
    * Delete credentials for a property
    */
   async deleteCredentials(
-    propertyId: string | Types.ObjectId
+    propertyId: string | Types.ObjectId,
   ): Promise<boolean> {
     try {
       const result = await PropertyCredentials.deleteOne({
@@ -142,7 +142,7 @@ export class PropertyCredentialsService {
       await dualLogError(
         `Error deleting credentials for property ${propertyId}:`,
         error,
-        { propertyId }
+        { propertyId },
       );
       throw error;
     }

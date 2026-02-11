@@ -6,9 +6,6 @@ export interface WorkerJobData {
     | "retrieval-reservation-run"
     | "graphql-retrieval-run"
     | "graphql-run"
-    | "agoda-property-run"
-    | "agoda-rerun-failed"
-    | "agoda-retrieval-run"
     | "stop";
   jobId: string;
   startDate?: string;
@@ -16,9 +13,6 @@ export interface WorkerJobData {
   expediaId?: string;
   user_email?: string;
   user_password?: string;
-  agodaId?: string;
-  agodaUsername?: string;
-  agodaPassword?: string;
   reservations?: any[];
   retrievalId?: string;
   originalStatus?: string;
