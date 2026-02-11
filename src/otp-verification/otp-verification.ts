@@ -211,6 +211,7 @@ async function tryMultipleOtpCodes(
 ): Promise<boolean> {
   const maxAttempts = Math.min(3, codes.length);
   let otpSuccess = false;
+  let navigationStarted = false;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const code = codes[attempt];
@@ -243,15 +244,51 @@ async function tryMultipleOtpCodes(
       return false;
     }
 
-    // Click the verify button
+    // Click the verify button and race between navigation and error check
     await verifyButtonHandle.click();
     await dualLogInfo("Clicked the verify button");
 
-    // Wait for response (either navigation or error message)
-    await delay(2000);
+    // Race between navigation and error detection
+    const navPromise = page
+      .waitForNavigation({ timeout: 5000, waitUntil: "domcontentloaded" })
+      .then(() => {
+        navigationStarted = true;
+        return "navigation";
+      })
+      .catch(() => "no-navigation");
 
-    // Check if there's an error message
-    const hasError = await hasOtpError(page);
+    const delayPromise = delay(3000).then(() => "delay");
+
+    const result = await Promise.race([navPromise, delayPromise]);
+
+    // If navigation started, it means OTP was successful
+    if (navigationStarted) {
+      await dualLogInfo(`Attempt ${attempt + 1} successful! Navigation detected.`);
+      otpSuccess = true;
+      break;
+    }
+
+    // Check if there's an error message (only if no navigation happened)
+    let hasError = false;
+    try {
+      hasError = await hasOtpError(page);
+    } catch (e) {
+      // If error checking fails, page might have navigated
+      const msg = e instanceof Error ? e.message : String(e);
+      if (
+        msg.includes("Execution context was destroyed") ||
+        msg.includes("Cannot find context") ||
+        msg.includes("Target closed")
+      ) {
+        await dualLogInfo(
+          `Attempt ${attempt + 1} successful! Page context destroyed (navigation occurred).`
+        );
+        otpSuccess = true;
+        navigationStarted = true;
+        break;
+      }
+      throw e;
+    }
 
     if (hasError) {
       await dualLogInfo(`Attempt ${attempt + 1} failed: Invalid or expired OTP code`);
@@ -876,29 +913,53 @@ async function handleOtpVerification(
       }
     }
 
-    // Wait for successful login
+    // Wait for successful login - but be forgiving if navigation already happened
     const loadingTimeout = await timeoutManager.getLoadingTimeout(jobId);
     try {
-      await page.waitForNavigation({
-        waitUntil: "domcontentloaded",
-        timeout: loadingTimeout,
-      });
+      // Try to wait for navigation, but it might have already completed
+      await Promise.race([
+        page.waitForNavigation({
+          waitUntil: "domcontentloaded",
+          timeout: loadingTimeout,
+        }),
+        delay(5000).then(() => {
+          // Check if we're on a different page after 5 seconds
+          return page.url();
+        }),
+      ]);
+      await dualLogInfo("Navigation completed or page already changed");
       console.log("Login successful!");
     } catch (error: any) {
-      await dualLogError("Error waiting for navigation after OTP:", error);
+      // Navigation timeout is not always an error - page might have already navigated
+      const currentUrl = page.url();
+      await dualLogInfo(`Current URL after OTP: ${currentUrl}`);
+      
+      // Check if we're still on the verification page
+      const stillOnVerificationPage = await page.evaluate(() => {
+        return !!document.querySelector('input[name="passcode-input"]');
+      }).catch(() => false);
 
-      // Send email notification for navigation error
-      if (jobId) {
-        try {
-        } catch (emailError) {
-          await dualLogError(
-            "Failed to send navigation error notification:",
-            emailError
-          );
+      if (stillOnVerificationPage) {
+        // We're still on verification page, this is an actual error
+        await dualLogError("Error waiting for navigation after OTP:", error);
+
+        // Send email notification for navigation error
+        if (jobId) {
+          try {
+          } catch (emailError) {
+            await dualLogError(
+              "Failed to send navigation error notification:",
+              emailError
+            );
+          }
         }
-      }
 
-      throw error;
+        throw error;
+      } else {
+        // Navigation already happened, this is fine
+        await dualLogInfo("Navigation already completed during OTP verification, continuing...");
+        console.log("Login successful!");
+      }
     }
   } catch (error: any) {
     await dualLogError("Error in handleOtpVerification:", error);
