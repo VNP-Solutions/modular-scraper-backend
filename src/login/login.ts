@@ -57,19 +57,36 @@ async function login(
   try {
     await dualLogInfo("Waiting for password page to fully load...");
 
-    await delay(10000);
+    // Wait for either password selector to appear (try both at once)
+    const passwordSelector = await Promise.race([
+      page.waitForSelector("#password-input", {
+        visible: true,
+        timeout: selectorTimeout,
+      }).then(() => "#password-input").catch(() => null),
+      page.waitForSelector("#passwordControl", {
+        visible: true,
+        timeout: selectorTimeout,
+      }).then(() => "#passwordControl").catch(() => null),
+    ]);
+
+    if (!passwordSelector) {
+      await dualLogError(
+        "Neither #password-input nor #passwordControl found. Checking page content..."
+      );
+      const pageContent = await page.content();
+      await dualLogInfo("Page title: " + (await page.title()));
+      await dualLogInfo("Current URL: " + page.url());
+      throw new Error("Password input field not found on the page");
+    }
+
+    await dualLogInfo(`Found password input: ${passwordSelector}`);
+    await delay(3000);
 
     // Try to find the password input field with a try-catch to handle both possible selectors
     let passwordInputFound = false;
 
-    try {
-      // First try to find #password-input
-      const passwordInput = await page.waitForSelector("#password-input", {
-        visible: true,
-        timeout: selectorTimeout, // Use dynamic timeout instead of hardcoded 15000
-      });
-
-      if (passwordInput) {
+    if (passwordSelector === "#password-input") {
+      try {
         passwordInputFound = true;
 
         // Add a significant delay to ensure the page is fully loaded and stable
@@ -150,31 +167,17 @@ async function login(
         // Click the login button
         await dualLogInfo("Clicking password continue button...");
         await page.click("#password-continue");
+      } catch (error: any) {
+        await dualLogError(
+          "Error with #password-input:",
+          error.message
+        );
+        throw error;
       }
-    } catch (error: any) {
-      await dualLogError(
-        "Could not find #password-input, trying #passwordControl instead:",
-        error.message
-      );
-      passwordInputFound = false;
-    }
-
-    // If #password-input wasn't found, try #passwordControl
-    if (!passwordInputFound) {
+    } else if (passwordSelector === "#passwordControl") {
+      // Use #passwordControl
       try {
-        // Check if #passwordControl exists
-        const passwordControlExists = await page.evaluate(() => {
-          return !!document.querySelector("#passwordControl");
-        });
-
-        if (!passwordControlExists) {
-          await dualLogError(
-            "Neither #password-input nor #passwordControl found. Checking page content..."
-          );
-          const pageContent = await page.content();
-          await dualLogInfo("Page title: " + (await page.title()));
-          throw new Error("Password input field not found on the page");
-        }
+        passwordInputFound = true;
 
         // Add a significant delay to ensure the page is fully loaded and stable
         await delay(3000);
@@ -255,7 +258,7 @@ async function login(
         await dualLogInfo("Clicking password continue button...");
         await page.click("#signInButton");
       } catch (error: any) {
-        await dualLogError("Error handling password input:", error.message);
+        await dualLogError("Error with #passwordControl:", error.message);
         throw error;
       }
     }
