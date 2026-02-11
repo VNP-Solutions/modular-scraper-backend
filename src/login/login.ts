@@ -57,6 +57,8 @@ async function login(
   try {
     await dualLogInfo("Waiting for password page to fully load...");
 
+    await delay(10000);
+
     // Try to find the password input field with a try-catch to handle both possible selectors
     let passwordInputFound = false;
 

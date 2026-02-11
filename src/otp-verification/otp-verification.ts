@@ -146,19 +146,32 @@ async function clearOtpInput(page: Page, inputSelector: string): Promise<void> {
   try {
     await dualLogInfo("Clearing input field for next attempt...");
     
-    // Click the input to focus it
+    // Method 1: Use page.evaluate to directly clear the value (most reliable)
+    await page.evaluate((selector) => {
+      const input = document.querySelector(selector) as HTMLInputElement;
+      if (input) {
+        input.value = '';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    }, inputSelector);
+    
+    await delay(300);
+    
+    // Method 2: Fallback - use keyboard to clear (works on all platforms)
+    // Click to focus the input
     await page.click(inputSelector);
     await delay(200);
-
-    // Select all text
-    await page.keyboard.down("Control");
-    await page.keyboard.press("KeyA");
-    await page.keyboard.up("Control");
+    
+    // Triple-click to select all text (works on all platforms)
+    await page.click(inputSelector, { clickCount: 3 });
     await delay(100);
     
     // Delete selected text
     await page.keyboard.press("Backspace");
     await delay(300);
+    
+    await dualLogInfo("Input field cleared successfully");
   } catch (error) {
     await dualLogError("Error clearing OTP input:", error);
   }
