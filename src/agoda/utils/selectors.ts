@@ -122,9 +122,11 @@ export const RESERVATIONS_PAGE = {
   // These are tried in order until one matches
   SELECTORS: [
     'h2:has-text("Reservations")',
-    "h2.sc-iMTnTL.sc-krNlru.ioCOri.jnyliE",
+    "h2.sc-aXZVg.ifcRDN", // Updated: More generic classes that are likely to persist
+    "h2.sc-iMTnTL.sc-krNlru.ioCOri.jnyliE", // Legacy: kept for backward compatibility
     'h2:contains("Reservations")',
     '[class*="Reservations"]',
+    '[data-testid="excel-box"] h2', // More reliable: using parent element's test attribute
   ] as const,
 
   // Text to search for in page content

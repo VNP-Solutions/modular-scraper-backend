@@ -10,7 +10,10 @@ import { otpCompletionNotifier } from "../../common/otp-completion-notifier.js";
 import { otpStatusManager } from "../../common/otp-status-manager.js";
 import { progressManager } from "../../common/progress-manager.js";
 import { scrapingStateManager } from "../../common/scraping-state.js";
-import { takeSuccessScreenshot } from "../../common/screenshot-helper.js";
+import {
+  takeErrorScreenshot,
+  takeSuccessScreenshot,
+} from "../../common/screenshot-helper.js";
 import { timeoutManager } from "../../common/timeout-manager.js";
 import { searchBookingAndNavigateToPayout } from "../retriveal-data/retriveal-data.js";
 import { PAGE_LOADING, RESERVATIONS_PAGE } from "../utils/selectors.js";
@@ -277,6 +280,35 @@ export async function getAgodaRetrivealData(
       "Successfully navigated to booking data page and confirmed Reservations section",
       { jobId }
     );
+
+    // CRITICAL: Verify search input field exists (confirms we're on the actual booking page, not error page)
+    await dualLogInfo("Verifying search input field exists...", { jobId });
+    
+    try {
+      const searchInputSelector = 'input[data-element-name="ycs-booking-search-bid-guestname"], input[data-testid="search-box"]';
+      
+      await newPage.waitForSelector(searchInputSelector, {
+        visible: true,
+        timeout: 10000,
+      });
+      
+      await dualLogInfo("✅ Search input field found - booking page loaded correctly", { jobId });
+    } catch (searchInputError) {
+      const errorMessage = `Page shows 'Reservations' text but search input field is missing. This usually means the property ID (${agodaId}) was not found or the page failed to load correctly.`;
+      
+      await dualLogError(errorMessage, searchInputError, { jobId, agodaId });
+      
+      // Take error screenshot
+      if (jobId) {
+        try {
+          await takeErrorScreenshot(newPage, jobId, "booking_page_search_input_missing");
+        } catch (screenshotError) {
+          await dualLogError("Failed to take error screenshot", screenshotError);
+        }
+      }
+      
+      throw new Error(errorMessage);
+    }
 
     // Take screenshot after successful navigation to booking data page
     if (jobId) {
