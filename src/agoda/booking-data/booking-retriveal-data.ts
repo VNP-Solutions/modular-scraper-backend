@@ -154,17 +154,72 @@ export async function getAgodaRetrivealData(
         { jobId }
       );
 
-      await newPage.goto(bookingUrl, {
-        waitUntil: "networkidle2",
-        timeout: loadingTimeout,
-      });
+      try {
+        // Progressive timeout increase: 60s, 90s, 120s
+        const navigationTimeout = loadingTimeout * (1 + navigationAttempts * 0.5);
+        
+        await dualLogInfo(
+          `Using navigation timeout: ${navigationTimeout}ms (attempt ${navigationAttempts})`,
+          { jobId }
+        );
 
-      await newPage.waitForSelector(PAGE_LOADING.BODY, {
-        timeout: loadingTimeout,
-      });
+        // Try with networkidle2 first (ideal but might timeout on slow tables)
+        try {
+          await newPage.goto(bookingUrl, {
+            waitUntil: "networkidle2",
+            timeout: navigationTimeout,
+          });
+          
+          await dualLogInfo("Navigation completed with networkidle2", { jobId });
+        } catch (networkIdleError: any) {
+          // If networkidle2 times out, try with just domcontentloaded (more lenient)
+          if (networkIdleError.message?.includes("Navigation timeout")) {
+            await dualLogInfo(
+              "networkidle2 timeout, retrying with domcontentloaded...",
+              { jobId }
+            );
+            
+            await newPage.goto(bookingUrl, {
+              waitUntil: "domcontentloaded",
+              timeout: navigationTimeout,
+            });
+            
+            await dualLogInfo("Navigation completed with domcontentloaded", { jobId });
+            
+            // Give extra time for React/table to load after DOM is ready
+            await delay(10000);
+          } else {
+            throw networkIdleError;
+          }
+        }
 
-      // Wait for the page to load completely
-      await delay(5000);
+        await newPage.waitForSelector(PAGE_LOADING.BODY, {
+          timeout: loadingTimeout,
+        });
+
+        // Wait for the page to load completely
+        await delay(5000);
+      } catch (navigationError: any) {
+        await dualLogError(
+          `Navigation error on attempt ${navigationAttempts}/${maxNavigationAttempts}:`,
+          navigationError,
+          { jobId }
+        );
+
+        if (navigationAttempts < maxNavigationAttempts) {
+          await dualLogInfo(
+            `Will retry navigation in 5 seconds... (attempt ${navigationAttempts}/${maxNavigationAttempts})`,
+            { jobId }
+          );
+          await delay(5000);
+          continue; // Skip to next iteration
+        } else {
+          // Last attempt failed
+          throw new Error(
+            `Failed to navigate to booking page after ${maxNavigationAttempts} attempts. Last error: ${navigationError.message}`
+          );
+        }
+      }
 
       // Check for "Reservations" text on the page
       try {
@@ -287,12 +342,97 @@ export async function getAgodaRetrivealData(
     try {
       const searchInputSelector = 'input[data-element-name="ycs-booking-search-bid-guestname"], input[data-testid="search-box"]';
       
+      // Increased timeout for slow-loading tables (30 seconds)
       await newPage.waitForSelector(searchInputSelector, {
         visible: true,
-        timeout: 10000,
+        timeout: 30000,
       });
       
       await dualLogInfo("✅ Search input field found - booking page loaded correctly", { jobId });
+      
+      // ✨ BROWSER-NATIVE: Wait for page to be fully loaded using browser signals
+      await dualLogInfo("Waiting for page to be fully loaded (using browser signals)...", { jobId });
+      
+      try {
+        // Wait for document.readyState to be 'complete' and all resources loaded
+        const pageFullyLoaded = await newPage.waitForFunction(
+          () => {
+            // 1. Check document.readyState is 'complete' (all resources including images, stylesheets loaded)
+            if (document.readyState !== 'complete') {
+              return false;
+            }
+            
+            // 2. Check if there are any pending fetch/XHR requests using Performance API
+            const performanceEntries = performance.getEntriesByType('resource');
+            const recentRequests = performanceEntries.filter((entry: any) => {
+              // Check for requests that completed very recently (within last 500ms)
+              const timeSinceResponse = performance.now() - (entry.responseEnd || 0);
+              return timeSinceResponse < 500;
+            });
+            
+            // If there are recent requests, page is still loading data
+            if (recentRequests.length > 0) {
+              return false;
+            }
+            
+            // 3. Check for active network requests using window.performance
+            // @ts-ignore - performance.timing is deprecated but still works
+            const navigationTiming = performance.timing;
+            const loadComplete = navigationTiming.loadEventEnd > 0;
+            
+            if (!loadComplete) {
+              return false;
+            }
+            
+            // 4. Additional check: No fetch/XHR in progress
+            // React apps often show this in window.__REACT_DEVTOOLS_GLOBAL_HOOK__ or similar
+            // But we'll use a simpler heuristic: check if images are still loading
+            const images = Array.from(document.images);
+            const allImagesLoaded = images.every((img: HTMLImageElement) => img.complete);
+            
+            if (!allImagesLoaded) {
+              return false;
+            }
+            
+            // All checks passed - page is fully loaded
+            return true;
+          },
+          { timeout: 30000, polling: 500 }  // Check every 500ms, max 30 seconds
+        ).then(() => ({ loaded: true, method: 'browser-signals' }))
+        .catch(() => ({ loaded: false, method: 'timeout' }));
+        
+        if (pageFullyLoaded.loaded) {
+          await dualLogInfo("✅ Page fully loaded (confirmed by browser signals)", { jobId });
+        } else {
+          await dualLogInfo("⏱️ Browser signal timeout - page may still be loading, proceeding anyway", { jobId });
+        }
+        
+        // Get detailed page state from browser
+        const pageState = await newPage.evaluate(() => {
+          return {
+            readyState: document.readyState,
+            loadEventFired: performance.timing.loadEventEnd > 0,
+            domContentLoaded: performance.timing.domContentLoadedEventEnd > 0,
+            allImagesLoaded: Array.from(document.images).every((img: HTMLImageElement) => img.complete),
+            totalImages: document.images.length,
+            totalStylesheets: document.styleSheets.length,
+            totalScripts: document.scripts.length,
+          };
+        });
+        
+        await dualLogInfo("Browser-native page state:", {
+          jobId,
+          ...pageState
+        });
+        
+      } catch (dynamicWaitError) {
+        // Dynamic wait failed, but continue anyway
+        await dualLogInfo("Dynamic wait check failed, proceeding with processing", {
+          jobId,
+          error: dynamicWaitError
+        });
+      }
+      
     } catch (searchInputError) {
       const errorMessage = `Page shows 'Reservations' text but search input field is missing. This usually means the property ID (${agodaId}) was not found or the page failed to load correctly.`;
       
