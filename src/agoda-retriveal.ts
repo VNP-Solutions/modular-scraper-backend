@@ -20,6 +20,7 @@ import {
 import { timeManager } from "./common/time-manager.js";
 import { JobStatus } from "./models/job.model.js";
 import { jobService } from "./services/job.service.js";
+import { retrievalService } from "./services/retriveal-job.service.js";
 
 dotenv.config();
 
@@ -247,7 +248,34 @@ async function agodaRetrieval(
       );
     }
 
-    // Mark job as completed
+    // Validate that card info was actually retrieved before marking as completed
+    if (retrievalId) {
+      await dualLogInfo("Validating card info retrieval...", { jobId, retrievalId });
+      
+      const cardInfoStatus = await retrievalService.hasAnyCardInfo(retrievalId);
+      
+      await dualLogInfo("Card info validation result:", {
+        jobId,
+        retrievalId,
+        totalBookings: cardInfoStatus.totalBookings,
+        bookingsWithCardInfo: cardInfoStatus.bookingsWithCardInfo,
+        hasCardInfo: cardInfoStatus.hasCardInfo
+      });
+
+      // If no card info was retrieved, fail the job
+      if (!cardInfoStatus.hasCardInfo) {
+        throw new Error(
+          `Failed to retrieve card info. 0 out of ${cardInfoStatus.totalBookings || reservations?.length || 0} bookings have card information.`
+        );
+      }
+
+      await dualLogInfo(
+        `✅ Card info validation passed: ${cardInfoStatus.bookingsWithCardInfo}/${cardInfoStatus.totalBookings} bookings have card info`,
+        { jobId, retrievalId }
+      );
+    }
+
+    // Mark job as completed (only if card info validation passed)
     if (jobId) {
       await progressManager.markJobCompleted(jobId);
     }

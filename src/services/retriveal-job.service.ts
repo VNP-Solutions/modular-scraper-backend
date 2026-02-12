@@ -463,6 +463,44 @@ export class RetrievalService {
       return null;
     }
   }
+
+  /**
+   * Check if any card info was saved for a retrieval
+   */
+  async hasAnyCardInfo(retrievalId: string): Promise<{
+    hasCardInfo: boolean;
+    totalBookings: number;
+    bookingsWithCardInfo: number;
+  }> {
+    try {
+      const retrievalObjectId = this.validateObjectId(
+        retrievalId,
+        "retrievalId"
+      );
+
+      const totalBookings = await RetrievalItem.countDocuments({
+        retrieval_id: retrievalObjectId,
+      });
+
+      const bookingsWithCardInfo = await RetrievalItem.countDocuments({
+        retrieval_id: retrievalObjectId,
+        has_card_info: true,
+      });
+
+      return {
+        hasCardInfo: bookingsWithCardInfo > 0,
+        totalBookings,
+        bookingsWithCardInfo,
+      };
+    } catch (error) {
+      console.error(`Error checking card info for retrieval: ${error}`);
+      return {
+        hasCardInfo: false,
+        totalBookings: 0,
+        bookingsWithCardInfo: 0,
+      };
+    }
+  }
 }
 
 // Export singleton instance
