@@ -21,6 +21,7 @@ import { ScheduledJob } from "../models/scheduled-job.model.js";
 // } from "../services/booking-trust-cron.service.js";
 // import { bookingTrustScheduler } from "../services/booking-trust-scheduler.service.js";
 import { propertyCredentialsService } from "../services/job-credentials.service.js";
+import { propertyCredentialsService as propertyPasswordUpdateService } from "../services/property-credentials.service.js";
 import { jobService } from "../services/job.service.js";
 
 // Ensure main thread ID is set for API routes and system tasks
@@ -117,6 +118,53 @@ app.get("/test-captcha-email", async (req, res) => {
     });
   }
 });
+
+// Test endpoint for password update and email notification
+app.post("/test-password-update", (async (req: any, res: any) => {
+  try {
+    const { jobId } = req.body;
+
+    if (!jobId) {
+      return res.status(400).json({
+        success: false,
+        error: "jobId is required in request body",
+      });
+    }
+
+    // Test the password update logic (read-only - just fetches data without actually updating)
+    const updateResult = await propertyPasswordUpdateService.updateBookingPasswordByJobId(
+      jobId,
+      "TestPassword123!" // This will be encrypted and stored
+    );
+
+    if (!updateResult.success) {
+      return res.status(400).json({
+        success: false,
+        message: "Failed to update password",
+        result: updateResult,
+      });
+    }
+
+    res.json({
+      success: true,
+      message: "Password update test completed!",
+      data: {
+        totalPropertiesUpdated: updateResult.totalUpdated,
+        username: updateResult.username,
+        affectedProperties: updateResult.affectedProperties,
+        propertyNames: updateResult.affectedProperties.map((p: any) => p.propertyName),
+      },
+      note: "Check the logs for detailed information about property name resolution",
+    });
+  } catch (error: any) {
+    console.error("Password update test error:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      stack: error.stack,
+    });
+  }
+}) as any);
 
 // API to get scraping status
 app.get(

@@ -119,8 +119,8 @@ class PropertyCredentialsService {
   }
 
   /**
-   * Update booking password for ALL properties with the same username
-   * Finds all properties that share the same bookingUsername and updates all their passwords
+   * Update booking password for ALL properties with the same username AND same portfolio
+   * Finds all properties that share the same bookingUsername within the same portfolio and updates all their passwords
    */
   async updateBookingPasswordByJobId(
     jobId: string,
@@ -133,11 +133,11 @@ class PropertyCredentialsService {
   }> {
     try {
       await dualLogInfo(
-        `Updating booking password for all properties with same username (job ${jobId})...`
+        `Updating booking password for all properties with same username and same portfolio (job ${jobId})...`
       );
 
-      // Step 1: Get job details to find the specific property_id
-      const job = await Job.findById(jobId).select("property_id").lean();
+      // Step 1: Get job details to find the specific property_id and portfolio_id
+      const job = await Job.findById(jobId).select("property_id portfolio_id").lean();
 
       if (!job) {
         await dualLogError(`Job not found with ID: ${jobId}`);
@@ -158,6 +158,20 @@ class PropertyCredentialsService {
           totalUpdated: 0,
         };
       }
+
+      if (!job.portfolio_id) {
+        await dualLogError(`Job ${jobId} has no portfolio_id`);
+        return {
+          success: false,
+          affectedProperties: [],
+          username: "",
+          totalUpdated: 0,
+        };
+      }
+
+      await dualLogInfo(
+        `Found portfolio_id: ${job.portfolio_id} for job ${jobId}`
+      );
 
       // Step 2: Get credentials for this property to find the username
       const credentials = await PropertyCredentials.findOne({
@@ -180,26 +194,58 @@ class PropertyCredentialsService {
 
       const username = credentials.bookingUsername;
       await dualLogInfo(
-        `Found username: ${username}, searching for all properties with same username...`
+        `Found username: ${username}, searching for all properties with same username in portfolio ${job.portfolio_id}...`
       );
 
-      // Step 3: Find ALL properties with the same bookingUsername
+      // Step 3: Find all property_ids that belong to the same portfolio AND build property name map from jobs
+      const portfolioJobs = await Job.find({ portfolio_id: job.portfolio_id })
+        .select("property_id property_name")
+        .lean();
+
+      const portfolioPropertyIds = [
+        ...new Set(
+          portfolioJobs
+            .map((j) => j.property_id?.toString())
+            .filter((id): id is string => id !== undefined)
+        ),
+      ].map((id) => new Types.ObjectId(id));
+
+      // Build a map of property_id -> property_name from jobs as fallback
+      const jobPropertyNameMap = new Map<string, string>();
+      portfolioJobs.forEach((j) => {
+        if (j.property_id && j.property_name) {
+          jobPropertyNameMap.set(j.property_id.toString(), j.property_name);
+        }
+      });
+
+      await dualLogInfo(
+        `Found ${portfolioPropertyIds.length} properties in portfolio ${job.portfolio_id}`
+      );
+      await dualLogInfo(
+        `Built property name map from ${jobPropertyNameMap.size} jobs`
+      );
+
+      // Step 4: Find ALL properties with the same bookingUsername AND in the same portfolio
       const allMatchingCredentials = await PropertyCredentials.find({
         bookingUsername: username,
+        property_id: { $in: portfolioPropertyIds },
       })
         .select("property_id")
         .lean();
 
       await dualLogInfo(
-        `Found ${allMatchingCredentials.length} properties with username: ${username}`
+        `Found ${allMatchingCredentials.length} properties with username: ${username} in portfolio ${job.portfolio_id}`
       );
 
-      // Step 4: Encrypt the password
+      // Step 5: Encrypt the password
       const encryptedPassword = encryptPassword(newPassword);
 
-      // Step 5: Update ALL properties with the same username
+      // Step 6: Update ALL properties with the same username AND same portfolio
       const updateResult = await PropertyCredentials.updateMany(
-        { bookingUsername: username },
+        {
+          bookingUsername: username,
+          property_id: { $in: portfolioPropertyIds },
+        },
         {
           $set: {
             bookingPassword: encryptedPassword,
@@ -211,32 +257,82 @@ class PropertyCredentialsService {
         `Updated ${updateResult.modifiedCount} property credentials with new password`
       );
 
-      // Step 6: Get property names for all affected properties
+      // Step 7: Get property names for all affected properties
       const propertyIds = allMatchingCredentials.map((c) => c.property_id);
+      
+      await dualLogInfo(
+        `Fetching property names for ${propertyIds.length} property IDs...`
+      );
+      await dualLogInfo(
+        `Property IDs to fetch: ${propertyIds.map(id => id.toString()).join(", ")}`
+      );
+
+      // Try to get property names from Property collection first
       const properties = await Property.find({
         _id: { $in: propertyIds },
       })
         .select("_id property_name")
         .lean();
 
-      // Map property IDs to names
+      await dualLogInfo(
+        `Found ${properties.length} properties in Property collection`
+      );
+
+      // Map property IDs to names from Property collection
       const propertyMap = new Map<string, string>();
       properties.forEach((prop: any) => {
-        propertyMap.set(
-          prop._id.toString(),
-          prop.property_name || "Unknown Property"
-        );
+        if (prop.property_name) {
+          propertyMap.set(prop._id.toString(), prop.property_name);
+        }
       });
 
-      // Build affected properties array
-      const affectedProperties = allMatchingCredentials.map((cred) => ({
-        propertyId: cred.property_id.toString(),
-        propertyName:
-          propertyMap.get(cred.property_id.toString()) || "Unknown Property",
-      }));
+      await dualLogInfo(
+        `Mapped ${propertyMap.size} property names from Property collection`
+      );
+
+      // Build affected properties array with fallback to Job property names
+      const affectedProperties = allMatchingCredentials.map((cred) => {
+        const propertyId = cred.property_id.toString();
+        let propertyName = propertyMap.get(propertyId);
+        
+        // Fallback to job property name if not found in Property collection
+        if (!propertyName) {
+          propertyName = jobPropertyNameMap.get(propertyId);
+        }
+        
+        // Final fallback
+        if (!propertyName) {
+          propertyName = "Unknown Property";
+        }
+
+        return {
+          propertyId,
+          propertyName,
+        };
+      });
+
+      // Log if any properties didn't get matched
+      const unmatchedCount = affectedProperties.filter(
+        (p) => p.propertyName === "Unknown Property"
+      ).length;
+      if (unmatchedCount > 0) {
+        await dualLogError(
+          `WARNING: ${unmatchedCount} properties could not be matched to Property or Job collections`
+        );
+        await dualLogError(
+          `Unmatched property IDs: ${affectedProperties
+            .filter((p) => p.propertyName === "Unknown Property")
+            .map((p) => p.propertyId)
+            .join(", ")}`
+        );
+      } else {
+        await dualLogInfo(
+          `Successfully resolved all ${affectedProperties.length} property names`
+        );
+      }
 
       await dualLogInfo(
-        `Successfully updated booking password for ${affectedProperties.length} properties with username: ${username}`
+        `Successfully updated booking password for ${affectedProperties.length} properties with username: ${username} in portfolio ${job.portfolio_id}`
       );
       await dualLogInfo(
         `Affected properties: ${affectedProperties
