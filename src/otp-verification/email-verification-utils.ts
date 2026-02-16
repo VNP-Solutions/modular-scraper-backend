@@ -169,48 +169,93 @@ export async function getBookingVerificationCodes(): Promise<string[]> {
 
     const gmail = google.gmail({ version: "v1", auth: oauth2Client });
 
-    // Fetch more emails to ensure we get 5 codes
-    const res = await gmail.users.messages.list({
-      userId: "me",
-      maxResults: 10,
-    });
-
-    if (!res.data.messages) {
-      await dualLogInfo("No new emails found.");
-      return [];
-    }
+    // Filter specifically for IFTTT SMS forwarded emails containing Extranet/PIN codes
+    // Only emails from: Android SMS via IFTTT <action@ifttt.com>
+    // OTP formats: "Extranet code: XXXXXX" or "PIN code: XXXXXX"
+    const queries = [
+      'from:action@ifttt.com subject:"to verify"',
+      'from:action@ifttt.com subject:"Extranet code"',
+      'from:action@ifttt.com subject:"PIN code"',
+      "from:action@ifttt.com",
+    ];
 
     const codes: string[] = [];
+    const processedMessageIds = new Set<string>();
 
-    for (const msg of res.data.messages) {
-      if (!msg.id) {
-        continue;
-      }
-
-      // Stop if we already have 5 codes
+    for (const query of queries) {
       if (codes.length >= 5) {
         break;
       }
 
-      const email = await gmail.users.messages.get({
-        userId: "me",
-        id: msg.id,
-      });
+      try {
+        const res = await gmail.users.messages.list({
+          userId: "me",
+          maxResults: 20,
+          q: query,
+        });
 
-      const body = email.data.snippet || "";
-      const codeMatch = body.match(/\b\d{6,10}\b/);
-
-      if (codeMatch && codeMatch[0]) {
-        const code = codeMatch[0];
-        // Only add if not already in list (avoid duplicates)
-        if (!codes.includes(code)) {
-          codes.push(code);
-          await dualLogInfo(`Found verification code: ${code}`);
+        if (!res.data.messages || res.data.messages.length === 0) {
+          continue;
         }
+
+        await dualLogInfo(
+          `Found ${res.data.messages.length} IFTTT emails matching: ${query}`
+        );
+
+        for (const msg of res.data.messages) {
+          if (!msg.id || processedMessageIds.has(msg.id)) {
+            continue;
+          }
+
+          if (codes.length >= 5) {
+            break;
+          }
+
+          processedMessageIds.add(msg.id);
+
+          const email = await gmail.users.messages.get({
+            userId: "me",
+            id: msg.id,
+            format: "full",
+          });
+
+          const headers = email.data.payload?.headers || [];
+          const subjectHeader = headers.find(
+            (h: any) => h.name === "Subject"
+          );
+          const subject = subjectHeader?.value || "";
+
+          const emailBody = getEmailBodyText(email.data);
+          const snippet = email.data.snippet || "";
+          const bodyText = emailBody || snippet;
+
+          const searchText = `${subject} ${bodyText}`;
+
+          // Match "Extranet code: XXXXXX" or "PIN code: XXXXXX" pattern from IFTTT forwarded SMS
+          const codePattern = /(?:Extranet|PIN)\s+code:\s*(\d{6})/i;
+          const match = searchText.match(codePattern);
+
+          if (match && match[1]) {
+            const code = match[1];
+            if (code && code.length === 6 && !codes.includes(code)) {
+              codes.push(code);
+              await dualLogInfo(`Found verification code: ${code}`);
+              if (codes.length >= 5) {
+                break;
+              }
+            }
+          }
+        }
+      } catch (queryError: any) {
+        await dualLogError(
+          `Error querying emails with pattern "${query}":`,
+          queryError
+        );
+        continue;
       }
     }
 
-    await dualLogInfo(`Total verification codes found: ${codes.length}`);
+    await dualLogInfo(`Total verification codes found: ${codes.length}`, codes);
     return codes;
   } catch (error: any) {
     await dualLogError("Error fetching verification codes:", error.message);
@@ -235,14 +280,16 @@ export async function getMultipleVerificationCodes(): Promise<string[]> {
 
     // Filter for IFTTT SMS emails
     // Emails come from: Android SMS via IFTTT <action@ifttt.com>
-    // Subject can be: "to verify" OR "Extranet code: XXXXXX (don't share)"
-    // Body contains: "Extranet code: XXXXXX (don't share)"
+    // Subject can be: "to verify" OR "Extranet code: XXXXXX (don't share)" OR "PIN code: XXXXXX"
+    // Body contains: "Extranet code: XXXXXX (don't share)" or "PIN code: XXXXXX"
     const queries = [
       'from:action@ifttt.com subject:"to verify"',
       'from:action@ifttt.com subject:"Extranet code"',
+      'from:action@ifttt.com subject:"PIN code"',
       "from:action@ifttt.com",
       'subject:"to verify"',
       'subject:"Extranet code"',
+      'subject:"PIN code"',
     ];
 
     const codes: string[] = [];
@@ -301,18 +348,18 @@ export async function getMultipleVerificationCodes(): Promise<string[]> {
           // Combine subject and body to search for code
           const searchText = `${subject} ${bodyText}`;
 
-          // Look for "Extranet code: XXXXXX" pattern
-          // Pattern: "Extranet code: 166190" or "Extranet code: 166190 (don't share)"
+          // Look for "Extranet code: XXXXXX" or "PIN code: XXXXXX" pattern
+          // Pattern: "Extranet code: 166190" or "PIN code: 604317"
           // Can be in subject OR body
-          const extranetCodePattern = /Extranet\s+code:\s*(\d{6})/i;
-          const match = searchText.match(extranetCodePattern);
+          const codePattern = /(?:Extranet|PIN)\s+code:\s*(\d{6})/i;
+          const match = searchText.match(codePattern);
 
           if (match && match[1]) {
             const code = match[1];
             // Validate it's a 6-digit code and not already in our list
             if (code && code.length === 6 && !codes.includes(code)) {
               codes.push(code);
-              await dualLogInfo(`Found Extranet code: ${code}`);
+              await dualLogInfo(`Found verification code: ${code}`);
               if (codes.length >= 5) {
                 break;
               }
@@ -328,10 +375,10 @@ export async function getMultipleVerificationCodes(): Promise<string[]> {
       }
     }
 
-    // If we still don't have 5 codes, try fallback: check all recent emails for Extranet code pattern
+    // If we still don't have 5 codes, try fallback: check all recent emails for Extranet/PIN code pattern
     if (codes.length < 5) {
       await dualLogInfo(
-        `Only found ${codes.length} codes, trying fallback: checking all recent emails for Extranet code pattern`
+        `Only found ${codes.length} codes, trying fallback: checking all recent emails for Extranet/PIN code pattern`
       );
 
       const res = await gmail.users.messages.list({
@@ -372,12 +419,12 @@ export async function getMultipleVerificationCodes(): Promise<string[]> {
             // Combine subject and body to search for code
             const searchText = `${subject} ${bodyText}`;
 
-            // Look for "Extranet code: XXXXXX" pattern
-            const extranetCodePattern = /Extranet\s+code:\s*(\d{6})/i;
-            const match = searchText.match(extranetCodePattern);
+            // Look for "Extranet code: XXXXXX" or "PIN code: XXXXXX" pattern
+            const codePattern = /(?:Extranet|PIN)\s+code:\s*(\d{6})/i;
+            const match = searchText.match(codePattern);
             if (match && match[1] && !codes.includes(match[1])) {
               codes.push(match[1]);
-              await dualLogInfo(`Found Extranet code (fallback): ${match[1]}`);
+              await dualLogInfo(`Found verification code (fallback): ${match[1]}`);
             }
           } catch (emailError) {
             // Skip this email if there's an error
