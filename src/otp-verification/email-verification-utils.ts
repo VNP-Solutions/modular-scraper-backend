@@ -169,89 +169,62 @@ export async function getBookingVerificationCodes(): Promise<string[]> {
 
     const gmail = google.gmail({ version: "v1", auth: oauth2Client });
 
-    // Filter specifically for IFTTT SMS forwarded emails containing Extranet/PIN codes
-    // Only emails from: Android SMS via IFTTT <action@ifttt.com>
-    // OTP formats: "Extranet code: XXXXXX" or "PIN code: XXXXXX"
-    const queries = [
-      'from:action@ifttt.com subject:"to verify"',
-      'from:action@ifttt.com subject:"Extranet code"',
-      'from:action@ifttt.com subject:"PIN code"',
-      "from:action@ifttt.com",
-    ];
+    // Single query: fetch all IFTTT emails sorted by newest first
+    // This ensures both "Extranet code" and "PIN code" emails are processed together
+    const res = await gmail.users.messages.list({
+      userId: "me",
+      maxResults: 20,
+      q: "from:action@ifttt.com",
+    });
+
+    if (!res.data.messages || res.data.messages.length === 0) {
+      await dualLogInfo("No IFTTT emails found.");
+      return [];
+    }
+
+    await dualLogInfo(
+      `Found ${res.data.messages.length} IFTTT emails`
+    );
 
     const codes: string[] = [];
-    const processedMessageIds = new Set<string>();
 
-    for (const query of queries) {
+    for (const msg of res.data.messages) {
+      if (!msg.id) {
+        continue;
+      }
+
       if (codes.length >= 5) {
         break;
       }
 
-      try {
-        const res = await gmail.users.messages.list({
-          userId: "me",
-          maxResults: 20,
-          q: query,
-        });
+      const email = await gmail.users.messages.get({
+        userId: "me",
+        id: msg.id,
+        format: "full",
+      });
 
-        if (!res.data.messages || res.data.messages.length === 0) {
-          continue;
+      const headers = email.data.payload?.headers || [];
+      const subjectHeader = headers.find(
+        (h: any) => h.name === "Subject"
+      );
+      const subject = subjectHeader?.value || "";
+
+      const emailBody = getEmailBodyText(email.data);
+      const snippet = email.data.snippet || "";
+      const bodyText = emailBody || snippet;
+
+      const searchText = `${subject} ${bodyText}`;
+
+      // Match "Extranet code: XXXXXX" or "PIN code: XXXXXX" pattern from IFTTT forwarded SMS
+      const codePattern = /(?:Extranet|PIN)\s+code:\s*(\d{6})/i;
+      const match = searchText.match(codePattern);
+
+      if (match && match[1]) {
+        const code = match[1];
+        if (code && code.length === 6 && !codes.includes(code)) {
+          codes.push(code);
+          await dualLogInfo(`Found verification code: ${code}`);
         }
-
-        await dualLogInfo(
-          `Found ${res.data.messages.length} IFTTT emails matching: ${query}`
-        );
-
-        for (const msg of res.data.messages) {
-          if (!msg.id || processedMessageIds.has(msg.id)) {
-            continue;
-          }
-
-          if (codes.length >= 5) {
-            break;
-          }
-
-          processedMessageIds.add(msg.id);
-
-          const email = await gmail.users.messages.get({
-            userId: "me",
-            id: msg.id,
-            format: "full",
-          });
-
-          const headers = email.data.payload?.headers || [];
-          const subjectHeader = headers.find(
-            (h: any) => h.name === "Subject"
-          );
-          const subject = subjectHeader?.value || "";
-
-          const emailBody = getEmailBodyText(email.data);
-          const snippet = email.data.snippet || "";
-          const bodyText = emailBody || snippet;
-
-          const searchText = `${subject} ${bodyText}`;
-
-          // Match "Extranet code: XXXXXX" or "PIN code: XXXXXX" pattern from IFTTT forwarded SMS
-          const codePattern = /(?:Extranet|PIN)\s+code:\s*(\d{6})/i;
-          const match = searchText.match(codePattern);
-
-          if (match && match[1]) {
-            const code = match[1];
-            if (code && code.length === 6 && !codes.includes(code)) {
-              codes.push(code);
-              await dualLogInfo(`Found verification code: ${code}`);
-              if (codes.length >= 5) {
-                break;
-              }
-            }
-          }
-        }
-      } catch (queryError: any) {
-        await dualLogError(
-          `Error querying emails with pattern "${query}":`,
-          queryError
-        );
-        continue;
       }
     }
 
