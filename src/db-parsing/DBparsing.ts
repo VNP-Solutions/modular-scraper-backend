@@ -79,8 +79,16 @@ export async function getDBData(
           `📆 Starting from 1st of month, taking full month (${lastDayOfMonth} days)`
         );
       } else {
-        // Take up to 31 days or 30 days
-        chunkEnd = addDays(currentStart, 30); // Using 30 days for non-month-start
+        // Take from current date to end of the current month
+        const lastDayOfMonth = getLastDayOfMonth(currentStart);
+        chunkEnd = new Date(
+          currentStart.getFullYear(),
+          currentStart.getMonth(),
+          lastDayOfMonth
+        );
+        await dualLogInfo(
+          `📆 Starting mid-month, taking rest of month until day ${lastDayOfMonth}`
+        );
       }
 
       // Make sure chunk end doesn't exceed overall end date
