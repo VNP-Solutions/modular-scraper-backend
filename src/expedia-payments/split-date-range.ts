@@ -89,34 +89,26 @@ export async function splitDateRange(
         throw new Error("Scraping was stopped during date range processing");
       }
 
-      // Calculate chunk end date
+      // Calculate chunk end date — always align to month boundaries
       let chunkEnd: Date;
 
-      // Use db_billing_duration if available, otherwise use default logic
-      if (dbBillingDuration && dbBillingDuration > 0) {
-        // Always use db_billing_duration when provided, regardless of day of month
-        const chunkSize = dbBillingDuration;
-        const calculatedEnd = addDays(currentStart, chunkSize - 1); // -1 because we include the start date
-        chunkEnd = calculatedEnd < endDateObj ? calculatedEnd : endDateObj;
-        await dualLogInfo(
-          `Using chunk size of ${chunkSize} days (from db_billing_duration: ${dbBillingDuration})`
-        );
-      } else if (isFirstDayOfMonth(currentStart)) {
-        // If starting on 1st day and no db_billing_duration, take whole month
+      if (isFirstDayOfMonth(currentStart)) {
+        // Starting on 1st day, take the whole month
         const lastDayOfMonth = getLastDayOfMonth(currentStart);
         chunkEnd = lastDayOfMonth < endDateObj ? lastDayOfMonth : endDateObj;
         await dualLogInfo(
-          `Starting on 1st day of month, taking whole month until ${formatDate(
+          `Starting on 1st day of month, taking full month until ${formatDate(
             chunkEnd
-          )} (no db_billing_duration specified)`
+          )}`
         );
       } else {
-        // Default to 30 days if no db_billing_duration and not 1st of month
-        const chunkSize = 30;
-        const calculatedEnd = addDays(currentStart, chunkSize - 1); // -1 because we include the start date
-        chunkEnd = calculatedEnd < endDateObj ? calculatedEnd : endDateObj;
+        // Starting mid-month, take the rest of the current month
+        const lastDayOfMonth = getLastDayOfMonth(currentStart);
+        chunkEnd = lastDayOfMonth < endDateObj ? lastDayOfMonth : endDateObj;
         await dualLogInfo(
-          `Using default chunk size of ${chunkSize} days (no db_billing_duration specified)`
+          `Starting mid-month, taking rest of month until ${formatDate(
+            chunkEnd
+          )}`
         );
       }
 
