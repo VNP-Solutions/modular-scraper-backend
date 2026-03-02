@@ -19,6 +19,7 @@ export interface CreateDbEntryInput {
   requested_taxes: number;
   requested_total: number;
   requested_total_currency: string;
+  gearbox_queue_ids: string[];
 }
 
 export class DbEntryService {
@@ -55,6 +56,7 @@ export class DbEntryService {
       requested_taxes: data.requested_taxes,
       requested_total: data.requested_total,
       requested_total_currency: data.requested_total_currency,
+      gearbox_queue_ids: data.gearbox_queue_ids ?? [],
     });
 
     return await dbEntry.save();
@@ -91,6 +93,7 @@ export class DbEntryService {
       requested_taxes: data.requested_taxes,
       requested_total: data.requested_total,
       requested_total_currency: data.requested_total_currency,
+      gearbox_queue_ids: data.gearbox_queue_ids ?? [],
     }));
 
     return await DbEntry.insertMany(dbEntries);

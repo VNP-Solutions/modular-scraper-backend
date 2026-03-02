@@ -7,6 +7,7 @@ import { decryptPassword } from "./common/encription.js";
 import { dualLogError, dualLogInfo } from "./common/log-helper.js";
 import { otpCompletionNotifier } from "./common/otp-completion-notifier.js";
 import { scrapingStateManager } from "./common/scraping-state.js";
+import { processReservationIds } from "./expedia-payments/by-reservation-id.js";
 import { clickExpediaPaymentandsetDaterange } from "./expedia-payments/expedia-payments.js";
 import { splitDateRange } from "./expedia-payments/split-date-range.js";
 import login from "./login/login.js";
@@ -209,7 +210,8 @@ async function dbScraping(
         throw error;
       }
 
-      // Step 5: Process date range in chunks
+      // Step 5: Phase 1 — Collect all reservation IDs across all date range chunks
+      let collectedReservationIds: string[] = [];
       try {
         // Check pause state before date range processing
         await scrapingStateManager.waitWhilePaused();
@@ -219,8 +221,10 @@ async function dbScraping(
           return;
         }
 
-        await dualLogInfo("Starting date range split and processing...");
-        await splitDateRange(
+        await dualLogInfo(
+          "Phase 1: Starting date range split — collecting reservation IDs into memory..."
+        );
+        collectedReservationIds = await splitDateRange(
           browser,
           page,
           startDate!,
@@ -230,18 +234,43 @@ async function dbScraping(
           propertyName,
           dbBillingDuration
         );
-        await dualLogInfo("Date range processing completed successfully!");
+        await dualLogInfo(
+          `Phase 1 complete! Collected ${collectedReservationIds.length} reservation ID(s) in memory.`
+        );
       } catch (error: any) {
-        await dualLogError("Date range processing failed:", error);
+        await dualLogError("Phase 1 (date range collection) failed:", error);
         throw error;
       }
 
-      // TODO: Add your custom DB scraping logic here
-      // The browser has processed all date ranges and validated data for each chunk
-      // You can add any additional logic after this point
+      // Step 6: Phase 2 — Process all collected reservation IDs in batches of 100
+      try {
+        // Check pause state before Phase 2
+        await scrapingStateManager.waitWhilePaused();
+        if (!scrapingStateManager.isRunning()) {
+          await dualLogInfo("Scraping was stopped, exiting...");
+          await browser.close();
+          return;
+        }
+
+        await dualLogInfo(
+          `Phase 2: Processing ${collectedReservationIds.length} reservation ID(s) via 'By Reservation ID' tab in batches of 100...`
+        );
+        await processReservationIds(
+          browser,
+          page,
+          collectedReservationIds,
+          jobId,
+          expediaId,
+          propertyName
+        );
+        await dualLogInfo("Phase 2 complete! All reservation ID batches processed.");
+      } catch (error: any) {
+        await dualLogError("Phase 2 (reservation ID processing) failed:", error);
+        throw error;
+      }
 
       await dualLogInfo(
-        "DB scraping completed - All chunks processed and validated"
+        "DB scraping completed — Phase 1 (date range collection) + Phase 2 (reservation ID batches) both finished."
       );
       await delay(5000); // Give time to see the page
     }

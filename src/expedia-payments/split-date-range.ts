@@ -3,9 +3,6 @@ import { delay } from "../common/delay.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import { dbDataService } from "../services/db-data.service.js";
-import { dbEntryService } from "../services/db-entry.service.js";
-import { dbDatachecking } from "./db-data-checking.js";
-import { extractInvoiceRows } from "./extract-invoice-rows.js";
 
 /**
  * Convert date from MM/DD/YYYY to DD/MM/YYYY format
@@ -57,8 +54,93 @@ function isFirstDayOfMonth(date: Date): boolean {
 }
 
 /**
- * Split date range into chunks and process each chunk
- * Uses db_billing_duration from job if available, otherwise defaults to 30 days
+ * Extract reservation IDs from the current search results table.
+ * Returns an empty array if no table / no rows found.
+ */
+async function extractReservationIdsFromTable(
+  page: Page,
+  chunkNumber: number
+): Promise<string[]> {
+  // Check for "No results found" alert
+  const noResultsVisible = await page.evaluate(() => {
+    const alert = document.querySelector(
+      "#noResultsAlert"
+    ) as HTMLElement | null;
+    if (!alert) return false;
+    return alert.offsetParent !== null;
+  });
+
+  if (noResultsVisible) {
+    await dualLogInfo(
+      `Chunk ${chunkNumber}: "No results found" alert visible — 0 reservation IDs`
+    );
+    return [];
+  }
+
+  // Check if table-contents div exists
+  const tableContentsExists = await page.evaluate(() => {
+    return document.querySelector("#table-contents") !== null;
+  });
+
+  if (!tableContentsExists) {
+    await dualLogInfo(
+      `Chunk ${chunkNumber}: Table contents div not found — 0 reservation IDs`
+    );
+    return [];
+  }
+
+  // Check if invoice table exists
+  const tableExists = await page
+    .waitForSelector("#invoice-details-table", {
+      visible: true,
+      timeout: 15000,
+    })
+    .then(() => true)
+    .catch(async () => {
+      return await page.evaluate(
+        () => document.querySelector("#invoice-details-table") !== null
+      );
+    });
+
+  if (!tableExists) {
+    await dualLogInfo(
+      `Chunk ${chunkNumber}: Invoice table not found — 0 reservation IDs`
+    );
+    return [];
+  }
+
+  await delay(2000); // Let table fully render
+
+  // Extract reservation IDs from each row
+  const ids = await page.evaluate(() => {
+    const rows = document.querySelectorAll("#invoice-details-table tbody tr");
+    const result: string[] = [];
+
+    rows.forEach((row) => {
+      const td =
+        row.querySelector('td[data-title="Reservation ID"]') ||
+        row.querySelector('td[data-title="Reservation"]') ||
+        row.querySelector("td.reservationId");
+
+      const rawId = td?.textContent?.trim() || "";
+      if (rawId) {
+        result.push(rawId);
+      }
+    });
+
+    return result;
+  });
+
+  return ids;
+}
+
+/**
+ * Split date range into monthly chunks. For each chunk:
+ *   1. Type the date range into the form and click Search
+ *   2. Collect all reservation IDs from the results table
+ *   3. Add them to the in-memory array
+ *
+ * Returns the full array of collected reservation IDs once all chunks finish.
  */
 export async function splitDateRange(
   browser: Browser,
@@ -69,7 +151,11 @@ export async function splitDateRange(
   expediaId?: string,
   propertyName?: string,
   dbBillingDuration?: number
-): Promise<void> {
+): Promise<string[]> {
+  // In-memory store for ALL reservation IDs collected across all chunks
+  const allReservationIds: string[] = []
+  ;
+
   try {
     await dualLogInfo(`Starting date range split: ${startDate} to ${endDate}`);
 
@@ -82,33 +168,31 @@ export async function splitDateRange(
     while (currentStart <= endDateObj) {
       chunkCount++;
 
-      // Check if scraping is paused
+      // Check pause / stop state
       await scrapingStateManager.waitWhilePaused();
       if (!scrapingStateManager.isRunning()) {
-        await dualLogError("Scraping was stopped during date range processing");
+        await dualLogError(
+          "Scraping was stopped during date range processing"
+        );
         throw new Error("Scraping was stopped during date range processing");
       }
 
-      // Calculate chunk end date — always align to month boundaries
+      // Calculate chunk end — always align to month boundaries
       let chunkEnd: Date;
 
       if (isFirstDayOfMonth(currentStart)) {
-        // Starting on 1st day, take the whole month
         const lastDayOfMonth = getLastDayOfMonth(currentStart);
-        chunkEnd = lastDayOfMonth < endDateObj ? lastDayOfMonth : endDateObj;
+        chunkEnd =
+          lastDayOfMonth < endDateObj ? lastDayOfMonth : endDateObj;
         await dualLogInfo(
-          `Starting on 1st day of month, taking full month until ${formatDate(
-            chunkEnd
-          )}`
+          `Chunk ${chunkCount}: Starting on 1st of month → full month until ${formatDate(chunkEnd)}`
         );
       } else {
-        // Starting mid-month, take the rest of the current month
         const lastDayOfMonth = getLastDayOfMonth(currentStart);
-        chunkEnd = lastDayOfMonth < endDateObj ? lastDayOfMonth : endDateObj;
+        chunkEnd =
+          lastDayOfMonth < endDateObj ? lastDayOfMonth : endDateObj;
         await dualLogInfo(
-          `Starting mid-month, taking rest of month until ${formatDate(
-            chunkEnd
-          )}`
+          `Chunk ${chunkCount}: Starting mid-month → rest of month until ${formatDate(chunkEnd)}`
         );
       }
 
@@ -119,18 +203,19 @@ export async function splitDateRange(
         `Processing chunk ${chunkCount}: ${chunkStartStr} to ${chunkEndStr}`
       );
 
-      // Convert to DD/MM/YYYY format for Expedia form
+      // Convert to DD/MM/YYYY for Expedia form
       const fromDateExpedia = convertDateFormat(chunkStartStr);
       const toDateExpedia = convertDateFormat(chunkEndStr);
 
       await dualLogInfo(
-        `Expedia format: From ${fromDateExpedia} To ${toDateExpedia}`
+        `Expedia format: From ${fromDateExpedia}  To ${toDateExpedia}`
       );
 
-      // Type dates into the input fields
       try {
-        // Wait for the search form to be ready (especially important in headless mode)
-        await dualLogInfo("Waiting for search form to be ready...");
+        // Wait for search form fields
+        await dualLogInfo(
+          `Chunk ${chunkCount}: Waiting for search form...`
+        );
         await page.waitForSelector("#startDateInput", {
           visible: true,
           timeout: 10000,
@@ -139,73 +224,54 @@ export async function splitDateRange(
           visible: true,
           timeout: 10000,
         });
-        await delay(1000); // Additional wait to ensure form is fully interactive
+        await delay(1000);
 
-        // Clear and type "From" date
+        // Fill From date
         await page.click("#startDateInput", { clickCount: 3 });
         await delay(500);
         await page.type("#startDateInput", fromDateExpedia, { delay: 100 });
-        await dualLogInfo(`Typed From date: ${fromDateExpedia}`);
-
+        await dualLogInfo(`Chunk ${chunkCount}: Typed From date: ${fromDateExpedia}`);
         await delay(1000);
 
-        // Clear and type "To" date
+        // Fill To date
         await page.click("#endDateInput", { clickCount: 3 });
         await delay(500);
         await page.type("#endDateInput", toDateExpedia, { delay: 100 });
-        await dualLogInfo(`Typed To date: ${toDateExpedia}`);
-
+        await dualLogInfo(`Chunk ${chunkCount}: Typed To date: ${toDateExpedia}`);
         await delay(1000);
 
-        // Check for date validation error before clicking search
+        // Check for date validation error
         const hasValidationError = await page.evaluate(() => {
           const validationElement = document.querySelector("#datesValidation");
           if (validationElement) {
-            // Check if the validation element is visible (not hidden)
             const style = window.getComputedStyle(validationElement);
             const isVisible =
               style.display !== "none" && style.visibility !== "hidden";
-
             if (isVisible) {
-              // Check if it contains the "last year" error message
-              const messageElement =
-                validationElement.querySelector(".alert-message");
-              if (messageElement) {
-                const messageText = messageElement.textContent || "";
-                if (
-                  messageText.includes(
-                    "date range must occur within the last year"
-                  )
-                ) {
-                  return true;
-                }
+              const msg = validationElement.querySelector(".alert-message");
+              if (
+                msg?.textContent?.includes(
+                  "date range must occur within the last year"
+                )
+              ) {
+                return true;
               }
             }
           }
-
-          // Also check if search button is disabled (indicates validation error)
-          const searchButton = document.querySelector(
+          const searchBtn = document.querySelector(
             "#searchButton"
           ) as HTMLButtonElement;
-          if (searchButton && searchButton.disabled) {
-            return true;
-          }
-
-          return false;
+          return !!(searchBtn && searchBtn.disabled);
         });
 
         if (hasValidationError) {
           await dualLogInfo(
-            `Chunk ${chunkCount}: Date range validation error detected - "The date range must occur within the last year". Skipping this chunk and moving to next date range.`
+            `Chunk ${chunkCount}: Validation error "date range must occur within the last year" — skipping chunk`
           );
 
-          // Save skipped chunk to database
+          // Record skipped chunk to DB so we have a paper trail
           if (jobId && expediaId) {
             try {
-              await dualLogInfo(
-                `Chunk ${chunkCount}: Saving skipped chunk to database (validation error)...`
-              );
-
               await dbDataService.createDbData({
                 job_id: jobId,
                 property_name: propertyName || "Unknown Property",
@@ -214,24 +280,21 @@ export async function splitDateRange(
                   start_date: fromDateExpedia,
                   end_date: toDateExpedia,
                 },
-                gearbox_queue_ids: [], // Empty array indicates skipped/validation error
-                total_invoice_amount: 0, // Zero amount indicates no data processed
+                gearbox_queue_ids: [],
+                total_invoice_amount: 0,
                 total_invoice_amount_currency: undefined,
               });
-
               await dualLogInfo(
-                `Chunk ${chunkCount}: Skipped chunk saved to database (validation error: date range must occur within the last year)`
+                `Chunk ${chunkCount}: Skipped chunk recorded in database`
               );
-            } catch (dbError) {
+            } catch (dbErr) {
               await dualLogError(
-                `Chunk ${chunkCount}: Error saving skipped chunk to database:`,
-                dbError
+                `Chunk ${chunkCount}: Error recording skipped chunk:`,
+                dbErr
               );
-              // Continue anyway, don't throw error
             }
           }
 
-          // Skip this chunk and move to next
           currentStart = addDays(chunkEnd, 1);
           if (currentStart > endDateObj) {
             await dualLogInfo(
@@ -240,385 +303,137 @@ export async function splitDateRange(
             break;
           }
           await delay(1000);
-          continue; // Continue to next iteration of while loop
+          continue;
         }
 
-        // Click the Search button
-        await dualLogInfo("Clicking Search button...");
+        // Click Search
+        await dualLogInfo(`Chunk ${chunkCount}: Clicking Search button...`);
         await page.click("#searchButton");
-
-        await dualLogInfo("Search button clicked, waiting for results...");
-
-        // Wait for any loading indicator to appear and disappear
+        await dualLogInfo(
+          `Chunk ${chunkCount}: Search clicked, waiting for results...`
+        );
         await delay(2000);
 
+        // Wait for loading indicator
         try {
-          await dualLogInfo("Waiting for loading to complete...");
-          // Wait for loading indicator if it exists
           await page
             .waitForSelector(".fds-loader.is-loading.is-visible", {
               visible: true,
               timeout: 5000,
             })
-            .catch(() => dualLogInfo("No loading indicator found"));
+            .catch(() =>
+              dualLogInfo(`Chunk ${chunkCount}: No loading indicator found`)
+            );
 
-          // Wait for loading to disappear
           await page
             .waitForSelector(".fds-loader.is-loading.is-visible", {
               hidden: true,
               timeout: 30000,
             })
-            .catch(() => dualLogInfo("Loading indicator already hidden"));
+            .catch(() =>
+              dualLogInfo(
+                `Chunk ${chunkCount}: Loading indicator already hidden`
+              )
+            );
 
-          await dualLogInfo("Loading completed");
-        } catch (loadError) {
-          await dualLogInfo("Loading detection skipped:", loadError);
+          await dualLogInfo(`Chunk ${chunkCount}: Loading completed`);
+        } catch (loadErr) {
+          await dualLogInfo(
+            `Chunk ${chunkCount}: Loading detection skipped`,
+            loadErr
+          );
         }
 
-        await delay(3000); // Additional wait for table to be fully rendered
+        await delay(3000);
 
-        // Check and validate invoice data for this chunk
+        // ── PHASE 1 ONLY: Collect reservation IDs into memory ──
         await dualLogInfo(
-          `Checking and validating data for chunk ${chunkCount}...`
+          `Chunk ${chunkCount}: Extracting reservation IDs from results...`
         );
-        const hasData = await dbDatachecking(browser, page, jobId);
-        await dualLogInfo(`Chunk ${chunkCount} data validation completed`);
+        const chunkIds = await extractReservationIdsFromTable(page, chunkCount);
 
-        // Extract invoice rows BEFORE creating invoice (to ensure table is accessible)
-        let invoiceRows: any[] = [];
-        if (hasData) {
-          try {
-            await dualLogInfo(
-              `Chunk ${chunkCount}: Extracting invoice rows before invoice creation...`
-            );
-            invoiceRows = await extractInvoiceRows(page, jobId);
-            await dualLogInfo(
-              `Chunk ${chunkCount}: Extracted ${invoiceRows.length} invoice row(s) before invoice creation`
-            );
-          } catch (extractError) {
-            await dualLogError(
-              `Chunk ${chunkCount}: Error extracting invoice rows before invoice creation:`,
-              extractError
-            );
-            // Continue even if extraction fails
-          }
-        }
-
-        // Variable to store Gearbox Queue IDs
-        let gearboxQueueIds: string[] = [];
-        // Variable to store total invoice amount
-        let totalInvoiceAmount: number = 0;
-        // Variable to store total invoice amount currency
-        let totalInvoiceAmountCurrency: string | undefined = undefined;
-
-        if (!hasData) {
+        if (chunkIds.length > 0) {
           await dualLogInfo(
-            `Chunk ${chunkCount}: No data found for this date range, skipping invoice creation and amount extraction`
+            `Chunk ${chunkCount}: Found ${chunkIds.length} reservation ID(s): ${chunkIds.join(", ")}`
           );
+          allReservationIds.push(...chunkIds);
         } else {
-          // Extract total invoice amount and currency only if data exists
-          try {
-            await dualLogInfo(
-              `Chunk ${chunkCount}: Extracting total invoice amount and currency...`
-            );
-
-            const extractedData = await page.evaluate(() => {
-              const invoiceTotalElement =
-                document.querySelector(".invoiceTotal");
-              if (invoiceTotalElement) {
-                const boldElement = invoiceTotalElement.querySelector("b");
-                if (boldElement) {
-                  const text = boldElement.textContent || "";
-
-                  // Extract currency code (typically 3 letters like USD, EUR, GBP, etc.)
-                  // Look for currency code at the start (e.g., "USD 90.32") or end (e.g., "90.32 USD")
-                  const currencyMatchStart = text.match(/^([A-Z]{3})\s/);
-                  const currencyMatchEnd = text.match(/\s([A-Z]{3})$/);
-                  const currency = currencyMatchStart
-                    ? currencyMatchStart[1]
-                    : currencyMatchEnd
-                    ? currencyMatchEnd[1]
-                    : undefined;
-
-                  // Extract number from text like "USD 90.32", "-90.32", "90.32", or "90.32 USD"
-                  // Regex now includes optional negative sign and preserves decimal points
-                  const amountMatch = text.match(/-?[\d,]+\.?\d*/);
-                  let amount = 0;
-                  if (amountMatch) {
-                    // Remove commas and parse as float (preserves negative sign and decimals)
-                    const cleanedAmount = amountMatch[0].replace(/,/g, "");
-                    const parsedAmount = parseFloat(cleanedAmount);
-                    amount = isNaN(parsedAmount) ? 0 : parsedAmount;
-                  }
-
-                  return {
-                    amount,
-                    currency,
-                  };
-                }
-              }
-              return { amount: 0, currency: undefined };
-            });
-
-            totalInvoiceAmount = extractedData.amount;
-            totalInvoiceAmountCurrency = extractedData.currency;
-            await dualLogInfo(
-              `Chunk ${chunkCount}: Extracted total invoice amount: ${totalInvoiceAmount} ${
-                totalInvoiceAmountCurrency || ""
-              }`
-            );
-          } catch (amountError) {
-            await dualLogError(
-              `Chunk ${chunkCount}: Error extracting total invoice amount:`,
-              amountError
-            );
-            // Continue with 0 if extraction fails
-            totalInvoiceAmount = 0;
-            totalInvoiceAmountCurrency = undefined;
-          }
-          // Check disclaimer checkbox and submit invoice
           await dualLogInfo(
-            `Chunk ${chunkCount}: Checking disclaimer checkbox...`
+            `Chunk ${chunkCount}: No reservation IDs found in this date range`
           );
-
-          await page.evaluate(() => {
-            const disclaimerCheckbox = document.querySelector(
-              "#invoiceUploadDisclaimer"
-            ) as HTMLInputElement;
-            if (disclaimerCheckbox && !disclaimerCheckbox.checked) {
-              disclaimerCheckbox.click();
-            }
-          });
-
-          await delay(500);
-          await dualLogInfo(`Chunk ${chunkCount}: Disclaimer checkbox checked`);
-
-          // Click "Create Invoice" button
-          await dualLogInfo(
-            `Chunk ${chunkCount}: Clicking 'Create Invoice' button...`
-          );
-
-          //TODO: create invoice button here
-          await page.click("#submitInvoice");
-          await delay(3000); // Wait for invoice creation
-
-          // Wait for success alert and get Gearbox Queue ID(s)
-          try {
-            await page.waitForSelector("#success-alert", { timeout: 10000 });
-
-            const extractedIds = await page.evaluate(() => {
-              const successAlert = document.querySelector("#success-alert");
-              if (successAlert) {
-                // Find all <p> tags that contain "Gearbox Queue ID"
-                const paragraphs = Array.from(
-                  successAlert.querySelectorAll("p")
-                );
-                const ids: string[] = [];
-
-                paragraphs.forEach((p) => {
-                  const text = p.textContent || "";
-                  if (text.includes("Gearbox Queue ID")) {
-                    // Extract all <b> tags within this paragraph
-                    const boldElements = p.querySelectorAll("b");
-                    boldElements.forEach((b) => {
-                      const id = b.textContent?.trim();
-                      if (id) {
-                        ids.push(id);
-                      }
-                    });
-                  }
-                });
-
-                return ids.length > 0 ? ids : [];
-              }
-              return [];
-            });
-
-            gearboxQueueIds = extractedIds;
-
-            if (gearboxQueueIds.length > 0) {
-              if (gearboxQueueIds.length === 1) {
-                await dualLogInfo(
-                  `Chunk ${chunkCount}: Invoice created successfully! Gearbox Queue ID: ${gearboxQueueIds[0]}`
-                );
-              } else {
-                await dualLogInfo(
-                  `Chunk ${chunkCount}: Invoice created successfully! Gearbox Queue IDs: ${gearboxQueueIds.join(
-                    ", "
-                  )}`
-                );
-              }
-            } else {
-              await dualLogInfo(
-                `Chunk ${chunkCount}: Invoice created successfully!`
-              );
-            }
-          } catch (waitError) {
-            await dualLogError(
-              `Chunk ${chunkCount}: Could not find success alert:`,
-              waitError
-            );
-            await dualLogInfo(
-              `Chunk ${chunkCount}: Invoice creation status unknown`
-            );
-          }
         }
 
-        // Save to database (always save, even with no queue IDs)
-        let dbDataId: string | null = null;
-        try {
-          if (jobId && expediaId) {
-            await dualLogInfo(
-              `Chunk ${chunkCount}: Saving data to database...`
-            );
+        await dualLogInfo(
+          `Chunk ${chunkCount}: In-memory total so far: ${allReservationIds.length} reservation ID(s)`
+        );
 
-            const dbData = await dbDataService.createDbData({
-              job_id: jobId,
-              property_name: propertyName || "Unknown Property",
-              property_id: expediaId,
-              date_range: {
-                start_date: fromDateExpedia,
-                end_date: toDateExpedia,
-              },
-              gearbox_queue_ids: gearboxQueueIds,
-              total_invoice_amount: totalInvoiceAmount,
-              total_invoice_amount_currency: totalInvoiceAmountCurrency,
-            });
-
-            dbDataId = dbData._id.toString();
-
-            if (gearboxQueueIds.length > 0) {
-              await dualLogInfo(
-                `Chunk ${chunkCount}: Data saved successfully to database with ${gearboxQueueIds.length} Gearbox Queue ID(s). DB Data ID: ${dbDataId}`
-              );
-            } else {
-              await dualLogInfo(
-                `Chunk ${chunkCount}: Data saved successfully to database with no Gearbox Queue IDs (no data found for this date range). DB Data ID: ${dbDataId}`
-              );
-            }
-
-            // Save invoice rows to db_entry if we have data and db_data_id
-            if (hasData && dbDataId && invoiceRows.length > 0) {
-              try {
-                await dualLogInfo(
-                  `Chunk ${chunkCount}: Saving ${invoiceRows.length} invoice row(s) to db_entry...`
-                );
-
-                // Prepare db_entry records
-                const dbEntries = invoiceRows.map((row) => ({
-                  job_id: jobId,
-                  property_name: propertyName || "Unknown Property",
-                  property_id: expediaId,
-                  db_data_id: dbDataId!,
-                  reservation_id: row.reservation_id,
-                  invoice_id: row.invoice_id,
-                  guest_name: row.guest_name,
-                  check_in_date: row.check_in_date,
-                  check_out_date: row.check_out_date,
-                  previously_paid_amount: row.previously_paid_amount,
-                  previously_paid_amount_currency:
-                    row.previously_paid_amount_currency,
-                  maximum_billable_amount: row.maximum_billable_amount,
-                  maximum_billable_amount_currency:
-                    row.maximum_billable_amount_currency,
-                  requested_booking_amount: row.requested_booking_amount,
-                  requested_taxes: row.requested_taxes,
-                  requested_total: row.requested_total,
-                  requested_total_currency: row.requested_total_currency,
-                }));
-
-                // Save all entries in bulk
-                await dbEntryService.createDbEntries(dbEntries);
-
-                await dualLogInfo(
-                  `Chunk ${chunkCount}: Successfully saved ${invoiceRows.length} row(s) to db_entry collection`
-                );
-              } catch (entryError) {
-                await dualLogError(
-                  `Chunk ${chunkCount}: Error saving invoice rows to db_entry:`,
-                  entryError
-                );
-                // Don't throw error, continue with next chunk
-              }
-            } else {
-              if (!hasData) {
-                await dualLogInfo(
-                  `Chunk ${chunkCount}: No data found, skipping db_entry save`
-                );
-              } else if (!dbDataId) {
-                await dualLogInfo(
-                  `Chunk ${chunkCount}: No db_data_id available, skipping db_entry save`
-                );
-              } else if (invoiceRows.length === 0) {
-                await dualLogInfo(
-                  `Chunk ${chunkCount}: No invoice rows extracted, skipping db_entry save`
-                );
-              }
-            }
-          } else {
-            await dualLogInfo(
-              `Chunk ${chunkCount}: Skipping database save - missing required data (jobId: ${!!jobId}, expediaId: ${!!expediaId})`
-            );
-          }
-        } catch (dbError) {
-          await dualLogError(
-            `Chunk ${chunkCount}: Error saving to database:`,
-            dbError
-          );
-          // Don't throw error, continue with next chunk
-        }
-        await dualLogInfo(`Chunk ${chunkCount} processed successfully`);
-
-        // After processing this chunk, navigate back to search form for next chunk
+        // Navigate back to search form for the next chunk
         if (currentStart < endDateObj) {
-          await dualLogInfo("Navigating back to search form for next chunk...");
-
+          await dualLogInfo(
+            `Chunk ${chunkCount}: Navigating back to date range search form...`
+          );
           try {
-            if (hasData) {
-              // If data was found and invoice was created, click "Add more reservation IDs"
-              const showSearchClicked = await page.evaluate(() => {
-                const showSearchLink = document.querySelector("a.showSearch");
-                if (showSearchLink && showSearchLink instanceof HTMLElement) {
-                  showSearchLink.click();
-                  return true;
-                }
-                return false;
-              });
-
-              if (showSearchClicked) {
-                await dualLogInfo(
-                  "Clicked 'Add more reservation IDs' successfully"
-                );
-                await delay(2000);
-              } else {
-                await dualLogInfo(
-                  "Could not find 'Add more reservation IDs' link, search form may already be visible"
-                );
+            // Try clicking "Add more reservation IDs" link if present
+            const showSearchClicked = await page.evaluate(() => {
+              const link = document.querySelector(
+                "a.showSearch"
+              ) as HTMLElement | null;
+              if (link) {
+                link.click();
+                return true;
               }
-            } else {
-              // If no data was found, search form should already be visible
+              return false;
+            });
+
+            if (showSearchClicked) {
               await dualLogInfo(
-                "No data was found in previous chunk, search form should already be visible"
+                `Chunk ${chunkCount}: Clicked 'Add more reservation IDs' link`
+              );
+              await delay(2000);
+            } else {
+              await dualLogInfo(
+                `Chunk ${chunkCount}: 'Add more reservation IDs' not found — search form may already be visible`
               );
               await delay(1000);
             }
-          } catch (navError) {
+
+            // Make sure we're on the By Date Range tab for the next chunk
+            const dateTabClicked = await page.evaluate(() => {
+              const btn = document.querySelector(
+                "#tab-dateRangeSearch"
+              ) as HTMLElement | null;
+              if (btn) {
+                btn.click();
+                return true;
+              }
+              return false;
+            });
+
+            if (dateTabClicked) {
+              await delay(1500);
+              await dualLogInfo(
+                `Chunk ${chunkCount}: Re-selected 'By Date Range' tab for next chunk`
+              );
+            }
+          } catch (navErr) {
             await dualLogError(
-              "Error navigating back to search form:",
-              navError
+              `Chunk ${chunkCount}: Error navigating back to search form:`,
+              navErr
             );
-            // Continue anyway, maybe the form is already visible
+            // Continue anyway
           }
         }
-      } catch (error) {
-        await dualLogError(`Error processing chunk ${chunkCount}:`, error);
-        throw error;
+      } catch (chunkErr) {
+        await dualLogError(
+          `Chunk ${chunkCount}: Error processing chunk:`,
+          chunkErr
+        );
+        throw chunkErr;
       }
 
-      // Move to next chunk (day after current chunk end)
+      // Advance to next chunk
       currentStart = addDays(chunkEnd, 1);
 
-      // If we've reached or passed the end date, break
       if (currentStart > endDateObj) {
         await dualLogInfo("Reached end date, date range processing complete");
         break;
@@ -628,8 +443,17 @@ export async function splitDateRange(
     }
 
     await dualLogInfo(
-      `Date range split completed. Processed ${chunkCount} chunk(s)`
+      `Date range split completed. Processed ${chunkCount} chunk(s). ` +
+      `Total reservation IDs collected in memory: ${allReservationIds.length}`
     );
+
+    if (allReservationIds.length > 0) {
+      await dualLogInfo(
+        `All collected reservation IDs: ${allReservationIds.join(", ")}`
+      );
+    }
+
+    return allReservationIds;
   } catch (error: any) {
     await dualLogError("Error in splitDateRange:", error);
     throw error;

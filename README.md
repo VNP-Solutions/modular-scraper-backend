@@ -210,12 +210,7 @@ Process:
 - `POST /api/expedia/property-run-job` - Start Expedia property scraping job (uses worker threads)
 - `POST /api/expedia/rerun-failed-job` - Rerun failed or partial Expedia jobs (uses worker threads)
 - `POST /api/expedia/reservation-run-job` - Start Expedia reservation scraping job (uses worker threads)
-
-#### Agoda Jobs
-
-- `POST /api/agoda/property-run-job` - Start Agoda property scraping job (uses worker threads)
-- `POST /api/agoda/rerun-failed-job` - Rerun failed or partial Agoda jobs (uses worker threads)
-
+- 
 ### Progress Monitoring
 
 - `GET /api/jobs/:id/progress` - Get job progress and resume status

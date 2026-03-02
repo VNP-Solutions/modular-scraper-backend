@@ -20,6 +20,7 @@ export interface IDbEntry extends Document {
   requested_taxes: number;
   requested_total: number;
   requested_total_currency: string;
+  gearbox_queue_ids: string[];
   created_at: Date;
   updated_at: Date;
 }
@@ -111,6 +112,11 @@ const DbEntrySchema = new Schema<IDbEntry>(
     requested_total_currency: {
       type: String,
       required: true,
+      index: true,
+    },
+    gearbox_queue_ids: {
+      type: [String],
+      default: [],
       index: true,
     },
   },
