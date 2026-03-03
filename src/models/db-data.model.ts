@@ -6,10 +6,11 @@ export interface IDbData extends Document {
   job_id: Types.ObjectId;
   property_name: string;
   property_id: string;
-  date_range: {
+  date_range?: {
     start_date: string;
     end_date: string;
   };
+  reservation_ids: string[];
   gearbox_queue_ids: string[];
   total_invoice_amount: number;
   total_invoice_amount_currency?: string;
@@ -36,14 +37,12 @@ const DbDataSchema = new Schema<IDbData>(
       index: true,
     },
     date_range: {
-      start_date: {
-        type: String,
-        required: true,
-      },
-      end_date: {
-        type: String,
-        required: true,
-      },
+      start_date: { type: String },
+      end_date: { type: String },
+    },
+    reservation_ids: {
+      type: [String],
+      default: [],
     },
     gearbox_queue_ids: {
       type: [String],

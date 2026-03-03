@@ -194,6 +194,7 @@ export async function getDBData(
                 start_date: chunk.start,
                 end_date: chunk.end,
               },
+              reservation_ids: reservationIds,
               gearbox_queue_ids: [],
               total_invoice_amount: 0,
             });

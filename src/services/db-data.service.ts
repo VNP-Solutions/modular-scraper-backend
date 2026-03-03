@@ -5,10 +5,11 @@ export interface CreateDbDataInput {
   job_id: string;
   property_name: string;
   property_id: string;
-  date_range: {
+  date_range?: {
     start_date: string;
     end_date: string;
   };
+  reservation_ids: string[];
   gearbox_queue_ids: string[];
   total_invoice_amount: number;
   total_invoice_amount_currency?: string;
@@ -23,11 +24,14 @@ export class DbDataService {
       job_id: new mongoose.Types.ObjectId(data.job_id),
       property_name: data.property_name,
       property_id: data.property_id,
-      date_range: {
-        start_date: data.date_range.start_date,
-        end_date: data.date_range.end_date,
-      },
-      gearbox_queue_ids: data.gearbox_queue_ids,
+      ...(data.date_range && {
+        date_range: {
+          start_date: data.date_range.start_date,
+          end_date: data.date_range.end_date,
+        },
+      }),
+      reservation_ids: data.reservation_ids ?? [],
+      gearbox_queue_ids: data.gearbox_queue_ids ?? [],
       total_invoice_amount: data.total_invoice_amount,
       total_invoice_amount_currency: data.total_invoice_amount_currency,
     });
@@ -148,10 +152,14 @@ export class DbDataService {
       0
     );
 
-    const dateRanges = records.map((record) => ({
-      start_date: record.date_range.start_date,
-      end_date: record.date_range.end_date,
-    }));
+    const dateRanges = records
+      .filter((record): record is typeof record & { date_range: NonNullable<typeof record.date_range> } =>
+        record.date_range != null
+      )
+      .map((record) => ({
+        start_date: record.date_range.start_date,
+        end_date: record.date_range.end_date,
+      }));
 
     return {
       totalRecords: records.length,

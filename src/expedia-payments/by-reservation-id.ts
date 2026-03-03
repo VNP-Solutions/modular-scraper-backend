@@ -379,10 +379,7 @@ export async function processReservationIds(
             job_id: jobId,
             property_name: propertyName || "Unknown Property",
             property_id: expediaId,
-            date_range: {
-              start_date: `batch-${batchNumber}-start`,
-              end_date: `batch-${batchNumber}-end`,
-            },
+            reservation_ids: batch,
             gearbox_queue_ids: gearboxQueueIds,
             total_invoice_amount: totalInvoiceAmount,
             total_invoice_amount_currency: totalInvoiceAmountCurrency,

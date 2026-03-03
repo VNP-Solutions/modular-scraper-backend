@@ -264,6 +264,8 @@ async function dbScraping(
           propertyName
         );
         await dualLogInfo("Phase 2 complete! All reservation ID batches processed.");
+        // Empty in-memory reservation IDs after all batches are done
+        collectedReservationIds = [];
       } catch (error: any) {
         await dualLogError("Phase 2 (reservation ID processing) failed:", error);
         throw error;

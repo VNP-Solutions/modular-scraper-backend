@@ -280,6 +280,7 @@ export async function splitDateRange(
                   start_date: fromDateExpedia,
                   end_date: toDateExpedia,
                 },
+                reservation_ids: [],
                 gearbox_queue_ids: [],
                 total_invoice_amount: 0,
                 total_invoice_amount_currency: undefined,
