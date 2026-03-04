@@ -2,7 +2,6 @@ import { Browser, Page } from "puppeteer";
 import { delay } from "../common/delay.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
-import { dbDataService } from "../services/db-data.service.js";
 
 /**
  * Convert date from MM/DD/YYYY to DD/MM/YYYY format
@@ -268,33 +267,6 @@ export async function splitDateRange(
           await dualLogInfo(
             `Chunk ${chunkCount}: Validation error "date range must occur within the last year" — skipping chunk`
           );
-
-          // Record skipped chunk to DB so we have a paper trail
-          if (jobId && expediaId) {
-            try {
-              await dbDataService.createDbData({
-                job_id: jobId,
-                property_name: propertyName || "Unknown Property",
-                property_id: expediaId,
-                date_range: {
-                  start_date: fromDateExpedia,
-                  end_date: toDateExpedia,
-                },
-                reservation_ids: [],
-                gearbox_queue_ids: [],
-                total_invoice_amount: 0,
-                total_invoice_amount_currency: undefined,
-              });
-              await dualLogInfo(
-                `Chunk ${chunkCount}: Skipped chunk recorded in database`
-              );
-            } catch (dbErr) {
-              await dualLogError(
-                `Chunk ${chunkCount}: Error recording skipped chunk:`,
-                dbErr
-              );
-            }
-          }
 
           currentStart = addDays(chunkEnd, 1);
           if (currentStart > endDateObj) {
