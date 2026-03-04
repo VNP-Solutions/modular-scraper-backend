@@ -20,7 +20,11 @@ import login from "./login/login.js";
 import { CardInfo, PaymentInfo } from "./models/job-item.model.js";
 import { JobStatus } from "./models/job.model.js";
 import handleOtpVerification from "./otp-verification/otp-verification.js";
-import { CreateJobItemData, jobService } from "./services/job.service.js";
+import {
+  getFailedReasonForUser,
+  CreateJobItemData,
+  jobService,
+} from "./services/job.service.js";
 
 dotenv.config();
 
@@ -767,9 +771,18 @@ async function makeGraphQLRequest(
           );
         }
 
-        throw new Error(
-          `GraphQL query errors: ${JSON.stringify(responseData.errors)}`
-        );
+        // Throw with a user-friendly or API message so failed_reason is clear for the UI
+        const firstMessage = responseData.errors[0]?.message || "";
+        const isUnauthorized =
+          firstMessage
+            .toLowerCase()
+            .includes("not authorized") ||
+          firstMessage.toLowerCase().includes("forbidden") ||
+          (responseData.errors[0]?.extensions?.classification || "").toLowerCase() === "forbidden";
+        const userFriendlyMessage = isUnauthorized
+          ? "GraphQL issue: This is likely a temporary issue with Expedia's reservation search API."
+          : firstMessage || `GraphQL query errors: ${JSON.stringify(responseData.errors)}`;
+        throw new Error(userFriendlyMessage);
       } else {
         console.warn("⚠️ No reservation data found in response");
         console.log("📋 Full response structure:", Object.keys(responseData));
@@ -1287,6 +1300,11 @@ async function graphqlScraping(
         await progressManager.handleJobError(jobId, error);
       }
 
+      const failedReason = getFailedReasonForUser(
+        error,
+        "GraphQL scraping failed; no reservations found"
+      );
+
       // Check job items count and set appropriate job status
       if (jobId) {
         try {
@@ -1294,14 +1312,22 @@ async function graphqlScraping(
 
           if (jobItemsCount > 0) {
             // If job items found, set status to Partial
-            await jobService.updateJobStatus(jobId, JobStatus.Partial);
+            await jobService.updateJobStatus(
+              jobId,
+              JobStatus.Partial,
+              failedReason
+            );
             await dualLogInfo(
               `Job status set to Partial - found ${jobItemsCount} job items`,
               { jobId, jobItemsCount }
             );
           } else {
             // If no job items found, set status to Failed
-            await jobService.updateJobStatus(jobId, JobStatus.Failed);
+            await jobService.updateJobStatus(
+              jobId,
+              JobStatus.Failed,
+              failedReason
+            );
             await dualLogInfo("Job status set to Failed - no job items found", {
               jobId,
               jobItemsCount: 0,
@@ -1315,7 +1341,11 @@ async function graphqlScraping(
           );
           // Fallback to Failed status if there's an error checking job items
           try {
-            await jobService.updateJobStatus(jobId, JobStatus.Failed);
+            await jobService.updateJobStatus(
+              jobId,
+              JobStatus.Failed,
+              failedReason
+            );
           } catch (fallbackError) {
             await dualLogError(
               "Error setting fallback Failed status:",
@@ -1335,6 +1365,11 @@ async function graphqlScraping(
   } catch (error: any) {
     await dualLogError("Main function error:", error);
 
+    const failedReason = getFailedReasonForUser(
+      error,
+      "GraphQL scraping failed; no reservations found"
+    );
+
     // Check job items count and set appropriate job status
     if (jobId) {
       try {
@@ -1342,14 +1377,22 @@ async function graphqlScraping(
 
         if (jobItemsCount > 0) {
           // If job items found, set status to Partial
-          await jobService.updateJobStatus(jobId, JobStatus.Partial);
+          await jobService.updateJobStatus(
+            jobId,
+            JobStatus.Partial,
+            failedReason
+          );
           await dualLogInfo(
             `Job status set to Partial - found ${jobItemsCount} job items`,
             { jobId, jobItemsCount }
           );
         } else {
           // If no job items found, set status to Failed
-          await jobService.updateJobStatus(jobId, JobStatus.Failed);
+          await jobService.updateJobStatus(
+            jobId,
+            JobStatus.Failed,
+            failedReason
+          );
           await dualLogInfo("Job status set to Failed - no job items found", {
             jobId,
             jobItemsCount: 0,
@@ -1363,7 +1406,11 @@ async function graphqlScraping(
         );
         // Fallback to Failed status if there's an error checking job items
         try {
-          await jobService.updateJobStatus(jobId, JobStatus.Failed);
+          await jobService.updateJobStatus(
+            jobId,
+            JobStatus.Failed,
+            failedReason
+          );
         } catch (fallbackError) {
           await dualLogError(
             "Error setting fallback Failed status:",
@@ -1500,7 +1547,14 @@ async function runScrapingWithRestart(
         if (!scrapingStateManager.isRunning()) {
           await dualLogInfo("Scraping was stopped, exiting...");
           if (globalBrowser) await globalBrowser.close();
-          if (jobId) await finalizeJobLogging("failed");
+          if (jobId) {
+            await jobService.updateJobStatus(
+              jobId,
+              JobStatus.Failed,
+              "Scraping was stopped"
+            );
+            await finalizeJobLogging("failed");
+          }
           return;
         }
 
@@ -1516,7 +1570,14 @@ async function runScrapingWithRestart(
           if (!scrapingStateManager.isRunning()) {
             await dualLogInfo("Scraping was stopped, exiting...");
             if (globalBrowser) await globalBrowser.close();
-            if (jobId) await finalizeJobLogging("failed");
+            if (jobId) {
+              await jobService.updateJobStatus(
+                jobId,
+                JobStatus.Failed,
+                "Scraping was stopped"
+              );
+              await finalizeJobLogging("failed");
+            }
             return;
           }
 
@@ -1535,10 +1596,17 @@ async function runScrapingWithRestart(
             otpCompletionNotifier.notifyOtpCompleted(jobId);
           }
 
-          // Don't fail the entire process for OTP - it might not be required
-          await dualLogInfo(
-            "Continuing without OTP verification (it might not be required)"
-          );
+          // Close browser before rethrowing so the root-cause OTP error is stored as failed_reason
+          if (globalBrowser) {
+            try {
+              await globalBrowser.close();
+            } catch (_) {
+              // ignore close errors so we always rethrow the OTP error
+            }
+            globalBrowser = null;
+          }
+          // Rethrow so job fails with the actual OTP error (e.g. navigation timeout, selector timeout)
+          throw otpError;
         }
 
         // Extract session cookies ONCE (after OTP verification)
@@ -1603,6 +1671,11 @@ async function runScrapingWithRestart(
           if (!scrapingStateManager.isRunning()) {
             await dualLogInfo("Scraping was stopped, exiting...");
             if (jobId) {
+              await jobService.updateJobStatus(
+                jobId,
+                JobStatus.Failed,
+                "Scraping was stopped"
+              );
               await finalizeJobLogging("failed");
             }
             return;

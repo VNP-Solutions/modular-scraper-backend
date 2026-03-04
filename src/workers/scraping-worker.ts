@@ -19,7 +19,10 @@ import main from "../main.js";
 import { JobStatus } from "../models/job.model.js";
 import reservation from "../reservation/reservation.js";
 import { propertyCredentialsService } from "../services/job-credentials.service.js";
-import { jobService } from "../services/job.service.js";
+import {
+  getFailedReasonForUser,
+  jobService,
+} from "../services/job.service.js";
 
 // Load environment variables
 dotenv.config();
@@ -310,14 +313,22 @@ class ScrapingWorker {
 
       // 8. Determine final status based on completion
       let finalStatus = "Completed";
+      let failedReason: string | undefined;
       if (progress.totalItems === 0) {
         finalStatus = "Failed";
+        failedReason = "No reservations found for the date range";
       } else if (progress.completionPercentage < 100) {
         finalStatus = "Partial";
+        failedReason =
+          "Scraping completed partially; some dates could not be processed";
       }
 
       // 9. Update final job status
-      await jobService.updateJobStatus(jobId, finalStatus as any);
+      await jobService.updateJobStatus(
+        jobId,
+        finalStatus as any,
+        failedReason
+      );
 
       // 10. Stop scraping state manager
       scrapingStateManager.stopScraping();
@@ -347,7 +358,12 @@ class ScrapingWorker {
         logInfo: logInfo,
       };
     } catch (scrapingError) {
-      // Mark job as failed on scraping error
+      // Mark job as failed on scraping error with reason for UI
+      const failedReason = getFailedReasonForUser(
+        scrapingError,
+        "Property scraping failed"
+      );
+      await jobService.updateJobStatus(jobId, JobStatus.Failed, failedReason);
       await dualLogError(`Worker: Job ${jobId} failed`, scrapingError, {
         jobId,
       });
@@ -440,14 +456,22 @@ class ScrapingWorker {
 
       // 10. Determine final status based on completion
       let finalStatus = "Completed";
+      let failedReason: string | undefined;
       if (progress.totalItems === 0) {
         finalStatus = "Failed";
+        failedReason = "No reservations found for the date range";
       } else if (progress.completionPercentage < 100) {
         finalStatus = "Partial";
+        failedReason =
+          "Scraping completed partially; some dates could not be processed";
       }
 
       // 11. Update final job status
-      await jobService.updateJobStatus(jobId, finalStatus as any);
+      await jobService.updateJobStatus(
+        jobId,
+        finalStatus as any,
+        failedReason
+      );
 
       // 12. Stop scraping state manager
       scrapingStateManager.stopScraping();
@@ -478,6 +502,8 @@ class ScrapingWorker {
       };
     } catch (error) {
       console.error(`Worker: ❌ Error during job ${jobId} rerun:`, error);
+      const failedReason = getFailedReasonForUser(error, "Job rerun failed");
+      await jobService.updateJobStatus(jobId, JobStatus.Failed, failedReason);
       await dualLogError(`Worker: Job ${jobId} rerun failed`, error, { jobId });
 
       // Update job status to Failed
@@ -648,14 +674,22 @@ class ScrapingWorker {
 
       // 8. Determine final status based on completion
       let finalStatus = "Completed";
+      let failedReason: string | undefined;
       if (progress.totalItems === 0) {
         finalStatus = "Failed";
+        failedReason = "No reservations found for the date range";
       } else if (progress.completionPercentage < 100) {
         finalStatus = "Partial";
+        failedReason =
+          "Scraping completed partially; some dates could not be processed";
       }
 
       // 9. Update final job status
-      await jobService.updateJobStatus(jobId, finalStatus as any);
+      await jobService.updateJobStatus(
+        jobId,
+        finalStatus as any,
+        failedReason
+      );
 
       // 10. Stop scraping state manager
       scrapingStateManager.stopScraping();
@@ -685,7 +719,12 @@ class ScrapingWorker {
         logInfo: logInfo,
       };
     } catch (scrapingError) {
-      // Mark job as failed on scraping error
+      // Mark job as failed on scraping error with reason for UI
+      const failedReason = getFailedReasonForUser(
+        scrapingError,
+        "GraphQL scraping failed"
+      );
+      await jobService.updateJobStatus(jobId, JobStatus.Failed, failedReason);
       await dualLogError(`Worker: GraphQL job ${jobId} failed`, scrapingError, {
         jobId,
       });
@@ -791,14 +830,18 @@ class ScrapingWorker {
 
       // 8. Determine final status based on completion
       let finalStatus = JobStatus.Completed;
+      let failedReason: string | undefined;
       if (progress.totalItems === 0) {
         finalStatus = JobStatus.Failed;
+        failedReason = "No reservations found for the date range";
       } else if (progress.completionPercentage < 100) {
         finalStatus = JobStatus.Partial;
+        failedReason =
+          "Scraping completed partially; some dates could not be processed";
       }
 
       // 9. Update final job status
-      await jobService.updateJobStatus(jobId, finalStatus);
+      await jobService.updateJobStatus(jobId, finalStatus, failedReason);
 
       // 10. Stop scraping state manager
       scrapingStateManager.stopScraping();
@@ -828,7 +871,12 @@ class ScrapingWorker {
         logInfo: logInfo,
       };
     } catch (scrapingError) {
-      // Mark job as failed on scraping error
+      // Mark job as failed on scraping error with reason for UI
+      const failedReason = getFailedReasonForUser(
+        scrapingError,
+        "Agoda scraping failed"
+      );
+      await jobService.updateJobStatus(jobId, JobStatus.Failed, failedReason);
       await dualLogError(`Worker: Agoda job ${jobId} failed`, scrapingError, {
         jobId,
       });
@@ -928,14 +976,18 @@ class ScrapingWorker {
 
       // 10. Determine final status based on completion
       let finalStatus = JobStatus.Completed;
+      let failedReason: string | undefined;
       if (progress.totalItems === 0) {
         finalStatus = JobStatus.Failed;
+        failedReason = "No reservations found for the date range";
       } else if (progress.completionPercentage < 100) {
         finalStatus = JobStatus.Partial;
+        failedReason =
+          "Scraping completed partially; some dates could not be processed";
       }
 
       // 11. Update final job status
-      await jobService.updateJobStatus(jobId, finalStatus);
+      await jobService.updateJobStatus(jobId, finalStatus, failedReason);
 
       // 12. Stop scraping state manager
       scrapingStateManager.stopScraping();
@@ -966,6 +1018,11 @@ class ScrapingWorker {
       };
     } catch (error) {
       console.error(`Worker: ❌ Error during Agoda job ${jobId} rerun:`, error);
+      const failedReason = getFailedReasonForUser(
+        error,
+        "Agoda job rerun failed"
+      );
+      await jobService.updateJobStatus(jobId, JobStatus.Failed, failedReason);
       await dualLogError(`Worker: Agoda job ${jobId} rerun failed`, error, {
         jobId,
       });

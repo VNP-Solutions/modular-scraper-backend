@@ -16,7 +16,10 @@ import {
   takeErrorScreenshot,
 } from "./common/screenshot-helper.js";
 import { JobStatus } from "./models/job.model.js";
-import { jobService } from "./services/job.service.js";
+import {
+  getFailedReasonForUser,
+  jobService,
+} from "./services/job.service.js";
 
 dotenv.config();
 
@@ -317,9 +320,17 @@ async function agoda(
     // Send email notification for outer main function error
     if (jobId) {
       // Make the job fail
+      const failedReason = getFailedReasonForUser(
+        error,
+        "Agoda scraping failed; no reservations found"
+      );
       const CurrentJob = await jobService.getJobById(jobId);
       if (CurrentJob) {
-        await jobService.updateJobStatus(jobId, JobStatus.Failed);
+        await jobService.updateJobStatus(
+          jobId,
+          JobStatus.Failed,
+          failedReason
+        );
       }
       try {
         await emailNotifier.notifyJobError(

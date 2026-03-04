@@ -59,6 +59,67 @@ export interface CreateJobItemData {
   additional_text?: string;
 }
 
+/**
+ * Map raw errors to user-friendly failed_reason strings for the UI.
+ * Covers OTP verification failed, Login failed, Property not found, VCC not available, etc.
+ */
+export function getFailedReasonForUser(
+  error: unknown,
+  fallback: string = "Scraping failed",
+): string {
+  const msg = String((error as Error)?.message ?? "").toLowerCase();
+  if (!msg) return fallback;
+  if (
+    msg.includes("failed to get verification code from email") ||
+    msg.includes("no verification code found")
+  )
+    return "Failed to fetch verification code from your email. Re-authenticate to solve this issue.";
+  if (
+    msg.includes("otp") ||
+    msg.includes("verification code") ||
+    msg.includes("verify button") ||
+    msg.includes("verification failed") ||
+    msg.includes("gmail credentials")
+  )
+    return "OTP verification failed";
+  if (
+    msg.includes("login") ||
+    msg.includes("password input") ||
+    msg.includes("credentials") ||
+    msg.includes("authentication")
+  )
+    return "Login failed";
+  if (
+    msg.includes("property") ||
+    msg.includes("expedia_id") ||
+    msg.includes("agoda_id") ||
+    msg.includes("cannot retrieve valid")
+  )
+    return "Property not found or invalid ID";
+  if (
+    msg.includes("vcc") ||
+    msg.includes("virtual card") ||
+    msg.includes("evc") ||
+    msg.includes("card not available")
+  )
+    return "VCC / virtual card not available";
+  if (msg.includes("scraping was stopped")) return "Scraping was stopped";
+  if (
+    msg.includes("timeout") ||
+    msg.includes("timed out") ||
+    msg.includes("network timeout") ||
+    (msg.includes("exceeded") && (msg.includes("ms") || msg.includes("waiting")))
+  )
+    return "Request timed out or page did not load in time. Please try again.";
+  if (msg.includes("graphql") && msg.includes("error"))
+    return "GraphQL API error";
+  if (msg.includes("no reservations found"))
+    return "No reservations found for the date range";
+  if (msg.includes("maximum restart attempts"))
+    return "Maximum restart attempts exceeded";
+  return (error as Error)?.message || fallback;
+}
+
 export class JobService {
   /**
    * Validate and convert string to ObjectId
@@ -66,7 +127,7 @@ export class JobService {
   private validateObjectId(id: string, fieldName: string): Types.ObjectId {
     if (!Types.ObjectId.isValid(id)) {
       throw new Error(
-        `Invalid ${fieldName}: ${id}. Must be a valid MongoDB ObjectId (24 character hex string).`
+        `Invalid ${fieldName}: ${id}. Must be a valid MongoDB ObjectId (24 character hex string).`,
       );
     }
     return new Types.ObjectId(id);
@@ -76,7 +137,7 @@ export class JobService {
    * Get job with populated property to access expedia_id
    */
   async getJobWithProperty(
-    jobId: string
+    jobId: string,
   ): Promise<(IJob & { property?: IProperty }) | null> {
     try {
       const objectId = this.validateObjectId(jobId, "jobId");
@@ -115,14 +176,14 @@ export class JobService {
 
       if (!property) {
         console.error(
-          `Property not found for job ${jobId}, property_id: ${job.property_id}`
+          `Property not found for job ${jobId}, property_id: ${job.property_id}`,
         );
         return null;
       }
 
       if (!property.expedia_id || property.expedia_id === "0") {
         console.error(
-          `Property ${property._id} has no valid expedia_id (current: ${property.expedia_id})`
+          `Property ${property._id} has no valid expedia_id (current: ${property.expedia_id})`,
         );
         return null;
       }
@@ -139,7 +200,7 @@ export class JobService {
         : undefined;
 
       console.log(
-        `✅ Found expedia_id: ${property.expedia_id} for job: ${jobId}`
+        `✅ Found expedia_id: ${property.expedia_id} for job: ${jobId}`,
       );
       return {
         expediaId: property.expedia_id,
@@ -198,14 +259,14 @@ export class JobService {
 
       if (!property) {
         console.error(
-          `Property not found for job ${jobId}, property_id: ${job.property_id}`
+          `Property not found for job ${jobId}, property_id: ${job.property_id}`,
         );
         return null;
       }
 
       if (!property.agoda_id || property.agoda_id === "0") {
         console.error(
-          `Property ${property._id} has no valid agoda_id (current: ${property.agoda_id})`
+          `Property ${property._id} has no valid agoda_id (current: ${property.agoda_id})`,
         );
         return null;
       }
@@ -225,13 +286,13 @@ export class JobService {
    */
   async updateJobCaseOpen(
     jobId: string,
-    caseOpen: boolean
+    caseOpen: boolean,
   ): Promise<IJob | null> {
     try {
       const updatedJob = await Job.findByIdAndUpdate(
         jobId,
         { case_open: caseOpen },
-        { new: true }
+        { new: true },
       ).exec();
 
       if (!updatedJob) {
@@ -290,11 +351,13 @@ export class JobService {
   }
 
   /**
-   * Update job status
+   * Update job status. When status is Failed or Partial, pass failedReason so the UI can show why the job failed.
+   * When status is Running, Completed, Pending, or InQueue, failed_reason is cleared.
    */
   async updateJobStatus(
     jobId: string,
-    status: JobStatus
+    status: JobStatus,
+    failedReason?: string | null,
   ): Promise<IJob | null> {
     try {
       const objectId = this.validateObjectId(jobId, "jobId");
@@ -307,6 +370,16 @@ export class JobService {
       // If changing to Running status, assign current worker
       if (status === JobStatus.Running) {
         updateData.worker_assigned = process.env.WORKER_ID || "scraper-worker";
+      }
+
+      // Set or clear failed_reason for UI
+      if (status === JobStatus.Failed || status === JobStatus.Partial) {
+        updateData.failed_reason =
+          failedReason != null && failedReason !== ""
+            ? String(failedReason).slice(0, 1000)
+            : undefined;
+      } else {
+        updateData.failed_reason = null;
       }
 
       return await Job.findByIdAndUpdate(objectId, updateData, { new: true });
@@ -333,15 +406,21 @@ export class JobService {
   /**
    * Partial complete job - Update status to Partial
    */
-  async partialCompleteJob(jobId: string): Promise<IJob | null> {
-    return await this.updateJobStatus(jobId, JobStatus.Partial);
+  async partialCompleteJob(
+    jobId: string,
+    failedReason?: string | null,
+  ): Promise<IJob | null> {
+    return await this.updateJobStatus(jobId, JobStatus.Partial, failedReason);
   }
 
   /**
    * Fail job - Update status to Failed
    */
-  async failJob(jobId: string): Promise<IJob | null> {
-    return await this.updateJobStatus(jobId, JobStatus.Failed);
+  async failJob(
+    jobId: string,
+    failedReason?: string | null,
+  ): Promise<IJob | null> {
+    return await this.updateJobStatus(jobId, JobStatus.Failed, failedReason);
   }
 
   /**
@@ -357,7 +436,7 @@ export class JobService {
           log_link: logLink,
           updatedAt: new Date(),
         },
-        { new: true }
+        { new: true },
       );
     } catch (error) {
       console.error(`Error updating job log link: ${error}`);
@@ -378,7 +457,7 @@ export class JobService {
           live_url: liveUrl,
           updatedAt: new Date(),
         },
-        { new: true }
+        { new: true },
       );
     } catch (error) {
       console.error(`Error updating job live URL: ${error}`);
@@ -390,7 +469,7 @@ export class JobService {
    * Check if job exists and is in valid state
    */
   async validateJob(
-    jobId: string
+    jobId: string,
   ): Promise<{ exists: boolean; job?: IJob; canRun: boolean }> {
     const job = await this.getJobById(jobId);
 
@@ -431,7 +510,7 @@ export class JobService {
       const jobObjectId = this.validateObjectId(itemData.job_id, "job_id");
       const propertyObjectId = this.validateObjectId(
         itemData.property_id,
-        "property_id"
+        "property_id",
       );
 
       const jobItem = new JobItem({
@@ -453,14 +532,14 @@ export class JobService {
    * Create multiple job items in batch
    */
   async createJobItemsBatch(
-    itemsData: CreateJobItemData[]
+    itemsData: CreateJobItemData[],
   ): Promise<IJobItem[]> {
     try {
       const jobItems = itemsData.map((itemData) => {
         const jobObjectId = this.validateObjectId(itemData.job_id, "job_id");
         const propertyObjectId = this.validateObjectId(
           itemData.property_id,
-          "property_id"
+          "property_id",
         );
 
         return new JobItem({
@@ -484,7 +563,7 @@ export class JobService {
    */
   async updateJobItemCardInfo(
     jobItemId: string,
-    cardInfo: CardInfo
+    cardInfo: CardInfo,
   ): Promise<IJobItem | null> {
     try {
       const objectId = this.validateObjectId(jobItemId, "jobItemId");
@@ -495,7 +574,7 @@ export class JobService {
           card_info: cardInfo,
           updatedAt: new Date(),
         },
-        { new: true }
+        { new: true },
       );
     } catch (error) {
       console.error(`Error updating job item card info: ${error}`);
@@ -508,7 +587,7 @@ export class JobService {
    */
   async updateJobItemPaymentInfo(
     jobItemId: string,
-    paymentInfo: PaymentInfo
+    paymentInfo: PaymentInfo,
   ): Promise<IJobItem | null> {
     try {
       const objectId = this.validateObjectId(jobItemId, "jobItemId");
@@ -519,7 +598,7 @@ export class JobService {
           payment_info: paymentInfo,
           updatedAt: new Date(),
         },
-        { new: true }
+        { new: true },
       );
     } catch (error) {
       console.error(`Error updating job item payment info: ${error}`);
@@ -553,7 +632,7 @@ export class JobService {
    */
   async getJobItemByReservation(
     jobId: string,
-    reservationId: string
+    reservationId: string,
   ): Promise<IJobItem | null> {
     try {
       const objectId = this.validateObjectId(jobId, "jobId");
@@ -572,7 +651,7 @@ export class JobService {
    */
   async reservationExists(
     jobId: string,
-    reservationId: string
+    reservationId: string,
   ): Promise<boolean> {
     try {
       const objectId = this.validateObjectId(jobId, "jobId");

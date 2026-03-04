@@ -20,7 +20,10 @@ import login from "./login/login.js";
 import { JobStatus } from "./models/job.model.js";
 import handleOtpVerification from "./otp-verification/otp-verification.js";
 import { propertySearchAndClickReservation } from "./property-search/property-search.js";
-import { jobService } from "./services/job.service.js";
+import {
+  getFailedReasonForUser,
+  jobService,
+} from "./services/job.service.js";
 
 dotenv.config();
 
@@ -108,6 +111,11 @@ async function main(
         await progressManager.handleJobError(jobId, error);
       }
 
+      const failedReason = getFailedReasonForUser(
+        error,
+        "Scraping failed; no reservations found"
+      );
+
       // Check job items count and set appropriate job status
       if (jobId) {
         try {
@@ -115,14 +123,22 @@ async function main(
 
           if (jobItemsCount > 0) {
             // If job items found, set status to Partial
-            await jobService.updateJobStatus(jobId, JobStatus.Partial);
+            await jobService.updateJobStatus(
+              jobId,
+              JobStatus.Partial,
+              failedReason
+            );
             await dualLogInfo(
               `Job status set to Partial - found ${jobItemsCount} job items`,
               { jobId, jobItemsCount }
             );
           } else {
             // If no job items found, set status to Failed
-            await jobService.updateJobStatus(jobId, JobStatus.Failed);
+            await jobService.updateJobStatus(
+              jobId,
+              JobStatus.Failed,
+              failedReason
+            );
             await dualLogInfo("Job status set to Failed - no job items found", {
               jobId,
               jobItemsCount: 0,
@@ -136,7 +152,11 @@ async function main(
           );
           // Fallback to Failed status if there's an error checking job items
           try {
-            await jobService.updateJobStatus(jobId, JobStatus.Failed);
+            await jobService.updateJobStatus(
+              jobId,
+              JobStatus.Failed,
+              failedReason
+            );
           } catch (fallbackError) {
             await dualLogError(
               "Error setting fallback Failed status:",
@@ -187,6 +207,9 @@ async function main(
       await progressManager.handleJobError(jobId, error);
     }
 
+    const failedReason =
+      (error as Error)?.message || "Scraping failed; no reservations found";
+
     // Check job items count and set appropriate job status
     if (jobId) {
       try {
@@ -194,14 +217,22 @@ async function main(
 
         if (jobItemsCount > 0) {
           // If job items found, set status to Partial
-          await jobService.updateJobStatus(jobId, JobStatus.Partial);
+          await jobService.updateJobStatus(
+            jobId,
+            JobStatus.Partial,
+            failedReason
+          );
           await dualLogInfo(
             `Job status set to Partial - found ${jobItemsCount} job items`,
             { jobId, jobItemsCount }
           );
         } else {
           // If no job items found, set status to Failed
-          await jobService.updateJobStatus(jobId, JobStatus.Failed);
+          await jobService.updateJobStatus(
+            jobId,
+            JobStatus.Failed,
+            failedReason
+          );
           await dualLogInfo("Job status set to Failed - no job items found", {
             jobId,
             jobItemsCount: 0,
@@ -215,7 +246,11 @@ async function main(
         );
         // Fallback to Failed status if there's an error checking job items
         try {
-          await jobService.updateJobStatus(jobId, JobStatus.Failed);
+          await jobService.updateJobStatus(
+            jobId,
+            JobStatus.Failed,
+            failedReason
+          );
         } catch (fallbackError) {
           await dualLogError(
             "Error setting fallback Failed status:",
@@ -296,6 +331,11 @@ async function runScrapingWithRestart(
         await dualLogInfo("Scraping was stopped, exiting...");
         await browser.close();
         if (jobId) {
+          await jobService.updateJobStatus(
+            jobId,
+            JobStatus.Failed,
+            "Scraping was stopped"
+          );
           await finalizeJobLogging("failed");
         }
         return;
@@ -317,6 +357,11 @@ async function runScrapingWithRestart(
             await dualLogInfo("Scraping was stopped, exiting...");
             await browser.close();
             if (jobId) {
+              await jobService.updateJobStatus(
+                jobId,
+                JobStatus.Failed,
+                "Scraping was stopped"
+              );
               await finalizeJobLogging("failed");
             }
             return;
@@ -348,6 +393,11 @@ async function runScrapingWithRestart(
             await dualLogInfo("Scraping was stopped, exiting...");
             await browser.close();
             if (jobId) {
+              await jobService.updateJobStatus(
+                jobId,
+                JobStatus.Failed,
+                "Scraping was stopped"
+              );
               await finalizeJobLogging("failed");
             }
             return;
@@ -386,6 +436,11 @@ async function runScrapingWithRestart(
               await dualLogInfo("Scraping was stopped, exiting...");
               await browser.close();
               if (jobId) {
+                await jobService.updateJobStatus(
+                  jobId,
+                  JobStatus.Failed,
+                  "Scraping was stopped"
+                );
                 await finalizeJobLogging("failed");
               }
               return;
@@ -422,6 +477,11 @@ async function runScrapingWithRestart(
               await dualLogInfo("Scraping was stopped, exiting...");
               await browser.close();
               if (jobId) {
+                await jobService.updateJobStatus(
+                  jobId,
+                  JobStatus.Failed,
+                  "Scraping was stopped"
+                );
                 await finalizeJobLogging("failed");
               }
               return;
@@ -543,6 +603,11 @@ async function runScrapingWithRestart(
           await progressManager.handleJobError(jobId, error);
         }
 
+        const failedReason = getFailedReasonForUser(
+          error,
+          "Scraping failed; no reservations found"
+        );
+
         // Check job items count and set appropriate job status
         if (jobId) {
           try {
@@ -550,14 +615,22 @@ async function runScrapingWithRestart(
 
             if (jobItemsCount > 0) {
               // If job items found, set status to Partial
-              await jobService.updateJobStatus(jobId, JobStatus.Partial);
+              await jobService.updateJobStatus(
+                jobId,
+                JobStatus.Partial,
+                failedReason
+              );
               await dualLogInfo(
                 `Job status set to Partial - found ${jobItemsCount} job items`,
                 { jobId, jobItemsCount }
               );
             } else {
               // If no job items found, set status to Failed
-              await jobService.updateJobStatus(jobId, JobStatus.Failed);
+              await jobService.updateJobStatus(
+                jobId,
+                JobStatus.Failed,
+                failedReason
+              );
               await dualLogInfo(
                 "Job status set to Failed - no job items found",
                 {
@@ -574,7 +647,11 @@ async function runScrapingWithRestart(
             );
             // Fallback to Failed status if there's an error checking job items
             try {
-              await jobService.updateJobStatus(jobId, JobStatus.Failed);
+              await jobService.updateJobStatus(
+                jobId,
+                JobStatus.Failed,
+                failedReason
+              );
             } catch (fallbackError) {
               await dualLogError(
                 "Error setting fallback Failed status:",
@@ -594,6 +671,10 @@ async function runScrapingWithRestart(
     const maxAttemptsError = new Error(
       `Maximum restart attempts (${maxAttempts}) exceeded`
     );
+    const maxAttemptsReason = getFailedReasonForUser(
+      maxAttemptsError,
+      "Maximum restart attempts exceeded"
+    );
     // Clean up progress file when max attempts exceeded
     if (jobId) {
       await progressManager.handleJobError(jobId, maxAttemptsError);
@@ -606,14 +687,22 @@ async function runScrapingWithRestart(
 
         if (jobItemsCount > 0) {
           // If job items found, set status to Partial
-          await jobService.updateJobStatus(jobId, JobStatus.Partial);
+          await jobService.updateJobStatus(
+            jobId,
+            JobStatus.Partial,
+            maxAttemptsReason
+          );
           await dualLogInfo(
             `Job status set to Partial - found ${jobItemsCount} job items (max attempts exceeded)`,
             { jobId, jobItemsCount, maxAttempts }
           );
         } else {
           // If no job items found, set status to Failed
-          await jobService.updateJobStatus(jobId, JobStatus.Failed);
+          await jobService.updateJobStatus(
+            jobId,
+            JobStatus.Failed,
+            maxAttemptsReason
+          );
           await dualLogInfo(
             "Job status set to Failed - no job items found (max attempts exceeded)",
             {
@@ -631,7 +720,11 @@ async function runScrapingWithRestart(
         );
         // Fallback to Failed status if there's an error checking job items
         try {
-          await jobService.updateJobStatus(jobId, JobStatus.Failed);
+          await jobService.updateJobStatus(
+            jobId,
+            JobStatus.Failed,
+            maxAttemptsReason
+          );
         } catch (fallbackError) {
           await dualLogError(
             "Error setting fallback Failed status:",

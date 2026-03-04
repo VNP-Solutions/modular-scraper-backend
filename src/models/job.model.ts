@@ -66,6 +66,8 @@ export interface IJob extends Document {
   updatedAt: Date;
   start_date?: string;
   end_date?: string;
+  /** User-facing reason when job status is Failed or Partial (e.g. "Property not found", "Login failed", "VCC not available") */
+  failed_reason?: string;
 }
 
 // Mongoose Schema (read-only, updates only)
@@ -212,6 +214,10 @@ const JobSchema = new Schema<IJob>(
       required: false,
     },
     end_date: {
+      type: String,
+      required: false,
+    },
+    failed_reason: {
       type: String,
       required: false,
     },

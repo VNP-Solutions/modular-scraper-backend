@@ -11,7 +11,10 @@ import { getAccess, getOauth2Callback } from "../get-access/access.js";
 import { JobStatus } from "../models/job.model.js";
 import { ScheduledJob } from "../models/scheduled-job.model.js";
 import { propertyCredentialsService } from "../services/job-credentials.service.js";
-import { jobService } from "../services/job.service.js";
+import {
+  getFailedReasonForUser,
+  jobService,
+} from "../services/job.service.js";
 
 const app = express();
 
@@ -2479,8 +2482,16 @@ app.post("/api/expedia/bulk-property-run-job", (async (
       otpAwareWorkerPool.executeJob(workerJobData).catch(async (error) => {
         console.error(`Error submitting job ${job.jobId}:`, error);
         // Update job status to Failed if submission fails
+        const failedReason = getFailedReasonForUser(
+          error,
+          "Job submission failed"
+        );
         try {
-          await jobService.updateJobStatus(job.jobId, JobStatus.Failed);
+          await jobService.updateJobStatus(
+            job.jobId,
+            JobStatus.Failed,
+            failedReason
+          );
         } catch (statusError) {
           console.error(
             `Error updating job ${job.jobId} status to Failed:`,
@@ -2767,8 +2778,16 @@ app.post("/api/expedia/bulk-graphql-run-job", (async (
       otpAwareWorkerPool.executeJob(workerJobData).catch(async (error) => {
         console.error(`Error submitting GraphQL job ${job.jobId}:`, error);
         // Update job status to Failed if submission fails
+        const failedReason = getFailedReasonForUser(
+          error,
+          "GraphQL job submission failed"
+        );
         try {
-          await jobService.updateJobStatus(job.jobId, JobStatus.Failed);
+          await jobService.updateJobStatus(
+            job.jobId,
+            JobStatus.Failed,
+            failedReason
+          );
         } catch (statusError) {
           console.error(
             `Error updating job ${job.jobId} status to Failed:`,
