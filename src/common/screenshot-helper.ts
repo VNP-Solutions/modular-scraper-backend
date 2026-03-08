@@ -7,7 +7,7 @@ import { dualLogError, dualLogInfo } from "./log-helper.js";
 
 /**
  * Screenshot helper — takes a screenshot of the current page, uploads it to S3,
- * and appends the S3 URL to the job's screenshot_urls array in the database.
+ * and appends the S3 URL to the job or retrieval's screenshot_urls array in DB.
  *
  * Never throws: screenshot failures must not interrupt the scraping process.
  */
@@ -20,34 +20,35 @@ export class ScreenshotHelper {
     },
   });
 
-  private static s3BucketName =
-    process.env.S3_BUCKET_NAME || "vnpstorage";
+  private static s3BucketName = process.env.S3_BUCKET_NAME || "vnpstorage";
 
   private static get baseDir(): string {
     return path.join(process.cwd(), "screenshots");
   }
 
   /**
-   * Take a screenshot, upload to S3, and save the URL to the job record.
+   * Take a screenshot, upload to S3, and save the URL to the correct DB record.
    *
-   * @param page     Puppeteer Page instance
-   * @param jobId    Job ID — used for S3 path and DB update
-   * @param step     Human-readable step name, e.g. "login_page_loaded"
-   * @param type     "step" for normal flow, "error" for error captures
-   * @param platform Optional platform label (default "expedia")
-   * @returns        S3 URL string, or null if anything failed
+   * @param page        Puppeteer Page instance
+   * @param entityId    Job ID or Retrieval ID
+   * @param step        Human-readable step name, e.g. "login_page_loaded"
+   * @param type        "step" for normal flow, "error" for error captures
+   * @param platform    Optional platform label (default "expedia")
+   * @param entityType  "job" (default) — which DB record to update
+   * @returns           S3 URL string, or null if anything failed
    */
   public static async takeScreenshot(
     page: Page | null,
-    jobId: string,
+    entityId: string,
     step: string,
     type: "step" | "error",
-    platform: string = "expedia"
+    platform: string = "expedia",
+    entityType: "job" | "retrieval" = "job"
   ): Promise<string | null> {
-    if (!page || !jobId) {
-      await dualLogError("takeScreenshot: missing page or jobId", {
+    if (!page || !entityId) {
+      await dualLogError("takeScreenshot: missing page or entityId", {
         hasPage: !!page,
-        jobId,
+        entityId,
         step,
       });
       return null;
@@ -58,46 +59,39 @@ export class ScreenshotHelper {
     const localDir = path.join(
       this.baseDir,
       platform,
-      jobId,
+      entityId,
       type === "error" ? "error" : "step"
     );
     const localPath = path.join(localDir, filename);
 
     try {
-      // Ensure local directory exists
       await fs.mkdir(localDir, { recursive: true });
 
-      // Take screenshot and save locally first
       await page.screenshot({
         path: localPath as `${string}.png`,
         fullPage: true,
         type: "png",
       });
 
-      // Upload to S3
-      const s3Url = await this.uploadToS3(
-        localPath,
-        jobId,
-        type,
-        filename
-      );
+      const s3Url = await this.uploadToS3(localPath, entityId, type, filename);
 
       // Clean up local file regardless of S3 outcome
-      await fs.unlink(localPath).catch(() => {
-        // ignore cleanup errors
-      });
+      await fs.unlink(localPath).catch(() => {});
 
       if (s3Url) {
-        // Persist URL in the job document
-        await jobService.addScreenshotUrl(jobId, {
+        const entry = {
           step,
           url: s3Url,
           timestamp: new Date().toISOString(),
           type,
-        });
+        };
+
+        // On this branch only jobs exist — entityType "retrieval" is a no-op fallback
+        await jobService.addScreenshotUrl(entityId, entry);
 
         await dualLogInfo(`Screenshot captured: ${step}`, {
-          jobId,
+          entityId,
+          entityType,
           platform,
           step,
           type,
@@ -108,18 +102,17 @@ export class ScreenshotHelper {
       }
 
       await dualLogError(`Screenshot S3 upload failed for step: ${step}`, {
-        jobId,
+        entityId,
         step,
       });
       return null;
     } catch (error: any) {
       await dualLogError(`Failed to take screenshot for step: ${step}`, {
-        jobId,
+        entityId,
         step,
         type,
         error: error.message,
       });
-      // Clean up local file if it exists
       await fs.unlink(localPath).catch(() => {});
       return null;
     }
@@ -127,13 +120,13 @@ export class ScreenshotHelper {
 
   private static async uploadToS3(
     localPath: string,
-    jobId: string,
+    entityId: string,
     type: "step" | "error",
     filename: string
   ): Promise<string | null> {
     try {
       const fileContent = await fs.readFile(localPath);
-      const s3Key = `job-screenshots/${jobId}/${type}/${filename}`;
+      const s3Key = `job-screenshots/${entityId}/${type}/${filename}`;
 
       const command = new PutObjectCommand({
         Bucket: this.s3BucketName,
@@ -141,7 +134,7 @@ export class ScreenshotHelper {
         Body: fileContent,
         ContentType: "image/png",
         Metadata: {
-          jobId,
+          entityId,
           uploadedAt: new Date().toISOString(),
         },
       });
@@ -164,7 +157,6 @@ export const takeScreenshot = ScreenshotHelper.takeScreenshot.bind(
 
 /**
  * Backward-compatible wrapper: takes a "step" screenshot (success).
- * Maps the old (page, jobId, stepName, platform?) signature to the new API.
  */
 export async function takeSuccessScreenshot(
   page: Page | null,
@@ -177,7 +169,6 @@ export async function takeSuccessScreenshot(
 
 /**
  * Backward-compatible wrapper: takes an "error" screenshot.
- * Maps the old (page, jobId, errorContext, platform?) signature to the new API.
  */
 export async function takeErrorScreenshot(
   page: Page | null,

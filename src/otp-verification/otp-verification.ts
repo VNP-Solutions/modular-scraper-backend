@@ -147,7 +147,8 @@ async function getVerificationCode() {
 async function handleOtpVerification(
   browser: Browser,
   page: Page,
-  jobId?: string
+  jobId?: string,
+  entityType: "job" | "retrieval" = "job"
 ): Promise<void> {
   try {
     // Check if scraping is paused before starting OTP verification
@@ -168,7 +169,7 @@ async function handleOtpVerification(
       });
 
       // Screenshot: OTP page detected
-      await takeScreenshot(page, jobId ?? "", "otp_page_detected", "step");
+      await takeScreenshot(page, jobId ?? "", "otp_page_detected", "step", "expedia", entityType);
     } catch (error: any) {
       await dualLogError("Error waiting for verification page:", error);
       // Send email notification for verification page error
@@ -288,7 +289,7 @@ async function handleOtpVerification(
         await verifyButtonHandle.click();
         await dualLogInfo("Clicked the verify button successfully!");
         // Screenshot: OTP code submitted
-        await takeScreenshot(page, jobId ?? "", "otp_submitted", "step");
+        await takeScreenshot(page, jobId ?? "", "otp_submitted", "step", "expedia", entityType);
       } catch (error: any) {
         await dualLogError("Error in primary verification flow:", error);
 
@@ -721,7 +722,7 @@ async function handleOtpVerification(
   } catch (error: any) {
     await dualLogError("Error in handleOtpVerification:", error);
     // Screenshot: OTP verification failed
-    await takeScreenshot(page, jobId ?? "", "otp_failed", "error");
+    await takeScreenshot(page, jobId ?? "", "otp_failed", "error", "expedia", entityType);
     setFailedReasonCode(error, inferOtpFailedReasonCode(error?.message));
 
     // Send email notification for general OTP verification error
