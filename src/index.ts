@@ -4,6 +4,10 @@ import open from "open";
 import app from "./app/app.js";
 import { loadAndSetCredentials } from "./common/load-token.js";
 import { otpAwareWorkerPool } from "./common/otp-aware-worker-pool.js";
+import {
+  startTokenRefreshCron,
+  stopTokenRefreshCron,
+} from "./common/token-refresh-cron.js";
 dotenv.config();
 
 const port: number = parseInt(process.env.PORT || "3000");
@@ -40,6 +44,10 @@ const gracefulShutdown = async (signal: string): Promise<void> => {
   console.log(`Received ${signal}. Starting graceful shutdown...`);
 
   try {
+    // Stop token refresh cron first
+    console.log("Stopping token refresh cron job...");
+    stopTokenRefreshCron();
+
     // Shutdown worker pool first
     console.log("Shutting down OTP-aware worker pool...");
     await otpAwareWorkerPool.shutdown();
@@ -71,6 +79,10 @@ app.listen(port, async () => {
       console.log("Opening browser for authentication...");
       open(`http://localhost:${port}/auth`);
     }
+
+    // Start the every-2-hour token refresh cron job
+    startTokenRefreshCron();
+
     console.log(`Server is listening on port ${port}`);
     console.log(
       `OTP-aware worker pool initialized with ${
