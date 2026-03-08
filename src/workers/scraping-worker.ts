@@ -21,6 +21,10 @@ import reservation from "../reservation/reservation.js";
 import { propertyCredentialsService } from "../services/job-credentials.service.js";
 import {
   getFailedReasonForUser,
+  isStatusAlreadySaved,
+  markStatusSaved,
+} from "../common/failed-reason.js";
+import {
   jobService,
 } from "../services/job.service.js";
 
@@ -359,11 +363,15 @@ class ScrapingWorker {
       };
     } catch (scrapingError) {
       // Mark job as failed on scraping error with reason for UI
-      const failedReason = getFailedReasonForUser(
-        scrapingError,
-        "Property scraping failed"
-      );
-      await jobService.updateJobStatus(jobId, JobStatus.Failed, failedReason);
+      // Only write if inner catches (expedia-graphql/main) haven't already saved a more specific reason
+      if (!isStatusAlreadySaved(scrapingError)) {
+        const failedReason = getFailedReasonForUser(
+          scrapingError,
+          "Property scraping failed"
+        );
+        await jobService.updateJobStatus(jobId, JobStatus.Failed, failedReason);
+        markStatusSaved(scrapingError);
+      }
       await dualLogError(`Worker: Job ${jobId} failed`, scrapingError, {
         jobId,
       });
@@ -502,8 +510,11 @@ class ScrapingWorker {
       };
     } catch (error) {
       console.error(`Worker: ❌ Error during job ${jobId} rerun:`, error);
-      const failedReason = getFailedReasonForUser(error, "Job rerun failed");
-      await jobService.updateJobStatus(jobId, JobStatus.Failed, failedReason);
+      if (!isStatusAlreadySaved(error)) {
+        const failedReason = getFailedReasonForUser(error, "Job rerun failed");
+        await jobService.updateJobStatus(jobId, JobStatus.Failed, failedReason);
+        markStatusSaved(error);
+      }
       await dualLogError(`Worker: Job ${jobId} rerun failed`, error, { jobId });
 
       // Update job status to Failed
@@ -720,11 +731,15 @@ class ScrapingWorker {
       };
     } catch (scrapingError) {
       // Mark job as failed on scraping error with reason for UI
-      const failedReason = getFailedReasonForUser(
-        scrapingError,
-        "GraphQL scraping failed"
-      );
-      await jobService.updateJobStatus(jobId, JobStatus.Failed, failedReason);
+      // Only write if inner catches (expedia-graphql) haven't already saved a more specific reason
+      if (!isStatusAlreadySaved(scrapingError)) {
+        const failedReason = getFailedReasonForUser(
+          scrapingError,
+          "GraphQL scraping failed"
+        );
+        await jobService.updateJobStatus(jobId, JobStatus.Failed, failedReason);
+        markStatusSaved(scrapingError);
+      }
       await dualLogError(`Worker: GraphQL job ${jobId} failed`, scrapingError, {
         jobId,
       });
@@ -872,11 +887,15 @@ class ScrapingWorker {
       };
     } catch (scrapingError) {
       // Mark job as failed on scraping error with reason for UI
-      const failedReason = getFailedReasonForUser(
-        scrapingError,
-        "Agoda scraping failed"
-      );
-      await jobService.updateJobStatus(jobId, JobStatus.Failed, failedReason);
+      // Only write if inner catches haven't already saved a more specific reason
+      if (!isStatusAlreadySaved(scrapingError)) {
+        const failedReason = getFailedReasonForUser(
+          scrapingError,
+          "Agoda scraping failed"
+        );
+        await jobService.updateJobStatus(jobId, JobStatus.Failed, failedReason);
+        markStatusSaved(scrapingError);
+      }
       await dualLogError(`Worker: Agoda job ${jobId} failed`, scrapingError, {
         jobId,
       });
@@ -1018,11 +1037,14 @@ class ScrapingWorker {
       };
     } catch (error) {
       console.error(`Worker: ❌ Error during Agoda job ${jobId} rerun:`, error);
-      const failedReason = getFailedReasonForUser(
-        error,
-        "Agoda job rerun failed"
-      );
-      await jobService.updateJobStatus(jobId, JobStatus.Failed, failedReason);
+      if (!isStatusAlreadySaved(error)) {
+        const failedReason = getFailedReasonForUser(
+          error,
+          "Agoda job rerun failed"
+        );
+        await jobService.updateJobStatus(jobId, JobStatus.Failed, failedReason);
+        markStatusSaved(error);
+      }
       await dualLogError(`Worker: Agoda job ${jobId} rerun failed`, error, {
         jobId,
       });

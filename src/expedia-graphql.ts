@@ -6,6 +6,13 @@ import { delay } from "./common/delay.js";
 import { emailNotifier } from "./common/email-notifier.js";
 import { decryptPassword } from "./common/encription.js";
 import {
+  FAILED_REASON,
+  hasFailedReasonCode,
+  isStatusAlreadySaved,
+  markStatusSaved,
+  setFailedReasonCode,
+} from "./common/failed-reason.js";
+import {
   dualLogError,
   dualLogInfo,
   finalizeJobLogging,
@@ -782,7 +789,12 @@ async function makeGraphQLRequest(
         const userFriendlyMessage = isUnauthorized
           ? "GraphQL issue: This is likely a temporary issue with Expedia's reservation search API."
           : firstMessage || `GraphQL query errors: ${JSON.stringify(responseData.errors)}`;
-        throw new Error(userFriendlyMessage);
+        const graphqlErr = new Error(userFriendlyMessage);
+        setFailedReasonCode(
+          graphqlErr,
+          isUnauthorized ? FAILED_REASON.GRAPHQL_NOT_AUTHORIZED : FAILED_REASON.GRAPHQL_ERROR
+        );
+        throw graphqlErr;
       } else {
         console.warn("⚠️ No reservation data found in response");
         console.log("📋 Full response structure:", Object.keys(responseData));
@@ -796,6 +808,7 @@ async function makeGraphQLRequest(
           `GraphQL API request timed out after ${graphqlTimeoutMs}ms. This may be due to network issues or server overload.`
         );
         timeoutError.name = "NETWORK_TIMEOUT";
+        setFailedReasonCode(timeoutError, FAILED_REASON.GRAPHQL_TIMEOUT);
         throw timeoutError;
       }
 
@@ -808,6 +821,7 @@ async function makeGraphQLRequest(
           `GraphQL API network timeout: ${fetchError.message}`
         );
         timeoutError.name = "NETWORK_TIMEOUT";
+        setFailedReasonCode(timeoutError, FAILED_REASON.GRAPHQL_TIMEOUT);
         throw timeoutError;
       }
 
@@ -1360,18 +1374,20 @@ async function graphqlScraping(
       if (jobId) {
         await finalizeJobLogging("failed");
       }
+      markStatusSaved(error);
       throw error;
     }
   } catch (error: any) {
     await dualLogError("Main function error:", error);
 
-    const failedReason = getFailedReasonForUser(
-      error,
-      "GraphQL scraping failed; no reservations found"
-    );
+    // Inner catch already saved the status — skip to avoid overwriting the real failed_reason
+    if (!isStatusAlreadySaved(error) && jobId) {
+      const failedReason = getFailedReasonForUser(
+        error,
+        "GraphQL scraping failed; no reservations found"
+      );
 
-    // Check job items count and set appropriate job status
-    if (jobId) {
+      // Check job items count and set appropriate job status
       try {
         const jobItemsCount = await jobService.getJobItemsCount(jobId);
 
@@ -1616,8 +1632,12 @@ async function runScrapingWithRestart(
           .join("; ");
 
         await dualLogInfo("Session cookies extracted for GraphQL API");
-      } catch (loginError) {
+      } catch (loginError: any) {
         await dualLogError("Login failed:", loginError);
+        // Only set LOGIN_FAILED if the error has no code yet (e.g. OTP already set OTP_VERIFICATION_CODE_NOT_FOUND)
+        if (!hasFailedReasonCode(loginError)) {
+          setFailedReasonCode(loginError, FAILED_REASON.LOGIN_FAILED);
+        }
         if (globalBrowser) await globalBrowser.close();
         throw loginError;
       }
@@ -1656,7 +1676,9 @@ async function runScrapingWithRestart(
 
           // Check if browser is still alive
           if (!globalBrowser || globalBrowser.isConnected() === false) {
-            throw new Error("Browser session lost, need to restart");
+            const err = new Error("Browser session lost, need to restart");
+            setFailedReasonCode(err, FAILED_REASON.BROWSER_SESSION_LOST);
+            throw err;
           }
 
           let browser = globalBrowser;

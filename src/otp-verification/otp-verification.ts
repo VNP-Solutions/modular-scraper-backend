@@ -1,6 +1,10 @@
 import dotenv from "dotenv";
 import { google } from "googleapis";
 import { Browser, Page } from "puppeteer";
+import {
+  inferOtpFailedReasonCode,
+  setFailedReasonCode,
+} from "../common/failed-reason.js";
 import { delay } from "../common/delay.js";
 import { loadAndSetCredentials } from "../common/load-token.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
@@ -711,6 +715,7 @@ async function handleOtpVerification(
     }
   } catch (error: any) {
     await dualLogError("Error in handleOtpVerification:", error);
+    setFailedReasonCode(error, inferOtpFailedReasonCode(error?.message));
 
     // Send email notification for general OTP verification error
     if (jobId) {

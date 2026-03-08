@@ -59,66 +59,8 @@ export interface CreateJobItemData {
   additional_text?: string;
 }
 
-/**
- * Map raw errors to user-friendly failed_reason strings for the UI.
- * Covers OTP verification failed, Login failed, Property not found, VCC not available, etc.
- */
-export function getFailedReasonForUser(
-  error: unknown,
-  fallback: string = "Scraping failed",
-): string {
-  const msg = String((error as Error)?.message ?? "").toLowerCase();
-  if (!msg) return fallback;
-  if (
-    msg.includes("failed to get verification code from email") ||
-    msg.includes("no verification code found")
-  )
-    return "Failed to fetch verification code from your email. Re-authenticate to solve this issue.";
-  if (
-    msg.includes("otp") ||
-    msg.includes("verification code") ||
-    msg.includes("verify button") ||
-    msg.includes("verification failed") ||
-    msg.includes("gmail credentials")
-  )
-    return "OTP verification failed";
-  if (
-    msg.includes("login") ||
-    msg.includes("password input") ||
-    msg.includes("credentials") ||
-    msg.includes("authentication")
-  )
-    return "Login failed";
-  if (
-    msg.includes("property") ||
-    msg.includes("expedia_id") ||
-    msg.includes("agoda_id") ||
-    msg.includes("cannot retrieve valid")
-  )
-    return "Property not found or invalid ID";
-  if (
-    msg.includes("vcc") ||
-    msg.includes("virtual card") ||
-    msg.includes("evc") ||
-    msg.includes("card not available")
-  )
-    return "VCC / virtual card not available";
-  if (msg.includes("scraping was stopped")) return "Scraping was stopped";
-  if (
-    msg.includes("timeout") ||
-    msg.includes("timed out") ||
-    msg.includes("network timeout") ||
-    (msg.includes("exceeded") && (msg.includes("ms") || msg.includes("waiting")))
-  )
-    return "Request timed out or page did not load in time. Please try again.";
-  if (msg.includes("graphql") && msg.includes("error"))
-    return "GraphQL API error";
-  if (msg.includes("no reservations found"))
-    return "No reservations found for the date range";
-  if (msg.includes("maximum restart attempts"))
-    return "Maximum restart attempts exceeded";
-  return (error as Error)?.message || fallback;
-}
+// Re-export from central failed-reason module (stable codes + messages, set at throw/catch sites)
+export { getFailedReasonForUser } from "../common/failed-reason.js";
 
 export class JobService {
   /**

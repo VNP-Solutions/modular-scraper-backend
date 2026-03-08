@@ -21,6 +21,12 @@ import { JobStatus } from "./models/job.model.js";
 import handleOtpVerification from "./otp-verification/otp-verification.js";
 import { propertySearchAndClickReservation } from "./property-search/property-search.js";
 import {
+  FAILED_REASON,
+  isStatusAlreadySaved,
+  markStatusSaved,
+  setFailedReasonCode,
+} from "./common/failed-reason.js";
+import {
   getFailedReasonForUser,
   jobService,
 } from "./services/job.service.js";
@@ -171,6 +177,7 @@ async function main(
       if (jobId) {
         await finalizeJobLogging("failed");
       }
+      markStatusSaved(error);
       throw error;
     }
   } catch (error) {
@@ -207,11 +214,14 @@ async function main(
       await progressManager.handleJobError(jobId, error);
     }
 
-    const failedReason =
-      (error as Error)?.message || "Scraping failed; no reservations found";
+    // Inner catch already saved the status — skip to avoid overwriting the real failed_reason
+    if (!isStatusAlreadySaved(error) && jobId) {
+      const failedReason = getFailedReasonForUser(
+        error,
+        "Scraping failed; no reservations found"
+      );
 
-    // Check job items count and set appropriate job status
-    if (jobId) {
+      // Check job items count and set appropriate job status
       try {
         const jobItemsCount = await jobService.getJobItemsCount(jobId);
 
@@ -671,6 +681,7 @@ async function runScrapingWithRestart(
     const maxAttemptsError = new Error(
       `Maximum restart attempts (${maxAttempts}) exceeded`
     );
+    setFailedReasonCode(maxAttemptsError, FAILED_REASON.MAX_RESTART_ATTEMPTS);
     const maxAttemptsReason = getFailedReasonForUser(
       maxAttemptsError,
       "Maximum restart attempts exceeded"

@@ -1,4 +1,5 @@
 import { Browser, Page } from "puppeteer";
+import { FAILED_REASON, setFailedReasonCode } from "../common/failed-reason.js";
 import { delay } from "../common/delay.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
@@ -15,7 +16,9 @@ async function login(
   await scrapingStateManager.waitWhilePaused();
   if (!scrapingStateManager.isRunning()) {
     await dualLogError("Scraping was stopped during login");
-    throw new Error("Scraping was stopped during login");
+    const err = new Error("Scraping was stopped during login");
+    setFailedReasonCode(err, FAILED_REASON.SCRAPING_STOPPED);
+    throw err;
   }
 
   // Get timeout configuration for this job
@@ -31,7 +34,9 @@ async function login(
   await scrapingStateManager.waitWhilePaused();
   if (!scrapingStateManager.isRunning()) {
     await dualLogError("Scraping was stopped during login");
-    throw new Error("Scraping was stopped during login");
+    const err = new Error("Scraping was stopped during login");
+    setFailedReasonCode(err, FAILED_REASON.SCRAPING_STOPPED);
+    throw err;
   }
 
   // Type email slowly, character by character
@@ -50,7 +55,9 @@ async function login(
   await scrapingStateManager.waitWhilePaused();
   if (!scrapingStateManager.isRunning()) {
     await dualLogError("Scraping was stopped during login");
-    throw new Error("Scraping was stopped during login");
+    const err = new Error("Scraping was stopped during login");
+    setFailedReasonCode(err, FAILED_REASON.SCRAPING_STOPPED);
+    throw err;
   }
 
   // Wait for password page to be fully loaded
@@ -171,7 +178,9 @@ async function login(
           );
           const pageContent = await page.content();
           await dualLogInfo("Page title: " + (await page.title()));
-          throw new Error("Password input field not found on the page");
+          const err = new Error("Password input field not found on the page");
+          setFailedReasonCode(err, FAILED_REASON.LOGIN_FAILED);
+          throw err;
         }
 
         // Add a significant delay to ensure the page is fully loaded and stable
