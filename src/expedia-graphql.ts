@@ -1801,27 +1801,12 @@ async function runScrapingWithRestart(
               } (${singleDate}) completed successfully!`
             );
 
-            // Screenshot: date chunk processed successfully
-            await takeScreenshot(
-              globalPage,
-              jobId ?? "",
-              `date_${singleDate.replace(/\//g, "-")}_processed`,
-              "step"
-            );
-
             // ✅ Data stored to database via GraphQL processing above
 
             dateCompleted = true; // Mark this date as completed
             break; // Exit the retry attempts for this date
           } catch (graphqlError: any) {
             console.error("❌ GraphQL API call failed:", graphqlError);
-            // Screenshot: GraphQL error on this date
-            await takeScreenshot(
-              globalPage,
-              jobId ?? "",
-              `graphql_error_date_${singleDate.replace(/\//g, "-")}`,
-              "error"
-            );
             throw graphqlError;
           }
         } catch (error: any) {
