@@ -1,11 +1,11 @@
 import dotenv from "dotenv";
-import cron from "node-cron";
+import { schedule, ScheduledTask } from "node-cron";
 import { forceRefreshToken } from "./load-token.js";
 import { dualLogError, dualLogInfo, dualLogWarn } from "./log-helper.js";
 
 dotenv.config();
 
-let cronTask: cron.ScheduledTask | null = null;
+let cronTask: ScheduledTask | null = null;
 let isRefreshing = false;
 
 /**
@@ -70,8 +70,7 @@ export function startTokenRefreshCron(): void {
   );
 
   // Schedule: every 2 hours (0 */2 * * *)
-  cronTask = cron.schedule("0 */2 * * *", runTokenRefresh, {
-    scheduled: true,
+  cronTask = schedule("0 */2 * * *", runTokenRefresh, {
     timezone: "UTC",
   });
 
