@@ -169,29 +169,38 @@ async function login(
         // Screenshot: password submitted
         await takeScreenshot(page, jobId ?? "", "password_submitted", "step", "expedia", entityType);
 
-        // Wait briefly then check if Expedia shows a wrong-password error
-        await delay(3000);
-        const loginErrorText = await page.evaluate(() => {
-          // Exact error element Expedia renders on wrong password
-          const exactError = document.querySelector("#password-input-error");
-          if (exactError && exactError.textContent && exactError.textContent.trim().length > 0) {
-            return exactError.textContent.trim();
-          }
-          // aria-invalid on the password input also signals a validation error
-          const invalidInput = document.querySelector("#password-input[aria-invalid='true']");
-          if (invalidInput) {
-            return "The email or password entered is incorrect.";
-          }
-          return null;
-        });
+        // Wait up to 10s for either: the password error to appear, OR the page to navigate away
+        await dualLogInfo("Waiting for login result (success navigation or error message)...");
+        const loginResult = await Promise.race([
+          // Race 1: error element appears → wrong password
+          page.waitForSelector("#password-input-error", { timeout: 10000 })
+            .then(() => "error" as const)
+            .catch(() => null),
+          // Race 2: page navigates away from password page → login succeeded
+          page.waitForFunction(
+            () => !document.querySelector("#password-input") && !document.querySelector("#password-continue"),
+            { timeout: 10000 }
+          )
+            .then(() => "success" as const)
+            .catch(() => null),
+        ]);
 
-        if (loginErrorText) {
-          await dualLogError(`Login error detected after password submit: ${loginErrorText}`);
+        await dualLogInfo(`Login result: ${loginResult ?? "timeout (no response)"}`);
+
+        if (loginResult === "error" || loginResult === null) {
+          // Either the error element appeared, or both waits timed out (page still on password screen)
+          const errorMessage = await page.evaluate(() => {
+            const el = document.querySelector("#password-input-error");
+            return el?.textContent?.trim() || "The email or password entered is incorrect.";
+          });
+          await dualLogError(`Login failed - wrong credentials detected: ${errorMessage}`);
           await takeScreenshot(page, jobId ?? "", "login_error_detected", "error", "expedia", entityType);
-          const err = new Error(`Login failed: ${loginErrorText}`);
+          const err = new Error(`Login failed: ${errorMessage}`);
           setFailedReasonCode(err, FAILED_REASON.LOGIN_FAILED);
           throw err;
         }
+
+        await dualLogInfo("Login succeeded - page navigated away from password screen.");
       }
     } catch (error: any) {
       await dualLogError(
@@ -304,30 +313,37 @@ async function login(
         // Screenshot: password submitted (passwordControl variant)
         await takeScreenshot(page, jobId ?? "", "password_submitted", "step", "expedia", entityType);
 
-        // Wait briefly then check if Expedia shows a wrong-password error
-        await delay(3000);
-        const loginErrorTextControl = await page.evaluate(() => {
-          // Exact error element Expedia renders on wrong password
-          const exactError = document.querySelector("#password-input-error");
-          if (exactError && exactError.textContent && exactError.textContent.trim().length > 0) {
-            return exactError.textContent.trim();
-          }
-          // aria-invalid on the password input also signals a validation error
-          const invalidInput = document.querySelector("#password-input[aria-invalid='true']") ||
-            document.querySelector("#passwordControl[aria-invalid='true']");
-          if (invalidInput) {
-            return "The email or password entered is incorrect.";
-          }
-          return null;
-        });
+        // Wait up to 10s for either: the password error to appear, OR the page to navigate away
+        await dualLogInfo("Waiting for login result (success navigation or error message)...");
+        const loginResultControl = await Promise.race([
+          // Race 1: error element appears → wrong password
+          page.waitForSelector("#password-input-error", { timeout: 10000 })
+            .then(() => "error" as const)
+            .catch(() => null),
+          // Race 2: page navigates away from password page → login succeeded
+          page.waitForFunction(
+            () => !document.querySelector("#passwordControl") && !document.querySelector("#signInButton"),
+            { timeout: 10000 }
+          )
+            .then(() => "success" as const)
+            .catch(() => null),
+        ]);
 
-        if (loginErrorTextControl) {
-          await dualLogError(`Login error detected after password submit: ${loginErrorTextControl}`);
+        await dualLogInfo(`Login result: ${loginResultControl ?? "timeout (no response)"}`);
+
+        if (loginResultControl === "error" || loginResultControl === null) {
+          const errorMessage = await page.evaluate(() => {
+            const el = document.querySelector("#password-input-error");
+            return el?.textContent?.trim() || "The email or password entered is incorrect.";
+          });
+          await dualLogError(`Login failed - wrong credentials detected: ${errorMessage}`);
           await takeScreenshot(page, jobId ?? "", "login_error_detected", "error", "expedia", entityType);
-          const err = new Error(`Login failed: ${loginErrorTextControl}`);
+          const err = new Error(`Login failed: ${errorMessage}`);
           setFailedReasonCode(err, FAILED_REASON.LOGIN_FAILED);
           throw err;
         }
+
+        await dualLogInfo("Login succeeded - page navigated away from password screen.");
       } catch (error: any) {
         await dualLogError("Error handling password input:", error.message);
         throw error;
