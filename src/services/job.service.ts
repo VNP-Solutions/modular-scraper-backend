@@ -309,9 +309,10 @@ export class JobService {
         updatedAt: new Date(),
       };
 
-      // If changing to Running status, assign current worker
+      // If changing to Running status, assign current worker and clear previous screenshot trail
       if (status === JobStatus.Running) {
         updateData.worker_assigned = process.env.WORKER_ID || "scraper-worker";
+        updateData.screenshot_urls = [];
       }
 
       // Set or clear failed_reason for UI
