@@ -168,6 +168,30 @@ async function login(
         await page.click("#password-continue");
         // Screenshot: password submitted
         await takeScreenshot(page, jobId ?? "", "password_submitted", "step", "expedia", entityType);
+
+        // Wait briefly then check if Expedia shows a wrong-password error
+        await delay(3000);
+        const loginErrorText = await page.evaluate(() => {
+          // Exact error element Expedia renders on wrong password
+          const exactError = document.querySelector("#password-input-error");
+          if (exactError && exactError.textContent && exactError.textContent.trim().length > 0) {
+            return exactError.textContent.trim();
+          }
+          // aria-invalid on the password input also signals a validation error
+          const invalidInput = document.querySelector("#password-input[aria-invalid='true']");
+          if (invalidInput) {
+            return "The email or password entered is incorrect.";
+          }
+          return null;
+        });
+
+        if (loginErrorText) {
+          await dualLogError(`Login error detected after password submit: ${loginErrorText}`);
+          await takeScreenshot(page, jobId ?? "", "login_error_detected", "error", "expedia", entityType);
+          const err = new Error(`Login failed: ${loginErrorText}`);
+          setFailedReasonCode(err, FAILED_REASON.LOGIN_FAILED);
+          throw err;
+        }
       }
     } catch (error: any) {
       await dualLogError(
@@ -279,6 +303,31 @@ async function login(
         await page.click("#signInButton");
         // Screenshot: password submitted (passwordControl variant)
         await takeScreenshot(page, jobId ?? "", "password_submitted", "step", "expedia", entityType);
+
+        // Wait briefly then check if Expedia shows a wrong-password error
+        await delay(3000);
+        const loginErrorTextControl = await page.evaluate(() => {
+          // Exact error element Expedia renders on wrong password
+          const exactError = document.querySelector("#password-input-error");
+          if (exactError && exactError.textContent && exactError.textContent.trim().length > 0) {
+            return exactError.textContent.trim();
+          }
+          // aria-invalid on the password input also signals a validation error
+          const invalidInput = document.querySelector("#password-input[aria-invalid='true']") ||
+            document.querySelector("#passwordControl[aria-invalid='true']");
+          if (invalidInput) {
+            return "The email or password entered is incorrect.";
+          }
+          return null;
+        });
+
+        if (loginErrorTextControl) {
+          await dualLogError(`Login error detected after password submit: ${loginErrorTextControl}`);
+          await takeScreenshot(page, jobId ?? "", "login_error_detected", "error", "expedia", entityType);
+          const err = new Error(`Login failed: ${loginErrorTextControl}`);
+          setFailedReasonCode(err, FAILED_REASON.LOGIN_FAILED);
+          throw err;
+        }
       } catch (error: any) {
         await dualLogError("Error handling password input:", error.message);
         throw error;
