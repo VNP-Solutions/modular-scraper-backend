@@ -12,6 +12,15 @@ import {
   OTAProvider,
   PostingType,
 } from "../models/job.model.js";
+export {
+  getFailedReasonForUser,
+  isStatusAlreadySaved,
+  markStatusSaved,
+  setFailedReasonCode,
+  hasFailedReasonCode,
+  inferOtpFailedReasonCode,
+  FAILED_REASON,
+} from "../common/failed-reason.js";
 import {
   IPropertyCredentials,
   PropertyCredentials,
@@ -304,15 +313,39 @@ export class JobService {
         updatedAt: new Date(),
       };
 
-      // If changing to Running status, assign current worker
+      // If changing to Running status, assign current worker and clear previous screenshot trail
       if (status === JobStatus.Running) {
         updateData.worker_assigned = process.env.WORKER_ID || "scraper-worker";
+        updateData.screenshot_urls = [];
       }
 
       return await Job.findByIdAndUpdate(objectId, updateData, { new: true });
     } catch (error) {
       console.error(`Error updating job status: ${error}`);
       return null;
+    }
+  }
+
+  /**
+   * Append a screenshot entry to the job's screenshot_urls array
+   */
+  async addScreenshotUrl(
+    jobId: string,
+    entry: {
+      step: string;
+      url: string;
+      timestamp: string;
+      type: "step" | "error";
+    }
+  ): Promise<void> {
+    try {
+      const objectId = this.validateObjectId(jobId, "jobId");
+      await Job.findByIdAndUpdate(objectId, {
+        $push: { screenshot_urls: entry },
+        updatedAt: new Date(),
+      });
+    } catch (error) {
+      console.error(`Error adding screenshot URL to job: ${error}`);
     }
   }
 
@@ -738,6 +771,73 @@ export class JobService {
         totalPage: 1,
         limit,
       };
+    }
+  }
+
+  /**
+   * Update job status with an optional failed_reason message.
+   * Clears failed_reason on success/completed statuses.
+   */
+  async updateJobStatusWithReason(
+    jobId: string,
+    status: JobStatus,
+    failedReason?: string | null
+  ): Promise<IJob | null> {
+    try {
+      const objectId = this.validateObjectId(jobId, "jobId");
+      const isFailed = status === JobStatus.Failed || status === JobStatus.Partial;
+
+      const updateData: any = {
+        job_status: status,
+        updatedAt: new Date(),
+      };
+
+      if (status === JobStatus.Running) {
+        updateData.worker_assigned = process.env.WORKER_ID || "scraper-worker";
+        updateData.screenshot_urls = [];
+      }
+
+      if (isFailed) {
+        if (failedReason != null && failedReason !== "") {
+          updateData.failed_reason = String(failedReason).slice(0, 1000);
+        }
+      } else {
+        updateData.failed_reason = null;
+      }
+
+      return await Job.findByIdAndUpdate(objectId, updateData, { new: true });
+    } catch (error) {
+      console.error(`Error updating job status: ${error}`);
+      return null;
+    }
+  }
+
+  /**
+   * Set job to Failed status without overwriting an already-saved failed_reason.
+   * Use in outer callers (app.ts, worker) that don't have the original error object.
+   */
+  async failJobSafe(
+    jobId: string,
+    fallbackReason?: string
+  ): Promise<IJob | null> {
+    try {
+      const objectId = this.validateObjectId(jobId, "jobId");
+
+      const existing = await Job.findById(objectId).select("failed_reason").lean();
+      const alreadyHasReason = existing && (existing as any).failed_reason;
+
+      const updateData: any = {
+        job_status: JobStatus.Failed,
+        updatedAt: new Date(),
+      };
+      if (!alreadyHasReason && fallbackReason) {
+        updateData.failed_reason = String(fallbackReason).slice(0, 1000);
+      }
+
+      return await Job.findByIdAndUpdate(objectId, updateData, { new: true });
+    } catch (error) {
+      console.error(`Error failing job: ${error}`);
+      return null;
     }
   }
 }

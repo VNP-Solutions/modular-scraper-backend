@@ -6,6 +6,7 @@ import { delay } from "./common/delay.js";
 import { decryptPassword } from "./common/encription.js";
 import { dualLogError, dualLogInfo } from "./common/log-helper.js";
 import { otpCompletionNotifier } from "./common/otp-completion-notifier.js";
+import { takeScreenshot } from "./common/screenshot-helper.js";
 import { scrapingStateManager } from "./common/scraping-state.js";
 import { processReservationIds } from "./expedia-payments/by-reservation-id.js";
 import { clickExpediaPaymentandsetDaterange } from "./expedia-payments/expedia-payments.js";
@@ -108,6 +109,7 @@ async function dbScraping(
         await dualLogInfo(
           "Login completed successfully! User is now logged in."
         );
+        await takeScreenshot(page, jobId ?? "", "login_complete", "step", "expedia");
 
         // Add your post-login automation here
         await dualLogInfo("Ready for scraping operations...");
@@ -134,6 +136,7 @@ async function dbScraping(
 
         await handleOtpVerification(browser, page, jobId);
         await dualLogInfo("OTP verification completed successfully!");
+        await takeScreenshot(page, jobId ?? "", "otp_complete", "step", "expedia");
 
         // Notify worker that OTP work is completed so other jobs can proceed
         if (jobId) {
@@ -174,6 +177,7 @@ async function dbScraping(
           await dualLogInfo(
             "Property search and Payments completed successfully!"
           );
+          await takeScreenshot(page, jobId ?? "", "property_search_complete", "step", "expedia");
         } catch (error: any) {
           await dualLogError("Property search failed:", error);
           throw error;
@@ -205,6 +209,7 @@ async function dbScraping(
         await dualLogInfo(
           "Successfully clicked payment link and ready for date range setting!"
         );
+        await takeScreenshot(page, jobId ?? "", "payment_daterange_set", "step", "expedia");
       } catch (error: any) {
         await dualLogError("Payment link click failed:", error);
         throw error;
@@ -237,6 +242,7 @@ async function dbScraping(
         await dualLogInfo(
           `Phase 1 complete! Collected ${collectedReservationIds.length} reservation ID(s) in memory.`
         );
+        await takeScreenshot(page, jobId ?? "", "phase1_collection_complete", "step", "expedia");
       } catch (error: any) {
         await dualLogError("Phase 1 (date range collection) failed:", error);
         throw error;
@@ -264,6 +270,7 @@ async function dbScraping(
           propertyName
         );
         await dualLogInfo("Phase 2 complete! All reservation ID batches processed.");
+        await takeScreenshot(page, jobId ?? "", "phase2_processing_complete", "step", "expedia");
         // Empty in-memory reservation IDs after all batches are done
         collectedReservationIds = [];
       } catch (error: any) {
@@ -286,6 +293,9 @@ async function dbScraping(
     await dualLogInfo("DB scraping completed successfully!");
   } catch (error) {
     await dualLogError("Error in DB scraping:", error);
+    if (page) {
+      await takeScreenshot(page, jobId ?? "", "job_failed", "error", "expedia");
+    }
 
     // Ensure browser is closed on error
     if (browser) {

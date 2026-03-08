@@ -3,6 +3,11 @@ import mongoose from "mongoose";
 import { parentPort } from "worker_threads";
 import { otpCompletionNotifier } from "../common/otp-completion-notifier.js";
 import { WorkerJobData, WorkerMessage } from "../common/worker-types.js";
+import {
+  getFailedReasonForUser,
+  isStatusAlreadySaved,
+  markStatusSaved,
+} from "../common/failed-reason.js";
 
 import {
   dualLogError,
@@ -353,6 +358,13 @@ class ScrapingWorker {
       // Finalize logging with failed status
       await finalizeJobLogging("failed");
 
+      // If inner catches haven't already set failed_reason, do it now
+      if (!isStatusAlreadySaved(scrapingError)) {
+        const failedReason = getFailedReasonForUser(scrapingError, "Scraping failed");
+        await jobService.failJobSafe(jobId, failedReason);
+        markStatusSaved(scrapingError);
+      }
+
       throw scrapingError;
     }
   }
@@ -484,6 +496,13 @@ class ScrapingWorker {
 
       // Finalize logging with failed status
       await finalizeJobLogging("failed");
+
+      // If inner catches haven't already set failed_reason, do it now
+      if (!isStatusAlreadySaved(error)) {
+        const failedReason = getFailedReasonForUser(error, "Scraping failed");
+        await jobService.failJobSafe(jobId, failedReason);
+        markStatusSaved(error);
+      }
 
       throw error;
     }
@@ -691,6 +710,13 @@ class ScrapingWorker {
       // Finalize logging with failed status
       await finalizeJobLogging("failed");
 
+      // If inner catches haven't already set failed_reason, do it now
+      if (!isStatusAlreadySaved(scrapingError)) {
+        const failedReason = getFailedReasonForUser(scrapingError, "Scraping failed");
+        await jobService.failJobSafe(jobId, failedReason);
+        markStatusSaved(scrapingError);
+      }
+
       throw scrapingError;
     }
   }
@@ -835,6 +861,13 @@ class ScrapingWorker {
       // Finalize logging with failed status
       await finalizeJobLogging("failed");
 
+      // If inner catches haven't already set failed_reason, do it now
+      if (!isStatusAlreadySaved(scrapingError)) {
+        const failedReason = getFailedReasonForUser(scrapingError, "Scraping failed");
+        await jobService.failJobSafe(jobId, failedReason);
+        markStatusSaved(scrapingError);
+      }
+
       throw scrapingError;
     }
   }
@@ -973,6 +1006,13 @@ class ScrapingWorker {
 
       // Finalize logging with failed status
       await finalizeJobLogging("failed");
+
+      // If inner catches haven't already set failed_reason, do it now
+      if (!isStatusAlreadySaved(scrapingError)) {
+        const failedReason = getFailedReasonForUser(scrapingError, "Scraping failed");
+        await jobService.failJobSafe(jobId, failedReason);
+        markStatusSaved(scrapingError);
+      }
 
       throw scrapingError;
     }

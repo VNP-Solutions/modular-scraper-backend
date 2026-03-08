@@ -65,6 +65,14 @@ export interface IJob extends Document {
   batch_execution_id?: string;
   start_date?: string;
   end_date?: string;
+  failed_reason?: string;
+  /** Ordered list of screenshots taken during job execution, uploaded to S3 */
+  screenshot_urls?: {
+    step: string;
+    url: string;
+    timestamp: string;
+    type: "step" | "error";
+  }[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -219,6 +227,22 @@ const JobSchema = new Schema<IJob>(
       type: Boolean,
       required: false,
       default: false,
+    },
+    failed_reason: {
+      type: String,
+      required: false,
+    },
+    screenshot_urls: {
+      type: [
+        {
+          step: { type: String, required: true },
+          url: { type: String, required: true },
+          timestamp: { type: String, required: true },
+          type: { type: String, enum: ["step", "error"], required: true },
+        },
+      ],
+      required: false,
+      default: [],
     },
   },
   {

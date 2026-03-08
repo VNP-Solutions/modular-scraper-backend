@@ -1,6 +1,11 @@
 import { Browser, Page } from "puppeteer";
 import { delay } from "../common/delay.js";
+import {
+  FAILED_REASON,
+  setFailedReasonCode,
+} from "../common/failed-reason.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
+import { takeScreenshot } from "../common/screenshot-helper.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import { timeoutManager } from "../common/timeout-manager.js";
 
@@ -15,7 +20,9 @@ async function login(
   await scrapingStateManager.waitWhilePaused();
   if (!scrapingStateManager.isRunning()) {
     await dualLogError("Scraping was stopped during login");
-    throw new Error("Scraping was stopped during login");
+    const err = new Error("Scraping was stopped during login");
+    setFailedReasonCode(err, FAILED_REASON.SCRAPING_STOPPED);
+    throw err;
   }
 
   // Get timeout configuration for this job
@@ -26,12 +33,15 @@ async function login(
   });
   // Wait for email input
   await page.waitForSelector("#emailControl");
+  await takeScreenshot(page, jobId ?? "", "login_page_loaded", "step", "expedia");
 
   // Check pause state before entering email
   await scrapingStateManager.waitWhilePaused();
   if (!scrapingStateManager.isRunning()) {
     await dualLogError("Scraping was stopped during login");
-    throw new Error("Scraping was stopped during login");
+    const err = new Error("Scraping was stopped during login");
+    setFailedReasonCode(err, FAILED_REASON.SCRAPING_STOPPED);
+    throw err;
   }
 
   // Type email slowly, character by character
@@ -42,6 +52,7 @@ async function login(
 
   // Click continue button
   await page.click("#continueButton");
+  await takeScreenshot(page, jobId ?? "", "email_entered", "step", "expedia");
 
   // Wait before entering password
   await dualLogInfo("Waiting for password page to load...");
@@ -50,7 +61,9 @@ async function login(
   await scrapingStateManager.waitWhilePaused();
   if (!scrapingStateManager.isRunning()) {
     await dualLogError("Scraping was stopped during login");
-    throw new Error("Scraping was stopped during login");
+    const err = new Error("Scraping was stopped during login");
+    setFailedReasonCode(err, FAILED_REASON.SCRAPING_STOPPED);
+    throw err;
   }
 
   // Wait for password page to be fully loaded
@@ -69,6 +82,7 @@ async function login(
 
       if (passwordInput) {
         passwordInputFound = true;
+        await takeScreenshot(page, jobId ?? "", "password_page_loaded", "step", "expedia");
 
         // Add a significant delay to ensure the page is fully loaded and stable
         await delay(3000);
@@ -148,6 +162,7 @@ async function login(
         // Click the login button
         await dualLogInfo("Clicking password continue button...");
         await page.click("#password-continue");
+        await takeScreenshot(page, jobId ?? "", "password_submitted", "step", "expedia");
       }
     } catch (error: any) {
       await dualLogError(
@@ -171,8 +186,12 @@ async function login(
           );
           const pageContent = await page.content();
           await dualLogInfo("Page title: " + (await page.title()));
-          throw new Error("Password input field not found on the page");
+          const err = new Error("Password input field not found on the page");
+          setFailedReasonCode(err, FAILED_REASON.LOGIN_FAILED);
+          throw err;
         }
+
+        await takeScreenshot(page, jobId ?? "", "password_page_loaded", "step", "expedia");
 
         // Add a significant delay to ensure the page is fully loaded and stable
         await delay(3000);
@@ -252,6 +271,7 @@ async function login(
         // Click the login button
         await dualLogInfo("Clicking password continue button...");
         await page.click("#signInButton");
+        await takeScreenshot(page, jobId ?? "", "password_submitted", "step", "expedia");
       } catch (error: any) {
         await dualLogError("Error handling password input:", error.message);
         throw error;
@@ -259,6 +279,7 @@ async function login(
     }
   } catch (error: any) {
     await dualLogError("Error during password entry:", error.message);
+    await takeScreenshot(page, jobId ?? "", "login_failed", "error", "expedia");
     // Close browser when done with this attempt
     if (browser) {
       await browser.close();

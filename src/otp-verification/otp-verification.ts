@@ -2,8 +2,13 @@ import dotenv from "dotenv";
 import { google } from "googleapis";
 import { Browser, Page } from "puppeteer";
 import { delay } from "../common/delay.js";
+import {
+  inferOtpFailedReasonCode,
+  setFailedReasonCode,
+} from "../common/failed-reason.js";
 import { loadAndSetCredentials } from "../common/load-token.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
+import { takeScreenshot } from "../common/screenshot-helper.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import { timeoutManager } from "../common/timeout-manager.js";
 import { oauth2Client } from "../config/google-config.js";
@@ -161,6 +166,7 @@ async function handleOtpVerification(
         visible: true,
         timeout: selectorTimeout,
       });
+      await takeScreenshot(page, jobId ?? "", "otp_page_detected", "step", "expedia");
     } catch (error: any) {
       await dualLogError("Error waiting for verification page:", error);
 
@@ -280,6 +286,7 @@ async function handleOtpVerification(
         // Click the button
         await verifyButtonHandle.click();
         await dualLogInfo("Clicked the verify button successfully!");
+        await takeScreenshot(page, jobId ?? "", "otp_submitted", "step", "expedia");
       } catch (error: any) {
         await dualLogError("Error in primary verification flow:", error);
 
@@ -712,6 +719,9 @@ async function handleOtpVerification(
   } catch (error: any) {
     await dualLogError("Error in handleOtpVerification:", error);
 
+    // Stamp the OTP-specific failure code so outer catches show a precise message
+    setFailedReasonCode(error, inferOtpFailedReasonCode(error?.message));
+
     // Send email notification for general OTP verification error
     if (jobId) {
       try {
@@ -723,6 +733,7 @@ async function handleOtpVerification(
       }
     }
 
+    await takeScreenshot(page, jobId ?? "", "otp_failed", "error", "expedia");
     // Close browser when done with this attempt
     if (browser) {
       await browser.close();

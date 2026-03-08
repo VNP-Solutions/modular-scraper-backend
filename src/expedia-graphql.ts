@@ -11,6 +11,14 @@ import {
   finalizeJobLogging,
   initializeJobLogging,
 } from "./common/log-helper.js";
+import {
+  FAILED_REASON,
+  getFailedReasonForUser,
+  hasFailedReasonCode,
+  isStatusAlreadySaved,
+  markStatusSaved,
+  setFailedReasonCode,
+} from "./common/failed-reason.js";
 import { otpCompletionNotifier } from "./common/otp-completion-notifier.js";
 import { progressManager } from "./common/progress-manager.js";
 import { scrapingStateManager } from "./common/scraping-state.js";
@@ -403,9 +411,15 @@ async function makeGraphQLRequest(
         `❌ Response Headers:`,
         Object.fromEntries(response.headers.entries())
       );
-      throw new Error(
+      const isUnauthorized = response.status === 401 || response.status === 403;
+      const httpErr = new Error(
         `GraphQL API failed with status ${response.status}: ${errorText}`
       );
+      setFailedReasonCode(
+        httpErr,
+        isUnauthorized ? FAILED_REASON.GRAPHQL_NOT_AUTHORIZED : FAILED_REASON.GRAPHQL_ERROR
+      );
+      throw httpErr;
     }
 
     const responseData = await response.json();
@@ -710,6 +724,14 @@ async function makeGraphQLRequest(
           error.extensions?.classification === "DATA_SOURCE_ERROR"
       );
 
+      const isAuthError = responseData.errors.some(
+        (error: any) =>
+          error.extensions?.code === "UNAUTHORIZED" ||
+          error.extensions?.classification === "PERMISSION_DENIED" ||
+          error.message?.toLowerCase().includes("not authorized") ||
+          error.message?.toLowerCase().includes("unauthorized")
+      );
+
       if (isDownstreamError) {
         console.warn(
           "⚠️ Detected downstream service error - this may be temporary"
@@ -727,9 +749,14 @@ async function makeGraphQLRequest(
         );
       }
 
-      throw new Error(
+      const graphqlErr = new Error(
         `GraphQL query errors: ${JSON.stringify(responseData.errors)}`
       );
+      setFailedReasonCode(
+        graphqlErr,
+        isAuthError ? FAILED_REASON.GRAPHQL_NOT_AUTHORIZED : FAILED_REASON.GRAPHQL_ERROR
+      );
+      throw graphqlErr;
     } else {
       console.warn("⚠️ No reservation data found in response");
       console.log("📋 Full response structure:", Object.keys(responseData));
@@ -742,6 +769,15 @@ async function makeGraphQLRequest(
       startDate,
       endDate,
     });
+    // Stamp timeout errors if not already stamped
+    if (!hasFailedReasonCode(error)) {
+      const msg = String(error?.message || "").toLowerCase();
+      if (msg.includes("timeout") || msg.includes("timed out") || msg.includes("network timeout")) {
+        setFailedReasonCode(error, FAILED_REASON.GRAPHQL_TIMEOUT);
+      } else if (!hasFailedReasonCode(error)) {
+        setFailedReasonCode(error, FAILED_REASON.GRAPHQL_ERROR);
+      }
+    }
     throw error;
   }
 }
@@ -1210,25 +1246,27 @@ async function graphqlScraping(
       }
 
       // Check job items count and set appropriate job status
-      if (jobId) {
+      if (jobId && !isStatusAlreadySaved(error)) {
         try {
           const jobItemsCount = await jobService.getJobItemsCount(jobId);
+          const failedReason = getFailedReasonForUser(error, "Scraping failed");
 
           if (jobItemsCount > 0) {
             // If job items found, set status to Partial
-            await jobService.updateJobStatus(jobId, JobStatus.Partial);
+            await jobService.updateJobStatusWithReason(jobId, JobStatus.Partial, failedReason);
             await dualLogInfo(
               `Job status set to Partial - found ${jobItemsCount} job items`,
               { jobId, jobItemsCount }
             );
           } else {
             // If no job items found, set status to Failed
-            await jobService.updateJobStatus(jobId, JobStatus.Failed);
+            await jobService.updateJobStatusWithReason(jobId, JobStatus.Failed, failedReason);
             await dualLogInfo("Job status set to Failed - no job items found", {
               jobId,
               jobItemsCount: 0,
             });
           }
+          markStatusSaved(error);
         } catch (statusError) {
           await dualLogError(
             "Error updating job status based on job items count:",
@@ -1237,7 +1275,8 @@ async function graphqlScraping(
           );
           // Fallback to Failed status if there's an error checking job items
           try {
-            await jobService.updateJobStatus(jobId, JobStatus.Failed);
+            await jobService.updateJobStatusWithReason(jobId, JobStatus.Failed, getFailedReasonForUser(error, "Scraping failed"));
+            markStatusSaved(error);
           } catch (fallbackError) {
             await dualLogError(
               "Error setting fallback Failed status:",
@@ -1258,25 +1297,27 @@ async function graphqlScraping(
     await dualLogError("Main function error:", error);
 
     // Check job items count and set appropriate job status
-    if (jobId) {
+    if (jobId && !isStatusAlreadySaved(error)) {
       try {
         const jobItemsCount = await jobService.getJobItemsCount(jobId);
+        const failedReason = getFailedReasonForUser(error, "Scraping failed");
 
         if (jobItemsCount > 0) {
           // If job items found, set status to Partial
-          await jobService.updateJobStatus(jobId, JobStatus.Partial);
+          await jobService.updateJobStatusWithReason(jobId, JobStatus.Partial, failedReason);
           await dualLogInfo(
             `Job status set to Partial - found ${jobItemsCount} job items`,
             { jobId, jobItemsCount }
           );
         } else {
           // If no job items found, set status to Failed
-          await jobService.updateJobStatus(jobId, JobStatus.Failed);
+          await jobService.updateJobStatusWithReason(jobId, JobStatus.Failed, failedReason);
           await dualLogInfo("Job status set to Failed - no job items found", {
             jobId,
             jobItemsCount: 0,
           });
         }
+        markStatusSaved(error);
       } catch (statusError) {
         await dualLogError(
           "Error updating job status based on job items count:",
@@ -1285,7 +1326,8 @@ async function graphqlScraping(
         );
         // Fallback to Failed status if there's an error checking job items
         try {
-          await jobService.updateJobStatus(jobId, JobStatus.Failed);
+          await jobService.updateJobStatusWithReason(jobId, JobStatus.Failed, getFailedReasonForUser(error, "Scraping failed"));
+          markStatusSaved(error);
         } catch (fallbackError) {
           await dualLogError(
             "Error setting fallback Failed status:",
@@ -1457,6 +1499,12 @@ async function runScrapingWithRestart(
             otpCompletionNotifier.notifyOtpCompleted(jobId);
           }
 
+          // Stamp OTP code onto error — if this job later fails, the reason is preserved
+          if (!hasFailedReasonCode(otpError)) {
+            const { inferOtpFailedReasonCode } = await import("./common/failed-reason.js");
+            setFailedReasonCode(otpError, inferOtpFailedReasonCode(otpError?.message));
+          }
+
           // Don't fail the entire process for OTP - it might not be required
           await dualLogInfo(
             "Continuing without OTP verification (it might not be required)"
@@ -1472,6 +1520,9 @@ async function runScrapingWithRestart(
         await dualLogInfo("Session cookies extracted for GraphQL API");
       } catch (loginError) {
         await dualLogError("Login failed:", loginError);
+        if (!hasFailedReasonCode(loginError)) {
+          setFailedReasonCode(loginError, FAILED_REASON.LOGIN_FAILED);
+        }
         if (globalBrowser) await globalBrowser.close();
         throw loginError;
       }
@@ -1510,7 +1561,9 @@ async function runScrapingWithRestart(
 
           // Check if browser is still alive
           if (!globalBrowser || globalBrowser.isConnected() === false) {
-            throw new Error("Browser session lost, need to restart");
+            const sessionErr = new Error("Browser session lost, need to restart");
+            setFailedReasonCode(sessionErr, FAILED_REASON.BROWSER_SESSION_LOST);
+            throw sessionErr;
           }
 
           let browser = globalBrowser;
