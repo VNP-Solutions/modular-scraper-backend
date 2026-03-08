@@ -163,6 +163,38 @@ async function login(
         await dualLogInfo("Clicking password continue button...");
         await page.click("#password-continue");
         await takeScreenshot(page, jobId ?? "", "password_submitted", "step", "expedia");
+
+        // Race: wait for wrong-password error OR successful navigation away from password page
+        await dualLogInfo("Waiting for login result (success navigation or error message)...");
+        const loginResult = await Promise.race([
+          // Error element appears → wrong password
+          page.waitForSelector("#password-input-error", { timeout: 10000 })
+            .then(() => "error" as const)
+            .catch(() => null),
+          // Page navigates away from password page → login succeeded
+          page.waitForFunction(
+            () => !document.querySelector("#password-input") && !document.querySelector("#password-continue"),
+            { timeout: 10000 }
+          )
+            .then(() => "success" as const)
+            .catch(() => null),
+        ]);
+
+        await dualLogInfo(`Login result: ${loginResult ?? "timeout (no response)"}`);
+
+        if (loginResult === "error" || loginResult === null) {
+          const errorMessage = await page.evaluate(() => {
+            const el = document.querySelector("#password-input-error");
+            return el?.textContent?.trim() || "The email or password entered is incorrect.";
+          });
+          await dualLogError(`Login failed - wrong credentials detected: ${errorMessage}`);
+          await takeScreenshot(page, jobId ?? "", "login_error_detected", "error", "expedia");
+          const err = new Error(`Login failed: ${errorMessage}`);
+          setFailedReasonCode(err, FAILED_REASON.LOGIN_FAILED);
+          throw err;
+        }
+
+        await dualLogInfo("Login succeeded - page navigated away from password screen.");
       }
     } catch (error: any) {
       await dualLogError(
@@ -272,6 +304,38 @@ async function login(
         await dualLogInfo("Clicking password continue button...");
         await page.click("#signInButton");
         await takeScreenshot(page, jobId ?? "", "password_submitted", "step", "expedia");
+
+        // Race: wait for wrong-password error OR successful navigation away from password page
+        await dualLogInfo("Waiting for login result (success navigation or error message)...");
+        const loginResultControl = await Promise.race([
+          // Error element appears → wrong password
+          page.waitForSelector("#password-input-error", { timeout: 10000 })
+            .then(() => "error" as const)
+            .catch(() => null),
+          // Page navigates away from password page → login succeeded
+          page.waitForFunction(
+            () => !document.querySelector("#passwordControl") && !document.querySelector("#signInButton"),
+            { timeout: 10000 }
+          )
+            .then(() => "success" as const)
+            .catch(() => null),
+        ]);
+
+        await dualLogInfo(`Login result: ${loginResultControl ?? "timeout (no response)"}`);
+
+        if (loginResultControl === "error" || loginResultControl === null) {
+          const errorMessage = await page.evaluate(() => {
+            const el = document.querySelector("#password-input-error");
+            return el?.textContent?.trim() || "The email or password entered is incorrect.";
+          });
+          await dualLogError(`Login failed - wrong credentials detected: ${errorMessage}`);
+          await takeScreenshot(page, jobId ?? "", "login_error_detected", "error", "expedia");
+          const err = new Error(`Login failed: ${errorMessage}`);
+          setFailedReasonCode(err, FAILED_REASON.LOGIN_FAILED);
+          throw err;
+        }
+
+        await dualLogInfo("Login succeeded - page navigated away from password screen.");
       } catch (error: any) {
         await dualLogError("Error handling password input:", error.message);
         throw error;
