@@ -1,4 +1,8 @@
 import { Browser, Page } from "puppeteer";
+import {
+  FAILED_REASON,
+  setFailedReasonCode,
+} from "../common/failed-reason.js";
 import { delay } from "../common/delay.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
 import { takeScreenshot } from "../common/screenshot-helper.js";
@@ -17,7 +21,9 @@ async function login(
   await scrapingStateManager.waitWhilePaused();
   if (!scrapingStateManager.isRunning()) {
     await dualLogError("Scraping was stopped during login");
-    throw new Error("Scraping was stopped during login");
+    const err = new Error("Scraping was stopped during login");
+    setFailedReasonCode(err, FAILED_REASON.SCRAPING_STOPPED);
+    throw err;
   }
 
   // Get timeout configuration for this job
@@ -36,7 +42,9 @@ async function login(
   await scrapingStateManager.waitWhilePaused();
   if (!scrapingStateManager.isRunning()) {
     await dualLogError("Scraping was stopped during login");
-    throw new Error("Scraping was stopped during login");
+    const err = new Error("Scraping was stopped during login");
+    setFailedReasonCode(err, FAILED_REASON.SCRAPING_STOPPED);
+    throw err;
   }
 
   // Type email slowly, character by character
@@ -58,7 +66,9 @@ async function login(
   await scrapingStateManager.waitWhilePaused();
   if (!scrapingStateManager.isRunning()) {
     await dualLogError("Scraping was stopped during login");
-    throw new Error("Scraping was stopped during login");
+    const err = new Error("Scraping was stopped during login");
+    setFailedReasonCode(err, FAILED_REASON.SCRAPING_STOPPED);
+    throw err;
   }
 
   // Wait for password page to be fully loaded
@@ -81,10 +91,11 @@ async function login(
       await dualLogError(
         "Neither #password-input nor #passwordControl found. Checking page content..."
       );
-      const pageContent = await page.content();
       await dualLogInfo("Page title: " + (await page.title()));
       await dualLogInfo("Current URL: " + page.url());
-      throw new Error("Password input field not found on the page");
+      const err = new Error("Password input field not found on the page");
+      setFailedReasonCode(err, FAILED_REASON.LOGIN_FAILED);
+      throw err;
     }
 
     await dualLogInfo(`Found password input: ${passwordSelector}`);
@@ -93,13 +104,8 @@ async function login(
     // Screenshot: password page loaded
     await takeScreenshot(page, jobId ?? "", "password_page_loaded", "step", "expedia", entityType);
 
-    // Try to find the password input field with a try-catch to handle both possible selectors
-    let passwordInputFound = false;
-
     if (passwordSelector === "#password-input") {
       try {
-        passwordInputFound = true;
-
         // Add a significant delay to ensure the page is fully loaded and stable
         await delay(3000);
 
@@ -135,8 +141,8 @@ async function login(
 
         // Type password slowly with increased delays
         for (let char of password) {
-          await page.type("#password-input", char, { delay: 150 }); // Increased delay
-          await delay(100); // Increased delay between characters
+          await page.type("#password-input", char, { delay: 150 });
+          await delay(100);
         }
 
         // Wait longer before clicking submit to ensure password is fully entered
@@ -167,7 +173,6 @@ async function login(
           });
           await delay(1000);
 
-          // Try again with even slower typing
           for (let char of password) {
             await page.type("#password-input", char, { delay: 200 });
             await delay(150);
@@ -180,6 +185,38 @@ async function login(
         await page.click("#password-continue");
         // Screenshot: password submitted
         await takeScreenshot(page, jobId ?? "", "password_submitted", "step", "expedia", entityType);
+
+        // Race: wait for wrong-password error OR successful navigation away from password page
+        await dualLogInfo("Waiting for login result (success navigation or error message)...");
+        const loginResult = await Promise.race([
+          // Error element appears → wrong password
+          page.waitForSelector("#password-input-error", { timeout: 10000 })
+            .then(() => "error" as const)
+            .catch(() => null),
+          // Page navigates away from password page → login succeeded
+          page.waitForFunction(
+            () => !document.querySelector("#password-input") && !document.querySelector("#password-continue"),
+            { timeout: 10000 }
+          )
+            .then(() => "success" as const)
+            .catch(() => null),
+        ]);
+
+        await dualLogInfo(`Login result: ${loginResult ?? "timeout (no response)"}`);
+
+        if (loginResult === "error" || loginResult === null) {
+          const errorMessage = await page.evaluate(() => {
+            const el = document.querySelector("#password-input-error");
+            return el?.textContent?.trim() || "The email or password entered is incorrect.";
+          });
+          await dualLogError(`Login failed - wrong credentials detected: ${errorMessage}`);
+          await takeScreenshot(page, jobId ?? "", "login_error_detected", "error", "expedia", entityType);
+          const err = new Error(`Login failed: ${errorMessage}`);
+          setFailedReasonCode(err, FAILED_REASON.LOGIN_FAILED);
+          throw err;
+        }
+
+        await dualLogInfo("Login succeeded - page navigated away from password screen.");
       } catch (error: any) {
         await dualLogError(
           "Error with #password-input:",
@@ -188,10 +225,7 @@ async function login(
         throw error;
       }
     } else if (passwordSelector === "#passwordControl") {
-      // Use #passwordControl
       try {
-        passwordInputFound = true;
-
         // Add a significant delay to ensure the page is fully loaded and stable
         await delay(3000);
 
@@ -227,8 +261,8 @@ async function login(
 
         // Type password slowly with increased delays
         for (let char of password) {
-          await page.type("#passwordControl", char, { delay: 150 }); // Increased delay
-          await delay(100); // Increased delay between characters
+          await page.type("#passwordControl", char, { delay: 150 });
+          await delay(100);
         }
 
         // Wait longer before clicking submit to ensure password is fully entered
@@ -250,7 +284,6 @@ async function login(
             `Password entry issue: expected ${password.length} chars but got ${enteredPassword.length}`
           );
 
-          // Re-enter password if needed
           await page.evaluate(() => {
             const input = document.querySelector(
               "#passwordControl"
@@ -259,7 +292,6 @@ async function login(
           });
           await delay(1000);
 
-          // Try again with even slower typing
           for (let char of password) {
             await page.type("#passwordControl", char, { delay: 200 });
             await delay(150);
@@ -272,6 +304,38 @@ async function login(
         await page.click("#signInButton");
         // Screenshot: password submitted (passwordControl variant)
         await takeScreenshot(page, jobId ?? "", "password_submitted", "step", "expedia", entityType);
+
+        // Race: wait for wrong-password error OR successful navigation away from password page
+        await dualLogInfo("Waiting for login result (success navigation or error message)...");
+        const loginResultControl = await Promise.race([
+          // Error element appears → wrong password
+          page.waitForSelector("#password-input-error", { timeout: 10000 })
+            .then(() => "error" as const)
+            .catch(() => null),
+          // Page navigates away from password page → login succeeded
+          page.waitForFunction(
+            () => !document.querySelector("#passwordControl") && !document.querySelector("#signInButton"),
+            { timeout: 10000 }
+          )
+            .then(() => "success" as const)
+            .catch(() => null),
+        ]);
+
+        await dualLogInfo(`Login result: ${loginResultControl ?? "timeout (no response)"}`);
+
+        if (loginResultControl === "error" || loginResultControl === null) {
+          const errorMessage = await page.evaluate(() => {
+            const el = document.querySelector("#password-input-error");
+            return el?.textContent?.trim() || "The email or password entered is incorrect.";
+          });
+          await dualLogError(`Login failed - wrong credentials detected: ${errorMessage}`);
+          await takeScreenshot(page, jobId ?? "", "login_error_detected", "error", "expedia", entityType);
+          const err = new Error(`Login failed: ${errorMessage}`);
+          setFailedReasonCode(err, FAILED_REASON.LOGIN_FAILED);
+          throw err;
+        }
+
+        await dualLogInfo("Login succeeded - page navigated away from password screen.");
       } catch (error: any) {
         await dualLogError("Error with #passwordControl:", error.message);
         throw error;
