@@ -1634,8 +1634,8 @@ app.post("/api/expedia/retrieval-run-job", (async (
           });
         }
 
-        // Update retrieval status to Failed only if not stopped
-        await retrievalService.updateRetrievalStatus(retrieval_id, "Failed");
+        // Update retrieval status to Failed only if not stopped (preserve failed_reason set by inner catches)
+        await retrievalService.failRetrievalSafe(String(retrieval_id));
 
         return res.status(500).json({
           status: 500,
@@ -1668,8 +1668,8 @@ app.post("/api/expedia/retrieval-run-job", (async (
         });
       }
 
-      // Update retrieval status to Failed only if not stopped
-      await retrievalService.updateRetrievalStatus(retrieval_id, "Failed");
+      // Update retrieval status to Failed only if not stopped (preserve failed_reason set by inner catches)
+      await retrievalService.failRetrievalSafe(String(retrieval_id));
 
       return res.status(500).json({
         status: 500,
@@ -1874,8 +1874,8 @@ app.post("/api/expedia/graphql-retrieval-run-job", (async (
           reservationCount: reservations.length,
         });
       } else {
-        // Update retrieval status to Failed
-        await retrievalService.updateRetrievalStatus(retrieval_id, "Failed");
+        // Update retrieval status to Failed (preserve failed_reason set by inner catches)
+        await retrievalService.failRetrievalSafe(String(retrieval_id));
 
         return res.status(500).json({
           status: 500,
@@ -1891,8 +1891,8 @@ app.post("/api/expedia/graphql-retrieval-run-job", (async (
         workerError
       );
 
-      // Update retrieval status to Failed
-      await retrievalService.updateRetrievalStatus(retrieval_id, "Failed");
+      // Update retrieval status to Failed (preserve failed_reason set by inner catches)
+      await retrievalService.failRetrievalSafe(String(retrieval_id));
 
       return res.status(500).json({
         status: 500,
@@ -2153,7 +2153,7 @@ app.post("/api/expedia/bulk-retrieval-run-job", (async (
                   `Expedia retrieval job ${jobId} failed:`,
                   result.error
                 );
-                retrievalService.updateRetrievalStatus(retrieval_id, "Failed");
+                retrievalService.failRetrievalSafe(String(retrieval_id));
               }
             }
           })
@@ -2171,7 +2171,7 @@ app.post("/api/expedia/bulk-retrieval-run-job", (async (
               !errorMessage.includes("was stopped by user request") &&
               !errorMessage.includes("was stopped")
             ) {
-              retrievalService.updateRetrievalStatus(retrieval_id, "Failed");
+              retrievalService.failRetrievalSafe(String(retrieval_id));
             }
           });
 
@@ -2478,7 +2478,7 @@ app.post("/api/expedia/bulk-graphql-retrieval-run-job", (async (
                 `Expedia GraphQL retrieval job ${jobId} failed:`,
                 result.error
               );
-              retrievalService.updateRetrievalStatus(retrieval_id, "Failed");
+              retrievalService.failRetrievalSafe(String(retrieval_id));
             }
           })
           .catch((workerError) => {
@@ -2486,7 +2486,7 @@ app.post("/api/expedia/bulk-graphql-retrieval-run-job", (async (
               `Worker error for Expedia GraphQL retrieval job ${jobId}:`,
               workerError
             );
-            retrievalService.updateRetrievalStatus(retrieval_id, "Failed");
+            retrievalService.failRetrievalSafe(String(retrieval_id));
           });
 
         return {

@@ -1,6 +1,11 @@
 import { Types } from "mongoose";
 import { decryptPassword } from "../common/encription.js";
 import {
+  getFailedReasonForUser,
+  isStatusAlreadySaved,
+  markStatusSaved,
+} from "../common/failed-reason.js";
+import {
   IPropertyCredentials,
   PropertyCredentials,
 } from "../models/property-cred.model.js";
@@ -192,7 +197,104 @@ export class RetrievalService {
   }
 
   /**
-   * Update retrieval status
+   * Update retrieval status. When status is Failed or Partial, pass failedReason
+   * so the UI can show why it failed. Clears failed_reason on success statuses.
+   */
+  async updateRetrievalStatusWithReason(
+    retrievalId: string,
+    status: string,
+    failedReason?: string | null
+  ): Promise<IRetrieval | null> {
+    try {
+      const objectId = this.validateObjectId(retrievalId, "retrievalId");
+      const isFailed = status === "Failed" || status === "Partial";
+
+      const updateData: any = {
+        job_status: status,
+        updatedAt: new Date(),
+      };
+
+      if (isFailed) {
+        updateData.failed_reason =
+          failedReason != null && failedReason !== ""
+            ? String(failedReason).slice(0, 1000)
+            : undefined;
+      } else {
+        updateData.failed_reason = null;
+      }
+
+      // Clear screenshot trail when re-starting so new run begins fresh
+      if (status === "Running") {
+        updateData.screenshot_urls = [];
+      }
+
+      return await Retrieval.findByIdAndUpdate(objectId, updateData, {
+        new: true,
+      });
+    } catch (error) {
+      console.error(`Error updating retrieval status: ${error}`);
+      return null;
+    }
+  }
+
+  /**
+   * Set retrieval to Failed status. If failed_reason is already set on the
+   * document (saved by an inner catch), it is preserved — not overwritten.
+   * Use this in app.ts / outer callers that don't have the original error.
+   */
+  async failRetrievalSafe(
+    retrievalId: string,
+    fallbackReason?: string
+  ): Promise<IRetrieval | null> {
+    try {
+      const objectId = this.validateObjectId(retrievalId, "retrievalId");
+
+      // Only set failed_reason if it isn't already stored
+      const existing = await Retrieval.findById(objectId).select("failed_reason").lean();
+      const alreadyHasReason = existing && (existing as any).failed_reason;
+
+      const updateData: any = {
+        job_status: "Failed",
+        updatedAt: new Date(),
+      };
+      if (!alreadyHasReason && fallbackReason) {
+        updateData.failed_reason = String(fallbackReason).slice(0, 1000);
+      }
+
+      return await Retrieval.findByIdAndUpdate(objectId, updateData, {
+        new: true,
+      });
+    } catch (error) {
+      console.error(`Error failing retrieval: ${error}`);
+      return null;
+    }
+  }
+
+  /**
+   * Append a screenshot entry to the retrieval's screenshot_urls array
+   */
+  async addScreenshotUrl(
+    retrievalId: string,
+    entry: {
+      step: string;
+      url: string;
+      timestamp: string;
+      type: "step" | "error";
+    }
+  ): Promise<void> {
+    try {
+      const objectId = this.validateObjectId(retrievalId, "retrievalId");
+      await Retrieval.findByIdAndUpdate(objectId, {
+        $push: { screenshot_urls: entry },
+        updatedAt: new Date(),
+      });
+    } catch (error) {
+      console.error(`Error adding screenshot URL to retrieval: ${error}`);
+    }
+  }
+
+  /**
+   * Update retrieval status (legacy — no failed_reason, kept for backward compat)
    */
   async updateRetrievalStatus(
     retrievalId: string,
@@ -416,3 +518,6 @@ export class RetrievalService {
 
 // Export singleton instance
 export const retrievalService = new RetrievalService();
+
+// Re-export failed-reason helpers so retrieval callers import from one place
+export { getFailedReasonForUser, isStatusAlreadySaved, markStatusSaved } from "../common/failed-reason.js";

@@ -4,7 +4,11 @@ import { parentPort } from "worker_threads";
 import { otpCompletionNotifier } from "../common/otp-completion-notifier.js";
 import { WorkerJobData, WorkerMessage } from "../common/worker-types.js";
 
-// Import the main functions
+import {
+  getFailedReasonForUser,
+  isStatusAlreadySaved,
+  markStatusSaved,
+} from "../common/failed-reason.js";
 import {
   dualLogError,
   dualLogInfo,
@@ -770,6 +774,20 @@ class ScrapingWorker {
         graphqlRetrievalError.message,
         { jobId: finalJobId, retrievalId }
       );
+
+      // Only write status if the inner catch (expedia-graphql-retrieval) hasn't already saved it
+      if (!isStatusAlreadySaved(graphqlRetrievalError)) {
+        const failedReason = getFailedReasonForUser(
+          graphqlRetrievalError,
+          "Retrieval scraping failed"
+        );
+        await retrievalService.updateRetrievalStatusWithReason(
+          retrievalId,
+          "Failed",
+          failedReason
+        );
+        markStatusSaved(graphqlRetrievalError);
+      }
 
       // Mark scraping as stopped on error
       scrapingStateManager.stopScraping();

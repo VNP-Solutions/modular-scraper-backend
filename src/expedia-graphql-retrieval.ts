@@ -4,8 +4,18 @@ import { browserSetupLocal } from "./browser-setup/browser-local.js";
 import { browserSetupProduction } from "./browser-setup/browser-prod.js";
 import { BROWSER_CONFIG } from "./common/browser-constants.js";
 import { delay } from "./common/delay.js";
+import {
+  FAILED_REASON,
+  hasFailedReasonCode,
+  inferOtpFailedReasonCode,
+  isStatusAlreadySaved,
+  markStatusSaved,
+  setFailedReasonCode,
+  getFailedReasonForUser,
+} from "./common/failed-reason.js";
 import { dualLogError, dualLogInfo } from "./common/log-helper.js";
 import { otpCompletionNotifier } from "./common/otp-completion-notifier.js";
+import { takeScreenshot } from "./common/screenshot-helper.js";
 import { scrapingStateManager } from "./common/scraping-state.js";
 import login from "./login/login.js";
 import { CardInfo, PaymentInfo } from "./models/retrieval-item.model.js";
@@ -665,6 +675,7 @@ async function graphqlRetrievalScraping(
   jobId?: string
 ): Promise<void> {
   let browser: Browser | null = null;
+  let page: any = null;
 
   try {
     const environment = process.env.ENVIRONMENT || "production";
@@ -677,44 +688,55 @@ async function graphqlRetrievalScraping(
       setupResult = await browserSetupLocal(undefined, "expedia");
     }
     browser = setupResult.browser;
-    const page = setupResult.page;
+    page = setupResult.page;
     await dualLogInfo("Browser setup complete. Page is ready at login screen.");
 
     // Login to Expedia
     await dualLogInfo("Performing automatic login...");
     try {
-      await login(browser, page, userEmail, userPassword, jobId);
+      await login(browser, page, userEmail, userPassword, jobId, "retrieval");
       await dualLogInfo("Login completed successfully!");
       await delay(10000);
-    } catch (loginError) {
+    } catch (loginError: any) {
       await dualLogError("Login failed:", loginError);
+      if (!hasFailedReasonCode(loginError)) {
+        setFailedReasonCode(loginError, FAILED_REASON.LOGIN_FAILED);
+      }
       throw loginError;
     }
 
     // Handle OTP verification
     try {
-      await handleOtpVerification(browser, page, jobId);
+      await handleOtpVerification(browser, page, jobId, "retrieval");
       await dualLogInfo("OTP verification completed successfully!");
 
       // Notify worker that OTP work is completed so other jobs can proceed
       if (jobId) {
         otpCompletionNotifier.notifyOtpCompleted(jobId);
       }
-    } catch (error: any) {
-      await dualLogError("OTP verification failed:", error);
+    } catch (error: any) {      await dualLogError("OTP verification failed:", error);
+      setFailedReasonCode(error, inferOtpFailedReasonCode(error?.message));
 
       // Notify that OTP work is completed (even on failure) so other jobs can proceed
       if (jobId) {
         otpCompletionNotifier.notifyOtpCompleted(jobId);
       }
 
+      // Close browser before rethrowing so root-cause OTP error propagates cleanly
+      if (browser) {
+        try { await browser.close(); } catch (_) {}
+        browser = null;
+      }
       throw error;
     }
 
     // Get cookies for API requests
     const cookies = await page.cookies();
-    const cookieHeader = cookies.map((c) => `${c.name}=${c.value}`).join("; ");
+    const cookieHeader = cookies.map((c: any) => `${c.name}=${c.value}`).join("; ");
     await dualLogInfo("Cookies extracted for GraphQL API requests");
+
+    // Screenshot: login complete with cookies extracted
+    await takeScreenshot(page, retrievalId, "login_complete_cookies_extracted", "step", "expedia", "retrieval");
 
     // Get retrieval details for parent_retrieval_id and property_id
     const retrieval = await retrievalService.getRetrievalById(retrievalId);
@@ -949,11 +971,27 @@ async function graphqlRetrievalScraping(
     await dualLogInfo("Browser closed successfully.");
   } catch (error: any) {
     await dualLogError("GraphQL retrieval scraping error:", error.message);
+    // Screenshot: job failed
+    if (page) {
+      await takeScreenshot(page, retrievalId, "job_failed", "error", "expedia", "retrieval");
+    }
     // Close browser on error
     if (browser) {
       await browser.close();
     }
     await dualLogInfo("Browser closed due to error.");
+
+    // Save failed_reason to DB (first writer wins — don't overwrite if already saved)
+    if (!isStatusAlreadySaved(error)) {
+      const failedReason = getFailedReasonForUser(error, "Retrieval scraping failed");
+      await retrievalService.updateRetrievalStatusWithReason(
+        retrievalId,
+        "Failed",
+        failedReason
+      );
+      markStatusSaved(error);
+    }
+
     throw error;
   }
 }

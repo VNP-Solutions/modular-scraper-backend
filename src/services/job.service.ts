@@ -258,9 +258,10 @@ export class JobService {
         updatedAt: new Date(),
       };
 
-      // If changing to Running status, assign current worker
+      // If changing to Running status, assign current worker and clear previous screenshot trail
       if (status === JobStatus.Running) {
         updateData.worker_assigned = process.env.WORKER_ID || "scraper-worker";
+        updateData.screenshot_urls = [];
       }
 
       return await Job.findByIdAndUpdate(objectId, updateData, { new: true });
@@ -296,6 +297,29 @@ export class JobService {
    */
   async failJob(jobId: string): Promise<IJob | null> {
     return await this.updateJobStatus(jobId, JobStatus.Failed);
+  }
+
+  /**
+   * Append a screenshot entry to the job's screenshot_urls array
+   */
+  async addScreenshotUrl(
+    jobId: string,
+    entry: {
+      step: string;
+      url: string;
+      timestamp: string;
+      type: "step" | "error";
+    }
+  ): Promise<void> {
+    try {
+      const objectId = this.validateObjectId(jobId, "jobId");
+      await Job.findByIdAndUpdate(objectId, {
+        $push: { screenshot_urls: entry },
+        updatedAt: new Date(),
+      });
+    } catch (error) {
+      console.error(`Error adding screenshot URL to job: ${error}`);
+    }
   }
 
   /**

@@ -37,8 +37,16 @@ export interface IRetrieval extends Document {
   live_url?: string;
   current_url?: string;
   case_open?: boolean;
+  failed_reason?: string;
   watcher_emails: string[];
   reservations: string[]; // Array of reservation IDs
+  /** Ordered list of screenshots taken during retrieval execution, uploaded to S3 */
+  screenshot_urls?: {
+    step: string;
+    url: string;
+    timestamp: string;
+    type: "step" | "error";
+  }[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -195,6 +203,10 @@ const RetrievalSchema = new Schema<IRetrieval>(
       required: false,
       default: false,
     },
+    failed_reason: {
+      type: String,
+      required: false,
+    },
     watcher_emails: {
       type: [String],
       required: true,
@@ -203,6 +215,18 @@ const RetrievalSchema = new Schema<IRetrieval>(
     reservations: {
       type: [String],
       required: true,
+      default: [],
+    },
+    screenshot_urls: {
+      type: [
+        {
+          step: { type: String, required: true },
+          url: { type: String, required: true },
+          timestamp: { type: String, required: true },
+          type: { type: String, enum: ["step", "error"], required: true },
+        },
+      ],
+      required: false,
       default: [],
     },
   },

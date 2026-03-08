@@ -1,6 +1,7 @@
 import { Browser, Page } from "puppeteer";
 import { delay } from "../common/delay.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
+import { takeScreenshot } from "../common/screenshot-helper.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import { timeoutManager } from "../common/timeout-manager.js";
 
@@ -9,7 +10,8 @@ async function login(
   page: Page,
   email: string,
   password: string,
-  jobId?: string
+  jobId?: string,
+  entityType: "job" | "retrieval" = "job"
 ) {
   // Check if scraping is paused before starting login
   await scrapingStateManager.waitWhilePaused();
@@ -27,6 +29,9 @@ async function login(
   // Wait for email input
   await page.waitForSelector("#emailControl");
 
+  // Screenshot: login page loaded with email input visible
+  await takeScreenshot(page, jobId ?? "", "login_page_loaded", "step", "expedia", entityType);
+
   // Check pause state before entering email
   await scrapingStateManager.waitWhilePaused();
   if (!scrapingStateManager.isRunning()) {
@@ -42,6 +47,9 @@ async function login(
 
   // Click continue button
   await page.click("#continueButton");
+
+  // Screenshot: email entered and continue clicked
+  await takeScreenshot(page, jobId ?? "", "email_entered", "step", "expedia", entityType);
 
   // Wait before entering password
   await dualLogInfo("Waiting for password page to load...");
@@ -81,6 +89,9 @@ async function login(
 
     await dualLogInfo(`Found password input: ${passwordSelector}`);
     await delay(3000);
+
+    // Screenshot: password page loaded
+    await takeScreenshot(page, jobId ?? "", "password_page_loaded", "step", "expedia", entityType);
 
     // Try to find the password input field with a try-catch to handle both possible selectors
     let passwordInputFound = false;
@@ -167,6 +178,8 @@ async function login(
         // Click the login button
         await dualLogInfo("Clicking password continue button...");
         await page.click("#password-continue");
+        // Screenshot: password submitted
+        await takeScreenshot(page, jobId ?? "", "password_submitted", "step", "expedia", entityType);
       } catch (error: any) {
         await dualLogError(
           "Error with #password-input:",
@@ -257,6 +270,8 @@ async function login(
         // Click the login button
         await dualLogInfo("Clicking password continue button...");
         await page.click("#signInButton");
+        // Screenshot: password submitted (passwordControl variant)
+        await takeScreenshot(page, jobId ?? "", "password_submitted", "step", "expedia", entityType);
       } catch (error: any) {
         await dualLogError("Error with #passwordControl:", error.message);
         throw error;
@@ -264,6 +279,8 @@ async function login(
     }
   } catch (error: any) {
     await dualLogError("Error during password entry:", error.message);
+    // Screenshot: login failed
+    await takeScreenshot(page, jobId ?? "", "login_failed", "error", "expedia", entityType);
     // Close browser when done with this attempt
     if (browser) {
       await browser.close();

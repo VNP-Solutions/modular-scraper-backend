@@ -4,6 +4,7 @@ import { Browser, Page } from "puppeteer";
 import { delay } from "../common/delay.js";
 import { loadAndSetCredentials } from "../common/load-token.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
+import { takeScreenshot } from "../common/screenshot-helper.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import { timeoutManager } from "../common/timeout-manager.js";
 import { oauth2Client } from "../config/google-config.js";
@@ -207,7 +208,9 @@ async function hasOtpError(page: Page): Promise<boolean> {
 async function tryMultipleOtpCodes(
   page: Page,
   codes: string[],
-  selectorTimeout: number
+  selectorTimeout: number,
+  jobId?: string,
+  entityType: "job" | "retrieval" = "job"
 ): Promise<boolean> {
   const maxAttempts = Math.min(3, codes.length);
   let otpSuccess = false;
@@ -247,6 +250,8 @@ async function tryMultipleOtpCodes(
     // Click the verify button and race between navigation and error check
     await verifyButtonHandle.click();
     await dualLogInfo("Clicked the verify button");
+    // Screenshot: OTP code submitted
+    await takeScreenshot(page, jobId ?? "", "otp_submitted", "step", "expedia", entityType);
 
     // Race between navigation and error detection
     const navPromise = page
@@ -431,7 +436,8 @@ async function getMultipleVerificationCodes(): Promise<string[]> {
 async function handleOtpVerification(
   browser: Browser,
   page: Page,
-  jobId?: string
+  jobId?: string,
+  entityType: "job" | "retrieval" = "job"
 ): Promise<void> {
   try {
     // Check if scraping is paused before starting OTP verification
@@ -450,6 +456,9 @@ async function handleOtpVerification(
         visible: true,
         timeout: selectorTimeout,
       });
+
+      // Screenshot: OTP page detected
+      await takeScreenshot(page, jobId ?? "", "otp_page_detected", "step", "expedia", entityType);
     } catch (error: any) {
       await dualLogError("Error waiting for verification page:", error);
 
@@ -519,7 +528,7 @@ async function handleOtpVerification(
         await dualLogInfo(`Got ${codes.length} verification code(s)`);
 
         // Try up to 3 codes with retry logic
-        const success = await tryMultipleOtpCodes(page, codes, selectorTimeout);
+        const success = await tryMultipleOtpCodes(page, codes, selectorTimeout, jobId, entityType);
         
         if (!success) {
           const error = new Error("OTP verification failed after all attempts");
@@ -788,7 +797,7 @@ async function handleOtpVerification(
             await dualLogInfo(`Got ${codes.length} verification code(s)`);
 
             // Try up to 3 codes with retry logic
-            const success = await tryMultipleOtpCodes(page, codes, selectorTimeout);
+            const success = await tryMultipleOtpCodes(page, codes, selectorTimeout, jobId, entityType);
             
             if (!success) {
               throw new Error("OTP verification failed after all attempts");
@@ -875,7 +884,7 @@ async function handleOtpVerification(
           await dualLogInfo(`Got ${codes.length} verification code(s)`);
 
           // Try up to 3 codes with retry logic
-          const success = await tryMultipleOtpCodes(page, codes, selectorTimeout);
+          const success = await tryMultipleOtpCodes(page, codes, selectorTimeout, jobId, entityType);
           
           if (!success) {
             throw new Error("OTP verification failed after all attempts");
@@ -963,6 +972,8 @@ async function handleOtpVerification(
     }
   } catch (error: any) {
     await dualLogError("Error in handleOtpVerification:", error);
+    // Screenshot: OTP verification failed
+    await takeScreenshot(page, jobId ?? "", "otp_failed", "error", "expedia", entityType);
 
     // Send email notification for general OTP verification error
     if (jobId) {

@@ -62,6 +62,15 @@ export interface IJob extends Document {
   batch_execution_id?: string;
   createdAt: Date;
   updatedAt: Date;
+  /** User-facing reason when job status is Failed or Partial */
+  failed_reason?: string;
+  /** Ordered list of screenshots taken during job execution, uploaded to S3 */
+  screenshot_urls?: {
+    step: string;
+    url: string;
+    timestamp: string;
+    type: "step" | "error";
+  }[];
 }
 
 // Mongoose Schema (read-only, updates only)
@@ -202,6 +211,22 @@ const JobSchema = new Schema<IJob>(
       type: Boolean,
       required: false,
       default: false,
+    },
+    failed_reason: {
+      type: String,
+      required: false,
+    },
+    screenshot_urls: {
+      type: [
+        {
+          step: { type: String, required: true },
+          url: { type: String, required: true },
+          timestamp: { type: String, required: true },
+          type: { type: String, enum: ["step", "error"], required: true },
+        },
+      ],
+      required: false,
+      default: [],
     },
   },
   {
