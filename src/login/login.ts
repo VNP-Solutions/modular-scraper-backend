@@ -2,6 +2,7 @@ import { Browser, Page } from "puppeteer";
 import { FAILED_REASON, setFailedReasonCode } from "../common/failed-reason.js";
 import { delay } from "../common/delay.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
+import { takeScreenshot } from "../common/screenshot-helper.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import { timeoutManager } from "../common/timeout-manager.js";
 
@@ -30,6 +31,9 @@ async function login(
   // Wait for email input
   await page.waitForSelector("#emailControl");
 
+  // Screenshot: login page loaded with email input visible
+  await takeScreenshot(page, jobId ?? "", "login_page_loaded", "step");
+
   // Check pause state before entering email
   await scrapingStateManager.waitWhilePaused();
   if (!scrapingStateManager.isRunning()) {
@@ -47,6 +51,9 @@ async function login(
 
   // Click continue button
   await page.click("#continueButton");
+
+  // Screenshot: email entered and continue button clicked
+  await takeScreenshot(page, jobId ?? "", "email_entered", "step");
 
   // Wait before entering password
   await dualLogInfo("Waiting for password page to load...");
@@ -76,6 +83,9 @@ async function login(
 
       if (passwordInput) {
         passwordInputFound = true;
+
+        // Screenshot: password page loaded
+        await takeScreenshot(page, jobId ?? "", "password_page_loaded", "step");
 
         // Add a significant delay to ensure the page is fully loaded and stable
         await delay(3000);
@@ -155,6 +165,8 @@ async function login(
         // Click the login button
         await dualLogInfo("Clicking password continue button...");
         await page.click("#password-continue");
+        // Screenshot: password submitted
+        await takeScreenshot(page, jobId ?? "", "password_submitted", "step");
       }
     } catch (error: any) {
       await dualLogError(
@@ -182,6 +194,9 @@ async function login(
           setFailedReasonCode(err, FAILED_REASON.LOGIN_FAILED);
           throw err;
         }
+
+        // Screenshot: password page loaded (passwordControl variant)
+        await takeScreenshot(page, jobId ?? "", "password_page_loaded", "step");
 
         // Add a significant delay to ensure the page is fully loaded and stable
         await delay(3000);
@@ -261,6 +276,8 @@ async function login(
         // Click the login button
         await dualLogInfo("Clicking password continue button...");
         await page.click("#signInButton");
+        // Screenshot: password submitted (passwordControl variant)
+        await takeScreenshot(page, jobId ?? "", "password_submitted", "step");
       } catch (error: any) {
         await dualLogError("Error handling password input:", error.message);
         throw error;
@@ -268,6 +285,8 @@ async function login(
     }
   } catch (error: any) {
     await dualLogError("Error during password entry:", error.message);
+    // Screenshot: login failed
+    await takeScreenshot(page, jobId ?? "", "login_failed", "error");
     // Close browser when done with this attempt
     if (browser) {
       await browser.close();

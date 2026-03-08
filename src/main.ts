@@ -12,6 +12,7 @@ import {
 } from "./common/log-helper.js";
 import { otpCompletionNotifier } from "./common/otp-completion-notifier.js";
 import { progressManager } from "./common/progress-manager.js";
+import { takeScreenshot } from "./common/screenshot-helper.js";
 import { scrapingStateManager } from "./common/scraping-state.js";
 import { timeManager } from "./common/time-manager.js";
 import { splitDateRange } from "./date-split/date-split.js";
@@ -311,6 +312,7 @@ async function runScrapingWithRestart(
   ) {
     attemptCount++;
     let browser = null;
+    let page = null;
 
     try {
       await dualLogInfo(`Starting scraping attempt ${attemptCount}`, {
@@ -329,7 +331,7 @@ async function runScrapingWithRestart(
         setupResult = await browserSetupLocal(jobId, "expedia");
       }
       browser = setupResult.browser;
-      const page = setupResult.page;
+      page = setupResult.page;
 
       await dualLogInfo(
         "Browser setup complete. Page is ready at login screen."
@@ -382,6 +384,9 @@ async function runScrapingWithRestart(
             "Login completed successfully! User is now logged in."
           );
 
+          // Screenshot: login completed
+          await takeScreenshot(page, jobId ?? "", "login_complete", "step");
+
           // Add your post-login automation here
           await dualLogInfo("Ready for scraping operations...");
           await delay(10000);
@@ -415,6 +420,9 @@ async function runScrapingWithRestart(
 
           await handleOtpVerification(browser, page, jobId);
           await dualLogInfo("OTP verification completed successfully!");
+
+          // Screenshot: OTP verification complete
+          await takeScreenshot(page, jobId ?? "", "otp_complete", "step");
 
           // Notify worker that OTP work is completed so other jobs can proceed
           if (jobId) {
@@ -468,6 +476,13 @@ async function runScrapingWithRestart(
             await dualLogInfo(
               "Property search and reservation completed successfully!"
             );
+            // Screenshot: property search complete
+            await takeScreenshot(
+              page,
+              jobId ?? "",
+              "property_search_complete",
+              "step"
+            );
           } catch (error: any) {
             await dualLogError("Property search failed:", error);
             throw error;
@@ -508,6 +523,13 @@ async function runScrapingWithRestart(
 
             // If we reach here, all dates were processed successfully
             await dualLogInfo("All dates processed successfully!");
+            // Screenshot: all dates processed
+            await takeScreenshot(
+              page,
+              jobId ?? "",
+              "all_dates_processed",
+              "step"
+            );
             // Close browser when done with this attempt
             if (browser) {
               await browser.close();
@@ -588,6 +610,9 @@ async function runScrapingWithRestart(
       }
     } catch (error) {
       await dualLogError(`Scraping attempt ${attemptCount} failed:`, error);
+
+      // Screenshot: job failed
+      await takeScreenshot(page, jobId ?? "", "job_failed", "error");
 
       // Notify that OTP work is completed (on error) so other jobs can proceed
       if (jobId) {

@@ -68,6 +68,13 @@ export interface IJob extends Document {
   end_date?: string;
   /** User-facing reason when job status is Failed or Partial (e.g. "Property not found", "Login failed", "VCC not available") */
   failed_reason?: string;
+  /** Ordered list of screenshots taken during job execution, uploaded to S3 */
+  screenshot_urls?: {
+    step: string;
+    url: string;
+    timestamp: string;
+    type: "step" | "error";
+  }[];
 }
 
 // Mongoose Schema (read-only, updates only)
@@ -220,6 +227,18 @@ const JobSchema = new Schema<IJob>(
     failed_reason: {
       type: String,
       required: false,
+    },
+    screenshot_urls: {
+      type: [
+        {
+          step: { type: String, required: true },
+          url: { type: String, required: true },
+          timestamp: { type: String, required: true },
+          type: { type: String, enum: ["step", "error"], required: true },
+        },
+      ],
+      required: false,
+      default: [],
     },
   },
   {

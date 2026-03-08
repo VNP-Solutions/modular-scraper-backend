@@ -20,6 +20,7 @@ import {
 } from "./common/log-helper.js";
 import { otpCompletionNotifier } from "./common/otp-completion-notifier.js";
 import { progressManager } from "./common/progress-manager.js";
+import { takeScreenshot } from "./common/screenshot-helper.js";
 import { scrapingStateManager } from "./common/scraping-state.js";
 import { timeManager } from "./common/time-manager.js";
 import { getNextDateFromCompleted } from "./date-split/helper.js";
@@ -1632,6 +1633,14 @@ async function runScrapingWithRestart(
           .join("; ");
 
         await dualLogInfo("Session cookies extracted for GraphQL API");
+
+        // Screenshot: login complete, cookies extracted
+        await takeScreenshot(
+          globalPage,
+          jobId ?? "",
+          "login_complete_cookies_extracted",
+          "step"
+        );
       } catch (loginError: any) {
         await dualLogError("Login failed:", loginError);
         // Only set LOGIN_FAILED if the error has no code yet (e.g. OTP already set OTP_VERIFICATION_CODE_NOT_FOUND)
@@ -1792,12 +1801,27 @@ async function runScrapingWithRestart(
               } (${singleDate}) completed successfully!`
             );
 
+            // Screenshot: date chunk processed successfully
+            await takeScreenshot(
+              globalPage,
+              jobId ?? "",
+              `date_${singleDate.replace(/\//g, "-")}_processed`,
+              "step"
+            );
+
             // ✅ Data stored to database via GraphQL processing above
 
             dateCompleted = true; // Mark this date as completed
             break; // Exit the retry attempts for this date
           } catch (graphqlError: any) {
             console.error("❌ GraphQL API call failed:", graphqlError);
+            // Screenshot: GraphQL error on this date
+            await takeScreenshot(
+              globalPage,
+              jobId ?? "",
+              `graphql_error_date_${singleDate.replace(/\//g, "-")}`,
+              "error"
+            );
             throw graphqlError;
           }
         } catch (error: any) {
@@ -1863,6 +1887,10 @@ async function runScrapingWithRestart(
   } catch (error: any) {
     // Handle any unexpected errors during the entire scraping process
     await dualLogError("Unexpected error during GraphQL scraping:", error);
+    // Screenshot: unexpected scraping failure
+    if (globalPage) {
+      await takeScreenshot(globalPage, jobId ?? "", "job_failed", "error");
+    }
     throw error;
   } finally {
     // Clean up browser session at the very end

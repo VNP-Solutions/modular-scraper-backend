@@ -8,6 +8,7 @@ import {
 import { delay } from "../common/delay.js";
 import { loadAndSetCredentials } from "../common/load-token.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
+import { takeScreenshot } from "../common/screenshot-helper.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import { timeoutManager } from "../common/timeout-manager.js";
 import { oauth2Client } from "../config/google-config.js";
@@ -165,9 +166,11 @@ async function handleOtpVerification(
         visible: true,
         timeout: selectorTimeout,
       });
+
+      // Screenshot: OTP page detected
+      await takeScreenshot(page, jobId ?? "", "otp_page_detected", "step");
     } catch (error: any) {
       await dualLogError("Error waiting for verification page:", error);
-
       // Send email notification for verification page error
       if (jobId) {
         try {
@@ -284,6 +287,8 @@ async function handleOtpVerification(
         // Click the button
         await verifyButtonHandle.click();
         await dualLogInfo("Clicked the verify button successfully!");
+        // Screenshot: OTP code submitted
+        await takeScreenshot(page, jobId ?? "", "otp_submitted", "step");
       } catch (error: any) {
         await dualLogError("Error in primary verification flow:", error);
 
@@ -715,6 +720,8 @@ async function handleOtpVerification(
     }
   } catch (error: any) {
     await dualLogError("Error in handleOtpVerification:", error);
+    // Screenshot: OTP verification failed
+    await takeScreenshot(page, jobId ?? "", "otp_failed", "error");
     setFailedReasonCode(error, inferOtpFailedReasonCode(error?.message));
 
     // Send email notification for general OTP verification error

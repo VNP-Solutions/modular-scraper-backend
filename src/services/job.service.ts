@@ -408,6 +408,29 @@ export class JobService {
   }
 
   /**
+   * Append a screenshot entry to the job's screenshot_urls array
+   */
+  async addScreenshotUrl(
+    jobId: string,
+    entry: {
+      step: string;
+      url: string;
+      timestamp: string;
+      type: "step" | "error";
+    },
+  ): Promise<void> {
+    try {
+      const objectId = this.validateObjectId(jobId, "jobId");
+      await Job.findByIdAndUpdate(objectId, {
+        $push: { screenshot_urls: entry },
+        updatedAt: new Date(),
+      });
+    } catch (error) {
+      console.error(`Error adding screenshot URL to job: ${error}`);
+    }
+  }
+
+  /**
    * Check if job exists and is in valid state
    */
   async validateJob(
