@@ -653,8 +653,16 @@ class ScrapingWorker {
         finalStatus = JobStatus.Partial;
       }
 
-      // 9. Update final job status
-      await jobService.updateJobStatus(jobId, finalStatus);
+      // 9. Update final job status (with failed_reason if no reservations found)
+      if (finalStatus === JobStatus.Failed) {
+        await jobService.updateJobStatusWithReason(
+          jobId,
+          JobStatus.Failed,
+          "No reservations found for the specified date range."
+        );
+      } else {
+        await jobService.updateJobStatus(jobId, finalStatus);
+      }
 
       // 10. Stop scraping state manager
       scrapingStateManager.stopScraping();
