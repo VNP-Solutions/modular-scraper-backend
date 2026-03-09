@@ -2,6 +2,11 @@ import dotenv from "dotenv";
 import { Page } from "puppeteer";
 import { TWO_FA_TEXT_PATTERNS } from "../common/booking-selectors.js";
 import { delay } from "../common/delay.js";
+import {
+  FAILED_REASON,
+  inferBookingOtpFailedReasonCode,
+  setFailedReasonCode,
+} from "../common/failed-reason.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
 import { notificationService } from "../services/notification.service.js";
 import { getBookingVerificationCodes } from "./email-verification-utils.js";
@@ -54,6 +59,7 @@ async function handleBookingOtpVerification(
         const error = new Error(
           "Neither verification method selection nor OTP input page found"
         );
+        setFailedReasonCode(error, FAILED_REASON.BOOKING_OTP_FAILED);
 
         // Send public notification for OTP verification failure
         try {
@@ -94,6 +100,7 @@ async function handleBookingOtpVerification(
 
       if (!smsLinkClicked) {
         const error = new Error("SMS verification link not found");
+        setFailedReasonCode(error, FAILED_REASON.BOOKING_OTP_FAILED);
 
         // Send public notification for OTP verification failure
         try {
@@ -135,6 +142,7 @@ async function handleBookingOtpVerification(
       const phoneSelected = await selectCorrectPhoneNumber(page /* , jobId */);
       if (!phoneSelected) {
         const error = new Error("Failed to select correct phone number");
+        setFailedReasonCode(error, FAILED_REASON.BOOKING_OTP_FAILED);
 
         // Send public notification for OTP verification failure
         try {
@@ -375,6 +383,7 @@ async function handleBookingOtpVerification(
       const error = new Error(
         "OTP input field not found after exhaustive search"
       );
+      setFailedReasonCode(error, FAILED_REASON.BOOKING_OTP_FAILED);
 
       // Send public notification for OTP verification failure
       try {
@@ -405,6 +414,7 @@ async function handleBookingOtpVerification(
     const codes = await getBookingVerificationCodes();
     if (!codes || codes.length === 0) {
       const error = new Error("Failed to get verification codes from email");
+      setFailedReasonCode(error, FAILED_REASON.BOOKING_OTP_CODE_NOT_FOUND);
 
       // Send public notification for OTP verification failure
       try {
@@ -489,6 +499,7 @@ async function handleBookingOtpVerification(
           const error = new Error(
             "OTP verification failed after 3 attempts. All codes were invalid."
           );
+          setFailedReasonCode(error, FAILED_REASON.BOOKING_OTP_FAILED);
 
           // Send public notification
           try {
@@ -567,6 +578,10 @@ async function handleBookingOtpVerification(
 
     if (!otpSuccess) {
       const error = new Error("OTP verification failed unexpectedly");
+      setFailedReasonCode(
+        error,
+        inferBookingOtpFailedReasonCode(error.message)
+      );
       throw error;
     }
 
@@ -590,8 +605,15 @@ async function handleBookingOtpVerification(
     }
 
     await dualLogInfo("Booking.com OTP verification completed!");
-  } catch (error) {
+  } catch (error: any) {
     await dualLogError("Error in handleBookingOtpVerification:", error);
+
+    if (!error.failedReasonCode) {
+      setFailedReasonCode(
+        error,
+        inferBookingOtpFailedReasonCode(error?.message)
+      );
+    }
 
     // Send public notification for general OTP verification error
     try {

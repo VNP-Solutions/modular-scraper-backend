@@ -28,6 +28,11 @@ import { JobStatus } from "../models/job.model.js";
 import reservation from "../reservation/reservation.js";
 import { propertyCredentialsService } from "../services/job-credentials.service.js";
 import { jobService } from "../services/job.service.js";
+import {
+  getFailedReasonForUser,
+  isStatusAlreadySaved,
+  markStatusSaved,
+} from "../common/failed-reason.js";
 import { notificationService } from "../services/notification.service.js";
 
 // Global function to release OTP from worker
@@ -690,7 +695,7 @@ class ScrapingWorker {
         logInfo: logInfo,
         trackingStatus: finalStatus,
       };
-    } catch (error) {
+    } catch (error: any) {
       // Mark job as failed on scraping error
       await dualLogError(`Worker: Booking job ${jobId} failed`, error, {
         jobId,
@@ -701,8 +706,14 @@ class ScrapingWorker {
       await progressManager.handleJobError(jobId, error);
       scrapingStateManager.stopScraping();
 
-      // Update job status to Failed
-      await jobService.updateJobStatus(jobId, JobStatus.Failed);
+      // Update job status to Failed, preserving any specific failed_reason
+      if (!isStatusAlreadySaved(error)) {
+        const failedReason =
+          getFailedReasonForUser(error) ||
+          "An unexpected error occurred. Please try again.";
+        await jobService.failJobSafe(jobId, failedReason);
+        markStatusSaved(error);
+      }
 
       // Get job details for notification
       let propertyName: string | undefined;
@@ -840,7 +851,7 @@ class ScrapingWorker {
         rerunSuccess: true,
         rerunAttempt: 1,
       };
-    } catch (error) {
+    } catch (error: any) {
       await dualLogError("Booking job rerun failed", error, {
         errorType: BookingErrorType.RERUN_FAILED,
         platform: "booking",
@@ -866,8 +877,14 @@ class ScrapingWorker {
         maxRetries: jobService.maxRetries,
       });
 
-      // Update job status to Failed
-      await jobService.failJob(jobId);
+      // Update job status to Failed, preserving any specific failed_reason
+      if (!isStatusAlreadySaved(error)) {
+        const failedReason =
+          getFailedReasonForUser(error) ||
+          "An unexpected error occurred. Please try again.";
+        await jobService.failJobSafe(jobId, failedReason);
+        markStatusSaved(error);
+      }
 
       // Finalize logging with failed status
       await finalizeJobLogging("failed");

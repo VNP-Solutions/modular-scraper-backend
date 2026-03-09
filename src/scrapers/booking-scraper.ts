@@ -22,6 +22,11 @@ import {
 import { delay } from "../common/delay.js";
 import { emailNotifier } from "../common/email-notifier.js";
 import { decryptPassword } from "../common/encription.js";
+import {
+  FAILED_REASON,
+  hasFailedReasonCode,
+  setFailedReasonCode,
+} from "../common/failed-reason.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
 import { generateRandomPassword } from "../common/password-generator.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
@@ -883,10 +888,12 @@ export class BookingScraper extends BaseScraper {
             }
           );
           await this.takeScreenshot();
-          throw new Error("2FA verification failed");
+          const twoFaErr = new Error("2FA verification failed");
+          setFailedReasonCode(twoFaErr, FAILED_REASON.BOOKING_2FA_FAILED);
+          throw twoFaErr;
         }
       }
-    } catch (error) {
+    } catch (error: any) {
       await dualLogError(
         getBookingErrorDescription(BookingErrorType.LOGIN_FAILED),
         {
@@ -897,6 +904,9 @@ export class BookingScraper extends BaseScraper {
         }
       );
       await this.takeScreenshot();
+      if (!hasFailedReasonCode(error)) {
+        setFailedReasonCode(error, FAILED_REASON.BOOKING_LOGIN_FAILED);
+      }
       throw error;
     }
   }
@@ -4844,7 +4854,11 @@ export class BookingScraper extends BaseScraper {
       additionalData
     );
     if (shouldStop) {
-      throw new Error(`Scraping was stopped during ${action || "operation"}`);
+      const stoppedErr = new Error(
+        `Scraping was stopped during ${action || "operation"}`
+      );
+      setFailedReasonCode(stoppedErr, FAILED_REASON.BOOKING_SCRAPING_STOPPED);
+      throw stoppedErr;
     }
   }
 }

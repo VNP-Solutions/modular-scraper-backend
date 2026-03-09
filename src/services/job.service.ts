@@ -1,5 +1,14 @@
 import { Types } from "mongoose";
 import {
+  FAILED_REASON,
+  getFailedReasonForUser,
+  hasFailedReasonCode,
+  inferBookingOtpFailedReasonCode,
+  isStatusAlreadySaved,
+  markStatusSaved,
+  setFailedReasonCode,
+} from "../common/failed-reason.js";
+import {
   CardInfo,
   IJobItem,
   JobItem,
@@ -359,9 +368,10 @@ export class JobService {
         updatedAt: new Date(),
       };
 
-      // If changing to Running status, assign current worker
+      // If changing to Running status, assign current worker and clear previous screenshot trail
       if (status === JobStatus.Running) {
         updateData.worker_assigned = process.env.WORKER_ID || "scraper-worker";
+        updateData.screenshot_urls = [];
       }
 
       return await Job.findByIdAndUpdate(objectId, updateData, { new: true });
@@ -397,6 +407,83 @@ export class JobService {
    */
   async failJob(jobId: string): Promise<IJob | null> {
     return await this.updateJobStatus(jobId, JobStatus.Failed);
+  }
+
+  /**
+   * Update job status along with a specific failed_reason message.
+   * Pass null to clear an existing failed_reason.
+   */
+  async updateJobStatusWithReason(
+    jobId: string,
+    status: JobStatus,
+    failedReason?: string | null
+  ): Promise<IJob | null> {
+    try {
+      const objectId = this.validateObjectId(jobId, "jobId");
+      const updateData: any = {
+        job_status: status,
+        updatedAt: new Date(),
+      };
+      if (status === JobStatus.Running) {
+        updateData.worker_assigned = process.env.WORKER_ID || "scraper-worker";
+      }
+      if (failedReason !== undefined) {
+        updateData.failed_reason = failedReason ?? null;
+      }
+      return await Job.findByIdAndUpdate(objectId, updateData, { new: true });
+    } catch (error) {
+      console.error(`Error updating job status with reason: ${error}`);
+      return null;
+    }
+  }
+
+  /**
+   * Set job to Failed while preserving any failed_reason already saved by an
+   * inner catch block (first-writer-wins). Only writes a fallback reason when
+   * the DB document has no failed_reason yet.
+   */
+  async failJobSafe(
+    jobId: string,
+    fallbackReason?: string
+  ): Promise<IJob | null> {
+    try {
+      const objectId = this.validateObjectId(jobId, "jobId");
+      const existing = await Job.findById(objectId).select("failed_reason");
+      const reason = existing?.failed_reason ?? fallbackReason ?? null;
+      return await Job.findByIdAndUpdate(
+        objectId,
+        {
+          job_status: JobStatus.Failed,
+          failed_reason: reason,
+          updatedAt: new Date(),
+        },
+        { new: true }
+      );
+    } catch (error) {
+      console.error(`Error in failJobSafe: ${error}`);
+      return null;
+    }
+  }
+
+
+  async addScreenshotUrl(
+    jobId: string,
+    entry: {
+      step: string;
+      url: string;
+      timestamp: string;
+      type: "step" | "error";
+    }
+  ): Promise<void> {
+    try {
+      const objectId = this.validateObjectId(jobId, "jobId");
+      await Job.findByIdAndUpdate(objectId, {
+        $push: { screenshot_urls: entry },
+        updatedAt: new Date(),
+      });
+    } catch (error) {
+      console.error(`Error adding screenshot URL to job: ${error}`);
+    }
   }
 
   /**
@@ -905,3 +992,14 @@ export class JobService {
 
 // Export singleton instance
 export const jobService = new JobService();
+
+// Re-export failed-reason helpers for convenience
+export {
+  FAILED_REASON,
+  getFailedReasonForUser,
+  hasFailedReasonCode,
+  inferBookingOtpFailedReasonCode,
+  isStatusAlreadySaved,
+  markStatusSaved,
+  setFailedReasonCode,
+} from "../common/failed-reason.js";

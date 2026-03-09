@@ -5,13 +5,21 @@ import {
   getBookingErrorDescription,
 } from "../common/booking-error-types.js";
 import {
+  FAILED_REASON,
+  getFailedReasonForUser,
+  hasFailedReasonCode,
+  isStatusAlreadySaved,
+  markStatusSaved,
+  setFailedReasonCode,
+} from "../common/failed-reason.js";
+import {
   dualLogError,
   dualLogInfo,
   dualLogWarn,
 } from "../common/log-helper.js";
 import { otpStatusManager } from "../common/otp-status-manager.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
-import { screenshotManager } from "../common/screenshot-manager.js";
+import { ScreenshotHelper } from "../common/screenshot-helper.js";
 import { JobStatus } from "../models/job.model.js";
 import { jobService } from "../services/job.service.js";
 
@@ -83,34 +91,34 @@ export abstract class BaseScraper {
   abstract cleanup(): Promise<void>;
 
   // Common methods that can be shared across platforms
-  protected async takeScreenshot(filename?: string): Promise<void> {
-    if (this.page) {
-      let screenshotFilename: string;
-      const jobId = this.jobId || `trust_verify-${this.propertyIdForDb}`;
+  protected async takeScreenshot(stepName?: string): Promise<void> {
+    if (!this.page) return;
 
-      // Set job ID in screenshot manager
-      screenshotManager.setJobId(jobId);
+    const jobId = this.jobId || `trust_verify-${this.propertyIdForDb}`;
 
-      if (filename) {
-        screenshotFilename = filename;
-      } else {
-        screenshotFilename = screenshotManager.generateStepScreenshotName(
-          "last_step",
-          jobId
-        );
-      }
-
-      try {
-        const screenshotPath = await screenshotManager.saveScreenshot(
-          this.page,
-          screenshotFilename,
-          jobId
-        );
-        console.log(`Screenshot saved: ${screenshotPath}`);
-      } catch (error) {
-        console.error(`Failed to save screenshot: ${error}`);
-      }
+    // Derive a clean step label: strip file extension and timestamp noise if a
+    // filename was passed (legacy callers), otherwise use "step" + counter.
+    let step: string;
+    if (stepName) {
+      // Strip .png extension and trailing timestamps like -1234567890
+      step = stepName
+        .replace(/\.png$/i, "")
+        .replace(/-\d{10,}$/, "");
+    } else {
+      const ts = new Date().toISOString().replace(/[:.]/g, "-");
+      step = `booking_step_${ts}`;
     }
+
+    // Determine type: treat names containing "error" as error screenshots
+    const type: "step" | "error" = /error/i.test(step) ? "error" : "step";
+
+    await ScreenshotHelper.takeScreenshot(
+      this.page,
+      jobId,
+      step,
+      type,
+      this.platform
+    );
   }
 
   protected async delay(ms: number): Promise<void> {
@@ -139,30 +147,8 @@ export abstract class BaseScraper {
       this.jobId = params.jobId;
       this.propertyIdForDb = params.propertyIdForDb;
 
-      // Update job ID in screenshot manager and captcha service if available
+      // Update job ID and captcha service if available
       if (this.jobId) {
-        screenshotManager.setJobId(this.jobId);
-
-        // Clean up any existing screenshots from previous runs of this job
-        try {
-          await screenshotManager.cleanupJobScreenshots(
-            this.jobId,
-            "job start cleanup"
-          );
-          await dualLogInfo(
-            "Cleaned up existing screenshots from previous job runs",
-            {
-              jobId: this.jobId,
-              platform: this.platform,
-            }
-          );
-        } catch (cleanupError) {
-          await dualLogError(
-            "Failed to cleanup existing screenshots at job start",
-            cleanupError
-          );
-        }
-
         // Update captcha service job ID if it exists (for booking scraper)
         if ((this as any).captchaService) {
           (this as any).captchaService.setJobId(this.jobId);
@@ -191,7 +177,9 @@ export abstract class BaseScraper {
             action: "execute_scraping",
           }
         );
-        throw new Error("Scraping was stopped before starting");
+        const stoppedErr = new Error("Scraping was stopped before starting");
+        setFailedReasonCode(stoppedErr, FAILED_REASON.BOOKING_SCRAPING_STOPPED);
+        throw stoppedErr;
       }
 
       // Step 1: Setup browser
@@ -218,7 +206,9 @@ export abstract class BaseScraper {
               action: "login",
             }
           );
-          throw new Error("Scraping was stopped before login");
+          const stoppedErr = new Error("Scraping was stopped before login");
+          setFailedReasonCode(stoppedErr, FAILED_REASON.BOOKING_SCRAPING_STOPPED);
+          throw stoppedErr;
         }
 
         try {
@@ -283,7 +273,11 @@ export abstract class BaseScraper {
             action: "scrape_data",
           }
         );
-        throw new Error("Scraping was stopped before data scraping");
+        const stoppedErr = new Error(
+          "Scraping was stopped before data scraping"
+        );
+        setFailedReasonCode(stoppedErr, FAILED_REASON.BOOKING_SCRAPING_STOPPED);
+        throw stoppedErr;
       }
 
       const result = await this.scrapeData(params);
@@ -296,28 +290,7 @@ export abstract class BaseScraper {
         success: true,
       });
 
-      // Clean up screenshots on successful completion if captcha service is available
-      try {
-        if (this.jobId && (this as any).captchaService) {
-          await (this as any).captchaService.cleanupJobScreenshots(
-            this.jobId,
-            "job success"
-          );
-          await dualLogInfo(
-            "Screenshots cleaned up after successful completion",
-            {
-              jobId: this.jobId,
-              platform: this.platform,
-            }
-          );
-        }
-      } catch (cleanupError) {
-        await dualLogError(
-          "Failed to cleanup screenshots after success",
-          cleanupError
-        );
-      }
-
+      // Screenshots are stored in S3 — no local cleanup needed
       return result;
     } catch (error) {
       await dualLogError("Scraping failed", error, {
@@ -330,7 +303,17 @@ export abstract class BaseScraper {
       //job status change to failed
       if (this.jobId) {
         try {
-          await jobService.updateJobStatus(this.jobId, JobStatus.Failed);
+          if (!isStatusAlreadySaved(error)) {
+            const failedReason =
+              getFailedReasonForUser(error) ||
+              "An unexpected error occurred. Please try again.";
+            await jobService.updateJobStatusWithReason(
+              this.jobId,
+              JobStatus.Failed,
+              failedReason
+            );
+            markStatusSaved(error);
+          }
           await dualLogInfo("Job status changed to failed", {
             jobId: this.jobId,
             platform: this.platform,
@@ -348,24 +331,7 @@ export abstract class BaseScraper {
         }
       }
 
-      // Clean up screenshots on error if captcha service is available
-      try {
-        if (this.jobId && (this as any).captchaService) {
-          await (this as any).captchaService.cleanupJobScreenshots(
-            this.jobId,
-            "job error"
-          );
-          await dualLogInfo("Screenshots cleaned up after error", {
-            jobId: this.jobId,
-            platform: this.platform,
-          });
-        }
-      } catch (cleanupError) {
-        await dualLogError(
-          "Failed to cleanup screenshots after error",
-          cleanupError
-        );
-      }
+      // Screenshots are stored in S3 — no local cleanup needed
 
       // Ensure scraping state manager is stopped on any error
       try {
