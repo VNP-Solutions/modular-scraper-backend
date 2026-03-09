@@ -1,5 +1,11 @@
 import { Browser, Page } from "puppeteer";
 import { delay } from "../../common/delay.js";
+import {
+  FAILED_REASON,
+  hasFailedReasonCode,
+  inferAgodaOtpFailedReasonCode,
+  setFailedReasonCode,
+} from "../../common/failed-reason.js";
 import { dualLogError, dualLogInfo } from "../../common/log-helper.js";
 import { otpCompletionNotifier } from "../../common/otp-completion-notifier.js";
 import { progressManager } from "../../common/progress-manager.js";
@@ -47,7 +53,9 @@ async function agodaLogin(
     await scrapingStateManager.waitWhilePaused();
     if (!scrapingStateManager.isRunning()) {
       await dualLogError("Scraping was stopped during Agoda login");
-      throw new Error("Scraping was stopped during Agoda login");
+      const stoppedErr = new Error("Scraping was stopped during Agoda login");
+      setFailedReasonCode(stoppedErr, FAILED_REASON.AGODA_SCRAPING_STOPPED);
+      throw stoppedErr;
     }
 
     // Page and iframe initialization
@@ -333,11 +341,17 @@ async function agodaLogin(
           if (jobId) {
             otpCompletionNotifier.notifyOtpCompleted(jobId);
           }
-        } catch (directLinkError) {
+        } catch (directLinkError: any) {
           await dualLogError(
             "Error during direct email link flow:",
             directLinkError
           );
+          if (!hasFailedReasonCode(directLinkError)) {
+            setFailedReasonCode(
+              directLinkError,
+              FAILED_REASON.AGODA_EMAIL_LINK_NOT_FOUND
+            );
+          }
           throw directLinkError;
         }
       } else if (nextPageResult === "otp-form") {
@@ -355,13 +369,12 @@ async function agodaLogin(
           if (jobId) {
             otpCompletionNotifier.notifyOtpCompleted(jobId);
           }
-        } catch (otpError) {
+        } catch (otpError: any) {
           await dualLogError("Error during OTP flow:", otpError);
 
           // Take error screenshot for OTP flow error
           if (jobId) {
             try {
-              // Use the main page instead of trying to access from frame
               await takeErrorScreenshot(page, jobId, "otp_flow_error");
             } catch (screenshotError) {
               await dualLogError(
@@ -371,6 +384,12 @@ async function agodaLogin(
             }
           }
 
+          if (!hasFailedReasonCode(otpError)) {
+            setFailedReasonCode(
+              otpError,
+              inferAgodaOtpFailedReasonCode(otpError?.message)
+            );
+          }
           throw otpError;
         }
       } else {
@@ -389,7 +408,7 @@ async function agodaLogin(
           undefined
         );
       }
-    } catch (pageError) {
+    } catch (pageError: any) {
       await dualLogError("Error during page interaction:", pageError);
       shouldCloseBrowser = true;
 
@@ -408,6 +427,10 @@ async function agodaLogin(
       // Notify that OTP work is completed (on error) so other jobs can proceed
       if (jobId) {
         otpCompletionNotifier.notifyOtpCompleted(jobId);
+      }
+
+      if (!hasFailedReasonCode(pageError)) {
+        setFailedReasonCode(pageError, FAILED_REASON.AGODA_LOGIN_FAILED);
       }
       throw pageError;
     }
@@ -540,13 +563,17 @@ async function handleDirectLinkFlow(page: Page, jobId?: string): Promise<void> {
   }
 
   if (!signInResult || !signInResult.emailFound) {
-    throw new Error("Failed to access email for sign-in link");
+    const err = new Error("Failed to access email for sign-in link");
+    setFailedReasonCode(err, FAILED_REASON.AGODA_EMAIL_LINK_NOT_FOUND);
+    throw err;
   }
 
   if (!signInResult.signInLink) {
-    throw new Error(
+    const err = new Error(
       "Sign-in link not found in recent emails after all attempts. Please check if you received the Agoda sign-in email."
     );
+    setFailedReasonCode(err, FAILED_REASON.AGODA_EMAIL_LINK_NOT_FOUND);
+    throw err;
   }
 
   await dualLogInfo(`Sign-in link found: ${signInResult.signInLink}`);
@@ -628,13 +655,17 @@ async function handleOtpFlow(
   }
 
   if (!otpResult || !otpResult.emailFound) {
-    throw new Error("Failed to access email for OTP code");
+    const err = new Error("Failed to access email for OTP code");
+    setFailedReasonCode(err, FAILED_REASON.AGODA_OTP_CODE_NOT_FOUND);
+    throw err;
   }
 
   if (!otpResult.otpCode) {
-    throw new Error(
+    const err = new Error(
       "OTP code not found in recent emails after all attempts. Please check if you received the Agoda OTP email."
     );
+    setFailedReasonCode(err, FAILED_REASON.AGODA_OTP_CODE_NOT_FOUND);
+    throw err;
   }
 
   // Fill OTP code into the input fields

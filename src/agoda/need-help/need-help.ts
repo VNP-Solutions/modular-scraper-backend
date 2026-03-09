@@ -4,6 +4,10 @@ import { Page } from "puppeteer";
 import { dualLogError, dualLogInfo } from "../../common/log-helper.js";
 import { progressManager } from "../../common/progress-manager.js";
 import { scrapingStateManager } from "../../common/scraping-state.js";
+import {
+  takeErrorScreenshot,
+  takeSuccessScreenshot,
+} from "../../common/screenshot-helper.js";
 import { timeManager } from "../../common/time-manager.js";
 import { JobService } from "../../services/job.service.js";
 import { cleanupOnError } from "../utils/error-cleanup.js";
@@ -268,6 +272,7 @@ export async function automateNeedHelpProcess(
         "agoda_need_help_button_clicked",
         undefined
       );
+      await takeSuccessScreenshot(page, jobId, "need_help_button_clicked");
     } else if (!needHelpClicked) {
       await dualLogError(
         "Failed to click 'Need Help' button (standard and fallback)",
@@ -360,6 +365,7 @@ export async function automateNeedHelpProcess(
               "agoda_chat_message_sent",
               undefined
             );
+            await takeSuccessScreenshot(page, jobId, "chat_contact_agoda_sent");
           }
           break;
         } catch (error) {
@@ -457,6 +463,7 @@ export async function automateNeedHelpProcess(
               "agoda_chat_message_sent",
               undefined
             );
+            await takeSuccessScreenshot(page, jobId, "chat_submit_request_sent");
           }
           break;
         } catch (error) {
@@ -497,6 +504,7 @@ export async function automateNeedHelpProcess(
             "agoda_submit_request_clicked",
             undefined
           );
+          await takeSuccessScreenshot(page, jobId, "submit_request_button_clicked");
         }
         break;
       } catch (error) {
@@ -647,6 +655,9 @@ export async function automateNeedHelpProcess(
           }
         }
         await delay(1000);
+        if (jobId) {
+          await takeSuccessScreenshot(page, jobId, "issue_type_selected");
+        }
       }
     } catch (error: any) {
       await dualLogError("Error handling issue type dropdown:", error.message, {
@@ -693,6 +704,7 @@ export async function automateNeedHelpProcess(
               "agoda_issue_details_filled",
               undefined
             );
+            await takeSuccessScreenshot(page, jobId, "issue_details_filled");
           }
           break;
         } catch (error) {
@@ -748,6 +760,7 @@ export async function automateNeedHelpProcess(
                     "agoda_csv_file_uploaded",
                     undefined
                   );
+                  await takeSuccessScreenshot(page, jobId, "csv_file_uploaded");
                 }
                 await delay(3000); // Wait for upload to process
                 break;
@@ -790,6 +803,9 @@ export async function automateNeedHelpProcess(
             `✅ Filled phone number with selector: ${selector}`,
             { jobId }
           );
+          if (jobId) {
+            await takeSuccessScreenshot(page, jobId, "phone_number_filled");
+          }
           break;
         } catch (error) {
           continue;
@@ -825,6 +841,9 @@ export async function automateNeedHelpProcess(
         timeSession: timeManager.getSessionInfo(),
       }
     );
+    if (jobId) {
+      await takeSuccessScreenshot(page, jobId, "need_help_process_completed");
+    }
 
     // Cleanup CSV files if requested
     if (cleanupAfter) {
@@ -843,6 +862,9 @@ export async function automateNeedHelpProcess(
         timeSession: timeManager.getSessionInfo(),
       }
     );
+    if (jobId) {
+      await takeErrorScreenshot(page, jobId, "need_help_process_failed");
+    }
 
     // Standardized cleanup on Need Help error
     try {

@@ -5,6 +5,13 @@ import agodaLogin from "./agoda/login-system/login.js";
 import { cleanupOnError } from "./agoda/utils/error-cleanup.js";
 import { browserSetupLocal } from "./browser-setup/browser-local.js";
 import { browserSetupProduction } from "./browser-setup/browser-prod.js";
+import {
+  FAILED_REASON,
+  getFailedReasonForUser,
+  isStatusAlreadySaved,
+  markStatusSaved,
+  setFailedReasonCode,
+} from "./common/failed-reason.js";
 import { emailNotifier } from "./common/email-notifier.js";
 import { dualLogError, dualLogInfo } from "./common/log-helper.js";
 import { otpCompletionNotifier } from "./common/otp-completion-notifier.js";
@@ -94,7 +101,11 @@ async function agoda(
       await dualLogError(
         "Scraping was stopped during Agoda automation startup"
       );
-      throw new Error("Scraping was stopped during Agoda automation startup");
+      const stoppedErr = new Error(
+        "Scraping was stopped during Agoda automation startup"
+      );
+      setFailedReasonCode(stoppedErr, FAILED_REASON.AGODA_SCRAPING_STOPPED);
+      throw stoppedErr;
     }
 
     // Update progress - initialization phase
@@ -333,10 +344,20 @@ async function agoda(
 
     // Send email notification for outer main function error
     if (jobId) {
-      // Make the job fail
-      const CurrentJob = await jobService.getJobById(jobId);
-      if (CurrentJob) {
-        await jobService.updateJobStatus(jobId, JobStatus.Failed);
+      // Make the job fail, preserving any failed_reason already set by inner catches
+      if (!isStatusAlreadySaved(error)) {
+        const failedReason =
+          getFailedReasonForUser(error) ||
+          "An unexpected error occurred. Please try again.";
+        const CurrentJob = await jobService.getJobById(jobId);
+        if (CurrentJob) {
+          await jobService.updateJobStatusWithReason(
+            jobId,
+            JobStatus.Failed,
+            failedReason
+          );
+        }
+        markStatusSaved(error);
       }
       try {
         await emailNotifier.notifyJobError(

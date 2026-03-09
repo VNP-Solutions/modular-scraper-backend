@@ -20,6 +20,11 @@ import { JobStatus } from "../models/job.model.js";
 import reservation from "../reservation/reservation.js";
 import { propertyCredentialsService } from "../services/job-credentials.service.js";
 import { jobService } from "../services/job.service.js";
+import {
+  getFailedReasonForUser,
+  isStatusAlreadySaved,
+  markStatusSaved,
+} from "../common/failed-reason.js";
 
 // Load environment variables
 dotenv.config();
@@ -845,13 +850,21 @@ class ScrapingWorker {
         finalStatus: finalStatus,
         logInfo: logInfo,
       };
-    } catch (scrapingError) {
+    } catch (scrapingError: any) {
       // Mark job as failed on scraping error
       await dualLogError(`Worker: Agoda job ${jobId} failed`, scrapingError, {
         jobId,
       });
       await progressManager.handleJobError(jobId, scrapingError);
       scrapingStateManager.stopScraping();
+
+      if (!isStatusAlreadySaved(scrapingError)) {
+        const failedReason =
+          getFailedReasonForUser(scrapingError) ||
+          "An unexpected error occurred. Please try again.";
+        await jobService.failJobSafe(jobId, failedReason);
+        markStatusSaved(scrapingError);
+      }
 
       // Finalize logging with failed status
       await finalizeJobLogging("failed");
@@ -1018,7 +1031,7 @@ class ScrapingWorker {
         progress,
         logInfo,
       };
-    } catch (error) {
+    } catch (error: any) {
       console.error(`Worker: ❌ Error during Agoda job ${jobId} rerun:`, error);
       await dualLogError(`Worker: Agoda job ${jobId} rerun failed`, error, {
         jobId,
@@ -1029,6 +1042,14 @@ class ScrapingWorker {
 
       // Stop scraping state manager
       scrapingStateManager.stopScraping();
+
+      if (!isStatusAlreadySaved(error)) {
+        const failedReason =
+          getFailedReasonForUser(error) ||
+          "An unexpected error occurred. Please try again.";
+        await jobService.failJobSafe(jobId, failedReason);
+        markStatusSaved(error);
+      }
 
       // Finalize logging with failed status
       await finalizeJobLogging("failed");
