@@ -43,7 +43,10 @@ import { cookieStorageService } from "../services/cookie-storage.service.js";
 import { propertyCredentialsService } from "../services/job-credentials.service.js";
 import { jobService } from "../services/job.service.js";
 import { propertyCredentialsService as propertyPasswordUpdateService } from "../services/property-credentials.service.js";
-import { vccsManagementService } from "../services/vccs-management.service.js";
+import {
+  vccsManagementService,
+  VccsApiResponse,
+} from "../services/vccs-management.service.js";
 import {
   BaseScraper,
   CaptchaHandlerOptions,
@@ -3420,125 +3423,114 @@ export class BookingScraper extends BaseScraper {
         }
       }
 
-      // Paginate through all pages (100 per page), processing each page as we go.
-      // Stop early when the end_date filter removes every item on a page — meaning
-      // all remaining reservations are beyond the cutoff date.
-      const processingResult = {
-        processed: 0,
-        errors: 0,
-        results: [] as Array<{
-          reservationId: string;
-          vccsData: any;
-          cardDetails: any;
-          saved: boolean;
-        }>,
-      };
+      // ── Phase 1: Collect all reservation entries across all pages ────────────
+      // All requests stay on admin.booking.com so the session stays stable.
+      // We only apply the expiry_date filter here and stop early if an entire
+      // page is filtered out (all remaining items are beyond the cutoff).
+      await this.logInfo(
+        "Phase 1: Collecting all VCCS reservations across all pages..."
+      );
 
-      let currentPage = 1;
-      let isLastPage = false;
+      type VccsItem = VccsApiResponse["data"]["vccs"][number];
+      const allVccs: VccsItem[] = [];
+      let collectPage = 1;
+      let collectionDone = false;
 
-      while (!isLastPage) {
+      while (!collectionDone) {
         await this.logInfo(
-          `Fetching VCCS data page ${currentPage} (limit 100)...`
+          `Fetching VCCS list page ${collectPage} (limit 100)...`
         );
 
-        const vccsData = await vccsManagementService.getVccsDataFromBrowser(
+        const pageData = await vccsManagementService.getVccsDataFromBrowser(
           this.page!,
           urlParamsWithAccountId,
-          currentPage
+          collectPage
         );
 
-        if (!vccsData || !vccsData.success) {
+        if (!pageData || !pageData.success) {
           throw new Error(
-            `Failed to get VCCS data from API on page ${currentPage}`
+            `Failed to fetch VCCS list on page ${collectPage}`
           );
         }
 
+        const pageVccs = pageData.data?.vccs ?? [];
+        const isLastPage = pageData.data?.pagination?.is_last_page === 1;
+
         await this.logInfo(
-          `Page ${currentPage}: retrieved ${vccsData.data?.vccs?.length ?? 0} reservations`,
-          {
-            pagination: vccsData.data?.pagination,
-          }
+          `Page ${collectPage}: got ${pageVccs.length} reservations`,
+          { pagination: pageData.data?.pagination }
         );
 
-        // Determine whether this is the last page from the API response
-        isLastPage = vccsData.data?.pagination?.is_last_page === 1;
-
-        // Filter reservations based on expiry_date if endDateForFilter is available
-        if (endDateForFilter && vccsData.data && vccsData.data.vccs) {
-          const originalCount = vccsData.data.vccs.length;
-
-          const filteredOut: string[] = [];
-          const kept: string[] = [];
-
-          vccsData.data.vccs = vccsData.data.vccs.filter((vccs) => {
-            const expiryDate = new Date(vccs.expiry_date);
-            const shouldKeep = expiryDate <= endDateForFilter!;
-
-            if (shouldKeep) {
-              kept.push(`${vccs.hres_id} (expiry: ${vccs.expiry_date})`);
-            } else {
-              filteredOut.push(`${vccs.hres_id} (expiry: ${vccs.expiry_date})`);
-            }
-
-            return shouldKeep;
+        // Apply expiry_date filter if we have a cutoff date
+        let kept = pageVccs;
+        if (endDateForFilter) {
+          const before = pageVccs.length;
+          kept = pageVccs.filter(
+            (v) => new Date(v.expiry_date) <= endDateForFilter!
+          );
+          await this.logInfo(`Page ${collectPage} filter: kept ${kept.length}/${before}`, {
+            filteredOut: before - kept.length,
+            endDate: endDateForFilter.toDateString(),
           });
 
-          await this.logInfo(`Page ${currentPage} filter results:`, {
-            originalCount,
-            keptCount: vccsData.data.vccs.length,
-            filteredOutCount: filteredOut.length,
-            keptReservations:
-              kept.length > 10
-                ? [...kept.slice(0, 10), `... and ${kept.length - 10} more`]
-                : kept,
-            filteredOutReservations:
-              filteredOut.length > 10
-                ? [
-                    ...filteredOut.slice(0, 10),
-                    `... and ${filteredOut.length - 10} more`,
-                  ]
-                : filteredOut,
-          });
-
-          // If every item on this page was filtered out, all remaining pages will
-          // also be beyond the cutoff — stop paginating.
-          if (vccsData.data.vccs.length === 0) {
+          // If the entire page was filtered out there is no point fetching more —
+          // all subsequent pages will also be past the cutoff.
+          if (kept.length === 0) {
             await this.logInfo(
-              `All items on page ${currentPage} are past the end_date filter. Stopping pagination.`
+              `All items on page ${collectPage} are past the end_date filter. Stopping collection.`
             );
             break;
           }
         }
 
-        // Process this page's reservations
-        if (vccsData.data?.vccs?.length > 0) {
-          const pageResult =
-            await vccsManagementService.processAllVccsReservationsFromBrowser(
-              this.page!,
-              vccsData,
-              urlParamsWithAccountId,
-              params.jobId,
-              this.propertyIdForDb,
-              this
-            );
+        allVccs.push(...kept);
 
-          processingResult.processed += pageResult.processed;
-          processingResult.errors += pageResult.errors;
-          processingResult.results.push(...pageResult.results);
-
-          await this.logInfo(
-            `Page ${currentPage} processing done. Running totals — processed: ${processingResult.processed}, errors: ${processingResult.errors}`
-          );
-        }
-
-        if (!isLastPage) {
-          currentPage++;
+        if (isLastPage) {
+          collectionDone = true;
+        } else {
+          collectPage++;
         }
       }
 
       await this.logInfo(
-        `Pagination complete. Total pages fetched: ${currentPage}`
+        `Phase 1 complete. Total reservations collected: ${allVccs.length} across ${collectPage} page(s).`
+      );
+
+      // ── Phase 2: Process card details one by one ──────────────────────────
+      // The session is still fresh (we never left admin.booking.com in Phase 1).
+      // We build a synthetic VccsApiResponse that wraps the full collected list
+      // and hand it to the existing processor which handles auth/2FA internally.
+      await this.logInfo(
+        `Phase 2: Processing card details for ${allVccs.length} reservations...`
+      );
+
+      const syntheticVccsData: VccsApiResponse = {
+        success: 1,
+        data: {
+          vccs: allVccs,
+          pagination: {
+            current_page_size: allVccs.length,
+            current_page_number: 1,
+            total_count: allVccs.length,
+            is_last_page: 1,
+          },
+          total_amount: { amount: 0, amount_formatted: "", currency: "" },
+        },
+        params: { errors: [], details: null },
+      };
+
+      const processingResult =
+        await vccsManagementService.processAllVccsReservationsFromBrowser(
+          this.page!,
+          syntheticVccsData,
+          urlParamsWithAccountId,
+          params.jobId,
+          this.propertyIdForDb,
+          this
+        );
+
+      await this.logInfo(
+        `Phase 2 complete. Processed: ${processingResult.processed}, Errors: ${processingResult.errors}`
       );
 
       await this.logInfo("VCCS API Processing Results:");
