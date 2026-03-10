@@ -1118,6 +1118,8 @@ async function handleOtpVerification(
         }
 
         await delay(3000); // Wait longer for OTP form to appear after selection
+        // Screenshot: shows the "via Email" selection page after clicking
+        await takeScreenshot(page, jobId ?? "", `via_email_option_clicked_${bookingId}`, "step", "agoda", "retrieval");
         break; // Exit loop if successful
       } catch (error) {
         // Continue to next selector
@@ -1150,12 +1152,16 @@ async function handleOtpVerification(
         timeout: selectorTimeout,
       });
       await dualLogInfo("✅ OTP input fields found", { jobId, bookingId });
+      // Screenshot: OTP input form visible — shows "OTP has been sent to" + digit boxes
+      await takeScreenshot(page, jobId ?? "", `otp_input_form_visible_${bookingId}`, "step", "agoda", "retrieval");
     } catch (error) {
       await dualLogError(
         "OTP input fields not found after waiting. Checking page state...",
         error,
         { jobId, bookingId }
       );
+      // Screenshot: captures what's on screen when OTP input is missing
+      await takeScreenshot(page, jobId ?? "", `otp_input_form_missing_${bookingId}`, "error", "agoda", "retrieval");
 
       // Debug: Check what's on the page
       const pageDebug = await targetPage.evaluate(() => {
@@ -1529,6 +1535,8 @@ async function handleOtpVerification(
       bookingId,
     });
     await delay(1000);
+    // Screenshot: all OTP digits filled — shows the form just before submit
+    await takeScreenshot(page, jobId ?? "", `otp_digits_filled_${bookingId}`, "step", "agoda", "retrieval");
 
     // Step 6: Click the Submit OTP button
     await dualLogInfo("Looking for Submit OTP button...", { jobId, bookingId });
