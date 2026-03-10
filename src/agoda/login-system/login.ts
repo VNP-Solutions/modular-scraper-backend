@@ -235,6 +235,11 @@ async function agodaLogin(
 
       await dualLogInfo(`Next page result: ${nextPageResult}`);
 
+      // Screenshot: capture whichever page appeared after clicking Continue
+      if (jobId || entityId) {
+        await takeScreenshot(page, entityId ?? jobId ?? "", `login_next_page_${nextPageResult}`, "step", "agoda", entityType);
+      }
+
       // Handle different login flows based on next page result
       if (nextPageResult === "email-link") {
         await dualLogInfo("✅ Direct email link flow detected");
@@ -521,6 +526,9 @@ async function handleDirectLinkFlow(page: Page, jobId?: string): Promise<void> {
   // Wait 10 seconds after navigating to the sign-in link
   await dualLogInfo("Waiting 10 seconds after navigating to sign-in link...");
   await delay(10000);
+
+  // Screenshot: page state after email sign-in link navigation completed
+  await takeScreenshot(page, jobId ?? "", "email_signin_link_navigated", "step", "agoda");
 }
 
 /**
@@ -542,6 +550,11 @@ async function handleOtpFlow(
   await frame.waitForSelector('input[data-cy="otp-box-0"]', {
     timeout: selectorTimeout,
   });
+
+  // Screenshot: OTP form appeared with empty digit boxes
+  if (jobId || entityId) {
+    await takeScreenshot(page, entityId ?? jobId ?? "", "otp_form_appeared", "step", "agoda", entityType);
+  }
 
   // Extract reference code and email address from the page
   await dualLogInfo("Extracting reference code and email address from page...");
