@@ -8,6 +8,7 @@ import { delay } from "../../common/delay.js";
 import { dualLogError, dualLogInfo } from "../../common/log-helper.js";
 import { otpCompletionNotifier } from "../../common/otp-completion-notifier.js";
 import { otpStatusManager } from "../../common/otp-status-manager.js";
+import { takeScreenshot } from "../../common/screenshot-helper.js";
 import { retrievalService } from "../../services/retriveal-job.service.js";
 import { getYcsRetrievalOtpCode } from "../utils/retriveal-email.js";
 import {
@@ -193,11 +194,14 @@ export async function searchBookingAndNavigateToPayout(
         jobId,
         bookingId,
       });
+      // Screenshot: search results with matched booking row
+      await takeScreenshot(page, retrievalId ?? jobId ?? "", `search_results_${bookingId}`, "step", "agoda", retrievalId ? "retrieval" : "job");
     } catch (error) {
       await dualLogError(`Booking row not found for ID: ${bookingId}`, error, {
         jobId,
         bookingId,
       });
+      await takeScreenshot(page, retrievalId ?? jobId ?? "", `search_results_not_found_${bookingId}`, "error", "agoda", retrievalId ? "retrieval" : "job");
       return false;
     }
 
@@ -372,11 +376,14 @@ export async function searchBookingAndNavigateToPayout(
 
       // Small additional delay to ensure DOM is fully updated
       await delay(500);
+      // Screenshot: page state immediately after Get payout tab loaded
+      await takeScreenshot(page, retrievalId ?? jobId ?? "", `payout_tab_loaded_${bookingId}`, "step", "agoda", retrievalId ? "retrieval" : "job");
     } catch (error) {
       await dualLogError("Failed to click on 'Get payout (UPC)' tab", error, {
         jobId,
         bookingId,
       });
+      await takeScreenshot(page, retrievalId ?? jobId ?? "", `payout_tab_click_failed_${bookingId}`, "error", "agoda", retrievalId ? "retrieval" : "job");
       return false;
     }
 
@@ -725,6 +732,8 @@ export async function searchBookingAndNavigateToPayout(
                 "No payout OTP needed - verifying OTP ownership before release",
                 { jobId, bookingId }
               );
+              // Screenshot before releasing OTP — captures page state at release moment
+              await takeScreenshot(page, retrievalId ?? jobId ?? "", "before_otp_release_no_payout_needed", "step", "agoda", retrievalId ? "retrieval" : "job");
               if (markOtpReleasedForRetrieval()) {
                 // Directly release OTP in the database
                 const released = await otpStatusManager.releaseOtp(
@@ -1546,6 +1555,7 @@ async function handleOtpVerification(
         jobId,
         bookingId,
       });
+      await takeScreenshot(page, jobId ?? "", `otp_submit_failed_${bookingId}`, "error", "agoda", "retrieval");
       return false;
     }
 
@@ -1553,6 +1563,8 @@ async function handleOtpVerification(
       jobId,
       bookingId,
     });
+    // Screenshot: OTP submit result — shows if page redirected or shows error
+    await takeScreenshot(page, jobId ?? "", `otp_submit_success_${bookingId}`, "step", "agoda", "retrieval");
 
     // Release OTP immediately after payout verification completes (only once)
     // This frees up OTP for other jobs as soon as payout verification is done
@@ -1569,6 +1581,9 @@ async function handleOtpVerification(
           "Payout OTP verification completed - verifying OTP ownership before release",
           { jobId, bookingId }
         );
+
+        // Screenshot before releasing OTP — captures final payout page state
+        await takeScreenshot(page, retrievalJobId, "before_otp_release_after_payout_verification", "step", "agoda", "retrieval");
 
         // Directly release OTP in the database
         const released = await otpStatusManager.releaseOtp(retrievalJobId);
@@ -1606,6 +1621,7 @@ async function handleOtpVerification(
       jobId,
       bookingId,
     });
+    await takeScreenshot(page, jobId ?? "", `otp_verification_error_${bookingId}`, "error", "agoda", "retrieval");
     return false;
   }
 }
@@ -1834,11 +1850,14 @@ async function reSearchAndNavigateToPayout(
         jobId,
         bookingId,
       });
+      // Screenshot: search results with matched booking row (re-search after OTP)
+      await takeScreenshot(page, jobId ?? "", `re_search_results_${bookingId}`, "step", "agoda", "retrieval");
     } catch (error) {
       await dualLogError(`Booking row not found for ID: ${bookingId}`, error, {
         jobId,
         bookingId,
       });
+      await takeScreenshot(page, jobId ?? "", `re_search_results_not_found_${bookingId}`, "error", "agoda", "retrieval");
       return false;
     }
 

@@ -554,6 +554,8 @@ export async function getAgodaRetrivealData(
           "Retrieval job completed - verifying OTP ownership before release",
           { jobId }
         );
+        // Screenshot before releasing OTP — captures page state at release moment
+        await takeScreenshot(newPage ?? null, entityId, "before_otp_release_end_of_job", "step", "agoda", entityType);
         if (markOtpReleasedForRetrieval()) {
           // Directly release OTP in the database
           const released = await otpStatusManager.releaseOtp(retrievalJobId);
