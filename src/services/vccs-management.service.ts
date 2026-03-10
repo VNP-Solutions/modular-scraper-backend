@@ -109,7 +109,8 @@ export class VccsManagementService {
    */
   async getVccsDataFromBrowser(
     page: any,
-    params: VccsUrlParams
+    params: VccsUrlParams,
+    pageNumber: number = 1
   ): Promise<VccsApiResponse | null> {
     try {
       const apiUrl = `${this.apiBaseUrl}/vccs_to_charge`;
@@ -119,7 +120,7 @@ export class VccsManagementService {
         hotel_id: params.hotel_id,
         hotel_account_id: params.hotel_account_id || "21604744",
         limit: "100",
-        page: "1",
+        page: String(pageNumber),
       });
 
       const fullUrl = `${apiUrl}?${queryParams.toString()}`;

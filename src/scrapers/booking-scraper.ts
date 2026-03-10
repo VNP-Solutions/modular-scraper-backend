@@ -3389,18 +3389,6 @@ export class BookingScraper extends BaseScraper {
         hotel_account_id,
       };
 
-      // Get VCCS data from API using browser fetch to avoid fingerprinting
-      const vccsData = await vccsManagementService.getVccsDataFromBrowser(
-        this.page!,
-        urlParamsWithAccountId
-      );
-
-      if (!vccsData || !vccsData.success) {
-        throw new Error("Failed to get VCCS data from API");
-      }
-
-      await this.logInfo("Successfully retrieved VCCS data from API");
-
       // Fetch job from database to get end_date for filtering
       let endDateForFilter: Date | null = null;
       if (params.jobId) {
@@ -3432,64 +3420,126 @@ export class BookingScraper extends BaseScraper {
         }
       }
 
-      // Filter reservations based on expiry_date if endDateForFilter is available
-      if (endDateForFilter && vccsData.data && vccsData.data.vccs) {
-        const originalCount = vccsData.data.vccs.length;
+      // Paginate through all pages (100 per page), processing each page as we go.
+      // Stop early when the end_date filter removes every item on a page — meaning
+      // all remaining reservations are beyond the cutoff date.
+      const processingResult = {
+        processed: 0,
+        errors: 0,
+        results: [] as Array<{
+          reservationId: string;
+          vccsData: any;
+          cardDetails: any;
+          saved: boolean;
+        }>,
+      };
+
+      let currentPage = 1;
+      let isLastPage = false;
+
+      while (!isLastPage) {
+        await this.logInfo(
+          `Fetching VCCS data page ${currentPage} (limit 100)...`
+        );
+
+        const vccsData = await vccsManagementService.getVccsDataFromBrowser(
+          this.page!,
+          urlParamsWithAccountId,
+          currentPage
+        );
+
+        if (!vccsData || !vccsData.success) {
+          throw new Error(
+            `Failed to get VCCS data from API on page ${currentPage}`
+          );
+        }
 
         await this.logInfo(
-          `Filtering VCCS reservations by expiry_date <= ${endDateForFilter.toDateString()}`,
+          `Page ${currentPage}: retrieved ${vccsData.data?.vccs?.length ?? 0} reservations`,
           {
-            originalCount,
-            endDate: endDateForFilter.toDateString(),
-            totalReservationsBeforeFilter: originalCount,
+            pagination: vccsData.data?.pagination,
           }
         );
 
-        // Log each reservation and whether it passes the filter
-        const filteredOut: string[] = [];
-        const kept: string[] = [];
+        // Determine whether this is the last page from the API response
+        isLastPage = vccsData.data?.pagination?.is_last_page === 1;
 
-        vccsData.data.vccs = vccsData.data.vccs.filter((vccs) => {
-          const expiryDate = new Date(vccs.expiry_date);
-          const shouldKeep = expiryDate <= endDateForFilter!;
+        // Filter reservations based on expiry_date if endDateForFilter is available
+        if (endDateForFilter && vccsData.data && vccsData.data.vccs) {
+          const originalCount = vccsData.data.vccs.length;
 
-          if (shouldKeep) {
-            kept.push(`${vccs.hres_id} (expiry: ${vccs.expiry_date})`);
-          } else {
-            filteredOut.push(`${vccs.hres_id} (expiry: ${vccs.expiry_date})`);
+          const filteredOut: string[] = [];
+          const kept: string[] = [];
+
+          vccsData.data.vccs = vccsData.data.vccs.filter((vccs) => {
+            const expiryDate = new Date(vccs.expiry_date);
+            const shouldKeep = expiryDate <= endDateForFilter!;
+
+            if (shouldKeep) {
+              kept.push(`${vccs.hres_id} (expiry: ${vccs.expiry_date})`);
+            } else {
+              filteredOut.push(`${vccs.hres_id} (expiry: ${vccs.expiry_date})`);
+            }
+
+            return shouldKeep;
+          });
+
+          await this.logInfo(`Page ${currentPage} filter results:`, {
+            originalCount,
+            keptCount: vccsData.data.vccs.length,
+            filteredOutCount: filteredOut.length,
+            keptReservations:
+              kept.length > 10
+                ? [...kept.slice(0, 10), `... and ${kept.length - 10} more`]
+                : kept,
+            filteredOutReservations:
+              filteredOut.length > 10
+                ? [
+                    ...filteredOut.slice(0, 10),
+                    `... and ${filteredOut.length - 10} more`,
+                  ]
+                : filteredOut,
+          });
+
+          // If every item on this page was filtered out, all remaining pages will
+          // also be beyond the cutoff — stop paginating.
+          if (vccsData.data.vccs.length === 0) {
+            await this.logInfo(
+              `All items on page ${currentPage} are past the end_date filter. Stopping pagination.`
+            );
+            break;
           }
+        }
 
-          return shouldKeep;
-        });
+        // Process this page's reservations
+        if (vccsData.data?.vccs?.length > 0) {
+          const pageResult =
+            await vccsManagementService.processAllVccsReservationsFromBrowser(
+              this.page!,
+              vccsData,
+              urlParamsWithAccountId,
+              params.jobId,
+              this.propertyIdForDb,
+              this
+            );
 
-        await this.logInfo(`VCCS Filter Results Summary:`, {
-          originalCount,
-          keptCount: vccsData.data.vccs.length,
-          filteredOutCount: filteredOut.length,
-          keptReservations:
-            kept.length > 10
-              ? [...kept.slice(0, 10), `... and ${kept.length - 10} more`]
-              : kept,
-          filteredOutReservations:
-            filteredOut.length > 10
-              ? [
-                  ...filteredOut.slice(0, 10),
-                  `... and ${filteredOut.length - 10} more`,
-                ]
-              : filteredOut,
-        });
+          processingResult.processed += pageResult.processed;
+          processingResult.errors += pageResult.errors;
+          processingResult.results.push(...pageResult.results);
+
+          await this.logInfo(
+            `Page ${currentPage} processing done. Running totals — processed: ${processingResult.processed}, errors: ${processingResult.errors}`
+          );
+        }
+
+        if (!isLastPage) {
+          currentPage++;
+        }
       }
 
-      // Process all VCCS reservations to get card details using browser fetch
-      const processingResult =
-        await vccsManagementService.processAllVccsReservationsFromBrowser(
-          this.page!,
-          vccsData,
-          urlParamsWithAccountId,
-          params.jobId,
-          this.propertyIdForDb, // Use propertyIdForDb (MongoDB ObjectId), not hotel_id
-          this // Pass scraper instance for captcha/2FA handling
-        );
+      await this.logInfo(
+        `Pagination complete. Total pages fetched: ${currentPage}`
+      );
 
       await this.logInfo("VCCS API Processing Results:");
       await this.logInfo(
