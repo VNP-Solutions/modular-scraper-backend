@@ -360,20 +360,32 @@ async function agodaRetrieval(
 
     // Send email notification for outer main function error
     if (jobId) {
-      // Make the job fail, preserving any failed_reason already set by inner catches
+      // Save failed_reason to the retrieval document (not a job document —
+      // retrievalId and jobId are the same value for retrieval runs).
       if (!isStatusAlreadySaved(error)) {
         const failedReason =
           getFailedReasonForUser(error) ||
           "An unexpected error occurred. Please try again.";
-        const CurrentJob = await jobService.getJobById(jobId);
-        if (CurrentJob) {
-          await jobService.updateJobStatusWithReason(
-            jobId,
-            JobStatus.Failed,
+        // For retrieval jobs, save to the retrieval document directly
+        if (retrievalId) {
+          await retrievalService.updateRetrievalStatusWithReason(
+            retrievalId,
+            "Failed",
             failedReason
           );
+          markStatusSaved(error);
+        } else {
+          // Fallback: try as a regular job (non-retrieval path)
+          const CurrentJob = await jobService.getJobById(jobId);
+          if (CurrentJob) {
+            await jobService.updateJobStatusWithReason(
+              jobId,
+              JobStatus.Failed,
+              failedReason
+            );
+            markStatusSaved(error);
+          }
         }
-        markStatusSaved(error);
       }
       try {
         await emailNotifier.notifyJobError(
