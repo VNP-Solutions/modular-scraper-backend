@@ -756,6 +756,8 @@ export class BookingScraper extends BaseScraper {
       // Check if scraping should continue before entering email
       await this.throwIfScrapingShouldStop("enter_email");
 
+      await this.takeScreenshot("email_page_loaded");
+
       const emailEntered = await this.enterEmail(effectiveCredentials.email);
       if (!emailEntered) {
         await this.takeScreenshot();
@@ -763,6 +765,7 @@ export class BookingScraper extends BaseScraper {
       }
 
       await this.logInfo("Clicking Continue with email");
+      await this.takeScreenshot("email_entered");
       const continueClicked = await this.clickContinueButton();
 
       if (!continueClicked) {
