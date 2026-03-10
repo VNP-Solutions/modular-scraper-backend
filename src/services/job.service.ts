@@ -304,15 +304,34 @@ export class JobService {
         updatedAt: new Date(),
       };
 
-      // If changing to Running status, assign current worker
+      // If changing to Running status, assign current worker and clear old screenshots
       if (status === JobStatus.Running) {
         updateData.worker_assigned = process.env.WORKER_ID || "scraper-worker";
+        updateData.screenshot_urls = [];
       }
 
       return await Job.findByIdAndUpdate(objectId, updateData, { new: true });
     } catch (error) {
       console.error(`Error updating job status: ${error}`);
       return null;
+    }
+  }
+
+  /**
+   * Append a screenshot URL entry to the job document
+   */
+  async addScreenshotUrl(
+    jobId: string,
+    entry: { step: string; url: string; timestamp: string; type: "step" | "error" }
+  ): Promise<void> {
+    try {
+      const objectId = this.validateObjectId(jobId, "jobId");
+      await Job.findByIdAndUpdate(objectId, {
+        $push: { screenshot_urls: entry },
+        updatedAt: new Date(),
+      });
+    } catch (error) {
+      console.error(`Error adding screenshot URL to job: ${error}`);
     }
   }
 
@@ -342,6 +361,34 @@ export class JobService {
    */
   async failJob(jobId: string): Promise<IJob | null> {
     return await this.updateJobStatus(jobId, JobStatus.Failed);
+  }
+
+  /**
+   * Update job status along with a specific failed_reason message.
+   * Pass null to clear an existing failed_reason.
+   */
+  async updateJobStatusWithReason(
+    jobId: string,
+    status: JobStatus,
+    failedReason?: string | null
+  ): Promise<IJob | null> {
+    try {
+      const objectId = this.validateObjectId(jobId, "jobId");
+      const updateData: any = {
+        job_status: status,
+        updatedAt: new Date(),
+      };
+      if (status === JobStatus.Running) {
+        updateData.worker_assigned = process.env.WORKER_ID || "scraper-worker";
+      }
+      if (failedReason !== undefined) {
+        updateData.failed_reason = failedReason ?? null;
+      }
+      return await Job.findByIdAndUpdate(objectId, updateData, { new: true });
+    } catch (error) {
+      console.error(`Error updating job status with reason: ${error}`);
+      return null;
+    }
   }
 
   /**

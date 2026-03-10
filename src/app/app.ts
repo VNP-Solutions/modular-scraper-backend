@@ -2891,7 +2891,7 @@ app.post("/api/agoda/retrieval-run-job", (async (
         }
 
         // Update retrieval status to Failed only if not stopped
-        await retrievalService.updateRetrievalStatus(retrieval_id, "Failed");
+        await retrievalService.failRetrievalSafe(String(retrieval_id));
 
         return res.status(500).json({
           status: 500,
@@ -2925,7 +2925,7 @@ app.post("/api/agoda/retrieval-run-job", (async (
       }
 
       // Update retrieval status to Failed only if not stopped
-      await retrievalService.updateRetrievalStatus(retrieval_id, "Failed");
+      await retrievalService.failRetrievalSafe(String(retrieval_id));
 
       return res.status(500).json({
         status: 500,

@@ -1,276 +1,189 @@
+import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import fs from "fs";
 import path from "path";
 import { Page } from "puppeteer";
-import { dualLogInfo, dualLogError } from "./log-helper.js";
+import { jobService } from "../services/job.service.js";
+import { retrievalService } from "../services/retriveal-job.service.js";
+import { dualLogError, dualLogInfo } from "./log-helper.js";
 
 /**
- * Screenshot helper utility for taking and organizing screenshots
- * during job execution with organized folder structure
+ * Screenshot helper utility — captures page screenshots, uploads them to S3,
+ * and persists the URL to the job or retrieval document in MongoDB.
  */
 export class ScreenshotHelper {
-  private static baseScreenshotsDir = "screenshots";
+  private static readonly s3Client = new S3Client({
+    region: process.env.AWS_REGION || "us-east-1",
+    credentials: {
+      accessKeyId: process.env.AWS_ACCESS_KEY_ID || "",
+      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || "",
+    },
+  });
+
+  private static readonly bucketName =
+    process.env.AWS_S3_BUCKET || "vnpstorage";
+
+  private static readonly tempDir = path.join(process.cwd(), "temp_screenshots");
 
   /**
-   * Ensures the screenshot folder structure exists
-   * screenshots/agoda/{jobId}/success/
-   * screenshots/agoda/{jobId}/error/
+   * Core screenshot method — takes a viewport screenshot, uploads to S3, and
+   * saves the URL to MongoDB for the given entity (job or retrieval).
    */
-  private static async ensureFolderStructure(
-    jobId: string,
-    platform: string = "agoda"
-  ): Promise<{
-    successDir: string;
-    errorDir: string;
-  }> {
-    const baseDir = path.join(this.baseScreenshotsDir, platform, jobId);
-    const successDir = path.join(baseDir, "success");
-    const errorDir = path.join(baseDir, "error");
+  public static async takeScreenshot(
+    page: Page | null,
+    entityId: string,
+    step: string,
+    type: "step" | "error",
+    platform: string = "agoda",
+    entityType: "job" | "retrieval" = "job"
+  ): Promise<string | null> {
+    if (!page || !entityId) {
+      return null;
+    }
 
-    // Create directories if they don't exist
-    // TEMPORARILY DISABLED - Folder creation commented out
-    // await fs.promises.mkdir(successDir, { recursive: true });
-    // await fs.promises.mkdir(errorDir, { recursive: true });
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const filename = `${platform}_${entityType}_${entityId}_${step}_${timestamp}.png`;
+    const localPath = path.join(ScreenshotHelper.tempDir, filename);
 
-    return { successDir, errorDir };
+    try {
+      // Ensure temp directory exists
+      if (!fs.existsSync(ScreenshotHelper.tempDir)) {
+        fs.mkdirSync(ScreenshotHelper.tempDir, { recursive: true });
+      }
+
+      // Capture visible viewport only (fullPage: false)
+      await page.screenshot({
+        path: localPath as `${string}.png`,
+        fullPage: false,
+        type: "png",
+      });
+
+      // Upload to S3
+      const s3Key = `screenshots/${platform}/${entityType}/${entityId}/${step}_${timestamp}.png`;
+      const s3Url = await ScreenshotHelper.uploadToS3(localPath, s3Key);
+
+      if (s3Url) {
+        const entry = {
+          step,
+          url: s3Url,
+          timestamp: new Date().toISOString(),
+          type,
+        };
+
+        if (entityType === "retrieval") {
+          await retrievalService.addScreenshotUrl(entityId, entry);
+        } else {
+          await jobService.addScreenshotUrl(entityId, entry);
+        }
+
+        await dualLogInfo(`Screenshot saved: ${step}`, {
+          entityId,
+          entityType,
+          platform,
+          s3Url,
+        });
+      }
+
+      // Clean up local temp file
+      try {
+        fs.unlinkSync(localPath);
+      } catch {
+        // Non-critical; ignore cleanup errors
+      }
+
+      return s3Url;
+    } catch (error: any) {
+      await dualLogError("Failed to take/upload screenshot", {
+        entityId,
+        entityType,
+        step,
+        platform,
+        error: error.message,
+      });
+
+      // Best-effort cleanup
+      try {
+        if (fs.existsSync(localPath)) {
+          fs.unlinkSync(localPath);
+        }
+      } catch {
+        // Ignore
+      }
+
+      return null;
+    }
   }
 
-  /**
-   * Takes a success screenshot after a step is completed successfully
-   */
+  private static async uploadToS3(
+    localFilePath: string,
+    s3Key: string
+  ): Promise<string | null> {
+    try {
+      const fileBuffer = fs.readFileSync(localFilePath);
+
+      const command = new PutObjectCommand({
+        Bucket: ScreenshotHelper.bucketName,
+        Key: s3Key,
+        Body: fileBuffer,
+        ContentType: "image/png",
+      });
+
+      await ScreenshotHelper.s3Client.send(command);
+
+      return `https://${ScreenshotHelper.bucketName}.s3.${process.env.AWS_REGION || "us-east-1"}.amazonaws.com/${s3Key}`;
+    } catch (error: any) {
+      await dualLogError("Failed to upload screenshot to S3", {
+        s3Key,
+        error: error.message,
+      });
+      return null;
+    }
+  }
+
+  // ─── Legacy wrappers (keep backward-compatible for agoda.ts, need-help.ts, etc.) ─────
+
   public static async takeSuccessScreenshot(
     page: Page,
     jobId: string,
     stepName: string,
     platform: string = "agoda",
-    options: {
-      fullPage?: boolean;
-      quality?: number;
-    } = {}
+    options: { fullPage?: boolean; quality?: number } = {}
   ): Promise<void> {
-    try {
-      if (!page || !jobId) {
-        await dualLogError("Cannot take screenshot: missing page or jobId", {
-          hasPage: !!page,
-          jobId,
-        });
-        return;
-      }
-
-      const { successDir } = await this.ensureFolderStructure(jobId, platform);
-
-      // Generate timestamp for unique filename
-      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-      const filename = `${stepName}_${timestamp}.png`;
-      const screenshotPath = path.join(successDir, filename);
-
-      // Take screenshot with default options
-      // TEMPORARILY DISABLED - Screenshot saving commented out
-      // await page.screenshot({
-      //   path: screenshotPath as `${string}.png`,
-      //   fullPage: options.fullPage ?? true,
-      //   type: "png",
-      //   quality: options.quality,
-      // });
-
-      await dualLogInfo(`Success screenshot taken: ${stepName}`, {
-        jobId,
-        platform,
-        stepName,
-        screenshotPath,
-        timestamp,
-      });
-    } catch (error: any) {
-      await dualLogError("Failed to take success screenshot", {
-        jobId,
-        stepName,
-        platform,
-        error: error.message,
-      });
-      // Don't throw error - screenshots shouldn't break the main process
-    }
+    await ScreenshotHelper.takeScreenshot(page, jobId, stepName, "step", platform, "job");
   }
 
-  /**
-   * Takes an error screenshot when an error occurs
-   */
   public static async takeErrorScreenshot(
     page: Page | null,
     jobId: string,
     errorContext: string,
     platform: string = "agoda",
-    options: {
-      fullPage?: boolean;
-      quality?: number;
-    } = {}
+    options: { fullPage?: boolean; quality?: number } = {}
   ): Promise<void> {
-    try {
-      if (!page || !jobId) {
-        await dualLogError(
-          "Cannot take error screenshot: missing page or jobId",
-          {
-            hasPage: !!page,
-            jobId,
-          }
-        );
-        return;
-      }
-
-      const { errorDir } = await this.ensureFolderStructure(jobId, platform);
-
-      // Generate timestamp for unique filename
-      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-      const filename = `error_${errorContext}_${timestamp}.png`;
-      const screenshotPath = path.join(errorDir, filename);
-
-      // Take screenshot with default options
-      // TEMPORARILY DISABLED - Screenshot saving commented out
-      // await page.screenshot({
-      //   path: screenshotPath as `${string}.png`,
-      //   fullPage: options.fullPage ?? true,
-      //   type: "png",
-      //   quality: options.quality,
-      // });
-
-      await dualLogInfo(`Error screenshot taken: ${errorContext}`, {
-        jobId,
-        platform,
-        errorContext,
-        screenshotPath,
-        timestamp,
-      });
-    } catch (error: any) {
-      await dualLogError("Failed to take error screenshot", {
-        jobId,
-        errorContext,
-        platform,
-        error: error.message,
-      });
-      // Don't throw error - screenshots shouldn't break the main process
-    }
+    await ScreenshotHelper.takeScreenshot(page, jobId, errorContext, "error", platform, "job");
   }
 
-  /**
-   * Takes a screenshot with custom naming and folder
-   */
   public static async takeCustomScreenshot(
     page: Page,
     jobId: string,
     filename: string,
     subfolder: "success" | "error" = "success",
     platform: string = "agoda",
-    options: {
-      fullPage?: boolean;
-      quality?: number;
-    } = {}
+    options: { fullPage?: boolean; quality?: number } = {}
   ): Promise<void> {
-    try {
-      if (!page || !jobId) {
-        await dualLogError(
-          "Cannot take custom screenshot: missing page or jobId",
-          {
-            hasPage: !!page,
-            jobId,
-          }
-        );
-        return;
-      }
-
-      const { successDir, errorDir } = await this.ensureFolderStructure(
-        jobId,
-        platform
-      );
-      const targetDir = subfolder === "success" ? successDir : errorDir;
-
-      // Add timestamp if not already in filename
-      const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-      const finalFilename = filename.includes(timestamp)
-        ? filename
-        : `${filename}_${timestamp}.png`;
-      const screenshotPath = path.join(targetDir, finalFilename);
-
-      // Take screenshot
-      // TEMPORARILY DISABLED - Screenshot saving commented out
-      // await page.screenshot({
-      //   path: screenshotPath as `${string}.png`,
-      //   fullPage: options.fullPage ?? true,
-      //   type: "png",
-      //   quality: options.quality,
-      // });
-
-      await dualLogInfo(`Custom screenshot taken: ${filename}`, {
-        jobId,
-        platform,
-        filename: finalFilename,
-        subfolder,
-        screenshotPath,
-        timestamp,
-      });
-    } catch (error: any) {
-      await dualLogError("Failed to take custom screenshot", {
-        jobId,
-        filename,
-        platform,
-        subfolder,
-        error: error.message,
-      });
-      // Don't throw error - screenshots shouldn't break the main process
-    }
-  }
-
-  /**
-   * Cleanup old screenshots for a specific job (optional utility)
-   */
-  public static async cleanupOldScreenshots(
-    jobId: string,
-    platform: string = "agoda",
-    maxAge: number = 7 * 24 * 60 * 60 * 1000 // 7 days in milliseconds
-  ): Promise<void> {
-    try {
-      const baseDir = path.join(this.baseScreenshotsDir, platform, jobId);
-
-      if (!fs.existsSync(baseDir)) {
-        return;
-      }
-
-      const now = Date.now();
-      const directories = ["success", "error"];
-
-      for (const dir of directories) {
-        const dirPath = path.join(baseDir, dir);
-        if (fs.existsSync(dirPath)) {
-          const files = await fs.promises.readdir(dirPath);
-
-          for (const file of files) {
-            const filePath = path.join(dirPath, file);
-            const stats = await fs.promises.stat(filePath);
-
-            if (now - stats.mtime.getTime() > maxAge) {
-              await fs.promises.unlink(filePath);
-              await dualLogInfo(`Cleaned up old screenshot: ${file}`, {
-                jobId,
-                platform,
-                filePath,
-              });
-            }
-          }
-        }
-      }
-    } catch (error: any) {
-      await dualLogError("Failed to cleanup old screenshots", {
-        jobId,
-        platform,
-        error: error.message,
-      });
-    }
+    const type = subfolder === "error" ? "error" : "step";
+    await ScreenshotHelper.takeScreenshot(page, jobId, filename, type, platform, "job");
   }
 }
 
-// Export convenience functions
+// ─── Named exports for convenience ────────────────────────────────────────────
 export const takeSuccessScreenshot =
   ScreenshotHelper.takeSuccessScreenshot.bind(ScreenshotHelper);
 export const takeErrorScreenshot =
   ScreenshotHelper.takeErrorScreenshot.bind(ScreenshotHelper);
 export const takeCustomScreenshot =
   ScreenshotHelper.takeCustomScreenshot.bind(ScreenshotHelper);
-export const cleanupOldScreenshots =
-  ScreenshotHelper.cleanupOldScreenshots.bind(ScreenshotHelper);
+
+/**
+ * Core export for direct usage with full entityType control.
+ * Signature: (page, entityId, step, type, platform?, entityType?) => Promise<string | null>
+ */
+export const takeScreenshot = ScreenshotHelper.takeScreenshot.bind(ScreenshotHelper);

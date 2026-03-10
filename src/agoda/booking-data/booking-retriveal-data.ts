@@ -10,10 +10,7 @@ import { otpCompletionNotifier } from "../../common/otp-completion-notifier.js";
 import { otpStatusManager } from "../../common/otp-status-manager.js";
 import { progressManager } from "../../common/progress-manager.js";
 import { scrapingStateManager } from "../../common/scraping-state.js";
-import {
-  takeErrorScreenshot,
-  takeSuccessScreenshot,
-} from "../../common/screenshot-helper.js";
+import { takeScreenshot } from "../../common/screenshot-helper.js";
 import { timeoutManager } from "../../common/timeout-manager.js";
 import { searchBookingAndNavigateToPayout } from "../retriveal-data/retriveal-data.js";
 import { PAGE_LOADING, RESERVATIONS_PAGE } from "../utils/selectors.js";
@@ -89,6 +86,8 @@ export async function getAgodaRetrivealData(
   agodaUsername?: string,
   retrievalId?: string
 ): Promise<any[]> {
+  const entityId = retrievalId ?? jobId ?? "";
+  const entityType: "job" | "retrieval" = retrievalId ? "retrieval" : "job";
   let newPage: Page | undefined;
   let client: any;
 
@@ -439,9 +438,9 @@ export async function getAgodaRetrivealData(
       await dualLogError(errorMessage, searchInputError, { jobId, agodaId });
       
       // Take error screenshot
-      if (jobId) {
+      if (jobId || retrievalId) {
         try {
-          await takeErrorScreenshot(newPage, jobId, "booking_page_search_input_missing");
+          await takeScreenshot(newPage, entityId, "booking_page_search_input_missing", "error", "agoda", entityType);
         } catch (screenshotError) {
           await dualLogError("Failed to take error screenshot", screenshotError);
         }
@@ -451,8 +450,8 @@ export async function getAgodaRetrivealData(
     }
 
     // Take screenshot after successful navigation to booking data page
-    if (jobId) {
-      await takeSuccessScreenshot(newPage, jobId, "booking_page_loaded");
+    if (jobId || retrievalId) {
+      await takeScreenshot(newPage, entityId, "booking_page_loaded", "step", "agoda", entityType);
     }
 
     // Update progress

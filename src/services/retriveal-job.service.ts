@@ -1,6 +1,15 @@
 import { Types } from "mongoose";
 import { decryptPassword } from "../common/encription.js";
 import {
+  FAILED_REASON,
+  getFailedReasonForUser,
+  hasFailedReasonCode,
+  inferAgodaOtpFailedReasonCode,
+  isStatusAlreadySaved,
+  markStatusSaved,
+  setFailedReasonCode,
+} from "../common/failed-reason.js";
+import {
   IPropertyCredentials,
   PropertyCredentials,
 } from "../models/property-cred.model.js";
@@ -224,12 +233,88 @@ export class RetrievalService {
         ...additionalUpdates,
       };
 
+      if (status === "Running") {
+        updateData.screenshot_urls = [];
+      }
+
       return await Retrieval.findByIdAndUpdate(objectId, updateData, {
         new: true,
       });
     } catch (error) {
       console.error(`Error updating retrieval status: ${error}`);
       return null;
+    }
+  }
+
+  /**
+   * Update retrieval status along with a specific failed_reason message.
+   * Pass null to clear an existing failed_reason.
+   */
+  async updateRetrievalStatusWithReason(
+    retrievalId: string,
+    status: string,
+    failedReason?: string | null
+  ): Promise<IRetrieval | null> {
+    try {
+      const objectId = this.validateObjectId(retrievalId, "retrievalId");
+      const updateData: any = {
+        job_status: status,
+        updatedAt: new Date(),
+      };
+      if (status === "Running") {
+        updateData.screenshot_urls = [];
+      }
+      if (failedReason !== undefined) {
+        updateData.failed_reason = failedReason ?? null;
+      }
+      return await Retrieval.findByIdAndUpdate(objectId, updateData, {
+        new: true,
+      });
+    } catch (error) {
+      console.error(`Error updating retrieval status with reason: ${error}`);
+      return null;
+    }
+  }
+
+  /**
+   * Set retrieval to Failed while preserving any failed_reason already saved by
+   * an inner catch block (first-writer-wins). Only writes a fallback reason when
+   * the DB document has no failed_reason yet.
+   */
+  async failRetrievalSafe(
+    retrievalId: string,
+    fallbackReason?: string
+  ): Promise<IRetrieval | null> {
+    try {
+      const objectId = this.validateObjectId(retrievalId, "retrievalId");
+      const existing = await Retrieval.findById(objectId).select("failed_reason");
+      const reason = existing?.failed_reason ?? fallbackReason ?? null;
+      return await Retrieval.findByIdAndUpdate(
+        objectId,
+        { job_status: "Failed", failed_reason: reason, updatedAt: new Date() },
+        { new: true }
+      );
+    } catch (error) {
+      console.error(`Error in failRetrievalSafe: ${error}`);
+      return null;
+    }
+  }
+
+  /**
+   * Append a screenshot URL entry to the retrieval document
+   */
+  async addScreenshotUrl(
+    retrievalId: string,
+    entry: { step: string; url: string; timestamp: string; type: "step" | "error" }
+  ): Promise<void> {
+    try {
+      const objectId = this.validateObjectId(retrievalId, "retrievalId");
+      await Retrieval.findByIdAndUpdate(objectId, {
+        $push: { screenshot_urls: entry },
+        updatedAt: new Date(),
+      });
+    } catch (error) {
+      console.error(`Error adding screenshot URL to retrieval: ${error}`);
     }
   }
 
@@ -505,3 +590,14 @@ export class RetrievalService {
 
 // Export singleton instance
 export const retrievalService = new RetrievalService();
+
+// Re-export failed-reason helpers for convenience
+export {
+  FAILED_REASON,
+  getFailedReasonForUser,
+  hasFailedReasonCode,
+  inferAgodaOtpFailedReasonCode,
+  isStatusAlreadySaved,
+  markStatusSaved,
+  setFailedReasonCode,
+} from "../common/failed-reason.js";

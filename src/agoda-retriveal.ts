@@ -9,14 +9,18 @@ import {
 } from "./agoda/utils/selectors.js";
 import { browserSetupLocal } from "./browser-setup/browser-local.js";
 import { browserSetupProduction } from "./browser-setup/browser-prod.js";
+import {
+  FAILED_REASON,
+  getFailedReasonForUser,
+  isStatusAlreadySaved,
+  markStatusSaved,
+  setFailedReasonCode,
+} from "./common/failed-reason.js";
 import { emailNotifier } from "./common/email-notifier.js";
 import { dualLogError, dualLogInfo } from "./common/log-helper.js";
 import { progressManager } from "./common/progress-manager.js";
 import { scrapingStateManager } from "./common/scraping-state.js";
-import {
-  takeErrorScreenshot,
-  takeSuccessScreenshot,
-} from "./common/screenshot-helper.js";
+import { takeScreenshot } from "./common/screenshot-helper.js";
 import { timeManager } from "./common/time-manager.js";
 import { JobStatus } from "./models/job.model.js";
 import { jobService } from "./services/job.service.js";
@@ -129,7 +133,11 @@ async function agodaRetrieval(
       await dualLogError(
         "Scraping was stopped during Agoda automation startup"
       );
-      throw new Error("Scraping was stopped during Agoda automation startup");
+      const stoppedErr = new Error(
+        "Scraping was stopped during Agoda automation startup"
+      );
+      setFailedReasonCode(stoppedErr, FAILED_REASON.AGODA_SCRAPING_STOPPED);
+      throw stoppedErr;
     }
 
     // // Update progress - initialization phase
@@ -171,11 +179,14 @@ async function agodaRetrieval(
     await dualLogInfo("Browser setup completed successfully");
 
     // Take screenshot after successful browser setup
-    if (jobId && page) {
-      await takeSuccessScreenshot(
+    if (page) {
+      await takeScreenshot(
         page,
-        jobId,
-        SCREENSHOT_NAMES.BROWSER_SETUP_COMPLETED
+        retrievalId ?? jobId ?? "",
+        SCREENSHOT_NAMES.BROWSER_SETUP_COMPLETED,
+        "step",
+        "agoda",
+        retrievalId ? "retrieval" : "job"
       );
     }
 
@@ -197,15 +208,18 @@ async function agodaRetrieval(
     });
 
     // Agoda login process (which includes OTP verification)
-    await agodaLogin(browser, page, agodaUsername, agodaPassword, jobId);
+    await agodaLogin(browser, page, agodaUsername, agodaPassword, jobId, retrievalId ?? jobId, retrievalId ? "retrieval" : "job");
     await dualLogInfo("Agoda login completed successfully");
 
     // Take screenshot after successful login
-    if (jobId && page) {
-      await takeSuccessScreenshot(
+    if (page) {
+      await takeScreenshot(
         page,
-        jobId,
-        SCREENSHOT_NAMES.LOGIN_COMPLETED
+        retrievalId ?? jobId ?? "",
+        SCREENSHOT_NAMES.LOGIN_COMPLETED,
+        "step",
+        "agoda",
+        retrievalId ? "retrieval" : "job"
       );
     }
 
@@ -240,11 +254,14 @@ async function agodaRetrieval(
     );
 
     // Take screenshot after successful booking data retrieval
-    if (jobId && page) {
-      await takeSuccessScreenshot(
+    if (page) {
+      await takeScreenshot(
         page,
-        jobId,
-        SCREENSHOT_NAMES.BOOKING_DATA_COMPLETED
+        retrievalId ?? jobId ?? "",
+        SCREENSHOT_NAMES.BOOKING_DATA_COMPLETED,
+        "step",
+        "agoda",
+        retrievalId ? "retrieval" : "job"
       );
     }
 
@@ -264,9 +281,11 @@ async function agodaRetrieval(
 
       // If no card info was retrieved, fail the job
       if (!cardInfoStatus.hasCardInfo) {
-        throw new Error(
+        const err = new Error(
           `Failed to retrieve card info. 0 out of ${cardInfoStatus.totalBookings || reservations?.length || 0} bookings have card information.`
         );
+        setFailedReasonCode(err, FAILED_REASON.AGODA_CARD_INFO_NOT_FOUND);
+        throw err;
       }
 
       await dualLogInfo(
@@ -284,11 +303,14 @@ async function agodaRetrieval(
     await timeManager.endSession();
 
     // Take final success screenshot
-    if (jobId && page) {
-      await takeSuccessScreenshot(
+    if (page) {
+      await takeScreenshot(
         page,
-        jobId,
-        SCREENSHOT_NAMES.JOB_COMPLETED_SUCCESSFULLY
+        retrievalId ?? jobId ?? "",
+        SCREENSHOT_NAMES.JOB_COMPLETED_SUCCESSFULLY,
+        "step",
+        "agoda",
+        retrievalId ? "retrieval" : "job"
       );
     }
 
@@ -302,15 +324,18 @@ async function agodaRetrieval(
     await dualLogError("Error in Agoda automation:", error);
 
     // Take error screenshot when error occurs
-    if (jobId && browser) {
+    if (browser) {
       try {
         const pages = await browser.pages();
         const activePage = pages.find((p) => !p.isClosed()) || pages[0];
         if (activePage) {
-          await takeErrorScreenshot(
+          await takeScreenshot(
             activePage,
-            jobId,
-            SCREENSHOT_NAMES.AGODA_AUTOMATION_ERROR
+            retrievalId ?? jobId ?? "",
+            SCREENSHOT_NAMES.AGODA_AUTOMATION_ERROR,
+            "error",
+            "agoda",
+            retrievalId ? "retrieval" : "job"
           );
         }
       } catch (screenshotError) {
@@ -335,10 +360,20 @@ async function agodaRetrieval(
 
     // Send email notification for outer main function error
     if (jobId) {
-      // Make the job fail
-      const CurrentJob = await jobService.getJobById(jobId);
-      if (CurrentJob) {
-        await jobService.updateJobStatus(jobId, JobStatus.Failed);
+      // Make the job fail, preserving any failed_reason already set by inner catches
+      if (!isStatusAlreadySaved(error)) {
+        const failedReason =
+          getFailedReasonForUser(error) ||
+          "An unexpected error occurred. Please try again.";
+        const CurrentJob = await jobService.getJobById(jobId);
+        if (CurrentJob) {
+          await jobService.updateJobStatusWithReason(
+            jobId,
+            JobStatus.Failed,
+            failedReason
+          );
+        }
+        markStatusSaved(error);
       }
       try {
         await emailNotifier.notifyJobError(

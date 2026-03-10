@@ -1,11 +1,14 @@
 import { Browser, Page } from "puppeteer";
 import { delay } from "../../common/delay.js";
+import {
+  FAILED_REASON,
+  hasFailedReasonCode,
+  inferAgodaOtpFailedReasonCode,
+  setFailedReasonCode,
+} from "../../common/failed-reason.js";
 import { dualLogError, dualLogInfo } from "../../common/log-helper.js";
 import { progressManager } from "../../common/progress-manager.js";
-import {
-  takeErrorScreenshot,
-  takeSuccessScreenshot,
-} from "../../common/screenshot-helper.js";
+import { takeScreenshot } from "../../common/screenshot-helper.js";
 import { timeManager } from "../../common/time-manager.js";
 import { timeoutManager } from "../../common/timeout-manager.js";
 import { cleanupOnError } from "../utils/error-cleanup.js";
@@ -17,7 +20,9 @@ async function agodaLogin(
   page: Page,
   agodaUsername: string,
   agodaPassword: string,
-  jobId?: string
+  jobId?: string,
+  entityId?: string,
+  entityType: "job" | "retrieval" = "job"
 ): Promise<void> {
   let shouldCloseBrowser = false;
 
@@ -72,8 +77,8 @@ async function agodaLogin(
       await dualLogInfo("Iframe content accessible");
 
       // Take screenshot after iframe access
-      if (jobId) {
-        await takeSuccessScreenshot(page, jobId, "iframe_accessed");
+      if (jobId || entityId) {
+        await takeScreenshot(page, entityId ?? jobId ?? "", "iframe_accessed", "step", "agoda", entityType);
       }
 
       // Update progress - iframe accessed
@@ -137,8 +142,8 @@ async function agodaLogin(
       await dualLogInfo(`Successfully entered email: ${agodaUsername}`);
 
       // Take screenshot after email entry
-      if (jobId) {
-        await takeSuccessScreenshot(page, jobId, "email_entered");
+      if (jobId || entityId) {
+        await takeScreenshot(page, entityId ?? jobId ?? "", "email_entered", "step", "agoda", entityType);
       }
 
       // Update progress - email entered
@@ -186,8 +191,8 @@ async function agodaLogin(
       await dualLogInfo("Continue button clicked successfully!");
 
       // Take screenshot after continue button clicked
-      if (jobId) {
-        await takeSuccessScreenshot(page, jobId, "continue_button_clicked");
+      if (jobId || entityId) {
+        await takeScreenshot(page, entityId ?? jobId ?? "", "continue_button_clicked", "step", "agoda", entityType);
       }
 
       // Update progress - continue button clicked
@@ -243,11 +248,17 @@ async function agodaLogin(
               "OTP kept occupied - will release after payout verification (retrieval job)"
             );
           }
-        } catch (directLinkError) {
+        } catch (directLinkError: any) {
           await dualLogError(
             "Error during direct email link flow:",
             directLinkError
           );
+          if (!hasFailedReasonCode(directLinkError)) {
+            setFailedReasonCode(
+              directLinkError,
+              FAILED_REASON.AGODA_EMAIL_LINK_NOT_FOUND
+            );
+          }
           throw directLinkError;
         }
       } else if (nextPageResult === "otp-form") {
@@ -258,7 +269,9 @@ async function agodaLogin(
             loadingTimeout,
             selectorTimeout,
             page,
-            jobId
+            jobId,
+            entityId,
+            entityType
           );
 
           // For retrieval jobs, don't release OTP yet - wait for payout verification
@@ -268,14 +281,14 @@ async function agodaLogin(
               "OTP kept occupied - will release after payout verification (retrieval job)"
             );
           }
-        } catch (otpError) {
+        } catch (otpError: any) {
           await dualLogError("Error during OTP flow:", otpError);
 
           // Take error screenshot for OTP flow error
-          if (jobId) {
+          if (jobId || entityId) {
             try {
               // Use the main page instead of trying to access from frame
-              await takeErrorScreenshot(page, jobId, "otp_flow_error");
+              await takeScreenshot(page, entityId ?? jobId ?? "", "otp_flow_error", "error", "agoda", entityType);
             } catch (screenshotError) {
               await dualLogError(
                 "Failed to take OTP flow error screenshot:",
@@ -284,6 +297,12 @@ async function agodaLogin(
             }
           }
 
+          if (!hasFailedReasonCode(otpError)) {
+            setFailedReasonCode(
+              otpError,
+              inferAgodaOtpFailedReasonCode(otpError?.message)
+            );
+          }
           throw otpError;
         }
       } else {
@@ -307,9 +326,9 @@ async function agodaLogin(
       shouldCloseBrowser = true;
 
       // Take error screenshot for page interaction error
-      if (jobId) {
+      if (jobId || entityId) {
         try {
-          await takeErrorScreenshot(page, jobId, "page_interaction_error");
+          await takeScreenshot(page, entityId ?? jobId ?? "", "page_interaction_error", "error", "agoda", entityType);
         } catch (screenshotError) {
           await dualLogError(
             "Failed to take page interaction error screenshot:",
@@ -325,18 +344,21 @@ async function agodaLogin(
           "OTP kept occupied after login error - will be released after payout verification or job completion (retrieval job)"
         );
       }
+      if (!hasFailedReasonCode(pageError)) {
+        setFailedReasonCode(pageError, FAILED_REASON.AGODA_LOGIN_FAILED);
+      }
       throw pageError;
     }
   } catch (error) {
     await dualLogError("Critical error during Agoda login process:", error);
 
     // Take error screenshot for critical login error
-    if (jobId && browser) {
+    if ((jobId || entityId) && browser) {
       try {
         const pages = await browser.pages();
         const activePage = pages.find((p) => !p.isClosed()) || pages[0];
         if (activePage) {
-          await takeErrorScreenshot(activePage, jobId, "critical_login_error");
+          await takeScreenshot(activePage, entityId ?? jobId ?? "", "critical_login_error", "error", "agoda", entityType);
         }
       } catch (screenshotError) {
         await dualLogError(
@@ -459,13 +481,17 @@ async function handleDirectLinkFlow(page: Page, jobId?: string): Promise<void> {
   }
 
   if (!signInResult || !signInResult.emailFound) {
-    throw new Error("Failed to access email for sign-in link");
+    const err = new Error("Failed to access email for sign-in link");
+    setFailedReasonCode(err, FAILED_REASON.AGODA_EMAIL_LINK_NOT_FOUND);
+    throw err;
   }
 
   if (!signInResult.signInLink) {
-    throw new Error(
+    const err = new Error(
       "Sign-in link not found in recent emails after all attempts. Please check if you received the Agoda sign-in email."
     );
+    setFailedReasonCode(err, FAILED_REASON.AGODA_EMAIL_LINK_NOT_FOUND);
+    throw err;
   }
 
   await dualLogInfo(`Sign-in link found: ${signInResult.signInLink}`);
@@ -493,7 +519,9 @@ async function handleOtpFlow(
   loadingTimeout: number,
   selectorTimeout: number,
   page: Page,
-  jobId?: string
+  jobId?: string,
+  entityId?: string,
+  entityType: "job" | "retrieval" = "job"
 ): Promise<void> {
   await dualLogInfo("🔐 Processing OTP form...");
 
@@ -634,13 +662,17 @@ async function handleOtpFlow(
   }
 
   if (!otpResult || !otpResult.emailFound) {
-    throw new Error("Failed to access email for OTP code");
+    const err = new Error("Failed to access email for OTP code");
+    setFailedReasonCode(err, FAILED_REASON.AGODA_OTP_CODE_NOT_FOUND);
+    throw err;
   }
 
   if (!otpResult.otpCode) {
-    throw new Error(
+    const err = new Error(
       "OTP code not found in recent emails after all attempts. Please check if you received the Agoda OTP email."
     );
+    setFailedReasonCode(err, FAILED_REASON.AGODA_OTP_CODE_NOT_FOUND);
+    throw err;
   }
 
   // Fill OTP code into the input fields
@@ -680,10 +712,10 @@ async function handleOtpFlow(
   await dualLogInfo("All OTP digits filled successfully");
 
   // Take screenshot after OTP digits are filled (using main page)
-  if (jobId) {
+  if (jobId || entityId) {
     try {
       // Use the main page instead of trying to access from frame
-      await takeSuccessScreenshot(page, jobId, "otp_digits_filled");
+      await takeScreenshot(page, entityId ?? jobId ?? "", "otp_digits_filled", "step", "agoda", entityType);
     } catch (screenshotError) {
       await dualLogError(
         "Failed to take OTP digits filled screenshot:",
@@ -718,10 +750,10 @@ async function handleOtpFlow(
   await dualLogInfo("OTP continue button clicked successfully!");
 
   // Take screenshot after OTP continue button clicked
-  if (jobId) {
+  if (jobId || entityId) {
     try {
       // Use the main page instead of trying to access from frame
-      await takeSuccessScreenshot(page, jobId, "otp_verification_completed");
+      await takeScreenshot(page, entityId ?? jobId ?? "", "otp_verification_completed", "step", "agoda", entityType);
     } catch (screenshotError) {
       await dualLogError(
         "Failed to take OTP verification completed screenshot:",

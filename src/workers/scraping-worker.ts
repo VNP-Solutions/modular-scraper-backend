@@ -25,6 +25,11 @@ import reservation from "../reservation/reservation.js";
 import { propertyCredentialsService } from "../services/job-credentials.service.js";
 import { jobService } from "../services/job.service.js";
 import { retrievalService } from "../services/retriveal-job.service.js";
+import {
+  getFailedReasonForUser,
+  isStatusAlreadySaved,
+  markStatusSaved,
+} from "../common/failed-reason.js";
 
 // Load environment variables
 dotenv.config();
@@ -1090,7 +1095,7 @@ class ScrapingWorker {
         jobId: finalJobId,
         retrievalId: retrievalId,
       };
-    } catch (reservationError) {
+    } catch (reservationError: any) {
       await dualLogError(
         `Worker: Retrieval reservation job ${finalJobId} failed`,
         reservationError,
@@ -1102,6 +1107,19 @@ class ScrapingWorker {
 
       // Mark scraping as stopped on error
       scrapingStateManager.stopScraping();
+
+      // Save failed_reason to the retrieval document (first-writer-wins)
+      if (!isStatusAlreadySaved(reservationError)) {
+        const failedReason =
+          getFailedReasonForUser(reservationError) ||
+          "An unexpected error occurred. Please try again.";
+        await retrievalService.updateRetrievalStatusWithReason(
+          retrievalId,
+          "Failed",
+          failedReason
+        );
+        markStatusSaved(reservationError);
+      }
 
       // Finalize logging with failed status
       await finalizeJobLogging("failed");
