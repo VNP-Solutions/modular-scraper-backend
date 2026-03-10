@@ -3,8 +3,9 @@ export const FAILED_REASON = {
   LOGIN_FAILED: "LOGIN_FAILED",
   REQUEST_TIMEOUT: "REQUEST_TIMEOUT",
   BROWSER_SESSION_LOST: "BROWSER_SESSION_LOST",
-  // Agoda retrieval-specific
+  // Agoda-specific
   AGODA_LOGIN_FAILED: "AGODA_LOGIN_FAILED",
+  AGODA_UNEXPECTED_PAGE: "AGODA_UNEXPECTED_PAGE",
   AGODA_OTP_FAILED: "AGODA_OTP_FAILED",
   AGODA_OTP_CODE_NOT_FOUND: "AGODA_OTP_CODE_NOT_FOUND",
   AGODA_EMAIL_LINK_NOT_FOUND: "AGODA_EMAIL_LINK_NOT_FOUND",
@@ -24,9 +25,11 @@ const FAILED_REASON_MESSAGES: Record<FailedReasonCode, string> = {
     "Request timed out or page did not load in time. Please try again.",
   [FAILED_REASON.BROWSER_SESSION_LOST]:
     "Browser session was lost. Please try again.",
-  // Agoda retrieval-specific
+  // Agoda-specific
   [FAILED_REASON.AGODA_LOGIN_FAILED]:
     "Agoda login failed. Please check your credentials and try again.",
+  [FAILED_REASON.AGODA_UNEXPECTED_PAGE]:
+    "Agoda showed an unexpected page during login. This may be due to a CAPTCHA, account block, or Agoda platform issue. Please try again later.",
   [FAILED_REASON.AGODA_OTP_FAILED]:
     "Agoda OTP verification failed. Please check your OTP and try again.",
   [FAILED_REASON.AGODA_OTP_CODE_NOT_FOUND]:

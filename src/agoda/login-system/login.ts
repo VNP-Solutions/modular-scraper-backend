@@ -345,7 +345,19 @@ async function agodaLogin(
         );
       }
       if (!hasFailedReasonCode(pageError)) {
-        setFailedReasonCode(pageError, FAILED_REASON.AGODA_LOGIN_FAILED);
+        // If the error is a timeout waiting for the email/OTP page after clicking
+        // continue, it means Agoda showed an unexpected page (CAPTCHA, block, etc.)
+        const msg = (pageError as any)?.message || "";
+        const isNextPageTimeout =
+          msg.includes('check-your-email') ||
+          msg.includes('unified-auth-otp-form') ||
+          msg.includes('Sign in with OTP');
+        setFailedReasonCode(
+          pageError,
+          isNextPageTimeout
+            ? FAILED_REASON.AGODA_UNEXPECTED_PAGE
+            : FAILED_REASON.AGODA_LOGIN_FAILED
+        );
       }
       throw pageError;
     }
