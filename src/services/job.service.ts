@@ -317,6 +317,7 @@ export class JobService {
       if (status === JobStatus.Running) {
         updateData.worker_assigned = process.env.WORKER_ID || "scraper-worker";
         updateData.screenshot_urls = [];
+        updateData.failed_reason = null;
       }
 
       return await Job.findByIdAndUpdate(objectId, updateData, { new: true });
@@ -372,6 +373,7 @@ export class JobService {
       if (status === JobStatus.Running) {
         updateData.worker_assigned = process.env.WORKER_ID || "scraper-worker";
         updateData.screenshot_urls = [];
+        updateData.failed_reason = null;
       }
       if (failedReason !== undefined) {
         updateData.failed_reason = failedReason ?? null;
