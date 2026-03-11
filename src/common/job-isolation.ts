@@ -3,20 +3,13 @@
  *
  * Provides functions to generate unique isolation configurations for each job:
  * - Unique session ID for Bright Data proxy (ensures different residential IP)
- * - Unique window size
  * - Country selection (US only)
  *
  * Uses hash-based assignment to ensure deterministic but unique values per jobId
  */
 
-const WINDOW_SIZES = [
-  { width: 1920, height: 1080 }, // Full HD
-  { width: 1366, height: 768 }, // Common laptop
-  { width: 1536, height: 864 }, // MacBook Pro
-  { width: 1440, height: 900 }, // MacBook Air
-  { width: 1600, height: 900 }, // Wide screen
-  { width: 1280, height: 720 }, // HD
-];
+/** Single window size for all scraping: Full HD desktop, avoids mobile layouts and matches production. */
+const SCRAPE_WINDOW_SIZE = { width: 1920, height: 1080 };
 
 // Available countries in your Bright Data zone (US only)
 const AVAILABLE_COUNTRIES = [
@@ -110,14 +103,13 @@ export function getBrightDataSessionId(jobId: string): string {
 }
 
 /**
- * Get window size for a job based on jobId hash
- * @param jobId - The job ID to generate window size for
- * @returns An object with width and height properties
+ * Get window size for scraping (same for all jobs).
+ * @param _jobId - Unused; kept for API compatibility
+ * @returns 1920x1080 (Full HD) — standard desktop size, avoids mobile layout
  */
-export function getWindowSize(jobId: string): {
+export function getWindowSize(_jobId: string): {
   width: number;
   height: number;
 } {
-  const hash = simpleHash(jobId);
-  return WINDOW_SIZES[hash % WINDOW_SIZES.length];
+  return { ...SCRAPE_WINDOW_SIZE };
 }

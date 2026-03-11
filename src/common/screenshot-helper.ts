@@ -6,6 +6,9 @@ import { jobService } from "../services/job.service.js";
 import { retrievalService } from "../services/retriveal-job.service.js";
 import { dualLogError, dualLogInfo } from "./log-helper.js";
 
+/** Max time to wait for page.screenshot() before giving up (avoids long hangs after heavy pages). */
+const SCREENSHOT_CAPTURE_TIMEOUT_MS = 10_000;
+
 /**
  * Screenshot helper utility — captures page screenshots, uploads them to S3,
  * and persists the URL to the job or retrieval document in MongoDB.
@@ -50,12 +53,20 @@ export class ScreenshotHelper {
         fs.mkdirSync(ScreenshotHelper.tempDir, { recursive: true });
       }
 
-      // Capture visible viewport only (fullPage: false)
-      await page.screenshot({
+      // Capture visible viewport only (fullPage: false), with a capped timeout so we don't
+      // wait for the full CDP protocol timeout (e.g. after processing many bookings the page can be slow)
+      const capturePromise = page.screenshot({
         path: localPath as `${string}.png`,
         fullPage: false,
         type: "png",
       });
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(
+          () => reject(new Error(`Screenshot capture timed out after ${SCREENSHOT_CAPTURE_TIMEOUT_MS}ms`)),
+          SCREENSHOT_CAPTURE_TIMEOUT_MS
+        );
+      });
+      await Promise.race([capturePromise, timeoutPromise]);
 
       // Upload to S3
       const s3Key = `screenshots/${platform}/${entityType}/${entityId}/${step}_${timestamp}.png`;
