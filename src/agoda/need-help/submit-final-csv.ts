@@ -5,7 +5,13 @@ async function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export async function submitFinalCsv(page: Page, jobId: string | undefined) {
+/**
+ * Clicks the final submit button. Returns true if the button was clicked, false otherwise.
+ */
+export async function submitFinalCsv(
+  page: Page,
+  jobId: string | undefined
+): Promise<boolean> {
   await dualLogInfo("Clicking final submit button...", { jobId });
   try {
     const finalSubmitSelectors = [
@@ -25,16 +31,20 @@ export async function submitFinalCsv(page: Page, jobId: string | undefined) {
           `✅ Clicked final submit button with selector: ${selector}`,
           { jobId }
         );
-        break;
+        await delay(2000); // Give time for form submission to process
+        return true;
       } catch (error) {
         continue;
       }
     }
+    await dualLogError("Final submit button not found with any selector", {
+      jobId,
+    });
+    return false;
   } catch (error: any) {
     await dualLogError("Error clicking final submit button:", error.message, {
       jobId,
     });
+    return false;
   }
-
-  await delay(2000); // Give time for form submission to process
 }

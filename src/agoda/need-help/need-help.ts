@@ -172,6 +172,7 @@ export async function automateNeedHelpProcess(
     issueDetailsFilled: false,
     csvUploaded: false,
     phoneFilled: false,
+    finalSubmitClicked: false,
   };
 
   try {
@@ -840,10 +841,11 @@ export async function automateNeedHelpProcess(
       });
     }
 
-    // Step 9: Click final submit button
-    // Only for production environment
+    // Step 9: Click final submit button (production only); track success for completion/failure
     if (process.env.AGODA_SUBMISSION === "true") {
-      await submitFinalCsv(page, jobId);
+      stepResults.finalSubmitClicked = await submitFinalCsv(page, jobId);
+    } else {
+      stepResults.finalSubmitClicked = true; // not submitting in this env, skip check
     }
 
     // Fail if critical steps did not succeed instead of reporting success
@@ -853,6 +855,7 @@ export async function automateNeedHelpProcess(
       { key: "submitRequestButtonClicked" as const, label: "Submit request button clicked" },
       { key: "issueTypeSelected" as const, label: "Issue type (Other) selected" },
       { key: "issueDetailsFilled" as const, label: "Issue details filled" },
+      { key: "finalSubmitClicked" as const, label: "Final submit button clicked" },
     ];
     const failedSteps = criticalSteps.filter((s) => !stepResults[s.key]);
     if (failedSteps.length > 0) {
