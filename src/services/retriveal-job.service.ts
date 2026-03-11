@@ -235,6 +235,7 @@ export class RetrievalService {
 
       if (status === "Running") {
         updateData.screenshot_urls = [];
+        updateData.failed_reason = null;
       }
 
       return await Retrieval.findByIdAndUpdate(objectId, updateData, {
@@ -263,6 +264,7 @@ export class RetrievalService {
       };
       if (status === "Running") {
         updateData.screenshot_urls = [];
+        updateData.failed_reason = null;
       }
       if (failedReason !== undefined) {
         updateData.failed_reason = failedReason ?? null;
