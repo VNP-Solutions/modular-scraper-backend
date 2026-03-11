@@ -20,6 +20,77 @@ import {
   UPC_WIDGET,
 } from "../utils/selectors.js";
 
+/** Data extracted from the booking result table row (guest name, stay dates, etc.) */
+export interface BookingRowData {
+  guest_name: string;
+  check_in_date: Date | null;
+  check_out_date: Date | null;
+  reservation_status: string;
+  room_type: string;
+}
+
+/**
+ * Parse date string from Agoda row (e.g. "Mar 11, 2026", "Mar 14, 2026")
+ */
+function parseAgodaRowDate(text: string): Date | null {
+  if (!text || typeof text !== "string") return null;
+  const cleaned = text.replace(/\s*-\s*$/, "").trim();
+  if (!cleaned) return null;
+  const d = new Date(cleaned);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+/**
+ * Extract guest name, stay dates (check-in/check-out), reservation status, and room type from a booking result row.
+ * Row structure: td[0]=booking id+status, td[1]=guest name, td[2]=dates (two p), td[3]=room type.
+ */
+export async function extractBookingRowData(
+  page: Page,
+  bookingRowSelector: string
+): Promise<BookingRowData | null> {
+  try {
+    const raw = await page.evaluate(
+      (rowSelector: string) => {
+        const row = document.querySelector(rowSelector);
+        if (!row) return null;
+        const tds = row.querySelectorAll("td");
+        let checkInStr: string | null = null;
+        let checkOutStr: string | null = null;
+        if (tds.length >= 3) {
+          const datePs = tds[2].querySelectorAll("p");
+          const texts = Array.from(datePs).map((p) => (p.textContent || "").trim());
+          if (texts.length >= 1) checkInStr = texts[0].replace(/\s*-\s*$/, "").trim() || null;
+          if (texts.length >= 2) checkOutStr = texts[1] || null;
+        }
+        return {
+          guest_name: (row.querySelector('p[data-testid="guest-name"]')?.textContent || "").trim(),
+          reservation_status: (row.querySelector('span[data-testid="booking-ack-view"]')?.textContent || "").trim(),
+          room_type: (() => {
+            if (tds.length < 4) return "";
+            const p = tds[3].querySelector("p");
+            return (p?.textContent || "").trim();
+          })(),
+          check_in_str: checkInStr,
+          check_out_str: checkOutStr,
+        };
+      },
+      bookingRowSelector
+    );
+
+    if (!raw) return null;
+
+    return {
+      guest_name: raw.guest_name,
+      check_in_date: raw.check_in_str ? parseAgodaRowDate(raw.check_in_str) : null,
+      check_out_date: raw.check_out_str ? parseAgodaRowDate(raw.check_out_str) : null,
+      reservation_status: raw.reservation_status,
+      room_type: raw.room_type,
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
 /**
  * Searches for a booking ID and navigates to the Get payout (UPC) tab
  * @param page - Puppeteer page instance
@@ -196,6 +267,64 @@ export async function searchBookingAndNavigateToPayout(
       });
       // Screenshot: search results with matched booking row
       await takeScreenshot(page, retrievalId ?? jobId ?? "", `search_results_${bookingId}`, "step", "agoda", retrievalId ? "retrieval" : "job");
+
+      // Extract guest name and stay dates from the row and update retrieval item (same pattern as card info)
+      if (retrievalId) {
+        const rowData = await extractBookingRowData(page, bookingRowSelector);
+        if (rowData) {
+          try {
+            const checkIn = rowData.check_in_date ?? new Date();
+            const checkOut = rowData.check_out_date ?? new Date();
+            const updated = await retrievalService.updateRetrievalItemGuestAndDates(
+              retrievalId,
+              bookingId,
+              {
+                guest_name: rowData.guest_name || "—",
+                check_in_date: checkIn,
+                check_out_date: checkOut,
+                room_type: rowData.room_type || "—",
+                reservation_status: rowData.reservation_status || "—",
+              }
+            );
+            if (updated) {
+              await dualLogInfo(
+                `✅ Saved guest name and stay dates for booking ${bookingId}: ${rowData.guest_name}, ${checkIn.toISOString().slice(0, 10)} - ${checkOut.toISOString().slice(0, 10)}`,
+                { jobId, bookingId }
+              );
+            } else {
+              // Item doesn't exist yet; create it with full row data (upsert)
+              const retrieval = await retrievalService.getRetrievalById(retrievalId);
+              if (retrieval?.property_id) {
+                const propertyId = retrieval.property_id.toString();
+                const parentRetrievalId =
+                  retrieval.parent_retrieval_id?.toString() ?? retrievalId;
+                await retrievalService.upsertRetrievalItem({
+                  retrieval_id: retrievalId,
+                  parent_retrieval_id: parentRetrievalId,
+                  property_id: propertyId,
+                  guest_name: rowData.guest_name || "—",
+                  reservation_id: bookingId,
+                  check_in_date: checkIn,
+                  check_out_date: checkOut,
+                  room_type: rowData.room_type || "—",
+                  booked_date: rowData.check_in_date ?? checkIn,
+                  reservation_status: rowData.reservation_status || "—",
+                });
+                await dualLogInfo(
+                  `✅ Created retrieval item with guest name and stay dates for booking ${bookingId}: ${rowData.guest_name}, ${checkIn.toISOString().slice(0, 10)} - ${checkOut.toISOString().slice(0, 10)}`,
+                  { jobId, bookingId }
+                );
+              }
+            }
+          } catch (dbErr: any) {
+            await dualLogError(
+              `Failed to update retrieval item with row data for booking ${bookingId}`,
+              dbErr,
+              { jobId, bookingId }
+            );
+          }
+        }
+      }
     } catch (error) {
       await dualLogError(`Booking row not found for ID: ${bookingId}`, error, {
         jobId,

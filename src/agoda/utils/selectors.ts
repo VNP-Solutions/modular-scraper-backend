@@ -32,6 +32,10 @@ export const BOOKING_RESULTS = {
 
   // Guest name selector (standalone)
   GUEST_NAME_STANDALONE: 'p[data-testid="guest-name"]',
+
+  // Within row: reservation status (e.g. Cancelled, Confirmed)
+  ROW_STATUS: 'span[data-testid="booking-ack-view"]',
+  // Dates and room are in td cells by index (3rd td = dates, 4th td = room type)
 } as const;
 
 /**

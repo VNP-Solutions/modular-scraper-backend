@@ -552,6 +552,55 @@ export class RetrievalService {
   }
 
   /**
+   * Update retrieval item with guest name and stay dates (partial update, like card info).
+   * Does not upsert; returns null if the item does not exist.
+   */
+  async updateRetrievalItemGuestAndDates(
+    retrievalId: string,
+    reservationId: string,
+    data: {
+      guest_name: string;
+      check_in_date: Date;
+      check_out_date: Date;
+      room_type?: string;
+      reservation_status?: string;
+    }
+  ): Promise<IRetrievalItem | null> {
+    try {
+      const retrievalObjectId = this.validateObjectId(
+        retrievalId,
+        "retrievalId"
+      );
+
+      const updateFields: Record<string, unknown> = {
+        guest_name: data.guest_name,
+        check_in_date: data.check_in_date,
+        check_out_date: data.check_out_date,
+        updatedAt: new Date(),
+      };
+      if (data.room_type !== undefined) updateFields.room_type = data.room_type;
+      if (data.reservation_status !== undefined)
+        updateFields.reservation_status = data.reservation_status;
+
+      const result = await RetrievalItem.findOneAndUpdate(
+        {
+          retrieval_id: retrievalObjectId,
+          reservation_id: reservationId,
+        },
+        updateFields,
+        { new: true }
+      );
+
+      return result;
+    } catch (error) {
+      console.error(
+        `Error updating retrieval item guest and dates: ${error}`
+      );
+      return null;
+    }
+  }
+
+  /**
    * Check if any card info was saved for a retrieval
    */
   async hasAnyCardInfo(retrievalId: string): Promise<{
