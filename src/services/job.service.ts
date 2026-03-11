@@ -313,6 +313,7 @@ export class JobService {
       if (status === JobStatus.Running) {
         updateData.worker_assigned = process.env.WORKER_ID || "scraper-worker";
         updateData.screenshot_urls = [];
+        updateData.failed_reason = null;
       }
 
       // Set or clear failed_reason for UI
