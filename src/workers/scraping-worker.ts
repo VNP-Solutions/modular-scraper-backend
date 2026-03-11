@@ -321,8 +321,19 @@ class ScrapingWorker {
         finalStatus = "Partial";
       }
 
-      // 9. Update final job status
-      await jobService.updateJobStatus(jobId, finalStatus as any);
+      // 9. Update final job status only if job is still Running (never overwrite Failed/Stopped with Completed)
+      const currentJobExpedia = await jobService.getJobById(jobId);
+      const alreadyTerminalExpedia =
+        currentJobExpedia?.job_status === JobStatus.Failed ||
+        currentJobExpedia?.job_status === JobStatus.Stopped;
+      if (alreadyTerminalExpedia) {
+        await dualLogInfo(
+          `Worker: Skipping status update to ${finalStatus}; job ${jobId} is already ${currentJobExpedia?.job_status}`,
+          { jobId, currentStatus: currentJobExpedia?.job_status }
+        );
+      } else {
+        await jobService.updateJobStatus(jobId, finalStatus as any);
+      }
 
       // 10. Stop scraping state manager
       scrapingStateManager.stopScraping();
@@ -451,8 +462,19 @@ class ScrapingWorker {
         finalStatus = "Partial";
       }
 
-      // 11. Update final job status
-      await jobService.updateJobStatus(jobId, finalStatus as any);
+      // 11. Update final job status only if job is still Running (never overwrite Failed/Stopped with Completed)
+      const currentJobRerunExpedia = await jobService.getJobById(jobId);
+      const alreadyTerminalRerunExpedia =
+        currentJobRerunExpedia?.job_status === JobStatus.Failed ||
+        currentJobRerunExpedia?.job_status === JobStatus.Stopped;
+      if (alreadyTerminalRerunExpedia) {
+        await dualLogInfo(
+          `Worker: Skipping status update to ${finalStatus}; job ${jobId} is already ${currentJobRerunExpedia?.job_status}`,
+          { jobId, currentStatus: currentJobRerunExpedia?.job_status }
+        );
+      } else {
+        await jobService.updateJobStatus(jobId, finalStatus as any);
+      }
 
       // 12. Stop scraping state manager
       scrapingStateManager.stopScraping();
@@ -659,8 +681,19 @@ class ScrapingWorker {
         finalStatus = "Partial";
       }
 
-      // 9. Update final job status
-      await jobService.updateJobStatus(jobId, finalStatus as any);
+      // 9. Update final job status only if job is still Running (never overwrite Failed/Stopped with Completed)
+      const currentJobGraphQL = await jobService.getJobById(jobId);
+      const alreadyTerminalGraphQL =
+        currentJobGraphQL?.job_status === JobStatus.Failed ||
+        currentJobGraphQL?.job_status === JobStatus.Stopped;
+      if (alreadyTerminalGraphQL) {
+        await dualLogInfo(
+          `Worker: Skipping status update to ${finalStatus}; job ${jobId} is already ${currentJobGraphQL?.job_status}`,
+          { jobId, currentStatus: currentJobGraphQL?.job_status }
+        );
+      } else {
+        await jobService.updateJobStatus(jobId, finalStatus as any);
+      }
 
       // 10. Stop scraping state manager
       scrapingStateManager.stopScraping();
@@ -820,8 +853,19 @@ class ScrapingWorker {
         finalStatus = JobStatus.Partial;
       }
 
-      // 9. Update final job status
-      await jobService.updateJobStatus(jobId, finalStatus);
+      // 9. Update final job status only if job is still Running (never overwrite Failed/Stopped with Completed)
+      const currentJob = await jobService.getJobById(jobId);
+      const alreadyTerminal =
+        currentJob?.job_status === JobStatus.Failed ||
+        currentJob?.job_status === JobStatus.Stopped;
+      if (alreadyTerminal) {
+        await dualLogInfo(
+          `Worker: Skipping status update to ${finalStatus}; job ${jobId} is already ${currentJob?.job_status}`,
+          { jobId, currentStatus: currentJob?.job_status }
+        );
+      } else {
+        await jobService.updateJobStatus(jobId, finalStatus);
+      }
 
       // 10. Stop scraping state manager
       scrapingStateManager.stopScraping();
@@ -1001,8 +1045,19 @@ class ScrapingWorker {
         finalStatus = JobStatus.Partial;
       }
 
-      // 11. Update final job status
-      await jobService.updateJobStatus(jobId, finalStatus);
+      // 11. Update final job status only if job is still Running (never overwrite Failed/Stopped with Completed)
+      const currentJobRerun = await jobService.getJobById(jobId);
+      const alreadyTerminalRerun =
+        currentJobRerun?.job_status === JobStatus.Failed ||
+        currentJobRerun?.job_status === JobStatus.Stopped;
+      if (alreadyTerminalRerun) {
+        await dualLogInfo(
+          `Worker: Skipping status update to ${finalStatus}; job ${jobId} is already ${currentJobRerun?.job_status}`,
+          { jobId, currentStatus: currentJobRerun?.job_status }
+        );
+      } else {
+        await jobService.updateJobStatus(jobId, finalStatus);
+      }
 
       // 12. Stop scraping state manager
       scrapingStateManager.stopScraping();

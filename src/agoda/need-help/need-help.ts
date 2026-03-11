@@ -9,6 +9,7 @@ import {
   takeSuccessScreenshot,
 } from "../../common/screenshot-helper.js";
 import { timeManager } from "../../common/time-manager.js";
+import { JobStatus } from "../../models/job.model.js";
 import { JobService } from "../../services/job.service.js";
 import { cleanupOnError } from "../utils/error-cleanup.js";
 import {
@@ -161,6 +162,18 @@ export async function automateNeedHelpProcess(
     propertyName,
   } = options;
 
+  /** Track which steps actually succeeded so we don't report success when something failed */
+  const stepResults = {
+    needHelpClicked: false,
+    contactAgodaSent: false,
+    submitRequestPhraseSent: false,
+    submitRequestButtonClicked: false,
+    issueTypeSelected: false,
+    issueDetailsFilled: false,
+    csvUploaded: false,
+    phoneFilled: false,
+  };
+
   try {
     await dualLogInfo("🚀 Starting Need Help automation process...", {
       jobId,
@@ -264,6 +277,7 @@ export async function automateNeedHelpProcess(
       }
     }
 
+    stepResults.needHelpClicked = needHelpClicked;
     if (needHelpClicked && jobId) {
       await progressManager.updateJobProgress(
         jobId,
@@ -356,6 +370,7 @@ export async function automateNeedHelpProcess(
             { jobId }
           );
 
+          stepResults.contactAgodaSent = true;
           // Update progress - Chat message sent
           if (jobId) {
             await progressManager.updateJobProgress(
@@ -454,6 +469,7 @@ export async function automateNeedHelpProcess(
             { jobId }
           );
 
+          stepResults.submitRequestPhraseSent = true;
           // Update progress - Chat message sent
           if (jobId) {
             await progressManager.updateJobProgress(
@@ -494,6 +510,7 @@ export async function automateNeedHelpProcess(
           `✅ Clicked 'submit request' button with selector: ${selector}`,
           { jobId }
         );
+        stepResults.submitRequestButtonClicked = true;
 
         // Update progress - Submit request button clicked
         if (jobId) {
@@ -573,6 +590,7 @@ export async function automateNeedHelpProcess(
         });
 
         if (isOtherAlreadySelected) {
+          stepResults.issueTypeSelected = true;
           await dualLogInfo("✅ 'Other' option is already selected", { jobId });
         } else {
           await dualLogInfo("Selecting 'Other' option...", { jobId });
@@ -600,6 +618,7 @@ export async function automateNeedHelpProcess(
                 { jobId }
               );
               otherSelected = true;
+              stepResults.issueTypeSelected = true;
               break;
             } catch (error) {
               continue;
@@ -622,6 +641,7 @@ export async function automateNeedHelpProcess(
                 }
                 return false;
               });
+              stepResults.issueTypeSelected = true;
               await dualLogInfo(
                 "✅ Selected last radio option (should be 'Other')",
                 { jobId }
@@ -694,6 +714,7 @@ export async function automateNeedHelpProcess(
             `✅ Filled issue details with selector: ${selector}`,
             { jobId }
           );
+          stepResults.issueDetailsFilled = true;
 
           // Update progress - Issue details filled
           if (jobId) {
@@ -750,6 +771,7 @@ export async function automateNeedHelpProcess(
                   `✅ Uploaded CSV file: ${csvFilePathToUpload} with selector: ${selector}`,
                   { jobId }
                 );
+                stepResults.csvUploaded = true;
 
                 // Update progress - CSV file uploaded
                 if (jobId) {
@@ -803,6 +825,7 @@ export async function automateNeedHelpProcess(
             `✅ Filled phone number with selector: ${selector}`,
             { jobId }
           );
+          stepResults.phoneFilled = true;
           if (jobId) {
             await takeSuccessScreenshot(page, jobId, "phone_number_filled");
           }
@@ -823,6 +846,21 @@ export async function automateNeedHelpProcess(
       await submitFinalCsv(page, jobId);
     }
 
+    // Fail if critical steps did not succeed instead of reporting success
+    const criticalSteps = [
+      { key: "needHelpClicked" as const, label: "Need Help button clicked" },
+      { key: "contactAgodaSent" as const, label: "'contact agoda' message sent" },
+      { key: "submitRequestButtonClicked" as const, label: "Submit request button clicked" },
+      { key: "issueTypeSelected" as const, label: "Issue type (Other) selected" },
+      { key: "issueDetailsFilled" as const, label: "Issue details filled" },
+    ];
+    const failedSteps = criticalSteps.filter((s) => !stepResults[s.key]);
+    if (failedSteps.length > 0) {
+      const message = `Need Help process incomplete: missing steps - ${failedSteps.map((s) => s.label).join("; ")}. Step results: ${JSON.stringify(stepResults)}`;
+      await dualLogError(message, { jobId });
+      throw new Error(message);
+    }
+
     if (jobId) {
       // Update progress - Need Help process completed
       await progressManager.updateJobProgress(
@@ -839,6 +877,7 @@ export async function automateNeedHelpProcess(
       {
         jobId,
         timeSession: timeManager.getSessionInfo(),
+        stepResults,
       }
     );
     if (jobId) {
@@ -915,10 +954,19 @@ export async function automateNeedHelpProcess(
         undefined
       );
 
-      // Explicitly fail the job in the database
+      // Explicitly fail the job in the database with failed_reason
       try {
-        await jobService.failJob(jobId);
-        await dualLogInfo("❌ Job marked as Failed in database", { jobId });
+        const failedReason =
+          error?.message ?? "Need Help process failed (unknown reason)";
+        await jobService.updateJobStatusWithReason(
+          jobId,
+          JobStatus.Failed,
+          failedReason
+        );
+        await dualLogInfo("❌ Job marked as Failed in database with failed_reason", {
+          jobId,
+          failedReason,
+        });
       } catch (failError: any) {
         await dualLogError(
           "Failed to update job status to Failed:",

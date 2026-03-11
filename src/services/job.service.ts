@@ -320,6 +320,12 @@ export class JobService {
         updateData.failed_reason = null;
       }
 
+      // When setting to Pending (e.g. rerun a failed job), clear screenshots and failed_reason so the rerun starts clean
+      if (status === JobStatus.Pending) {
+        updateData.screenshot_urls = [];
+        updateData.failed_reason = null;
+      }
+
       return await Job.findByIdAndUpdate(objectId, updateData, { new: true });
     } catch (error) {
       console.error(`Error updating job status: ${error}`);
@@ -372,6 +378,10 @@ export class JobService {
       };
       if (status === JobStatus.Running) {
         updateData.worker_assigned = process.env.WORKER_ID || "scraper-worker";
+        updateData.screenshot_urls = [];
+        updateData.failed_reason = null;
+      }
+      if (status === JobStatus.Pending) {
         updateData.screenshot_urls = [];
         updateData.failed_reason = null;
       }
