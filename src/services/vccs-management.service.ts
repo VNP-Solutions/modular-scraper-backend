@@ -302,6 +302,8 @@ export class VccsManagementService {
       let cardDetailsUrl: string;
 
       // If we have an authenticated URL pattern from a previous successful fetch, use it!
+      // Second and subsequent requests use this URL, which contains the latest session
+      // (captured from the final URL after redirect on the first or previous request).
       if (authenticatedUrlPattern) {
         // Replace the bn (booking number) parameter with the new reservation ID
         cardDetailsUrl = authenticatedUrlPattern.replace(
@@ -309,28 +311,29 @@ export class VccsManagementService {
           `bn=${reservationId}`
         );
         dualLogInfo(
-          "Using authenticated URL pattern from previous successful fetch",
+          "Using latest session from previous successful fetch (authenticated URL pattern)",
           {
             reservationId,
             urlPattern: cardDetailsUrl,
           }
         );
       } else {
-        // First time - construct URL with params (might require authentication)
+        // First time - do NOT use session. Booking.com will use cookies, redirect,
+        // and set session; we capture the final URL for subsequent requests.
         // Note: Booking.com uses semicolons (;) not ampersands (&) for this URL!
-        cardDetailsUrl = `${this.cardDetailsBaseUrl}?lang=${params.lang};bn=${reservationId};hotel_id=${params.hotel_id};ses=${params.ses};has_bvc=1`;
+        cardDetailsUrl = `${this.cardDetailsBaseUrl}?lang=${params.lang};bn=${reservationId};hotel_id=${params.hotel_id};has_bvc=1`;
         dualLogInfo(
-          "First reservation - constructing URL with current session",
+          "First reservation - constructing URL without session (booking.com will redirect and set session)",
           {
             reservationId,
           }
         );
       }
 
-      dualLogInfo("Navigating to card details page (with old session)", {
+      dualLogInfo("Navigating to card details page", {
         url: cardDetailsUrl,
         reservationId,
-        oldSession: params.ses,
+        ...(authenticatedUrlPattern ? { usingAuthenticatedPattern: true } : { firstRequestNoSession: true }),
       });
 
       // Navigate - Booking.com will automatically:
