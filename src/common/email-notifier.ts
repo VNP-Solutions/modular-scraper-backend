@@ -261,39 +261,38 @@ export class EmailNotifier {
   }
 
   /**
-   * Extract plain email from "Display Name <email@domain.com>" or return trimmed address.
-   * Returns null if no valid email can be extracted.
+   * Get the address to validate: extract from "Display Name <email>" or use trimmed string.
    */
-  private normalizeEmail(address: string): string | null {
-    const trimmed = (address || "").trim();
-    if (!trimmed) return null;
-    // Angle-bracket format: "Name <email@domain.com>"
+  private toAddressToValidate(address: unknown): string {
+    if (address == null || typeof address !== "string") return "";
+    const trimmed = address.trim();
+    if (!trimmed) return "";
     const angleMatch = trimmed.match(/<([^>]+)>/);
-    const candidate = angleMatch ? angleMatch[1].trim() : trimmed;
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    return emailRegex.test(candidate) ? candidate : null;
+    return angleMatch ? angleMatch[1].trim() : trimmed;
   }
 
   /**
-   * Validate email addresses (accepts plain emails and "Display Name <email>" format).
+   * Validate email addresses (plain "user@domain.com" or "Display Name <email>").
+   * Only processes strings; skips null/undefined/non-strings safely.
    */
   private validateEmails(emails: string[]): string[] {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     const seen = new Set<string>();
-    return emails
-      .map((raw) => {
-        const normalized = this.normalizeEmail(raw);
-        if (normalized == null && (raw || "").trim())
-          dualLogWarn(`Invalid or unparseable email address, skipping`, {
-            email: raw,
-          });
-        return normalized;
-      })
-      .filter((email): email is string => {
-        if (email == null) return false;
-        if (seen.has(email.toLowerCase())) return false;
-        seen.add(email.toLowerCase());
-        return true;
-      });
+    const result: string[] = [];
+    for (const raw of emails) {
+      const candidate = this.toAddressToValidate(raw);
+      if (!candidate) continue;
+      if (!emailRegex.test(candidate)) {
+        if (String(raw || "").trim())
+          dualLogWarn(`Invalid email address, skipping`, { email: raw });
+        continue;
+      }
+      const key = candidate.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      result.push(candidate);
+    }
+    return result;
   }
 
   /**
