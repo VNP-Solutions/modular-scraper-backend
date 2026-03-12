@@ -261,17 +261,39 @@ export class EmailNotifier {
   }
 
   /**
-   * Validate email addresses
+   * Extract plain email from "Display Name <email@domain.com>" or return trimmed address.
+   * Returns null if no valid email can be extracted.
+   */
+  private normalizeEmail(address: string): string | null {
+    const trimmed = (address || "").trim();
+    if (!trimmed) return null;
+    // Angle-bracket format: "Name <email@domain.com>"
+    const angleMatch = trimmed.match(/<([^>]+)>/);
+    const candidate = angleMatch ? angleMatch[1].trim() : trimmed;
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(candidate) ? candidate : null;
+  }
+
+  /**
+   * Validate email addresses (accepts plain emails and "Display Name <email>" format).
    */
   private validateEmails(emails: string[]): string[] {
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    return emails.filter((email) => {
-      const isValid = emailRegex.test(email.trim());
-      if (!isValid) {
-        dualLogWarn(`Invalid email address: ${email}`, { email });
-      }
-      return isValid;
-    });
+    const seen = new Set<string>();
+    return emails
+      .map((raw) => {
+        const normalized = this.normalizeEmail(raw);
+        if (normalized == null && (raw || "").trim())
+          dualLogWarn(`Invalid or unparseable email address, skipping`, {
+            email: raw,
+          });
+        return normalized;
+      })
+      .filter((email): email is string => {
+        if (email == null) return false;
+        if (seen.has(email.toLowerCase())) return false;
+        seen.add(email.toLowerCase());
+        return true;
+      });
   }
 
   /**
