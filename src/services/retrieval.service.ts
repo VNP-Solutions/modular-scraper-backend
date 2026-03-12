@@ -200,7 +200,7 @@ export class RetrievalService {
    * Update retrieval status with overwrite protection. When status is Failed or Partial, pass failedReason
    * so the UI can show why it failed. Clears failed_reason on success statuses.
    * - Failed / Completed / Partial: only update if current status is Running.
-   * - Running: only update if current status is Pending or InQueue.
+   * - Running: only if current is Pending, InQueue, Partial, or Failed (rerun starts fresh).
    * - Stopped: only update if current status is Running.
    */
   async updateRetrievalStatusWithReason(
@@ -244,10 +244,13 @@ export class RetrievalService {
         return updated;
       }
 
-      // Running: only from Pending or InQueue
+      // Running: allow from Pending, InQueue, Partial, or Failed (rerun starts fresh)
       if (status === "Running") {
         const updated = await Retrieval.findOneAndUpdate(
-          { _id: objectId, job_status: { $in: ["Pending", "InQueue"] } },
+          {
+            _id: objectId,
+            job_status: { $in: ["Pending", "InQueue", "Partial", "Failed"] },
+          },
           updateData,
           { new: true }
         );
@@ -347,7 +350,7 @@ export class RetrievalService {
   /**
    * Update retrieval status with overwrite protection (legacy — no failed_reason, kept for backward compat).
    * - Failed / Completed / Partial: only if current is Running.
-   * - Running: only if current is Pending or InQueue.
+   * - Running: only if current is Pending, InQueue, Partial, or Failed.
    * - Stopped: only if current is Running.
    */
   async updateRetrievalStatus(
@@ -380,7 +383,10 @@ export class RetrievalService {
 
       if (status === "Running") {
         const updated = await Retrieval.findOneAndUpdate(
-          { _id: objectId, job_status: { $in: ["Pending", "InQueue"] } },
+          {
+            _id: objectId,
+            job_status: { $in: ["Pending", "InQueue", "Partial", "Failed"] },
+          },
           updateData,
           { new: true }
         );

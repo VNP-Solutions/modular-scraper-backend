@@ -296,7 +296,7 @@ export class JobService {
         return updated;
       }
 
-      // Running: only transition from Pending (clear failed_reason and screenshot_urls so rerun starts fresh)
+      // Running: allow transition from Pending, Partial, or Failed (clear failed_reason and screenshot_urls so rerun starts fresh)
       if (status === JobStatus.Running) {
         const updateData: any = {
           job_status: status,
@@ -306,7 +306,10 @@ export class JobService {
           failed_reason: null,
         };
         const updated = await Job.findOneAndUpdate(
-          { _id: objectId, job_status: JobStatus.Pending },
+          {
+            _id: objectId,
+            job_status: { $in: [JobStatus.Pending, JobStatus.Partial, JobStatus.Failed] },
+          },
           updateData,
           { new: true }
         );
