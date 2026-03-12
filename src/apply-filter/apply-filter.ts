@@ -1,5 +1,6 @@
 import { Browser, Page } from "puppeteer";
 import { delay } from "../common/delay.js";
+import { FAILED_REASON, setFailedReasonCode } from "../common/failed-reason.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import { timeoutManager } from "../common/timeout-manager.js";
@@ -18,7 +19,9 @@ export async function applyFilter(
     // Check if scraping is paused before starting
     await scrapingStateManager.waitWhilePaused();
     if (!scrapingStateManager.isRunning()) {
-      throw new Error("Scraping was stopped during filter application");
+      const err = new Error("Scraping was stopped during filter application");
+      setFailedReasonCode(err, FAILED_REASON.SCRAPING_STOPPED);
+      throw err;
     }
 
     // Get timeout configuration for this job
@@ -49,7 +52,9 @@ export async function applyFilter(
     // Check pause state before setting date range
     await scrapingStateManager.waitWhilePaused();
     if (!scrapingStateManager.isRunning()) {
-      throw new Error("Scraping was stopped during filter application");
+      const err = new Error("Scraping was stopped during filter application");
+      setFailedReasonCode(err, FAILED_REASON.SCRAPING_STOPPED);
+      throw err;
     }
 
     // Set the date range
@@ -60,7 +65,9 @@ export async function applyFilter(
     // Check pause state before applying more filters
     await scrapingStateManager.waitWhilePaused();
     if (!scrapingStateManager.isRunning()) {
-      throw new Error("Scraping was stopped during filter application");
+      const err = new Error("Scraping was stopped during filter application");
+      setFailedReasonCode(err, FAILED_REASON.SCRAPING_STOPPED);
+      throw err;
     }
 
     //wait for the more filter button
@@ -199,7 +206,9 @@ export async function applyFilter(
     // Check pause state before data processing
     await scrapingStateManager.waitWhilePaused();
     if (!scrapingStateManager.isRunning()) {
-      throw new Error("Scraping was stopped before data processing");
+      const err1 = new Error("Scraping was stopped before data processing");
+      setFailedReasonCode(err1, FAILED_REASON.SCRAPING_STOPPED);
+      throw err1;
     }
 
     await dualLogInfo("Starting to process reservation data...");
@@ -219,7 +228,9 @@ export async function applyFilter(
       // Check pause state during data stabilization
       await scrapingStateManager.waitWhilePaused();
       if (!scrapingStateManager.isRunning()) {
-        throw new Error("Scraping was stopped during data stabilization");
+        const err2 = new Error("Scraping was stopped during data stabilization");
+        setFailedReasonCode(err2, FAILED_REASON.SCRAPING_STOPPED);
+        throw err2;
       }
 
       await delay(2000);
@@ -256,7 +267,9 @@ export async function applyFilter(
     // Check pause state before setting pagination
     await scrapingStateManager.waitWhilePaused();
     if (!scrapingStateManager.isRunning()) {
-      throw new Error("Scraping was stopped before pagination setup");
+      const err3 = new Error("Scraping was stopped before pagination setup");
+      setFailedReasonCode(err3, FAILED_REASON.SCRAPING_STOPPED);
+      throw err3;
     }
 
     // Set results per page to 100
@@ -275,7 +288,9 @@ export async function applyFilter(
     // Final pause check before scraping
     await scrapingStateManager.waitWhilePaused();
     if (!scrapingStateManager.isRunning()) {
-      throw new Error("Scraping was stopped before data scraping");
+      const err4 = new Error("Scraping was stopped before data scraping");
+      setFailedReasonCode(err4, FAILED_REASON.SCRAPING_STOPPED);
+      throw err4;
     }
 
     await dualLogInfo("Starting data scraping...");

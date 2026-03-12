@@ -374,9 +374,17 @@ async function makeGraphQLRequestForReservation(
         `❌ GraphQL API Error Response: ${errorText}`,
         `Response Status: ${response.status} ${response.statusText}`
       );
-      throw new Error(
+      const err = new Error(
         `GraphQL API failed with status ${response.status}: ${errorText}`
       );
+      if (response.status === 401 || response.status === 403) {
+        setFailedReasonCode(err, FAILED_REASON.GRAPHQL_NOT_AUTHORIZED);
+      } else if (response.status === 408 || response.status === 504) {
+        setFailedReasonCode(err, FAILED_REASON.GRAPHQL_TIMEOUT);
+      } else {
+        setFailedReasonCode(err, FAILED_REASON.GRAPHQL_ERROR);
+      }
+      throw err;
     }
 
     const responseData = await response.json();
@@ -388,6 +396,9 @@ async function makeGraphQLRequestForReservation(
       `Error in GraphQL request for reservation ${reservationId}:`,
       error.message
     );
+    if (!hasFailedReasonCode(error)) {
+      setFailedReasonCode(error, FAILED_REASON.GRAPHQL_ERROR);
+    }
     throw error;
   }
 }
@@ -741,12 +752,16 @@ async function graphqlRetrievalScraping(
     // Get retrieval details for parent_retrieval_id and property_id
     const retrieval = await retrievalService.getRetrievalById(retrievalId);
     if (!retrieval) {
-      throw new Error(`Retrieval ${retrievalId} not found`);
+      const err = new Error(`Retrieval ${retrievalId} not found`);
+      setFailedReasonCode(err, FAILED_REASON.RETRIEVAL_NOT_FOUND);
+      throw err;
     }
     const parentRetrievalId = retrieval.parent_retrieval_id.toString();
     const propertyId = retrieval.property_id?.toString();
     if (!propertyId) {
-      throw new Error(`Property ID not found in retrieval ${retrievalId}`);
+      const err = new Error(`Property ID not found in retrieval ${retrievalId}`);
+      setFailedReasonCode(err, FAILED_REASON.PROPERTY_NOT_FOUND);
+      throw err;
     }
 
     // Update progress

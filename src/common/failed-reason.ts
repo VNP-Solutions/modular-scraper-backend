@@ -11,6 +11,7 @@ export const FAILED_REASON = {
   OTP_VERIFICATION_PAGE_TIMEOUT: "OTP_VERIFICATION_PAGE_TIMEOUT",
   LOGIN_FAILED: "LOGIN_FAILED",
   PROPERTY_NOT_FOUND: "PROPERTY_NOT_FOUND",
+  RETRIEVAL_NOT_FOUND: "RETRIEVAL_NOT_FOUND",
   GRAPHQL_ERROR: "GRAPHQL_ERROR",
   GRAPHQL_NOT_AUTHORIZED: "GRAPHQL_NOT_AUTHORIZED",
   GRAPHQL_TIMEOUT: "GRAPHQL_TIMEOUT",
@@ -35,6 +36,8 @@ const FAILED_REASON_MESSAGES: Record<FailedReasonCode, string> = {
     "Login failed. Please check your Expedia credentials and try again.",
   [FAILED_REASON.PROPERTY_NOT_FOUND]:
     "Property not found. Please verify the Expedia property ID is correct.",
+  [FAILED_REASON.RETRIEVAL_NOT_FOUND]:
+    "Retrieval not found. The retrieval may have been deleted or the ID is invalid.",
   [FAILED_REASON.GRAPHQL_ERROR]:
     "Failed to fetch reservation data from Expedia. Please try again.",
   [FAILED_REASON.GRAPHQL_NOT_AUTHORIZED]:
@@ -158,4 +161,14 @@ export function getFailedReasonForUser(
   const raw =
     typeof message === "string" && message.trim() ? message : fallback;
   return raw.slice(0, 1000);
+}
+
+/**
+ * Get the user-facing message for a failure code (e.g. when setting status to Failed
+ * from a success path with 0 items — no error object available).
+ */
+export function getFailedReasonMessageForCode(
+  code: FailedReasonCode
+): string {
+  return FAILED_REASON_MESSAGES[code] ?? "Scraping failed";
 }

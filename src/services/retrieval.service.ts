@@ -197,8 +197,11 @@ export class RetrievalService {
   }
 
   /**
-   * Update retrieval status. When status is Failed or Partial, pass failedReason
+   * Update retrieval status with overwrite protection. When status is Failed or Partial, pass failedReason
    * so the UI can show why it failed. Clears failed_reason on success statuses.
+   * - Failed / Completed / Partial: only update if current status is Running.
+   * - Running: only update if current status is Pending or InQueue.
+   * - Stopped: only update if current status is Running.
    */
   async updateRetrievalStatusWithReason(
     retrievalId: string,
@@ -208,6 +211,7 @@ export class RetrievalService {
     try {
       const objectId = this.validateObjectId(retrievalId, "retrievalId");
       const isFailed = status === "Failed" || status === "Partial";
+      const terminalStatuses = ["Failed", "Completed", "Partial"];
 
       const updateData: any = {
         job_status: status,
@@ -223,11 +227,50 @@ export class RetrievalService {
         updateData.failed_reason = null;
       }
 
-      // Clear screenshot trail when re-starting so new run begins fresh
       if (status === "Running") {
         updateData.screenshot_urls = [];
       }
 
+      // Terminal statuses: only transition from Running
+      if (terminalStatuses.includes(status)) {
+        const updated = await Retrieval.findOneAndUpdate(
+          { _id: objectId, job_status: "Running" },
+          updateData,
+          { new: true }
+        );
+        if (!updated) {
+          return (await Retrieval.findById(objectId)) ?? null;
+        }
+        return updated;
+      }
+
+      // Running: only from Pending or InQueue
+      if (status === "Running") {
+        const updated = await Retrieval.findOneAndUpdate(
+          { _id: objectId, job_status: { $in: ["Pending", "InQueue"] } },
+          updateData,
+          { new: true }
+        );
+        if (!updated) {
+          return (await Retrieval.findById(objectId)) ?? null;
+        }
+        return updated;
+      }
+
+      // Stopped: only from Running
+      if (status === "Stopped") {
+        const updated = await Retrieval.findOneAndUpdate(
+          { _id: objectId, job_status: "Running" },
+          updateData,
+          { new: true }
+        );
+        if (!updated) {
+          return (await Retrieval.findById(objectId)) ?? null;
+        }
+        return updated;
+      }
+
+      // Pending, InQueue, etc.: allow
       return await Retrieval.findByIdAndUpdate(objectId, updateData, {
         new: true,
       });
@@ -238,8 +281,8 @@ export class RetrievalService {
   }
 
   /**
-   * Set retrieval to Failed status. If failed_reason is already set on the
-   * document (saved by an inner catch), it is preserved — not overwritten.
+   * Set retrieval to Failed status only if current status is Running (avoid overwriting).
+   * If failed_reason is already set on the document (saved by an inner catch), it is preserved — not overwritten.
    * Use this in app.ts / outer callers that don't have the original error.
    */
   async failRetrievalSafe(
@@ -249,8 +292,9 @@ export class RetrievalService {
     try {
       const objectId = this.validateObjectId(retrievalId, "retrievalId");
 
-      // Only set failed_reason if it isn't already stored
-      const existing = await Retrieval.findById(objectId).select("failed_reason").lean();
+      const existing = await Retrieval.findById(objectId)
+        .select("failed_reason job_status")
+        .lean();
       const alreadyHasReason = existing && (existing as any).failed_reason;
 
       const updateData: any = {
@@ -261,9 +305,16 @@ export class RetrievalService {
         updateData.failed_reason = String(fallbackReason).slice(0, 1000);
       }
 
-      return await Retrieval.findByIdAndUpdate(objectId, updateData, {
-        new: true,
-      });
+      // Only transition to Failed from Running
+      const updated = await Retrieval.findOneAndUpdate(
+        { _id: objectId, job_status: "Running" },
+        updateData,
+        { new: true }
+      );
+      if (!updated) {
+        return (await Retrieval.findById(objectId)) ?? null;
+      }
+      return updated;
     } catch (error) {
       console.error(`Error failing retrieval: ${error}`);
       return null;
@@ -294,7 +345,10 @@ export class RetrievalService {
   }
 
   /**
-   * Update retrieval status (legacy — no failed_reason, kept for backward compat)
+   * Update retrieval status with overwrite protection (legacy — no failed_reason, kept for backward compat).
+   * - Failed / Completed / Partial: only if current is Running.
+   * - Running: only if current is Pending or InQueue.
+   * - Stopped: only if current is Running.
    */
   async updateRetrievalStatus(
     retrievalId: string,
@@ -306,8 +360,47 @@ export class RetrievalService {
 
       const updateData: any = {
         job_status: status,
+        updatedAt: new Date(),
         ...additionalUpdates,
       };
+
+      const terminalStatuses = ["Failed", "Completed", "Partial"];
+
+      if (terminalStatuses.includes(status)) {
+        const updated = await Retrieval.findOneAndUpdate(
+          { _id: objectId, job_status: "Running" },
+          updateData,
+          { new: true }
+        );
+        if (!updated) {
+          return (await Retrieval.findById(objectId)) ?? null;
+        }
+        return updated;
+      }
+
+      if (status === "Running") {
+        const updated = await Retrieval.findOneAndUpdate(
+          { _id: objectId, job_status: { $in: ["Pending", "InQueue"] } },
+          updateData,
+          { new: true }
+        );
+        if (!updated) {
+          return (await Retrieval.findById(objectId)) ?? null;
+        }
+        return updated;
+      }
+
+      if (status === "Stopped") {
+        const updated = await Retrieval.findOneAndUpdate(
+          { _id: objectId, job_status: "Running" },
+          updateData,
+          { new: true }
+        );
+        if (!updated) {
+          return (await Retrieval.findById(objectId)) ?? null;
+        }
+        return updated;
+      }
 
       return await Retrieval.findByIdAndUpdate(objectId, updateData, {
         new: true,

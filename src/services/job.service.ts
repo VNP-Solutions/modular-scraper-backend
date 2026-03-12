@@ -244,27 +244,97 @@ export class JobService {
   }
 
   /**
-   * Update job status
+   * Update job status with overwrite protection:
+   * - Failed / Completed / Partial: only update if current status is Running (avoid overwriting later/earlier outcome).
+   * - Running: only update if current status is Pending (avoid overwriting Stopped/Completed/Failed).
+   * - Stopped: only update if current status is Running (user stop).
+   * - Pending: allowed (e.g. for rerun/reset).
+   * When setting Failed or Partial, pass failedReason so the UI shows an accurate user-facing reason.
    */
   async updateJobStatus(
     jobId: string,
-    status: JobStatus
+    status: JobStatus,
+    options?: { failedReason?: string | null }
   ): Promise<IJob | null> {
     try {
       const objectId = this.validateObjectId(jobId, "jobId");
 
-      const updateData: any = {
-        job_status: status,
-        updatedAt: new Date(),
-      };
+      const terminalStatuses = [
+        JobStatus.Failed,
+        JobStatus.Completed,
+        JobStatus.Partial,
+      ];
 
-      // If changing to Running status, assign current worker and clear previous screenshot trail
-      if (status === JobStatus.Running) {
-        updateData.worker_assigned = process.env.WORKER_ID || "scraper-worker";
-        updateData.screenshot_urls = [];
+      // Terminal/outcome statuses: only transition from Running
+      if (terminalStatuses.includes(status)) {
+        const updatePayload: any = {
+          job_status: status,
+          updatedAt: new Date(),
+        };
+        if (
+          (status === JobStatus.Failed || status === JobStatus.Partial) &&
+          options?.failedReason != null &&
+          String(options.failedReason).trim() !== ""
+        ) {
+          updatePayload.failed_reason = String(options.failedReason).slice(
+            0,
+            1000
+          );
+        }
+        if (status === JobStatus.Completed) {
+          updatePayload.failed_reason = null;
+        }
+        const updated = await Job.findOneAndUpdate(
+          { _id: objectId, job_status: JobStatus.Running },
+          updatePayload,
+          { new: true }
+        );
+        if (!updated) {
+          const current = await Job.findById(objectId);
+          return current ?? null;
+        }
+        return updated;
       }
 
-      return await Job.findByIdAndUpdate(objectId, updateData, { new: true });
+      // Running: only transition from Pending (clear failed_reason and screenshot_urls so rerun starts fresh)
+      if (status === JobStatus.Running) {
+        const updateData: any = {
+          job_status: status,
+          updatedAt: new Date(),
+          worker_assigned: process.env.WORKER_ID || "scraper-worker",
+          screenshot_urls: [],
+          failed_reason: null,
+        };
+        const updated = await Job.findOneAndUpdate(
+          { _id: objectId, job_status: JobStatus.Pending },
+          updateData,
+          { new: true }
+        );
+        if (!updated) {
+          return (await Job.findById(objectId)) ?? null;
+        }
+        return updated;
+      }
+
+      // Stopped: only transition from Running
+      if (status === JobStatus.Stopped) {
+        const updated = await Job.findOneAndUpdate(
+          { _id: objectId, job_status: JobStatus.Running },
+          { job_status: status, updatedAt: new Date() },
+          { new: true }
+        );
+        if (!updated) {
+          return (await Job.findById(objectId)) ?? null;
+        }
+        return updated;
+      }
+
+      // Pending: allow (e.g. rerun/reset)
+      return await Job.findByIdAndUpdate(
+        objectId,
+        { job_status: status, updatedAt: new Date() },
+        { new: true }
+      );
     } catch (error) {
       console.error(`Error updating job status: ${error}`);
       return null;
@@ -286,17 +356,27 @@ export class JobService {
   }
 
   /**
-   * Partial complete job - Update status to Partial
+   * Partial complete job - Update status to Partial (with optional failed_reason for UI)
    */
-  async partialCompleteJob(jobId: string): Promise<IJob | null> {
-    return await this.updateJobStatus(jobId, JobStatus.Partial);
+  async partialCompleteJob(
+    jobId: string,
+    failedReason?: string | null
+  ): Promise<IJob | null> {
+    return await this.updateJobStatus(jobId, JobStatus.Partial, {
+      failedReason,
+    });
   }
 
   /**
-   * Fail job - Update status to Failed
+   * Fail job - Update status to Failed (with optional failed_reason for UI)
    */
-  async failJob(jobId: string): Promise<IJob | null> {
-    return await this.updateJobStatus(jobId, JobStatus.Failed);
+  async failJob(
+    jobId: string,
+    failedReason?: string | null
+  ): Promise<IJob | null> {
+    return await this.updateJobStatus(jobId, JobStatus.Failed, {
+      failedReason,
+    });
   }
 
   /**

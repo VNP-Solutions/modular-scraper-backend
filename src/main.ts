@@ -2,6 +2,7 @@ import dotenv from "dotenv";
 import { browserSetupLocal } from "./browser-setup/browser-local.js";
 import { browserSetupProduction } from "./browser-setup/browser-prod.js";
 import { delay } from "./common/delay.js";
+import { getFailedReasonForUser } from "./common/failed-reason.js";
 import { emailNotifier } from "./common/email-notifier.js";
 import { decryptPassword } from "./common/encription.js";
 import {
@@ -108,21 +109,24 @@ async function main(
         await progressManager.handleJobError(jobId, error);
       }
 
-      // Check job items count and set appropriate job status
+      // Check job items count and set appropriate job status (with accurate failed_reason from error)
       if (jobId) {
         try {
           const jobItemsCount = await jobService.getJobItemsCount(jobId);
+          const failedReason = getFailedReasonForUser(error, "Scraping failed");
 
           if (jobItemsCount > 0) {
-            // If job items found, set status to Partial
-            await jobService.updateJobStatus(jobId, JobStatus.Partial);
+            await jobService.updateJobStatus(jobId, JobStatus.Partial, {
+              failedReason,
+            });
             await dualLogInfo(
               `Job status set to Partial - found ${jobItemsCount} job items`,
               { jobId, jobItemsCount }
             );
           } else {
-            // If no job items found, set status to Failed
-            await jobService.updateJobStatus(jobId, JobStatus.Failed);
+            await jobService.updateJobStatus(jobId, JobStatus.Failed, {
+              failedReason,
+            });
             await dualLogInfo("Job status set to Failed - no job items found", {
               jobId,
               jobItemsCount: 0,
@@ -134,9 +138,10 @@ async function main(
             statusError,
             { jobId }
           );
-          // Fallback to Failed status if there's an error checking job items
           try {
-            await jobService.updateJobStatus(jobId, JobStatus.Failed);
+            await jobService.updateJobStatus(jobId, JobStatus.Failed, {
+              failedReason: getFailedReasonForUser(error, "Scraping failed"),
+            });
           } catch (fallbackError) {
             await dualLogError(
               "Error setting fallback Failed status:",
@@ -187,21 +192,27 @@ async function main(
       await progressManager.handleJobError(jobId, error);
     }
 
-    // Check job items count and set appropriate job status
+    // Check job items count and set appropriate job status (with accurate failed_reason from error)
     if (jobId) {
       try {
         const jobItemsCount = await jobService.getJobItemsCount(jobId);
+        const failedReason = getFailedReasonForUser(
+          error,
+          "Scraping failed"
+        );
 
         if (jobItemsCount > 0) {
-          // If job items found, set status to Partial
-          await jobService.updateJobStatus(jobId, JobStatus.Partial);
+          await jobService.updateJobStatus(jobId, JobStatus.Partial, {
+            failedReason,
+          });
           await dualLogInfo(
             `Job status set to Partial - found ${jobItemsCount} job items`,
             { jobId, jobItemsCount }
           );
         } else {
-          // If no job items found, set status to Failed
-          await jobService.updateJobStatus(jobId, JobStatus.Failed);
+          await jobService.updateJobStatus(jobId, JobStatus.Failed, {
+            failedReason,
+          });
           await dualLogInfo("Job status set to Failed - no job items found", {
             jobId,
             jobItemsCount: 0,
@@ -213,9 +224,10 @@ async function main(
           statusError,
           { jobId }
         );
-        // Fallback to Failed status if there's an error checking job items
         try {
-          await jobService.updateJobStatus(jobId, JobStatus.Failed);
+          await jobService.updateJobStatus(jobId, JobStatus.Failed, {
+            failedReason: getFailedReasonForUser(error, "Scraping failed"),
+          });
         } catch (fallbackError) {
           await dualLogError(
             "Error setting fallback Failed status:",
@@ -543,21 +555,24 @@ async function runScrapingWithRestart(
           await progressManager.handleJobError(jobId, error);
         }
 
-        // Check job items count and set appropriate job status
+        // Check job items count and set appropriate job status (with accurate failed_reason from error)
         if (jobId) {
           try {
             const jobItemsCount = await jobService.getJobItemsCount(jobId);
+            const failedReason = getFailedReasonForUser(error, "Scraping failed");
 
             if (jobItemsCount > 0) {
-              // If job items found, set status to Partial
-              await jobService.updateJobStatus(jobId, JobStatus.Partial);
+              await jobService.updateJobStatus(jobId, JobStatus.Partial, {
+                failedReason,
+              });
               await dualLogInfo(
                 `Job status set to Partial - found ${jobItemsCount} job items`,
                 { jobId, jobItemsCount }
               );
             } else {
-              // If no job items found, set status to Failed
-              await jobService.updateJobStatus(jobId, JobStatus.Failed);
+              await jobService.updateJobStatus(jobId, JobStatus.Failed, {
+                failedReason,
+              });
               await dualLogInfo(
                 "Job status set to Failed - no job items found",
                 {
@@ -572,9 +587,10 @@ async function runScrapingWithRestart(
               statusError,
               { jobId }
             );
-            // Fallback to Failed status if there's an error checking job items
             try {
-              await jobService.updateJobStatus(jobId, JobStatus.Failed);
+              await jobService.updateJobStatus(jobId, JobStatus.Failed, {
+                failedReason: getFailedReasonForUser(error, "Scraping failed"),
+              });
             } catch (fallbackError) {
               await dualLogError(
                 "Error setting fallback Failed status:",
@@ -594,6 +610,11 @@ async function runScrapingWithRestart(
     const maxAttemptsError = new Error(
       `Maximum restart attempts (${maxAttempts}) exceeded`
     );
+    const { setFailedReasonCode, FAILED_REASON } = await import(
+      "./common/failed-reason.js"
+    );
+    setFailedReasonCode(maxAttemptsError, FAILED_REASON.MAX_RESTART_ATTEMPTS);
+
     // Clean up progress file when max attempts exceeded
     if (jobId) {
       await progressManager.handleJobError(jobId, maxAttemptsError);
@@ -603,17 +624,23 @@ async function runScrapingWithRestart(
     if (jobId) {
       try {
         const jobItemsCount = await jobService.getJobItemsCount(jobId);
+        const failedReason = getFailedReasonForUser(
+          maxAttemptsError,
+          "Maximum restart attempts exceeded"
+        );
 
         if (jobItemsCount > 0) {
-          // If job items found, set status to Partial
-          await jobService.updateJobStatus(jobId, JobStatus.Partial);
+          await jobService.updateJobStatus(jobId, JobStatus.Partial, {
+            failedReason,
+          });
           await dualLogInfo(
             `Job status set to Partial - found ${jobItemsCount} job items (max attempts exceeded)`,
             { jobId, jobItemsCount, maxAttempts }
           );
         } else {
-          // If no job items found, set status to Failed
-          await jobService.updateJobStatus(jobId, JobStatus.Failed);
+          await jobService.updateJobStatus(jobId, JobStatus.Failed, {
+            failedReason,
+          });
           await dualLogInfo(
             "Job status set to Failed - no job items found (max attempts exceeded)",
             {
@@ -629,9 +656,13 @@ async function runScrapingWithRestart(
           statusError,
           { jobId }
         );
-        // Fallback to Failed status if there's an error checking job items
         try {
-          await jobService.updateJobStatus(jobId, JobStatus.Failed);
+          await jobService.updateJobStatus(jobId, JobStatus.Failed, {
+            failedReason: getFailedReasonForUser(
+              maxAttemptsError,
+              "Maximum restart attempts exceeded"
+            ),
+          });
         } catch (fallbackError) {
           await dualLogError(
             "Error setting fallback Failed status:",

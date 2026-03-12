@@ -5,7 +5,9 @@ import { otpCompletionNotifier } from "../common/otp-completion-notifier.js";
 import { WorkerJobData, WorkerMessage } from "../common/worker-types.js";
 
 import {
+  FAILED_REASON,
   getFailedReasonForUser,
+  getFailedReasonMessageForCode,
   isStatusAlreadySaved,
   markStatusSaved,
 } from "../common/failed-reason.js";
@@ -449,14 +451,20 @@ class ScrapingWorker {
 
       // 10. Determine final status based on completion
       let finalStatus = "Completed";
+      let failedReason: string | undefined;
       if (progress.totalItems === 0) {
         finalStatus = "Failed";
+        failedReason = getFailedReasonMessageForCode(
+          FAILED_REASON.NO_RESERVATIONS_FOUND
+        );
       } else if (progress.completionPercentage < 100) {
         finalStatus = "Partial";
       }
 
-      // 11. Update final job status
-      await jobService.updateJobStatus(jobId, finalStatus as any);
+      // 11. Update final job status (with accurate failed_reason when Failed)
+      await jobService.updateJobStatus(jobId, finalStatus as any, {
+        failedReason,
+      });
 
       // 12. Stop scraping state manager
       scrapingStateManager.stopScraping();
@@ -892,14 +900,20 @@ class ScrapingWorker {
 
       // 8. Determine final status based on completion
       let finalStatus = "Completed";
+      let failedReason: string | undefined;
       if (progress.totalItems === 0) {
         finalStatus = "Failed";
+        failedReason = getFailedReasonMessageForCode(
+          FAILED_REASON.NO_RESERVATIONS_FOUND
+        );
       } else if (progress.completionPercentage < 100) {
         finalStatus = "Partial";
       }
 
-      // 9. Update final job status
-      await jobService.updateJobStatus(jobId, finalStatus as any);
+      // 9. Update final job status (with accurate failed_reason when Failed)
+      await jobService.updateJobStatus(jobId, finalStatus as any, {
+        failedReason,
+      });
 
       // 10. Stop scraping state manager
       scrapingStateManager.stopScraping();

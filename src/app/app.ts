@@ -2,6 +2,7 @@ import bodyParser from "body-parser";
 import cors from "cors";
 import express from "express";
 import createError from "../common/error.js";
+import { getFailedReasonForUser } from "../common/failed-reason.js";
 import { otpAwareWorkerPool } from "../common/otp-aware-worker-pool.js";
 import { progressManager } from "../common/progress-manager.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
@@ -1263,7 +1264,16 @@ app.post("/api/expedia/property-run-job", (async (
     } catch (workerError) {
       console.error(`Worker error for job ${jobId}:`, workerError);
 
-      // Ensure job is marked as failed
+      // Ensure job is marked as failed with accurate failed_reason (only updates if status is Running)
+      try {
+        const failedReason = getFailedReasonForUser(
+          workerError,
+          "Scraping failed"
+        );
+        await jobService.failJob(jobId, failedReason);
+      } catch (statusError) {
+        console.error("Error marking job as failed:", statusError);
+      }
       try {
         await progressManager.handleJobError(jobId, workerError);
       } catch (cleanupError) {

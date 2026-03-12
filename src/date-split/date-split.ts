@@ -1,6 +1,7 @@
 import dotenv from "dotenv";
 import { Browser, Page } from "puppeteer";
 import { applyFilter } from "../apply-filter/apply-filter.js";
+import { FAILED_REASON, setFailedReasonCode } from "../common/failed-reason.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
 import { progressManager } from "../common/progress-manager.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
@@ -27,7 +28,9 @@ export async function splitDateRange(
     // Check if scraping is paused before starting
     await scrapingStateManager.waitWhilePaused();
     if (!scrapingStateManager.isRunning()) {
-      throw new Error("Scraping was stopped during date splitting");
+      const err = new Error("Scraping was stopped during date splitting");
+      setFailedReasonCode(err, FAILED_REASON.SCRAPING_STOPPED);
+      throw err;
     }
 
     // Get timeout configuration for this job
