@@ -147,7 +147,6 @@ export class EmailNotifier {
       if (!job) {
         await dualLogWarn(`Job not found for email notification: ${jobId}`, {
           jobId,
-          note: "Watcher emails will be empty; only captchaRecipients and EMAIL_USER will receive.",
         });
       }
 
@@ -155,7 +154,7 @@ export class EmailNotifier {
         ? [process.env.EMAIL_USER]
         : [];
 
-      const watcherEmails = job?.watcher_emails ?? [];
+      const watcherEmails = job?.watcher_emails || [];
 
       const captchaEmails = captchaRecipients || [];
 
@@ -262,34 +261,17 @@ export class EmailNotifier {
   }
 
   /**
-   * Normalize string before email validation (trim, remove BOM/nbsp and other invisible chars).
-   */
-  private normalizeEmailString(s: string): string {
-    if (s == null || typeof s !== "string") return "";
-    return s
-      .replace(/\uFEFF/g, "") // BOM
-      .replace(/\u00A0/g, " ") // non-breaking space -> space
-      .trim();
-  }
-
-  /**
-   * Validate email addresses. Uses normalized string so invisible chars from DB don't drop valid addresses.
+   * Validate email addresses
    */
   private validateEmails(emails: string[]): string[] {
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    return emails
-      .map((raw) => {
-        const normalized = this.normalizeEmailString(raw);
-        const isValid = !!normalized && emailRegex.test(normalized);
-        if (!isValid && (raw || "").trim()) {
-          dualLogWarn(`Invalid email address, skipped`, {
-            raw: raw,
-            normalized: normalized,
-          });
-        }
-        return isValid ? normalized : null;
-      })
-      .filter((e): e is string => e != null);
+    return emails.filter((email) => {
+      const isValid = emailRegex.test(email.trim());
+      if (!isValid) {
+        dualLogWarn(`Invalid email address: ${email}`, { email });
+      }
+      return isValid;
+    });
   }
 
   /**
