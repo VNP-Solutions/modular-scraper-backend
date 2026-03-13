@@ -4113,8 +4113,14 @@ export class BookingScraper extends BaseScraper {
           timestamp: new Date(),
         });
       } else {
+        const jobIdForEmail = this.jobId || "Unknown job";
+        if (!this.jobId) {
+          await this.logInfo(
+            "Captcha email: jobId not set on scraper — watcher_emails will not be included; only CAPTCHA_RECIPIENTS/EMAIL_USER will receive."
+          );
+        }
         await emailNotifier.notifyJobError(
-          this.jobId || "Unknown job",
+          jobIdForEmail,
           errorMessage,
           errorDetails,
           undefined,
