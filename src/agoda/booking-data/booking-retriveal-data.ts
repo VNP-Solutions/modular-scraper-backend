@@ -84,7 +84,7 @@ export async function getAgodaRetrivealData(
   jobId?: string,
   reservations?: Reservation[],
   agodaUsername?: string,
-  retrievalId?: string
+  retrievalId?: string,
 ): Promise<any[]> {
   const entityId = retrievalId ?? jobId ?? "";
   const entityType: "job" | "retrieval" = retrievalId ? "retrieval" : "job";
@@ -98,7 +98,7 @@ export async function getAgodaRetrivealData(
       await dualLogError(
         "Scraping was stopped during booking data retrieval",
         undefined,
-        { jobId }
+        { jobId },
       );
       throw new Error("Scraping was stopped during booking data retrieval");
     }
@@ -114,7 +114,7 @@ export async function getAgodaRetrivealData(
         undefined,
         10,
         "agoda_booking_data_retrieval",
-        undefined
+        undefined,
       );
     }
 
@@ -127,7 +127,7 @@ export async function getAgodaRetrivealData(
 
     console.log(
       "\x1b[34m%s\x1b[0m",
-      `Start Date: ${formattedStartDate}, End Date: ${formattedEndDate}`
+      `Start Date: ${formattedStartDate}, End Date: ${formattedEndDate}`,
     );
 
     // Construct the booking URL with agoda_id and date range using converted dates
@@ -150,16 +150,17 @@ export async function getAgodaRetrivealData(
 
       await dualLogInfo(
         `Navigation attempt ${navigationAttempts}/${maxNavigationAttempts} to booking data URL: ${bookingUrl}`,
-        { jobId }
+        { jobId },
       );
 
       try {
         // Progressive timeout increase: 60s, 90s, 120s
-        const navigationTimeout = loadingTimeout * (1 + navigationAttempts * 0.5);
-        
+        const navigationTimeout =
+          loadingTimeout * (1 + navigationAttempts * 0.5);
+
         await dualLogInfo(
           `Using navigation timeout: ${navigationTimeout}ms (attempt ${navigationAttempts})`,
-          { jobId }
+          { jobId },
         );
 
         // Try with networkidle2 first (ideal but might timeout on slow tables)
@@ -168,23 +169,27 @@ export async function getAgodaRetrivealData(
             waitUntil: "networkidle2",
             timeout: navigationTimeout,
           });
-          
-          await dualLogInfo("Navigation completed with networkidle2", { jobId });
+
+          await dualLogInfo("Navigation completed with networkidle2", {
+            jobId,
+          });
         } catch (networkIdleError: any) {
           // If networkidle2 times out, try with just domcontentloaded (more lenient)
           if (networkIdleError.message?.includes("Navigation timeout")) {
             await dualLogInfo(
               "networkidle2 timeout, retrying with domcontentloaded...",
-              { jobId }
+              { jobId },
             );
-            
+
             await newPage.goto(bookingUrl, {
               waitUntil: "domcontentloaded",
               timeout: navigationTimeout,
             });
-            
-            await dualLogInfo("Navigation completed with domcontentloaded", { jobId });
-            
+
+            await dualLogInfo("Navigation completed with domcontentloaded", {
+              jobId,
+            });
+
             // Give extra time for React/table to load after DOM is ready
             await delay(10000);
           } else {
@@ -202,20 +207,20 @@ export async function getAgodaRetrivealData(
         await dualLogError(
           `Navigation error on attempt ${navigationAttempts}/${maxNavigationAttempts}:`,
           navigationError,
-          { jobId }
+          { jobId },
         );
 
         if (navigationAttempts < maxNavigationAttempts) {
           await dualLogInfo(
             `Will retry navigation in 5 seconds... (attempt ${navigationAttempts}/${maxNavigationAttempts})`,
-            { jobId }
+            { jobId },
           );
           await delay(5000);
           continue; // Skip to next iteration
         } else {
           // Last attempt failed
           throw new Error(
-            `Failed to navigate to booking page after ${maxNavigationAttempts} attempts. Last error: ${navigationError.message}`
+            `Failed to navigate to booking page after ${maxNavigationAttempts} attempts. Last error: ${navigationError.message}`,
           );
         }
       }
@@ -241,16 +246,16 @@ export async function getAgodaRetrivealData(
               reservationsElement = await newPage.evaluate(
                 (h2Selector, searchText) => {
                   const headings = Array.from(
-                    document.querySelectorAll(h2Selector)
+                    document.querySelectorAll(h2Selector),
                   );
                   return (
                     headings.find(
-                      (h) => h.textContent?.trim() === searchText
+                      (h) => h.textContent?.trim() === searchText,
                     ) || null
                   );
                 },
                 PAGE_LOADING.H2_HEADING,
-                RESERVATIONS_PAGE.TEXT
+                RESERVATIONS_PAGE.TEXT,
               );
             } else {
               // Use regular selector
@@ -260,7 +265,7 @@ export async function getAgodaRetrivealData(
             if (reservationsElement) {
               await dualLogInfo(
                 `Found Reservations element with selector: ${selector}`,
-                { jobId }
+                { jobId },
               );
               break;
             }
@@ -275,7 +280,7 @@ export async function getAgodaRetrivealData(
           const pageText = await newPage.evaluate(
             (searchText) =>
               document.body.textContent?.includes(searchText) || false,
-            RESERVATIONS_PAGE.TEXT
+            RESERVATIONS_PAGE.TEXT,
           );
           if (pageText) {
             await dualLogInfo("Found 'Reservations' text in page content", {
@@ -289,17 +294,17 @@ export async function getAgodaRetrivealData(
           reservationsFound = true;
           console.log(
             "\x1b[32m%s\x1b[0m",
-            "✅ Reservations text found - page loaded successfully!"
+            "✅ Reservations text found - page loaded successfully!",
           );
           await dualLogInfo(
             "✅ Reservations text found - page loaded successfully!",
-            { jobId }
+            { jobId },
           );
           break;
         } else {
           await dualLogInfo(
             `❌ Reservations text not found on attempt ${navigationAttempts}`,
-            { jobId }
+            { jobId },
           );
 
           if (navigationAttempts < maxNavigationAttempts) {
@@ -311,7 +316,7 @@ export async function getAgodaRetrivealData(
         await dualLogError(
           `Error checking for Reservations text on attempt ${navigationAttempts}:`,
           checkError.message,
-          { jobId }
+          { jobId },
         );
 
         if (navigationAttempts < maxNavigationAttempts) {
@@ -332,126 +337,165 @@ export async function getAgodaRetrivealData(
 
     await dualLogInfo(
       "Successfully navigated to booking data page and confirmed Reservations section",
-      { jobId }
+      { jobId },
     );
 
     // CRITICAL: Verify search input field exists (confirms we're on the actual booking page, not error page)
     await dualLogInfo("Verifying search input field exists...", { jobId });
-    
+
     try {
-      const searchInputSelector = 'input[data-element-name="ycs-booking-search-bid-guestname"], input[data-testid="search-box"]';
-      
+      const searchInputSelector =
+        'input[data-element-name="ycs-booking-search-bid-guestname"], input[data-testid="search-box"]';
+
       // Increased timeout for slow-loading tables (30 seconds)
       await newPage.waitForSelector(searchInputSelector, {
         visible: true,
         timeout: 30000,
       });
-      
-      await dualLogInfo("✅ Search input field found - booking page loaded correctly", { jobId });
-      
+
+      await dualLogInfo(
+        "✅ Search input field found - booking page loaded correctly",
+        { jobId },
+      );
+
       // ✨ BROWSER-NATIVE: Wait for page to be fully loaded using browser signals
-      await dualLogInfo("Waiting for page to be fully loaded (using browser signals)...", { jobId });
-      
+      await dualLogInfo(
+        "Waiting for page to be fully loaded (using browser signals)...",
+        { jobId },
+      );
+
       try {
         // Wait for document.readyState to be 'complete' and all resources loaded
-        const pageFullyLoaded = await newPage.waitForFunction(
-          () => {
-            // 1. Check document.readyState is 'complete' (all resources including images, stylesheets loaded)
-            if (document.readyState !== 'complete') {
-              return false;
-            }
-            
-            // 2. Check if there are any pending fetch/XHR requests using Performance API
-            const performanceEntries = performance.getEntriesByType('resource');
-            const recentRequests = performanceEntries.filter((entry: any) => {
-              // Check for requests that completed very recently (within last 500ms)
-              const timeSinceResponse = performance.now() - (entry.responseEnd || 0);
-              return timeSinceResponse < 500;
-            });
-            
-            // If there are recent requests, page is still loading data
-            if (recentRequests.length > 0) {
-              return false;
-            }
-            
-            // 3. Check for active network requests using window.performance
-            // @ts-ignore - performance.timing is deprecated but still works
-            const navigationTiming = performance.timing;
-            const loadComplete = navigationTiming.loadEventEnd > 0;
-            
-            if (!loadComplete) {
-              return false;
-            }
-            
-            // 4. Additional check: No fetch/XHR in progress
-            // React apps often show this in window.__REACT_DEVTOOLS_GLOBAL_HOOK__ or similar
-            // But we'll use a simpler heuristic: check if images are still loading
-            const images = Array.from(document.images);
-            const allImagesLoaded = images.every((img: HTMLImageElement) => img.complete);
-            
-            if (!allImagesLoaded) {
-              return false;
-            }
-            
-            // All checks passed - page is fully loaded
-            return true;
-          },
-          { timeout: 30000, polling: 500 }  // Check every 500ms, max 30 seconds
-        ).then(() => ({ loaded: true, method: 'browser-signals' }))
-        .catch(() => ({ loaded: false, method: 'timeout' }));
-        
+        const pageFullyLoaded = await newPage
+          .waitForFunction(
+            () => {
+              // 1. Check document.readyState is 'complete' (all resources including images, stylesheets loaded)
+              if (document.readyState !== "complete") {
+                return false;
+              }
+
+              // 2. Check if there are any pending fetch/XHR requests using Performance API
+              const performanceEntries =
+                performance.getEntriesByType("resource");
+              const recentRequests = performanceEntries.filter((entry: any) => {
+                // Check for requests that completed very recently (within last 500ms)
+                const timeSinceResponse =
+                  performance.now() - (entry.responseEnd || 0);
+                return timeSinceResponse < 500;
+              });
+
+              // If there are recent requests, page is still loading data
+              if (recentRequests.length > 0) {
+                return false;
+              }
+
+              // 3. Check for active network requests using window.performance
+              // @ts-ignore - performance.timing is deprecated but still works
+              const navigationTiming = performance.timing;
+              const loadComplete = navigationTiming.loadEventEnd > 0;
+
+              if (!loadComplete) {
+                return false;
+              }
+
+              // 4. Additional check: No fetch/XHR in progress
+              // React apps often show this in window.__REACT_DEVTOOLS_GLOBAL_HOOK__ or similar
+              // But we'll use a simpler heuristic: check if images are still loading
+              const images = Array.from(document.images);
+              const allImagesLoaded = images.every(
+                (img: HTMLImageElement) => img.complete,
+              );
+
+              if (!allImagesLoaded) {
+                return false;
+              }
+
+              // All checks passed - page is fully loaded
+              return true;
+            },
+            { timeout: 30000, polling: 500 }, // Check every 500ms, max 30 seconds
+          )
+          .then(() => ({ loaded: true, method: "browser-signals" }))
+          .catch(() => ({ loaded: false, method: "timeout" }));
+
         if (pageFullyLoaded.loaded) {
-          await dualLogInfo("✅ Page fully loaded (confirmed by browser signals)", { jobId });
+          await dualLogInfo(
+            "✅ Page fully loaded (confirmed by browser signals)",
+            { jobId },
+          );
         } else {
-          await dualLogInfo("⏱️ Browser signal timeout - page may still be loading, proceeding anyway", { jobId });
+          await dualLogInfo(
+            "⏱️ Browser signal timeout - page may still be loading, proceeding anyway",
+            { jobId },
+          );
         }
-        
+
         // Get detailed page state from browser
         const pageState = await newPage.evaluate(() => {
           return {
             readyState: document.readyState,
             loadEventFired: performance.timing.loadEventEnd > 0,
             domContentLoaded: performance.timing.domContentLoadedEventEnd > 0,
-            allImagesLoaded: Array.from(document.images).every((img: HTMLImageElement) => img.complete),
+            allImagesLoaded: Array.from(document.images).every(
+              (img: HTMLImageElement) => img.complete,
+            ),
             totalImages: document.images.length,
             totalStylesheets: document.styleSheets.length,
             totalScripts: document.scripts.length,
           };
         });
-        
+
         await dualLogInfo("Browser-native page state:", {
           jobId,
-          ...pageState
+          ...pageState,
         });
-        
       } catch (dynamicWaitError) {
         // Dynamic wait failed, but continue anyway
-        await dualLogInfo("Dynamic wait check failed, proceeding with processing", {
-          jobId,
-          error: dynamicWaitError
-        });
+        await dualLogInfo(
+          "Dynamic wait check failed, proceeding with processing",
+          {
+            jobId,
+            error: dynamicWaitError,
+          },
+        );
       }
-      
     } catch (searchInputError) {
       const errorMessage = `Page shows 'Reservations' text but search input field is missing. This usually means the property ID (${agodaId}) was not found or the page failed to load correctly.`;
-      
+
       await dualLogError(errorMessage, searchInputError, { jobId, agodaId });
-      
+
       // Take error screenshot
       if (jobId || retrievalId) {
         try {
-          await takeScreenshot(newPage, entityId, "booking_page_search_input_missing", "error", "agoda", entityType);
+          await takeScreenshot(
+            newPage,
+            entityId,
+            "booking_page_search_input_missing",
+            "error",
+            "agoda",
+            entityType,
+          );
         } catch (screenshotError) {
-          await dualLogError("Failed to take error screenshot", screenshotError);
+          await dualLogError(
+            "Failed to take error screenshot",
+            screenshotError,
+          );
         }
       }
-      
+
       throw new Error(errorMessage);
     }
 
     // Take screenshot after successful navigation to booking data page
     if (jobId || retrievalId) {
-      await takeScreenshot(newPage, entityId, "booking_page_loaded", "step", "agoda", entityType);
+      await takeScreenshot(
+        newPage,
+        entityId,
+        "booking_page_loaded",
+        "step",
+        "agoda",
+        entityType,
+      );
     }
 
     // Update progress
@@ -461,7 +505,7 @@ export async function getAgodaRetrivealData(
         undefined,
         30,
         "agoda_booking_data_retrieval",
-        undefined
+        undefined,
       );
     }
 
@@ -469,7 +513,7 @@ export async function getAgodaRetrivealData(
     if (reservations && reservations.length > 0) {
       await dualLogInfo(
         `Processing ${reservations.length} reservation group(s) with booking IDs`,
-        { jobId }
+        { jobId },
       );
 
       // Extract all booking IDs from reservations array
@@ -484,58 +528,78 @@ export async function getAgodaRetrivealData(
         `Found ${allBookingIds.length} booking IDs to search: ${allBookingIds
           .slice(0, 5)
           .join(", ")}${allBookingIds.length > 5 ? "..." : ""}`,
-        { jobId }
+        { jobId },
       );
 
-      // Process each booking ID: search, click row, navigate to payout tab
+      // Process each booking ID: search, click row, navigate to payout tab.
+      // After each successful payout verification we search from the start again, so no reservation is permanently missed.
       if (allBookingIds.length > 0) {
         await dualLogInfo("Processing booking IDs...", { jobId });
 
         // Wait for the booking list/table to be visible
         await delay(3000);
 
-        // Process each booking ID
-        for (const bookingId of allBookingIds) {
-          try {
-            await dualLogInfo(`Processing booking ID: ${bookingId}`, { jobId });
+        const processedBookingIds = new Set<string>();
 
-            // Use the dedicated function to search and navigate to payout tab
-            const success = await searchBookingAndNavigateToPayout(
-              newPage,
-              bookingId,
-              agodaUsername,
-              retrievalId
-            );
+        while (processedBookingIds.size < allBookingIds.length) {
+          let madeProgress = false;
 
-            if (success) {
-              await dualLogInfo(
-                `✅ Successfully processed booking ID: ${bookingId}`,
-                { jobId }
+          for (const bookingId of allBookingIds) {
+            if (processedBookingIds.has(bookingId)) continue;
+
+            try {
+              await dualLogInfo(`Processing booking ID: ${bookingId}`, {
+                jobId,
+              });
+
+              const success = await searchBookingAndNavigateToPayout(
+                newPage,
+                bookingId,
+                agodaUsername,
+                retrievalId,
               );
-              // Add delay between processing different bookings
-              await delay(2000);
-            } else {
+
+              if (success) {
+                processedBookingIds.add(bookingId);
+                madeProgress = true;
+                await dualLogInfo(
+                  `✅ Successfully processed booking ID: ${bookingId} (${processedBookingIds.size}/${allBookingIds.length} done). Searching from start for remaining.`,
+                  { jobId },
+                );
+                await delay(2000);
+                break; // restart from first reservation
+              } else {
+                await dualLogError(
+                  `❌ Failed to process booking ID: ${bookingId}, will retry from start after next success`,
+                  undefined,
+                  { jobId },
+                );
+              }
+            } catch (searchError: any) {
               await dualLogError(
-                `❌ Failed to process booking ID: ${bookingId}`,
-                undefined,
-                { jobId }
+                `Error processing booking ID ${bookingId}:`,
+                searchError.message,
+                { jobId },
               );
-              // Continue with next booking ID even if this one failed
             }
-          } catch (searchError: any) {
-            await dualLogError(
-              `Error processing booking ID ${bookingId}:`,
-              searchError.message,
-              { jobId }
+          }
+
+          // No reservation succeeded this pass (e.g. remaining ones have no payout info or keep failing).
+          // Exit so we don't loop forever; reservations that never succeeded are left unprocessed.
+          if (!madeProgress) {
+            const remaining = allBookingIds.length - processedBookingIds.size;
+            await dualLogInfo(
+              `Full pass completed with no new success (${remaining} booking(s) left unprocessed, e.g. no payout info). Stopping.`,
+              { jobId },
             );
-            // Continue with next booking ID
+            break;
           }
         }
       }
     } else {
       await dualLogInfo(
         "No reservations provided - will process all bookings in date range",
-        { jobId }
+        { jobId },
       );
     }
 
@@ -545,30 +609,36 @@ export async function getAgodaRetrivealData(
     const retrievalJobId = getRetrievalJobId();
     if (retrievalJobId && !isOtpReleasedForRetrieval()) {
       // Check if OTP is still owned by this job before attempting release
-      const isOwnedByThisJob = await otpStatusManager.isOtpOwnedByJob(
-        retrievalJobId
-      );
+      const isOwnedByThisJob =
+        await otpStatusManager.isOtpOwnedByJob(retrievalJobId);
 
       if (isOwnedByThisJob) {
         await dualLogInfo(
           "Retrieval job completed - verifying OTP ownership before release",
-          { jobId }
+          { jobId },
         );
         // Screenshot before releasing OTP — captures page state at release moment
-        await takeScreenshot(newPage ?? null, entityId, "before_otp_release_end_of_job", "step", "agoda", entityType);
+        await takeScreenshot(
+          newPage ?? null,
+          entityId,
+          "before_otp_release_end_of_job",
+          "step",
+          "agoda",
+          entityType,
+        );
         if (markOtpReleasedForRetrieval()) {
           // Directly release OTP in the database
           const released = await otpStatusManager.releaseOtp(retrievalJobId);
           if (released) {
             await dualLogInfo(
               "✅ OTP released at end of retrieval job (verified ownership)",
-              { jobId }
+              { jobId },
             );
           } else {
             await dualLogError(
               "⚠️ Failed to release OTP at end of retrieval job",
               new Error("OTP release returned false"),
-              { jobId }
+              { jobId },
             );
           }
 
@@ -578,13 +648,13 @@ export async function getAgodaRetrivealData(
       } else {
         await dualLogInfo(
           `Retrieval job completed - OTP not owned by this job (job_id mismatch). OTP may have been released by another job or never reserved.`,
-          { jobId }
+          { jobId },
         );
       }
     } else if (retrievalJobId && isOtpReleasedForRetrieval()) {
       await dualLogInfo(
         "Retrieval job completed - OTP already released after payout verification",
-        { jobId }
+        { jobId },
       );
     }
 
