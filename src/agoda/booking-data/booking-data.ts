@@ -12,6 +12,7 @@ import {
 } from "../../common/screenshot-helper.js";
 import { timeoutManager } from "../../common/timeout-manager.js";
 import { PaymentInfo } from "../../models/job-item.model.js";
+import { JobStatus } from "../../models/job.model.js";
 import { JobService } from "../../services/job.service.js";
 import {
   CsvRecord,
@@ -882,6 +883,20 @@ export async function getAgodaBookingData(
       });
     } else {
       console.log("⚠️ No records found in API response");
+      if (jobId) {
+        const failedReason =
+          "Agoda API returned 0 reservations (both list request methods tried)";
+        await jobService.updateJobStatusWithReason(
+          jobId,
+          JobStatus.Failed,
+          failedReason
+        );
+        await dualLogError("Job marked as Failed: 0 reservations from API", {
+          jobId,
+          failedReason,
+        });
+        throw new Error(failedReason);
+      }
     }
     console.log("=== END AGODA BOOKING DATA ===");
 
