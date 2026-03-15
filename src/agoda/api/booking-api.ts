@@ -20,15 +20,18 @@ export interface CsvRecord {
 }
 
 /**
- * Extract bookings array from API response. Tries multiple possible keys (browser uses "bookings").
+ * Extract bookings array from API response.
+ * Tries multiple possible keys: pagedBookingList.items (new shape), bookings (browser), etc.
  */
 function extractBookingsArray(data: any): any[] | null {
   if (!data || typeof data !== "object") return null;
   const candidates = [
+    data.pagedBookingList?.items, // New API shape: list inside pagedBookingList
     data.bookings,
     data.Bookings,
     data.data?.bookings,
     data.data?.Bookings,
+    data.data?.pagedBookingList?.items,
     data.data?.list,
     data.data?.items,
     data.results,
