@@ -20,6 +20,38 @@ export interface CsvRecord {
 }
 
 /**
+ * Extract bookings array from API response. Tries multiple possible keys (browser uses "bookings").
+ */
+function extractBookingsArray(data: any): any[] | null {
+  if (!data || typeof data !== "object") return null;
+  const candidates = [
+    data.bookings,
+    data.Bookings,
+    data.data?.bookings,
+    data.data?.Bookings,
+    data.data?.list,
+    data.data?.items,
+    data.results,
+    data.result,
+    data.list,
+    data.items,
+  ];
+  for (const arr of candidates) {
+    if (Array.isArray(arr)) return arr;
+  }
+  // Fallback: first top-level key that is an array
+  for (const key of Object.keys(data)) {
+    if (Array.isArray(data[key])) return data[key];
+  }
+  if (data.data && typeof data.data === "object") {
+    for (const key of Object.keys(data.data)) {
+      if (Array.isArray(data.data[key])) return data.data[key];
+    }
+  }
+  return null;
+}
+
+/**
  * Parses date from various formats to JavaScript Date object in UTC
  * Handles both YYYY-MM-DD and MM/DD/YYYY formats
  * Uses Date.UTC() to avoid timezone offset issues
@@ -339,50 +371,53 @@ export async function fetchBookingDataFromAPI(
     // Construct API URL
     const apiUrl = `https://ycs.agoda.com/mldc/en-us/api/reporting/Booking/list/${agodaId}`;
 
-    // Prepare request body
-    const requestBody = {
+    const headers = {
+      Accept: "application/json, text/plain, */*",
+      "Accept-Language": browserSettings.acceptLanguage,
+      Connection: "keep-alive",
+      "Content-Type": "application/json-patch+json",
+      Cookie: cookieString,
+      DNT: "1",
+      Origin: "https://ycs.agoda.com",
+      Referer: `https://ycs.agoda.com/mldc/en-us/app/reporting/booking/${agodaId}`,
+      "Request-Id": requestId,
+      "User-Agent": browserSettings.userAgent,
+      "sec-ch-ua": browserSettings.secChUa,
+      "sec-ch-ua-mobile": browserSettings.secChUaMobile,
+      "sec-ch-ua-platform": browserSettings.secChUaPlatform,
+      "Sec-Fetch-Dest": "empty",
+      "Sec-Fetch-Mode": "cors",
+      "Sec-Fetch-Site": "same-origin",
+      traceparent: traceParent,
+    };
+
+    const stayDatePeriod = {
+      from: `/Date(${startTimestamp})/`,
+      to: `/Date(${endTimestamp})/`,
+    };
+
+    // Try 1: with bookingDatePeriod & lastUpdateDatePeriod (some properties need this)
+    const bodyWithPeriods = {
       hotelId: parseInt(agodaId, 10),
       customerName: "",
       ackRequestTypes: ["All"],
       bookingDatePeriod: {},
-      stayDatePeriod: {
-        from: `/Date(${startTimestamp})/`,
-        to: `/Date(${endTimestamp})/`,
-      },
+      stayDatePeriod,
       lastUpdateDatePeriod: {},
       pageIndex: 1,
       pageSize: 1000,
     };
 
-    await dualLogInfo("Making API request", {
+    await dualLogInfo("Making API request (with bookingDatePeriod/lastUpdateDatePeriod)", {
       url: apiUrl,
-      body: requestBody,
+      body: bodyWithPeriods,
       jobId,
     });
 
-    // Make API request with browser-matched headers and tracing headers
-    const response = await fetch(apiUrl, {
+    let response = await fetch(apiUrl, {
       method: "POST",
-      headers: {
-        Accept: "application/json, text/plain, */*",
-        "Accept-Language": browserSettings.acceptLanguage,
-        Connection: "keep-alive",
-        "Content-Type": "application/json-patch+json",
-        Cookie: cookieString,
-        DNT: "1",
-        Origin: "https://ycs.agoda.com",
-        Referer: `https://ycs.agoda.com/mldc/en-us/app/reporting/booking/${agodaId}`,
-        "Request-Id": requestId,
-        "User-Agent": browserSettings.userAgent,
-        "sec-ch-ua": browserSettings.secChUa,
-        "sec-ch-ua-mobile": browserSettings.secChUaMobile,
-        "sec-ch-ua-platform": browserSettings.secChUaPlatform,
-        "Sec-Fetch-Dest": "empty",
-        "Sec-Fetch-Mode": "cors",
-        "Sec-Fetch-Site": "same-origin",
-        traceparent: traceParent,
-      },
-      body: JSON.stringify(requestBody),
+      headers,
+      body: JSON.stringify(bodyWithPeriods),
     });
 
     if (!response.ok) {
@@ -396,11 +431,65 @@ export async function fetchBookingDataFromAPI(
       );
     }
 
-    const responseData = await response.json();
+    let responseData = await response.json();
+    let list = extractBookingsArray(responseData);
+
+    if (!list || list.length === 0) {
+      // Try 2: browser-style body without period filters (some properties need this)
+      const bodyWithoutPeriods = {
+        hotelId: parseInt(agodaId, 10),
+        customerName: "",
+        ackRequestTypes: ["All"],
+        stayDatePeriod,
+        pageIndex: 1,
+        pageSize: 1000,
+      };
+      await dualLogInfo("No bookings from first request, retrying with browser-style body (no period filters)", {
+        url: apiUrl,
+        jobId,
+      });
+      response = await fetch(apiUrl, {
+        method: "POST",
+        headers: { ...headers, "Request-Id": generateRequestId(), traceparent: generateTraceParent() },
+        body: JSON.stringify(bodyWithoutPeriods),
+      });
+      if (!response.ok) {
+        const errorText = await response.text();
+        await dualLogError(
+          `API fallback request failed with status ${response.status}: ${errorText}`,
+          { jobId, status: response.status }
+        );
+        throw new Error(
+          `Agoda API failed with status ${response.status}: ${errorText}`
+        );
+      }
+      responseData = await response.json();
+      list = extractBookingsArray(responseData);
+    }
+
+    const dataLen = JSON.stringify(responseData).length;
     await dualLogInfo("API request successful", {
       jobId,
-      dataLength: JSON.stringify(responseData).length,
+      dataLength: dataLen,
+      bookingsArrayLength: list?.length ?? null,
     });
+
+    if (!list || list.length === 0) {
+      const keys = responseData ? Object.keys(responseData) : [];
+      const structure = keys.reduce((acc: Record<string, string>, k) => {
+        const v = responseData[k];
+        if (Array.isArray(v)) acc[k] = `array(${v.length})`;
+        else if (v && typeof v === "object") acc[k] = `object(${Object.keys(v).join(",")})`;
+        else acc[k] = typeof v;
+        return acc;
+      }, {});
+      await dualLogError("API returned data but no bookings array found; response shape:", {
+        jobId,
+        responseKeys: keys,
+        structure,
+        dataLength: dataLen,
+      });
+    }
 
     return responseData;
   } catch (error: any) {
@@ -601,7 +690,23 @@ export async function mapApiResponseToCsvRecords(
   endDate?: string, // DD-MM-YYYY format for Referer header
   jobId?: string
 ): Promise<CsvRecord[]> {
-  if (!apiData || !apiData.bookings || !Array.isArray(apiData.bookings)) {
+  const bookings = extractBookingsArray(apiData);
+  if (!apiData || !bookings || !Array.isArray(bookings)) {
+    const keys = apiData ? Object.keys(apiData) : [];
+    const structure = keys.length
+      ? keys.reduce((acc: Record<string, string>, k) => {
+          const v = apiData[k];
+          if (Array.isArray(v)) acc[k] = `array(${v.length})`;
+          else if (v && typeof v === "object") acc[k] = `object(${Object.keys(v).slice(0, 8).join(",")}${Object.keys(v).length > 8 ? "..." : ""})`;
+          else acc[k] = typeof v;
+          return acc;
+        }, {})
+      : {};
+    await dualLogError("Booking list response missing bookings array", {
+      jobId,
+      responseKeys: keys,
+      structure,
+    });
     return [];
   }
 
@@ -617,19 +722,25 @@ export async function mapApiResponseToCsvRecords(
   const failedBookings: Array<{ item: any; attempt: number }> = [];
   const maxRetryAttempts = 3; // Maximum retry attempts for failed bookings
 
+  // Normalize list item: browser returns camelCase (bookingId, checkinDate, guestName, ...); support snake_case as fallback
+  const get = (item: any, camel: string, snake: string) =>
+    item?.[camel] ?? item?.[snake];
+
   // Process each booking and fetch additional details
-  for (let i = 0; i < apiData.bookings.length; i++) {
-    const item = apiData.bookings[i];
-    const bookingToken = item.bookingToken;
+  for (let i = 0; i < bookings.length; i++) {
+    const item = bookings[i];
+    const bookingToken = get(item, "bookingToken", "booking_token");
 
     if (!bookingToken) {
+      const bid = get(item, "bookingId", "booking_id");
       await dualLogError(
-        `Skipping booking ${item.bookingId} - no bookingToken`,
-        { jobId, bookingId: item.bookingId }
+        `Skipping booking ${bid} - no bookingToken`,
+        { jobId, bookingId: bid }
       );
       continue;
     }
 
+    const listBookingId = get(item, "bookingId", "booking_id");
     let bookingSummary: any = null;
     let retryAttempt = 0;
     const maxAttempts = 3; // Retry up to 3 times per booking
@@ -667,10 +778,10 @@ export async function mapApiResponseToCsvRecords(
 
           if (!hasCriticalData) {
             await dualLogError(
-              `Booking summary returned empty/invalid data for booking ${item.bookingId}, will retry`,
+              `Booking summary returned empty/invalid data for booking ${listBookingId}, will retry`,
               {
                 jobId,
-                bookingId: item.bookingId,
+                bookingId: listBookingId,
                 attempt: retryAttempt + 1,
                 summaryKeys: Object.keys(bookingSummary || {}),
               }
@@ -682,11 +793,11 @@ export async function mapApiResponseToCsvRecords(
               const retryDelay = 2000 * Math.pow(2, retryAttempt - 1);
               await dualLogInfo(
                 `Retrying booking summary for ${
-                  item.bookingId
+                  listBookingId
                 } in ${retryDelay}ms (attempt ${
                   retryAttempt + 1
                 }/${maxAttempts})`,
-                { jobId, bookingId: item.bookingId }
+                { jobId, bookingId: listBookingId }
               );
               await delay(retryDelay);
             }
@@ -695,10 +806,10 @@ export async function mapApiResponseToCsvRecords(
 
           // Success - we have valid booking summary data
           await dualLogInfo(
-            `Successfully fetched booking summary for booking ${item.bookingId}`,
+            `Successfully fetched booking summary for booking ${listBookingId}`,
             {
               jobId,
-              bookingId: item.bookingId,
+              bookingId: listBookingId,
               attempt: retryAttempt + 1,
               hasCheckIn: !!bookingSummary.checkInDate,
               hasCheckOut: !!bookingSummary.checkOutDate,
@@ -710,9 +821,9 @@ export async function mapApiResponseToCsvRecords(
       } catch (error: any) {
         retryAttempt++;
         await dualLogError(
-          `Failed to fetch booking summary for booking ${item.bookingId} (attempt ${retryAttempt}/${maxAttempts})`,
+          `Failed to fetch booking summary for booking ${listBookingId} (attempt ${retryAttempt}/${maxAttempts})`,
           error.message,
-          { jobId, bookingId: item.bookingId, attempt: retryAttempt }
+          { jobId, bookingId: listBookingId, attempt: retryAttempt }
         );
 
         if (retryAttempt < maxAttempts) {
@@ -720,18 +831,18 @@ export async function mapApiResponseToCsvRecords(
           const retryDelay = 2000 * Math.pow(2, retryAttempt - 1);
           await dualLogInfo(
             `Retrying booking summary for ${
-              item.bookingId
+              listBookingId
             } in ${retryDelay}ms (attempt ${retryAttempt + 1}/${maxAttempts})`,
-            { jobId, bookingId: item.bookingId }
+            { jobId, bookingId: listBookingId }
           );
           await delay(retryDelay);
         } else {
           // All retries exhausted - will use fallback data
           await dualLogError(
-            `All retry attempts exhausted for booking ${item.bookingId}, will use fallback data from booking list`,
+            `All retry attempts exhausted for booking ${listBookingId}, will use fallback data from booking list`,
             {
               jobId,
-              bookingId: item.bookingId,
+              bookingId: listBookingId,
               totalAttempts: retryAttempt,
             }
           );
@@ -739,30 +850,33 @@ export async function mapApiResponseToCsvRecords(
       }
     }
 
-    // Create CSV record with priority: bookingSummary > bookingList item
-    // Even if summary failed, we still create a record with available data
+    // Create CSV record with priority: bookingSummary > bookingList item (browser shape: camelCase; snake_case fallback)
+    const listCheckin = get(item, "checkinDate", "check_in_date");
+    const listCheckout = get(item, "checkoutDate", "check_out_date");
+    const listGuestName = get(item, "guestName", "guest_name");
+    const listRoomType = get(item, "roomTypeName", "room_type_name");
     const csvRecord: CsvRecord = {
-      BookingIDExternal_reference_ID: item.bookingId
-        ? item.bookingId.toString()
+      BookingIDExternal_reference_ID: listBookingId
+        ? String(listBookingId)
         : "",
       Status: "Confirmed",
       StayDateFrom:
         formatDate(bookingSummary?.checkInDate || "") ||
-        formatDate(item.checkinDate || ""),
+        formatDate(listCheckin || ""),
       StayDateTo:
         formatDate(bookingSummary?.checkOutDate || "") ||
-        formatDate(item.checkoutDate || ""),
+        formatDate(listCheckout || ""),
       BookedDate: formatDate(bookingSummary?.bookingDate || ""),
-      Customer_Name: bookingSummary?.guestName || item.guestName || "",
-      RoomType: bookingSummary?.roomTypeName || item.roomTypeName || "",
+      Customer_Name: bookingSummary?.guestName || listGuestName || "",
+      RoomType: bookingSummary?.roomTypeName || listRoomType || "",
       CancellationPolicyDescription: "", // API doesn't provide cancellation policy
     };
 
     // Validate critical fields before adding
     if (!csvRecord.BookingIDExternal_reference_ID) {
       await dualLogError(
-        `Skipping record - missing BookingIDExternal_reference_ID for booking ${item.bookingId}`,
-        { jobId, bookingId: item.bookingId }
+        `Skipping record - missing BookingIDExternal_reference_ID for booking ${listBookingId}`,
+        { jobId, bookingId: listBookingId }
       );
       continue;
     }
@@ -770,10 +884,10 @@ export async function mapApiResponseToCsvRecords(
     // Warn if we had to use fallback data
     if (!bookingSummary) {
       await dualLogError(
-        `⚠️ Using fallback data from booking list for booking ${item.bookingId} (summary API failed after ${maxAttempts} attempts)`,
+        `⚠️ Using fallback data from booking list for booking ${listBookingId} (summary API failed after ${maxAttempts} attempts)`,
         {
           jobId,
-          bookingId: item.bookingId,
+          bookingId: listBookingId,
           hasCheckIn: !!csvRecord.StayDateFrom,
           hasCheckOut: !!csvRecord.StayDateTo,
           hasGuestName: !!csvRecord.Customer_Name,
@@ -788,7 +902,7 @@ export async function mapApiResponseToCsvRecords(
     // Log progress for large datasets
     if ((i + 1) % 10 === 0) {
       await dualLogInfo(
-        `Processed ${i + 1}/${apiData.bookings.length} bookings (${
+        `Processed ${i + 1}/${bookings.length} bookings (${
           csvRecords.length
         } successful, ${failedBookings.length} with fallback data)`,
         { jobId }
@@ -805,7 +919,8 @@ export async function mapApiResponseToCsvRecords(
 
     for (const failed of failedBookings) {
       const { item } = failed;
-      const bookingToken = item.bookingToken;
+      const bookingToken = get(item, "bookingToken", "booking_token");
+      const bid = get(item, "bookingId", "booking_id");
 
       if (!bookingToken) continue;
 
@@ -824,10 +939,10 @@ export async function mapApiResponseToCsvRecords(
 
         // If we got summary data, update the existing record
         if (bookingSummary) {
-          const existingRecord = csvRecords.find(
-            (r) =>
-              r.BookingIDExternal_reference_ID === item.bookingId.toString()
-          );
+          const existingRecord =
+            bid != null
+              ? csvRecords.find((r) => r.BookingIDExternal_reference_ID === String(bid))
+              : null;
 
           if (existingRecord) {
             // Update with summary data (prioritize summary over list data)
@@ -846,16 +961,16 @@ export async function mapApiResponseToCsvRecords(
               bookingSummary.roomTypeName || existingRecord.RoomType;
 
             await dualLogInfo(
-              `✅ Successfully updated booking ${item.bookingId} with summary data on retry`,
-              { jobId, bookingId: item.bookingId }
+              `✅ Successfully updated booking ${bid} with summary data on retry`,
+              { jobId, bookingId: bid }
             );
           }
         }
       } catch (error: any) {
         await dualLogError(
-          `Final retry failed for booking ${item.bookingId}`,
+          `Final retry failed for booking ${bid}`,
           error.message,
-          { jobId, bookingId: item.bookingId }
+          { jobId, bookingId: bid }
         );
       }
     }
