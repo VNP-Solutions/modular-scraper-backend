@@ -859,9 +859,10 @@ export async function automateNeedHelpProcess(
     ];
     const failedSteps = criticalSteps.filter((s) => !stepResults[s.key]);
     if (failedSteps.length > 0) {
-      const message = `Need Help process incomplete: missing steps - ${failedSteps.map((s) => s.label).join("; ")}. Step results: ${JSON.stringify(stepResults)}`;
-      await dualLogError(message, { jobId });
-      throw new Error(message);
+      // Short message for DB failed_reason (minimalistic)
+      const shortMessage = `Need Help incomplete: ${failedSteps.map((s) => s.label).join("; ")}`;
+      await dualLogError(shortMessage, { jobId, stepResults });
+      throw new Error(shortMessage);
     }
 
     if (jobId) {
