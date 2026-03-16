@@ -33,6 +33,11 @@ import {
   isStatusAlreadySaved,
   markStatusSaved,
 } from "../common/failed-reason.js";
+import {
+  pickRandomPhoneForJob,
+  clearJobPhone,
+  getJobPort,
+} from "../common/job-phone-store.js";
 import { notificationService } from "../services/notification.service.js";
 
 // Global function to release OTP from worker
@@ -156,6 +161,16 @@ class ScrapingWorker {
   private async executeJob(jobData: WorkerJobData): Promise<void> {
     this.currentJobId = jobData.jobId;
 
+    // Lock a random phone (and port if configured) for this job (used for OTP/verification)
+    const lockedPhone = pickRandomPhoneForJob(jobData.jobId);
+    const lastThree = lockedPhone.replace(/\D/g, "").slice(-3);
+    const port = getJobPort(jobData.jobId);
+    await dualLogInfo(
+      port
+        ? `Job ${jobData.jobId} locked contact ...${lastThree} port ${port}`
+        : `Job ${jobData.jobId} locked contact ending ...${lastThree}`
+    );
+
     this.sendMessage({
       type: WorkerMessageType.JobStart,
       jobId: jobData.jobId,
@@ -210,6 +225,7 @@ class ScrapingWorker {
         timestamp: new Date(),
       });
     } finally {
+      clearJobPhone(jobData.jobId);
       this.currentJobId = undefined;
     }
   }

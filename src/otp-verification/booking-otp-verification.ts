@@ -9,6 +9,7 @@ import {
 } from "../common/failed-reason.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
 import { notificationService } from "../services/notification.service.js";
+import { getOurContactForJob } from "../common/job-phone-store.js";
 import { getBookingVerificationCodes } from "./email-verification-utils.js";
 import {
   getTimeoutConfig,
@@ -139,7 +140,7 @@ async function handleBookingOtpVerification(
         });
 
       // Look for phone selection page and select the correct phone number
-      const phoneSelected = await selectCorrectPhoneNumber(page /* , jobId */);
+      const phoneSelected = await selectCorrectPhoneNumber(page, jobId);
       if (!phoneSelected) {
         const error = new Error("Failed to select correct phone number");
         setFailedReasonCode(error, FAILED_REASON.BOOKING_OTP_FAILED);
@@ -411,7 +412,7 @@ async function handleBookingOtpVerification(
     await delay(60000); // Wait 1 minute for email to arrive
 
     // Get last 5 verification codes
-    const codes = await getBookingVerificationCodes();
+    const codes = await getBookingVerificationCodes(jobId);
     if (!codes || codes.length === 0) {
       const error = new Error("Failed to get verification codes from email");
       setFailedReasonCode(error, FAILED_REASON.BOOKING_OTP_CODE_NOT_FOUND);
@@ -638,11 +639,12 @@ async function handleBookingOtpVerification(
 }
 
 async function selectCorrectPhoneNumber(
-  page: Page /* , jobId?: string */
+  page: Page,
+  jobId?: string
 ): Promise<boolean> {
   try {
-    const ourContact = process.env.OUR_CONTACT || "01828704004";
-    const ourLastThree = ourContact.slice(-3);
+    const ourContact = getOurContactForJob(jobId);
+    const ourLastThree = ourContact.replace(/\D/g, "").slice(-3);
 
     await dualLogInfo(`Looking for phone number ending with: ${ourLastThree}`);
 
@@ -650,14 +652,11 @@ async function selectCorrectPhoneNumber(
     await delay(3000);
 
     // Check if we're on the phone selection page and find the correct phone
+    // Options in DOM look like: +15*****0638, +16*****0408, +15*****6664 (last 3 digits identify the number)
     const phoneSelected = await page.evaluate((ourContact) => {
-      console.log("Starting phone selection process");
-
       try {
-        // Simple inline validation to avoid any function name conflicts
-        const targetLastThree = ourContact.slice(-3);
+        const targetLastThree = ourContact.replace(/\D/g, "").slice(-3);
 
-        // First, look for select dropdown with phone options
         const phoneSelect = document.querySelector(
           'select[name="selected_phone"]'
         ) as HTMLSelectElement;
@@ -745,17 +744,24 @@ async function selectCorrectPhoneNumber(
         `Selected phone number: ${phoneSelected.phoneNumber} using method: ${phoneSelected.method}`
       );
 
-      // Now click the "Send verification code" button
-      await delay(1000);
+      // "Send verification code" is disabled until a phone is selected; wait for it to become enabled
+      await page.waitForFunction(
+        () => {
+          const btn = document.querySelector("button.nw-request-tfa");
+          return btn && !(btn as HTMLButtonElement).disabled;
+        },
+        { timeout: 10000 }
+      ).catch(() => null);
+      await delay(500);
 
       const sendButtonClicked = await page.evaluate(() => {
-        // Look for the specific send verification code button with the exact classes
         const sendButton = document.querySelector(
           "button.nw-request-tfa"
         ) as HTMLButtonElement;
 
         if (
           sendButton &&
+          !sendButton.disabled &&
           sendButton.textContent?.includes("Send verification code")
         ) {
           sendButton.click();

@@ -1,6 +1,7 @@
 import dotenv from "dotenv";
 import { Browser, Page } from "puppeteer";
 import { delay } from "../common/delay.js";
+import { getOurContactForJob } from "../common/job-phone-store.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
 import { getVerificationCode } from "./email-verification-utils.js";
 import {
@@ -55,7 +56,7 @@ async function handleOtpVerification(
       throw error;
     }
 
-    const ourContact = process.env.OUR_CONTACT || "01828704004";
+    const ourContact = getOurContactForJob(jobId);
 
     // Extract the phone number from the verification message
     const currentContact = await page.evaluate(() => {
@@ -86,7 +87,7 @@ async function handleOtpVerification(
 
       // Get verification code
       try {
-        const code = await getVerificationCode();
+        const code = await getVerificationCode(jobId);
         if (!code) {
           const error = new Error("Failed to get verification code from email");
 
@@ -405,7 +406,7 @@ async function handleOtpVerification(
             );
             await delay(15000);
 
-            const code = await getVerificationCode();
+            const code = await getVerificationCode(jobId);
             if (!code) {
               throw new Error("Failed to get verification code from email");
             }
@@ -508,7 +509,7 @@ async function handleOtpVerification(
           // Add delay before fetching verification code
           await delay(15000); // Wait 15 seconds for email to arrive
 
-          const code = await getVerificationCode();
+          const code = await getVerificationCode(jobId);
           if (!code) {
             throw new Error("Failed to get verification code from email");
           }

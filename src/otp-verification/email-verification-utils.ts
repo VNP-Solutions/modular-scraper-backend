@@ -1,10 +1,68 @@
 import dotenv from "dotenv";
 import fs from "fs";
 import { google } from "googleapis";
+import { getJobPhoneAndPort } from "../common/job-phone-store.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
 import { oauth2Client } from "../config/google-config.js";
 
 dotenv.config();
+
+/** OTP email sources: IFTTT and rfitsms (to IT support). */
+const OTP_EMAIL_FROM_IFTTT = "action@ifttt.com";
+const OTP_EMAIL_FROM_RFITSMS = "rfitsms@gmail.com";
+const OTP_EMAIL_TO_ITSUPPORT = "itsupport@vnpsolutions.com";
+
+/** Parsed SMS-forwarded email (e.g. PORT 9 SMS / IFTTT). We match only by slot (from header or Receiver). */
+export interface ParsedOtpEmail {
+  slot: string;   // e.g. "9" from Subject "PORT 9 SMS" or from Receiver "9.01"
+  code: string;   // 6-digit Extranet/PIN code
+}
+
+/**
+ * Extract slot from email (header preferred, then body).
+ * - Header: Subject "PORT 9 SMS" → slot "9"
+ * - Body: Receiver: "9.01" → first value before the dot → slot "9"
+ */
+function extractSlotFromEmail(bodyText: string, subject?: string): string {
+  if (subject) {
+    const portMatch = subject.match(/PORT\s*(\d+)/i);
+    if (portMatch && portMatch[1]) return portMatch[1].trim();
+  }
+  const receiverMatch = bodyText.match(/Receiver:\s*["']?(\d+)\./i);
+  if (receiverMatch && receiverMatch[1]) return receiverMatch[1].trim();
+  return "";
+}
+
+/**
+ * Parse OTP email: get slot (from Subject or Receiver "X.XX" → X) and Extranet/PIN code.
+ * We do NOT use Sender; matching is by slot only.
+ */
+export function parseOtpEmailSenderSlotAndCode(
+  bodyText: string,
+  subject?: string
+): ParsedOtpEmail | null {
+  const codeMatch = bodyText.match(/(?:Extranet|PIN)\s+code:\s*(\d{6})/i);
+  if (!codeMatch || !codeMatch[1]) return null;
+  const slot = extractSlotFromEmail(bodyText, subject);
+  return { slot, code: codeMatch[1] };
+}
+
+/** True if this email matches the job's locked slot (match by slot only). */
+function otpEmailMatchesJobSlot(parsed: ParsedOtpEmail, jobSlot?: string): boolean {
+  if (jobSlot === undefined || jobSlot === "") return true;
+  const slotNorm = String(parsed.slot).trim();
+  const jobSlotNorm = String(jobSlot).trim();
+  return slotNorm === jobSlotNorm;
+}
+
+/** True if message From/To match OTP sources: from IFTTT or rfitsms, to IT support. */
+function otpEmailMatchesFromTo(headers: Array<{ name?: string | null; value?: string | null }>): boolean {
+  const fromHeader = (headers.find((h) => (h.name || "").toLowerCase() === "from")?.value || "").toLowerCase();
+  const toHeader = (headers.find((h) => (h.name || "").toLowerCase() === "to")?.value || "").toLowerCase();
+  const fromOk = fromHeader.includes(OTP_EMAIL_FROM_IFTTT) || fromHeader.includes(OTP_EMAIL_FROM_RFITSMS);
+  const toOk = !toHeader || toHeader.includes(OTP_EMAIL_TO_ITSUPPORT.toLowerCase());
+  return fromOk && toOk;
+}
 
 export async function loadCredentials(): Promise<boolean> {
   try {
@@ -106,7 +164,7 @@ function extractUrlsFromHtml(html: string): string[] {
   return urls;
 }
 
-export async function getVerificationCode(): Promise<string | null> {
+export async function getVerificationCode(jobId?: string): Promise<string | null> {
   try {
     const credentialsLoaded = await loadCredentials();
     if (!credentialsLoaded) {
@@ -115,10 +173,16 @@ export async function getVerificationCode(): Promise<string | null> {
       );
     }
 
+    const jobContact = jobId ? getJobPhoneAndPort(jobId) : undefined;
+
     const gmail = google.gmail({ version: "v1", auth: oauth2Client });
+    const listQuery = jobContact
+      ? `from:${OTP_EMAIL_FROM_IFTTT} OR from:${OTP_EMAIL_FROM_RFITSMS}`
+      : undefined;
     const res = await gmail.users.messages.list({
       userId: "me",
-      maxResults: 5,
+      maxResults: jobContact ? 15 : 5,
+      ...(listQuery && { q: listQuery }),
     });
 
     if (!res.data.messages) {
@@ -127,21 +191,34 @@ export async function getVerificationCode(): Promise<string | null> {
     }
 
     for (const msg of res.data.messages) {
-      if (!msg.id) {
-        continue;
-      }
+      if (!msg.id) continue;
 
       const email = await gmail.users.messages.get({
         userId: "me",
         id: msg.id,
+        format: "full",
       });
 
-      const body = email.data.snippet || "";
-      await dualLogInfo("Email body:", body);
-      const codeMatch = body.match(/\b\d{6,10}\b/);
-      await dualLogInfo("Code match:", codeMatch);
+      const headers = email.data.payload?.headers || [];
+      if (jobContact && !otpEmailMatchesFromTo(headers)) continue;
 
+      const subjectHeader = headers.find((h: any) => h.name === "Subject");
+      const subject = subjectHeader?.value || "";
+      const emailBody = getEmailBodyText(email.data);
+      const bodyText = emailBody || email.data.snippet || "";
+
+      if (jobContact && (jobContact.phone || jobContact.port)) {
+        const parsed = parseOtpEmailSenderSlotAndCode(bodyText, subject);
+        if (parsed && otpEmailMatchesJobSlot(parsed, jobContact.port)) {
+          await dualLogInfo(`Verification code for job ${jobId} (slot ${parsed.slot}): ${parsed.code}`);
+          return parsed.code;
+        }
+        continue;
+      }
+
+      const codeMatch = bodyText.match(/\b\d{6,10}\b/);
       if (codeMatch) {
+        await dualLogInfo("Code match:", codeMatch[0]);
         return codeMatch[0];
       }
     }
@@ -155,10 +232,11 @@ export async function getVerificationCode(): Promise<string | null> {
 }
 
 /**
- * Get last 5 verification codes for Booking.com
- * Returns array of up to 5 OTP codes from most recent emails
+ * Get last 5 verification codes for Booking.com.
+ * If jobId is provided and the job has a locked phone (and optional port), only codes from
+ * emails matching that Sender + Slot are returned (PORT 9 SMS / IFTTT format).
  */
-export async function getBookingVerificationCodes(): Promise<string[]> {
+export async function getBookingVerificationCodes(jobId?: string): Promise<string[]> {
   try {
     const credentialsLoaded = await loadCredentials();
     if (!credentialsLoaded) {
@@ -167,35 +245,29 @@ export async function getBookingVerificationCodes(): Promise<string[]> {
       );
     }
 
+    const jobContact = jobId ? getJobPhoneAndPort(jobId) : undefined;
+
     const gmail = google.gmail({ version: "v1", auth: oauth2Client });
 
-    // Single query: fetch all IFTTT emails sorted by newest first
-    // This ensures both "Extranet code" and "PIN code" emails are processed together
+    // From: action@ifttt.com OR rfitsms@gmail.com; Subject e.g. "PORT 13 SMS"; To: itsupport@vnpsolutions.com
+    const listQuery = `from:${OTP_EMAIL_FROM_IFTTT} OR from:${OTP_EMAIL_FROM_RFITSMS}`;
     const res = await gmail.users.messages.list({
       userId: "me",
       maxResults: 20,
-      q: "from:action@ifttt.com",
+      q: listQuery,
     });
 
     if (!res.data.messages || res.data.messages.length === 0) {
-      await dualLogInfo("No IFTTT emails found.");
+      await dualLogInfo("No OTP emails found (IFTTT or rfitsms).");
       return [];
     }
 
-    await dualLogInfo(
-      `Found ${res.data.messages.length} IFTTT emails`
-    );
+    await dualLogInfo(`Found ${res.data.messages.length} OTP emails (IFTTT / rfitsms)`);
 
     const codes: string[] = [];
 
     for (const msg of res.data.messages) {
-      if (!msg.id) {
-        continue;
-      }
-
-      if (codes.length >= 5) {
-        break;
-      }
+      if (!msg.id || codes.length >= 5) continue;
 
       const email = await gmail.users.messages.get({
         userId: "me",
@@ -204,24 +276,31 @@ export async function getBookingVerificationCodes(): Promise<string[]> {
       });
 
       const headers = email.data.payload?.headers || [];
-      const subjectHeader = headers.find(
-        (h: any) => h.name === "Subject"
-      );
-      const subject = subjectHeader?.value || "";
+      if (!otpEmailMatchesFromTo(headers)) continue;
 
+      const subjectHeader = headers.find((h: any) => h.name === "Subject");
+      const subject = subjectHeader?.value || "";
       const emailBody = getEmailBodyText(email.data);
       const snippet = email.data.snippet || "";
       const bodyText = emailBody || snippet;
-
       const searchText = `${subject} ${bodyText}`;
 
-      // Match "Extranet code: XXXXXX" or "PIN code: XXXXXX" pattern from IFTTT forwarded SMS
+      if (jobContact && (jobContact.phone || jobContact.port)) {
+        const parsed = parseOtpEmailSenderSlotAndCode(searchText, subject);
+        if (parsed && otpEmailMatchesJobSlot(parsed, jobContact.port)) {
+          if (parsed.code.length === 6 && !codes.includes(parsed.code)) {
+            codes.push(parsed.code);
+            await dualLogInfo(`Found verification code for job (slot ${parsed.slot}): ${parsed.code}`);
+          }
+        }
+        continue;
+      }
+
       const codePattern = /(?:Extranet|PIN)\s+code:\s*(\d{6})/i;
       const match = searchText.match(codePattern);
-
       if (match && match[1]) {
         const code = match[1];
-        if (code && code.length === 6 && !codes.includes(code)) {
+        if (code.length === 6 && !codes.includes(code)) {
           codes.push(code);
           await dualLogInfo(`Found verification code: ${code}`);
         }
@@ -251,18 +330,18 @@ export async function getMultipleVerificationCodes(): Promise<string[]> {
 
     const gmail = google.gmail({ version: "v1", auth: oauth2Client });
 
-    // Filter for IFTTT SMS emails
-    // Emails come from: Android SMS via IFTTT <action@ifttt.com>
-    // Subject can be: "to verify" OR "Extranet code: XXXXXX (don't share)" OR "PIN code: XXXXXX"
-    // Body contains: "Extranet code: XXXXXX (don't share)" or "PIN code: XXXXXX"
+    // IFTTT or rfitsms to IT support; Subject e.g. "to verify", "Extranet code", "PIN code", "PORT 13 SMS"
     const queries = [
-      'from:action@ifttt.com subject:"to verify"',
-      'from:action@ifttt.com subject:"Extranet code"',
-      'from:action@ifttt.com subject:"PIN code"',
-      "from:action@ifttt.com",
+      `from:${OTP_EMAIL_FROM_IFTTT} subject:"to verify"`,
+      `from:${OTP_EMAIL_FROM_IFTTT} subject:"Extranet code"`,
+      `from:${OTP_EMAIL_FROM_IFTTT} subject:"PIN code"`,
+      `from:${OTP_EMAIL_FROM_IFTTT}`,
+      `from:${OTP_EMAIL_FROM_RFITSMS} subject:"PORT"`,
+      `from:${OTP_EMAIL_FROM_RFITSMS}`,
       'subject:"to verify"',
       'subject:"Extranet code"',
       'subject:"PIN code"',
+      'subject:"PORT"',
     ];
 
     const codes: string[] = [];
@@ -308,17 +387,14 @@ export async function getMultipleVerificationCodes(): Promise<string[]> {
             format: "full",
           });
 
-          // Get subject as well (code might be in subject)
           const headers = email.data.payload?.headers || [];
+          if (!otpEmailMatchesFromTo(headers)) continue;
+
           const subjectHeader = headers.find((h: any) => h.name === "Subject");
           const subject = subjectHeader?.value || "";
-
-          // Extract full email body
           const emailBody = getEmailBodyText(email.data);
           const snippet = email.data.snippet || "";
           const bodyText = emailBody || snippet;
-
-          // Combine subject and body to search for code
           const searchText = `${subject} ${bodyText}`;
 
           // Look for "Extranet code: XXXXXX" or "PIN code: XXXXXX" pattern
