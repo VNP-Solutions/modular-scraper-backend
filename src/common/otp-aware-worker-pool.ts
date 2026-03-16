@@ -8,6 +8,7 @@ import { JobStatus } from "../models/job.model.js";
 import { OtpPlatform } from "../models/otp-status.model.js";
 import { jobService } from "../services/job.service.js";
 import { otpStatusManager, OtpStatusManager } from "./otp-status-manager.js";
+import { getNextContactForJob } from "./job-phone-store.js";
 import {
   WorkerInfo,
   WorkerJobData,
@@ -410,6 +411,11 @@ export class OtpAwareWorkerPool extends EventEmitter {
 
       // Determine if this job requires OTP
       const requiresOtp = this.jobRequiresOtp(jobData);
+
+      // Assign contact in round-robin for even distribution (no contact picked more than others)
+      if (requiresOtp) {
+        jobData.selectedContact = getNextContactForJob();
+      }
 
       const queuedJob: QueuedJob = {
         jobData,

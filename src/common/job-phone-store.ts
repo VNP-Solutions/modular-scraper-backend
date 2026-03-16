@@ -17,6 +17,9 @@ export interface JobContact {
 /** jobId -> { phone, port? } for that job */
 const jobContacts = new Map<string, JobContact>();
 
+/** Round-robin index for even distribution (used when assignContactRoundRobin is true) */
+let nextRoundRobinIndex = 0;
+
 /**
  * Parses one contact entry: "phone" or "phone:port".
  * Port is optional (e.g. "01", "9.01" - kept as string).
@@ -53,8 +56,27 @@ function getContactPool(): JobContact[] {
 }
 
 /**
+ * Returns the next contact in round-robin order (even distribution).
+ * Call from main thread when enqueuing a job; pass result as jobData.selectedContact.
+ */
+export function getNextContactForJob(): JobContact {
+  const pool = getContactPool();
+  if (pool.length === 0) return { phone: DEFAULT_FALLBACK };
+  const index = nextRoundRobinIndex % pool.length;
+  nextRoundRobinIndex += 1;
+  return { ...pool[index] };
+}
+
+/**
+ * Sets the contact for a job (used when main thread assigned via round-robin).
+ */
+export function setJobContact(jobId: string, contact: JobContact): void {
+  jobContacts.set(jobId, { ...contact });
+}
+
+/**
  * Picks a random (phone, port) from the pool, stores it for this jobId, and returns the phone.
- * Call once when a job starts.
+ * Call once when a job starts (used when no selectedContact was passed from main thread).
  */
 export function pickRandomPhoneForJob(jobId: string): string {
   const pool = getContactPool();

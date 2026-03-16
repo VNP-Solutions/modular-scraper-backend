@@ -35,7 +35,9 @@ import {
 } from "../common/failed-reason.js";
 import {
   pickRandomPhoneForJob,
+  setJobContact,
   clearJobPhone,
+  getJobPhone,
   getJobPort,
 } from "../common/job-phone-store.js";
 import { notificationService } from "../services/notification.service.js";
@@ -161,8 +163,13 @@ class ScrapingWorker {
   private async executeJob(jobData: WorkerJobData): Promise<void> {
     this.currentJobId = jobData.jobId;
 
-    // Lock a random phone (and port if configured) for this job (used for OTP/verification)
-    const lockedPhone = pickRandomPhoneForJob(jobData.jobId);
+    // Lock phone/port for this job: use round-robin assignment from main thread, or pick random
+    if (jobData.selectedContact) {
+      setJobContact(jobData.jobId, jobData.selectedContact);
+    } else {
+      pickRandomPhoneForJob(jobData.jobId);
+    }
+    const lockedPhone = jobData.selectedContact?.phone ?? getJobPhone(jobData.jobId) ?? "";
     const lastThree = lockedPhone.replace(/\D/g, "").slice(-3);
     const port = getJobPort(jobData.jobId);
     await dualLogInfo(
