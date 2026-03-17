@@ -12,6 +12,7 @@ export const FAILED_REASON = {
   AGODA_PAGE_LOAD_FAILED: "AGODA_PAGE_LOAD_FAILED",
   AGODA_SCRAPING_STOPPED: "AGODA_SCRAPING_STOPPED",
   AGODA_CARD_INFO_NOT_FOUND: "AGODA_CARD_INFO_NOT_FOUND",
+  AGODA_CREDENTIALS_NOT_SET: "AGODA_CREDENTIALS_NOT_SET",
 } as const;
 
 export type FailedReasonCode = (typeof FAILED_REASON)[keyof typeof FAILED_REASON];
@@ -42,6 +43,8 @@ const FAILED_REASON_MESSAGES: Record<FailedReasonCode, string> = {
     "Agoda scraping was stopped manually. Please restart the job.",
   [FAILED_REASON.AGODA_CARD_INFO_NOT_FOUND]:
     "Failed to retrieve card information. No card info found for the reservations.",
+  [FAILED_REASON.AGODA_CREDENTIALS_NOT_SET]:
+    "Agoda username or password is not set. Please assign Agoda credentials to the property and try again.",
 };
 
 /**
