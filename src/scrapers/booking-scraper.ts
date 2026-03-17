@@ -2750,11 +2750,15 @@ export class BookingScraper extends BaseScraper {
     }
   }
 
+  /**
+   * Opens reservation detail tab and processes it (basic data + card details).
+   * @returns { success, cardInfoStored } for tracking and retry of missing card info.
+   */
   async clickReservationDetail(
     reservation: any,
     jobId?: string,
     propertyId?: string
-  ): Promise<boolean> {
+  ): Promise<{ success: boolean; cardInfoStored: boolean }> {
     if (!this.page) throw new Error("Page not initialized");
 
     try {
@@ -2802,7 +2806,7 @@ export class BookingScraper extends BaseScraper {
         this.page = newPage;
       } catch (error) {
         await this.logError("Timeout waiting for new tab to open:", error);
-        return false;
+        return { success: false, cardInfoStored: false };
       }
 
       await this.logInfo(`New tab loaded`);
@@ -2815,7 +2819,7 @@ export class BookingScraper extends BaseScraper {
 
       if (!captchaHandled) {
         await this.logInfo("Captcha not solved in new tab");
-        return false;
+        return { success: false, cardInfoStored: false };
       }
 
       await this.delay(2000);
@@ -2825,7 +2829,7 @@ export class BookingScraper extends BaseScraper {
 
       if (!twoFASuccess) {
         await this.logInfo("2FA not solved in new tab");
-        return false;
+        return { success: false, cardInfoStored: false };
       }
 
       // Check on captcha
@@ -2836,7 +2840,7 @@ export class BookingScraper extends BaseScraper {
 
       if (!captchaHandled) {
         await this.logInfo("Captcha not solved in new tab");
-        return false;
+        return { success: false, cardInfoStored: false };
       }
 
       await this.delay(2000);
@@ -2869,24 +2873,21 @@ export class BookingScraper extends BaseScraper {
       this.page = newPage;
 
       try {
-        const success = await this.processReservationDetail(
+        const result = await this.processReservationDetail(
           reservation,
           jobId,
           propertyId
         );
-        if (!success) {
+        if (!result.success) {
           await this.logInfo(
             `Failed to process reservation detail for ${reservation.id}`
           );
         }
+        return result;
       } finally {
         // Restore original page
         this.page = originalPage;
       }
-
-      // Close the new tab and switch back
-      // await newPage.close();
-      return true;
     } catch (error) {
       await dualLogError(
         `[${new Date().toISOString()}] ${getBookingErrorDescription(
@@ -2901,7 +2902,7 @@ export class BookingScraper extends BaseScraper {
           action: "click_reservation_detail",
         }
       );
-      return false;
+      return { success: false, cardInfoStored: false };
     }
   }
 
@@ -3031,6 +3032,13 @@ export class BookingScraper extends BaseScraper {
     );
   }
 
+  /**
+   * Number of retry attempts per reservation when card info was not stored on first try.
+   * E.g. 3 = for each reservation missing card info, we try up to 3 more times (open card details → extract → save).
+   * Set to 0 to disable retries.
+   */
+  private static readonly MAX_CARD_INFO_RETRIES = 3;
+
   private async processReservations(
     reservationIds: any[],
     jobId?: string,
@@ -3038,6 +3046,7 @@ export class BookingScraper extends BaseScraper {
   ): Promise<{ processed: number; errors: number }> {
     let processedCount = 0;
     let errorCount = 0;
+    const reservationsWithoutCardInfo: any[] = [];
 
     for (const reservation of reservationIds) {
       // Check if scraping should continue before processing each reservation
@@ -3050,16 +3059,23 @@ export class BookingScraper extends BaseScraper {
         break;
       }
       try {
-        const success = await this.clickReservationDetail(
+        const result = await this.clickReservationDetail(
           reservation,
           jobId,
           propertyId
         );
-        if (success) {
+        if (result.success) {
           processedCount++;
-          await this.logInfo(
-            `Successfully processed reservation ${reservation.id} (${processedCount} total)`
-          );
+          if (!result.cardInfoStored) {
+            reservationsWithoutCardInfo.push(reservation);
+            await this.logInfo(
+              `Reservation ${reservation.id} processed but card info not stored (tracked for retry)`
+            );
+          } else {
+            await this.logInfo(
+              `Successfully processed reservation ${reservation.id} (${processedCount} total, card info saved)`
+            );
+          }
         } else {
           errorCount++;
           await this.logInfo(`Failed to process reservation ${reservation.id}`);
@@ -3073,7 +3089,170 @@ export class BookingScraper extends BaseScraper {
         );
       }
     }
+
+    // Retry card info for reservations that were saved without card info.
+    // MAX_CARD_INFO_RETRIES = how many retry attempts per reservation (e.g. 3 = try up to 3 times until card info is stored).
+    if (
+      reservationsWithoutCardInfo.length > 0 &&
+      jobId &&
+      propertyId &&
+      BookingScraper.MAX_CARD_INFO_RETRIES > 0
+    ) {
+      await this.logInfo(
+        `Retrying card info for ${reservationsWithoutCardInfo.length} reservation(s), up to ${BookingScraper.MAX_CARD_INFO_RETRIES} attempt(s) each: ${reservationsWithoutCardInfo.map((r) => r.id).join(", ")}`
+      );
+      for (const reservation of reservationsWithoutCardInfo) {
+        let stored = false;
+        for (let attempt = 1; attempt <= BookingScraper.MAX_CARD_INFO_RETRIES && !stored; attempt++) {
+          const shouldStop = await this.checkScrapingShouldStop(
+            "process_reservations_retry_card",
+            { reservationId: reservation.id, attempt }
+          );
+          if (shouldStop) break;
+          try {
+            await this.logInfo(
+              `Retry card info for reservation ${reservation.id} (attempt ${attempt}/${BookingScraper.MAX_CARD_INFO_RETRIES})`
+            );
+            stored = await this.retryCardInfoForReservation(
+              reservation,
+              jobId,
+              propertyId
+            );
+            if (stored) {
+              await this.logInfo(
+                `Retry attempt ${attempt}: card info saved for reservation ${reservation.id}`
+              );
+            } else if (attempt < BookingScraper.MAX_CARD_INFO_RETRIES) {
+              await this.logInfo(
+                `Retry attempt ${attempt}: card info still missing for ${reservation.id}, will try again`
+              );
+            }
+          } catch (error) {
+            await this.logError(
+              `Retry attempt ${attempt} failed for ${reservation.id}:`,
+              error
+            );
+            if (attempt < BookingScraper.MAX_CARD_INFO_RETRIES) {
+              await this.logInfo(
+                `Will retry reservation ${reservation.id} (${BookingScraper.MAX_CARD_INFO_RETRIES - attempt} attempt(s) left)`
+              );
+            }
+          }
+        }
+        if (!stored) {
+          await this.logInfo(
+            `Card info still missing for reservation ${reservation.id} after ${BookingScraper.MAX_CARD_INFO_RETRIES} retry attempt(s)`
+          );
+        }
+      }
+    }
+
     return { processed: processedCount, errors: errorCount };
+  }
+
+  /**
+   * Build basicData shape from a saved job item (for card-info retry when we don't reopen reservation detail).
+   */
+  private buildBasicDataFromJobItem(item: any, reservation: any): any {
+    const formatDate = (d: Date | string | undefined): string => {
+      if (!d) return "";
+      const date = typeof d === "string" ? new Date(d) : d;
+      return isNaN(date.getTime()) ? "" : date.toISOString().split("T")[0];
+    };
+    return {
+      guestName: item.guest_name ?? "",
+      reservationId: item.reservation_id ?? reservation.id,
+      bookingNumber: item.confirmation_number ?? "",
+      checkInDate: formatDate(item.check_in_date),
+      checkOutDate: formatDate(item.check_out_date),
+      roomType: item.room_type ?? "",
+      totalAmount: String(item.booking_amount ?? ""),
+      receivedDate: formatDate(item.booked_date),
+      totalPayout: String(item.payment_info?.total_payout ?? ""),
+      amount: reservation.amount ?? "",
+      chargeBefore: reservation.chargeBefore ?? "",
+      reservationStatus: item.reservation_status ?? "",
+    };
+  }
+
+  /**
+   * Retry fetching and saving card info for one reservation. Assumes we're on VCCS list page.
+   * Uses existing job item to get basicData so we only open card details tab.
+   */
+  private async retryCardInfoForReservation(
+    reservation: any,
+    jobId: string,
+    propertyId: string
+  ): Promise<boolean> {
+    if (!this.page) return false;
+
+    const existingItem = await jobService.findJobItemByReservationId(
+      jobId,
+      reservation.id
+    );
+    if (!existingItem) {
+      await this.logError(
+        `Retry card info: no job item found for reservation ${reservation.id}`
+      );
+      return false;
+    }
+
+    const basicData = this.buildBasicDataFromJobItem(existingItem, reservation);
+
+    const newPagePromise = new Promise<Page>((resolve) => {
+      this.browser!.once("targetcreated", async (target) => {
+        if (target.type() === "page") {
+          const newPage = await target.page();
+          await newPage!.bringToFront();
+          resolve(newPage!);
+        }
+      });
+    });
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(
+        () => reject(new Error("Timeout waiting for new tab to open")),
+        30000
+      );
+    });
+
+    const clicked = await this.clickCardDetailsFromRow(reservation.id);
+    if (!clicked) return false;
+
+    let newPage: Page;
+    try {
+      newPage = await Promise.race([newPagePromise, timeoutPromise]);
+    } catch {
+      return false;
+    }
+
+    const previousPage = this.page;
+    this.page = newPage;
+
+    try {
+      const needsLogin = await this.checkIfLoginNeeded(newPage);
+      if (needsLogin) {
+        await this.login(this.credentials, undefined, true);
+      }
+      const twoFASuccess = await this.handle2FA({ page: newPage });
+      if (!twoFASuccess) return false;
+
+      const cardData = await this.extractCardDetailsFromPage(this.page);
+
+      await SelectorUtils.findAndClick(
+        this.page,
+        BOOKING_SELECTORS.reservations.closeCardDetails
+      );
+      this.page = previousPage;
+
+      const saveResult = await this.saveReservationToDatabase(
+        jobId,
+        basicData,
+        cardData ?? null
+      );
+      return saveResult.saved && saveResult.hasCardInfo;
+    } finally {
+      this.page = previousPage;
+    }
   }
 
   private isTimeoutReached(
@@ -4631,16 +4810,26 @@ export class BookingScraper extends BaseScraper {
     }
   }
 
+  /**
+   * Saves reservation to database. Handles null/empty cardData (saves with has_card_info: false).
+   * @returns { saved: boolean, hasCardInfo: boolean } so callers can track and retry missing card info.
+   */
   async saveReservationToDatabase(
     jobId: string,
     basicData: any,
     cardData: any
-  ): Promise<any> {
+  ): Promise<{ saved: boolean; hasCardInfo: boolean }> {
     try {
       // Validate inputs
       if (!jobId || !this.propertyIdForDb) {
         throw new Error("JobId and propertyIdForDb are required");
       }
+
+      const hasCardInfo = !!(
+        cardData &&
+        cardData.cardNumber &&
+        String(cardData.cardNumber).trim()
+      );
 
       // Parse dates
       const parseDate = (dateStr: string): Date => {
@@ -4679,7 +4868,7 @@ export class BookingScraper extends BaseScraper {
         room_type: basicData.roomType || "Unknown",
         booking_amount: parseAmount(basicData.totalAmount),
         booked_date: parseDate(basicData.receivedDate),
-        has_card_info: !!cardData.cardNumber,
+        has_card_info: hasCardInfo,
         has_payment_info: !!basicData.totalPayout,
         payment_info: {
           total_guest_payment: parseAmount(basicData.totalAmount),
@@ -4688,12 +4877,16 @@ export class BookingScraper extends BaseScraper {
           cancellation_fee: 0, // update later
           charge_before: basicData.chargeBefore,
         },
-        card_info: {
-          expiry_date: cardData.expiry,
-          card_number: cardData.cardNumber,
-          cvv: cardData.cvv,
-          card_holder_name: cardData.cardholder,
-        },
+        ...(hasCardInfo && cardData
+          ? {
+              card_info: {
+                expiry_date: cardData.expiry,
+                card_number: cardData.cardNumber,
+                cvv: cardData.cvv,
+                card_holder_name: cardData.cardholder,
+              },
+            }
+          : {}),
         reservation_status: basicData.reservationStatus || "Unknown",
       };
 
@@ -4706,33 +4899,37 @@ export class BookingScraper extends BaseScraper {
       );
 
       if (existingReservation) {
-        const updatedItem = await jobService.updateJobItem(
+        await jobService.updateJobItem(
           existingReservation._id.toString(),
           jobItemData
         );
         await this.logInfo(
-          `Updated reservation ${basicData.reservationId} with new data`
+          `Updated reservation ${basicData.reservationId} with new data (has_card_info: ${hasCardInfo})`
         );
-        return updatedItem;
+        return { saved: true, hasCardInfo };
       } else {
-        const savedItem = await jobService.createJobItem(jobItemData);
+        await jobService.createJobItem(jobItemData);
 
         await this.logInfo(
-          `Saved reservation ${basicData.reservationId} to database`
+          `Saved reservation ${basicData.reservationId} to database (has_card_info: ${hasCardInfo})`
         );
-        return savedItem;
+        return { saved: true, hasCardInfo };
       }
     } catch (error) {
       await this.logError(`Failed to save reservation to database:`, error);
-      return null;
+      return { saved: false, hasCardInfo: false };
     }
   }
 
+  /**
+   * Processes a single reservation detail: extracts basic data, opens card details, extracts card, saves to DB.
+   * @returns { success, cardInfoStored } so callers can track which reservations need card-info retry.
+   */
   async processReservationDetail(
     reservation: any,
     jobId?: string,
     propertyId?: string
-  ): Promise<boolean> {
+  ): Promise<{ success: boolean; cardInfoStored: boolean }> {
     try {
       // Check if scraping should continue before processing reservation detail
       await this.throwIfScrapingShouldStop("process_reservation_detail", {
@@ -4749,6 +4946,7 @@ export class BookingScraper extends BaseScraper {
 
       if (!basicData) {
         await this.logError("Failed to extract basic reservation data");
+        return { success: false, cardInfoStored: false };
       }
 
       basicData.amount = reservation.amount;
@@ -4793,21 +4991,35 @@ export class BookingScraper extends BaseScraper {
         );
       });
 
-      const cardDetailsClick = this.clickCardDetailsFromRow(reservation.id);
-      if (!cardDetailsClick) {
+      const cardDetailsClicked = await this.clickCardDetailsFromRow(
+        reservation.id
+      );
+      if (!cardDetailsClicked) {
         await this.logError(
-          `Failed to extract data for reservation ${reservation.id}`
+          `Failed to open card details for reservation ${reservation.id}`
         );
+        // Still save basic data without card info so we can retry card later
+        if (jobId && propertyId) {
+          const saveResult = await this.saveReservationToDatabase(
+            jobId,
+            basicData,
+            null
+          );
+          await this.logInfo(
+            `Saved reservation ${reservation.id} without card info (saved: ${saveResult.saved})`
+          );
+        }
+        return { success: true, cardInfoStored: false };
       }
 
-      let newPage = undefined;
+      let newPage: Page;
 
       try {
-        const newPage = await Promise.race([newPagePromise, timeoutPromise]);
+        newPage = await Promise.race([newPagePromise, timeoutPromise]);
         this.page = newPage; // switch page
       } catch (error) {
         await this.logError("Timeout waiting for new tab to open:", error);
-        return false;
+        return { success: false, cardInfoStored: false };
       }
 
       // Check and handle login on the new page
@@ -4822,7 +5034,7 @@ export class BookingScraper extends BaseScraper {
 
       if (!twoFASuccess) {
         await this.logInfo("2FA not solved in new tab");
-        return false;
+        return { success: false, cardInfoStored: false };
       }
 
       const cardData = await this.extractCardDetailsFromPage(this.page);
@@ -4833,21 +5045,31 @@ export class BookingScraper extends BaseScraper {
         BOOKING_SELECTORS.reservations.closeCardDetails
       );
 
-      // Save to database if jobId and propertyId are provided
+      let cardInfoStored = false;
       if (jobId && propertyId) {
-        await this.saveReservationToDatabase(jobId, basicData, cardData);
+        const saveResult = await this.saveReservationToDatabase(
+          jobId,
+          basicData,
+          cardData ?? null
+        );
+        cardInfoStored = saveResult.saved && saveResult.hasCardInfo;
+        if (!cardInfoStored && saveResult.saved) {
+          await this.logInfo(
+            `Reservation ${reservation.id} saved but card info missing (will be retried if retry enabled)`
+          );
+        }
       }
 
       await this.logInfo(
-        `Successfully processed reservation ${reservation.id}`
+        `Successfully processed reservation ${reservation.id} (cardInfoStored: ${cardInfoStored})`
       );
-      return true;
+      return { success: true, cardInfoStored };
     } catch (error) {
       await this.logError(
         `Error processing reservation ${reservation.id}:`,
         error
       );
-      return false;
+      return { success: false, cardInfoStored: false };
     }
   }
 
