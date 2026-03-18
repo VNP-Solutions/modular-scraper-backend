@@ -287,13 +287,18 @@ export async function getBookingVerificationCodes(jobId?: string): Promise<strin
 
       if (jobContact && (jobContact.phone || jobContact.port)) {
         const parsed = parseOtpEmailSenderSlotAndCode(searchText, subject);
-        if (parsed && otpEmailMatchesJobSlot(parsed, jobContact.port)) {
-          if (parsed.code.length === 6 && !codes.includes(parsed.code)) {
-            codes.push(parsed.code);
-            await dualLogInfo(`Found verification code for job (slot ${parsed.slot}): ${parsed.code}`);
-            // Old flow: no port = single stream, use only the most recent code (first we find)
-            if (!jobContact.port) break;
-          }
+        if (!parsed) continue;
+        // Single phone (no port): only accept old-format emails that have NO slot (no PORT X / Receiver in email)
+        if (!jobContact.port) {
+          if (parsed.slot) continue; // skip PORT 13 / Receiver emails when we're on single-phone mode
+          codes.push(parsed.code);
+          await dualLogInfo(`Found verification code (single phone): ${parsed.code}`);
+          break;
+        }
+        // With port: only accept emails whose slot matches job's port
+        if (otpEmailMatchesJobSlot(parsed, jobContact.port) && parsed.code.length === 6 && !codes.includes(parsed.code)) {
+          codes.push(parsed.code);
+          await dualLogInfo(`Found verification code for job (slot ${parsed.slot}): ${parsed.code}`);
         }
         continue;
       }
