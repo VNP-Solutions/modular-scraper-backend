@@ -291,6 +291,8 @@ export async function getBookingVerificationCodes(jobId?: string): Promise<strin
           if (parsed.code.length === 6 && !codes.includes(parsed.code)) {
             codes.push(parsed.code);
             await dualLogInfo(`Found verification code for job (slot ${parsed.slot}): ${parsed.code}`);
+            // Old flow: no port = single stream, use only the most recent code (first we find)
+            if (!jobContact.port) break;
           }
         }
         continue;
