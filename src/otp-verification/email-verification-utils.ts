@@ -233,8 +233,8 @@ export async function getVerificationCode(jobId?: string): Promise<string | null
 
 /**
  * Get last 5 verification codes for Booking.com.
- * If jobId is provided and the job has a locked phone (and optional port), only codes from
- * emails matching that Sender + Slot are returned (PORT 9 SMS / IFTTT format).
+ * - Single phone (no port): OLD behaviour from before e329dfc – IFTTT only, no slot/From/To filter.
+ * - Multi-phone with port: NEW behaviour – filter by From/To and slot (PORT X / Receiver).
  */
 export async function getBookingVerificationCodes(jobId?: string): Promise<string[]> {
   try {
@@ -246,10 +246,59 @@ export async function getBookingVerificationCodes(jobId?: string): Promise<strin
     }
 
     const jobContact = jobId ? getJobPhoneAndPort(jobId) : undefined;
+    const usePortFlow = Boolean(jobContact?.port);
 
     const gmail = google.gmail({ version: "v1", auth: oauth2Client });
 
-    // From: action@ifttt.com OR rfitsms@gmail.com; Subject e.g. "PORT 13 SMS"; To: itsupport@vnpsolutions.com
+    if (!usePortFlow) {
+      // --- OLD: single phone, no port (exactly as before commit e329dfc) ---
+      const res = await gmail.users.messages.list({
+        userId: "me",
+        maxResults: 20,
+        q: "from:action@ifttt.com",
+      });
+
+      if (!res.data.messages || res.data.messages.length === 0) {
+        await dualLogInfo("No IFTTT emails found.");
+        return [];
+      }
+
+      await dualLogInfo(`Found ${res.data.messages.length} IFTTT emails`);
+
+      const codes: string[] = [];
+      for (const msg of res.data.messages) {
+        if (!msg.id || codes.length >= 5) break;
+
+        const email = await gmail.users.messages.get({
+          userId: "me",
+          id: msg.id,
+          format: "full",
+        });
+
+        const headers = email.data.payload?.headers || [];
+        const subjectHeader = headers.find((h: any) => h.name === "Subject");
+        const subject = subjectHeader?.value || "";
+        const emailBody = getEmailBodyText(email.data);
+        const snippet = email.data.snippet || "";
+        const bodyText = emailBody || snippet;
+        const searchText = `${subject} ${bodyText}`;
+
+        const codePattern = /(?:Extranet|PIN)\s+code:\s*(\d{6})/i;
+        const match = searchText.match(codePattern);
+        if (match && match[1]) {
+          const code = match[1];
+          if (code.length === 6 && !codes.includes(code)) {
+            codes.push(code);
+            await dualLogInfo(`Found verification code: ${code}`);
+          }
+        }
+      }
+
+      await dualLogInfo(`Total verification codes found: ${codes.length}`, codes);
+      return codes;
+    }
+
+    // --- NEW: multi-phone with port – filter by From/To and slot ---
     const listQuery = `from:${OTP_EMAIL_FROM_IFTTT} OR from:${OTP_EMAIL_FROM_RFITSMS}`;
     const res = await gmail.users.messages.list({
       userId: "me",
@@ -265,7 +314,6 @@ export async function getBookingVerificationCodes(jobId?: string): Promise<strin
     await dualLogInfo(`Found ${res.data.messages.length} OTP emails (IFTTT / rfitsms)`);
 
     const codes: string[] = [];
-
     for (const msg of res.data.messages) {
       if (!msg.id || codes.length >= 5) continue;
 
@@ -285,32 +333,11 @@ export async function getBookingVerificationCodes(jobId?: string): Promise<strin
       const bodyText = emailBody || snippet;
       const searchText = `${subject} ${bodyText}`;
 
-      if (jobContact && (jobContact.phone || jobContact.port)) {
-        const parsed = parseOtpEmailSenderSlotAndCode(searchText, subject);
-        if (!parsed) continue;
-        // Single phone (no port): only accept old-format emails that have NO slot (no PORT X / Receiver in email)
-        if (!jobContact.port) {
-          if (parsed.slot) continue; // skip PORT 13 / Receiver emails when we're on single-phone mode
-          codes.push(parsed.code);
-          await dualLogInfo(`Found verification code (single phone): ${parsed.code}`);
-          break;
-        }
-        // With port: only accept emails whose slot matches job's port
-        if (otpEmailMatchesJobSlot(parsed, jobContact.port) && parsed.code.length === 6 && !codes.includes(parsed.code)) {
-          codes.push(parsed.code);
-          await dualLogInfo(`Found verification code for job (slot ${parsed.slot}): ${parsed.code}`);
-        }
-        continue;
-      }
-
-      const codePattern = /(?:Extranet|PIN)\s+code:\s*(\d{6})/i;
-      const match = searchText.match(codePattern);
-      if (match && match[1]) {
-        const code = match[1];
-        if (code.length === 6 && !codes.includes(code)) {
-          codes.push(code);
-          await dualLogInfo(`Found verification code: ${code}`);
-        }
+      const parsed = parseOtpEmailSenderSlotAndCode(searchText, subject);
+      if (!parsed || !otpEmailMatchesJobSlot(parsed, jobContact!.port)) continue;
+      if (parsed.code.length === 6 && !codes.includes(parsed.code)) {
+        codes.push(parsed.code);
+        await dualLogInfo(`Found verification code for job (slot ${parsed.slot}): ${parsed.code}`);
       }
     }
 
