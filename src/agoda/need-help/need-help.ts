@@ -69,7 +69,7 @@ async function findCsvFileInImport(jobId?: string): Promise<string | null> {
       await validateFileForProcessing(
         exportFilePath,
         jobId,
-        "Need Help file upload"
+        "Need Help file upload",
       );
 
       return exportFilePath;
@@ -84,7 +84,7 @@ async function findCsvFileInImport(jobId?: string): Promise<string | null> {
     await dualLogError(
       "Error finding CSV file with standardized naming:",
       error,
-      { jobId }
+      { jobId },
     );
     return null;
   }
@@ -100,7 +100,7 @@ async function loadMessageContent(messageFilePath?: string): Promise<string> {
       "src",
       "agoda",
       "need-help",
-      "message.txt"
+      "message.txt",
     );
     const filePath = messageFilePath || defaultMessagePath;
 
@@ -108,15 +108,11 @@ async function loadMessageContent(messageFilePath?: string): Promise<string> {
       return fs.readFileSync(filePath, "utf-8");
     } else {
       // Fallback message if file not found
-      return `Dear Agoda Team,
+      return `Dear Agoda Support Team,
 
-Thank you in advance for your continued support and cooperation.
+We are reviewing Agoda transactions for our property and have followed all required guidelines. Some reservations still have outstanding balances, and attempts to charge the remaining amounts via VCCs were declined. Could you please provide the latest Open Payment Report, including Matched, Match-over, and Match-under bookings, to help us reconcile our records. 
 
-We are currently reviewing the Agoda transactions for the attached property. In accordance with the new guidelines provided by Agoda, we have followed all the required steps. During this process, we identified certain reservations where the full booking amount has not yet been collected.
-
-We have attempted to charge the remaining amounts as per our Accounts Receivable report; however, the VCCs are being declined. We kindly request that you reissue the VCCs for the outstanding amounts reflected in our report so we can reconcile these balances accordingly.
-
-We would greatly appreciate your assistance in providing the remaining amounts.
+Thank you for your support and assistance.
 
 Best regards,
 Revenue Control Team`;
@@ -124,17 +120,20 @@ Revenue Control Team`;
   } catch (error: any) {
     await dualLogError(
       "Error loading message content:",
-      error.message || error
+      error.message || error,
     );
     await dualLogInfo(
-      `Attempted to load message from: ${messageFilePath ||
-      path.join(process.cwd(), "src", "agoda", "need-help", "message.txt")
-      }`
+      `Attempted to load message from: ${
+        messageFilePath ||
+        path.join(process.cwd(), "src", "agoda", "need-help", "message.txt")
+      }`,
     );
     // Return fallback message
-    return `Dear Agoda Team,
+    return `Dear Agoda Support Team,
 
-Thank you in advance for your continued support and cooperation. We are currently reviewing the Agoda transactions for the attached property. In accordance with the new guidelines provided by Agoda, we have followed all the required steps. During this process, we identified certain reservations where the full booking amount has not yet been collected. We have attempted to charge the remaining amounts as per our Accounts Receivable report; however, the VCCs are being declined. We kindly request that you reissue the VCCs for the outstanding amounts reflected in our report so we can reconcile these balances accordingly. We would greatly appreciate your assistance in providing us the payment report with Booking payment status.
+We are reviewing Agoda transactions for our property and have followed all required guidelines. Some reservations still have outstanding balances, and attempts to charge the remaining amounts via VCCs were declined. Could you please provide the latest Open Payment Report, including Matched, Match-over, and Match-under bookings, to help us reconcile our records. 
+
+Thank you for your support and assistance.
 
 Best regards,
 Revenue Control Team`;
@@ -146,7 +145,7 @@ Revenue Control Team`;
  */
 export async function automateNeedHelpProcess(
   page: Page,
-  options: NeedHelpOptions = {}
+  options: NeedHelpOptions = {},
 ): Promise<void> {
   const {
     csvFilePath,
@@ -188,7 +187,7 @@ export async function automateNeedHelpProcess(
         undefined,
         95,
         "agoda_need_help_process_started",
-        undefined
+        undefined,
       );
     }
 
@@ -216,7 +215,7 @@ export async function automateNeedHelpProcess(
         await page.click(selector);
         await dualLogInfo(
           `✅ Clicked 'Need Help' button with selector: ${selector}`,
-          { jobId }
+          { jobId },
         );
         needHelpClicked = true;
         break;
@@ -229,7 +228,7 @@ export async function automateNeedHelpProcess(
     if (!needHelpClicked) {
       await dualLogInfo(
         "Standard 'Need Help' button not found, trying fallback via Inbox...",
-        { jobId }
+        { jobId },
       );
 
       try {
@@ -261,7 +260,7 @@ export async function automateNeedHelpProcess(
             await page.click(selector);
             await dualLogInfo(
               `✅ Clicked Secondary 'Need Help' button with selector: ${selector}`,
-              { jobId }
+              { jobId },
             );
             needHelpClicked = true;
             break;
@@ -273,7 +272,7 @@ export async function automateNeedHelpProcess(
         await dualLogError(
           "Error in fallback Need Help flow:",
           fallbackError.message,
-          { jobId }
+          { jobId },
         );
       }
     }
@@ -285,13 +284,13 @@ export async function automateNeedHelpProcess(
         undefined,
         96,
         "agoda_need_help_button_clicked",
-        undefined
+        undefined,
       );
       await takeSuccessScreenshot(page, jobId, "need_help_button_clicked");
     } else if (!needHelpClicked) {
       await dualLogError(
         "Failed to click 'Need Help' button (standard and fallback)",
-        { jobId }
+        { jobId },
       );
     }
     // Step 2: Wait for sidebar to load and handle chat input
@@ -315,7 +314,7 @@ export async function automateNeedHelpProcess(
           });
           await dualLogInfo(
             `✅ Chat input field found with selector: ${selector}`,
-            { jobId }
+            { jobId },
           );
           chatInputFound = true;
           break;
@@ -342,7 +341,7 @@ export async function automateNeedHelpProcess(
             await page.type(selector, "contact agoda");
             await dualLogInfo(
               `✅ Typed 'contact agoda' with selector: ${selector}`,
-              { jobId }
+              { jobId },
             );
             break;
           } catch (error) {
@@ -368,7 +367,7 @@ export async function automateNeedHelpProcess(
           await page.click(selector);
           await dualLogInfo(
             `✅ Clicked send button with selector: ${selector}`,
-            { jobId }
+            { jobId },
           );
 
           stepResults.contactAgodaSent = true;
@@ -379,7 +378,7 @@ export async function automateNeedHelpProcess(
               undefined,
               96.5,
               "agoda_chat_message_sent",
-              undefined
+              undefined,
             );
             await takeSuccessScreenshot(page, jobId, "chat_contact_agoda_sent");
           }
@@ -388,11 +387,13 @@ export async function automateNeedHelpProcess(
           continue;
         }
       }
-
     } catch (err: any) {
-      await dualLogInfo(`❌ Error during chat sidebar handling: ${err.message}`, {
-        jobId,
-      });
+      await dualLogInfo(
+        `❌ Error during chat sidebar handling: ${err.message}`,
+        {
+          jobId,
+        },
+      );
     }
 
     await delay(10000);
@@ -414,7 +415,7 @@ export async function automateNeedHelpProcess(
           });
           await dualLogInfo(
             `✅ Chat input field found with selector: ${selector}`,
-            { jobId }
+            { jobId },
           );
           chatInputFound = true;
           break;
@@ -428,7 +429,10 @@ export async function automateNeedHelpProcess(
         await delay(2000);
 
         // Type "contact agoda" in the input field
-        await dualLogInfo("Typing 'support a submit request' in chat input...", { jobId });
+        await dualLogInfo(
+          "Typing 'support a submit request' in chat input...",
+          { jobId },
+        );
 
         const inputFieldSelectors = [
           'fieldset[data-testid="ChatWidgetInputFieldset"]',
@@ -441,7 +445,7 @@ export async function automateNeedHelpProcess(
             await page.type(selector, "support a submit request");
             await dualLogInfo(
               `✅ Typed 'support a submit request' with selector: ${selector}`,
-              { jobId }
+              { jobId },
             );
             break;
           } catch (error) {
@@ -467,7 +471,7 @@ export async function automateNeedHelpProcess(
           await page.click(selector);
           await dualLogInfo(
             `✅ Clicked send button with selector: ${selector}`,
-            { jobId }
+            { jobId },
           );
 
           stepResults.submitRequestPhraseSent = true;
@@ -478,20 +482,26 @@ export async function automateNeedHelpProcess(
               undefined,
               96.5,
               "agoda_chat_message_sent",
-              undefined
+              undefined,
             );
-            await takeSuccessScreenshot(page, jobId, "chat_submit_request_sent");
+            await takeSuccessScreenshot(
+              page,
+              jobId,
+              "chat_submit_request_sent",
+            );
           }
           break;
         } catch (error) {
           continue;
         }
       }
-
     } catch (err: any) {
-      await dualLogInfo(`❌ Error during chat sidebar handling: ${err.message}`, {
-        jobId,
-      });
+      await dualLogInfo(
+        `❌ Error during chat sidebar handling: ${err.message}`,
+        {
+          jobId,
+        },
+      );
     }
 
     // step 4: Click "submit request" button (Restored)
@@ -509,7 +519,7 @@ export async function automateNeedHelpProcess(
         await page.click(selector);
         await dualLogInfo(
           `✅ Clicked 'submit request' button with selector: ${selector}`,
-          { jobId }
+          { jobId },
         );
         stepResults.submitRequestButtonClicked = true;
 
@@ -520,9 +530,13 @@ export async function automateNeedHelpProcess(
             undefined,
             97,
             "agoda_submit_request_clicked",
-            undefined
+            undefined,
           );
-          await takeSuccessScreenshot(page, jobId, "submit_request_button_clicked");
+          await takeSuccessScreenshot(
+            page,
+            jobId,
+            "submit_request_button_clicked",
+          );
         }
         break;
       } catch (error) {
@@ -616,7 +630,7 @@ export async function automateNeedHelpProcess(
               await page.click(selector);
               await dualLogInfo(
                 `✅ Selected 'Other' option with selector: ${selector}`,
-                { jobId }
+                { jobId },
               );
               otherSelected = true;
               stepResults.issueTypeSelected = true;
@@ -630,7 +644,7 @@ export async function automateNeedHelpProcess(
             // Final fallback: try to select the last radio option
             await dualLogInfo(
               "Trying fallback: selecting last radio option...",
-              { jobId }
+              { jobId },
             );
             try {
               await page.evaluate(() => {
@@ -645,13 +659,13 @@ export async function automateNeedHelpProcess(
               stepResults.issueTypeSelected = true;
               await dualLogInfo(
                 "✅ Selected last radio option (should be 'Other')",
-                { jobId }
+                { jobId },
               );
             } catch (error: any) {
               await dualLogError(
                 "Failed to select 'Other' option with any method",
                 error.message,
-                { jobId }
+                { jobId },
               );
             }
           }
@@ -667,7 +681,7 @@ export async function automateNeedHelpProcess(
                 `✅ Closed dropdown with selector: ${selector}`,
                 {
                   jobId,
-                }
+                },
               );
               break;
             }
@@ -713,7 +727,7 @@ export async function automateNeedHelpProcess(
           await page.type(selector, messageContent);
           await dualLogInfo(
             `✅ Filled issue details with selector: ${selector}`,
-            { jobId }
+            { jobId },
           );
           stepResults.issueDetailsFilled = true;
 
@@ -724,7 +738,7 @@ export async function automateNeedHelpProcess(
               undefined,
               98,
               "agoda_issue_details_filled",
-              undefined
+              undefined,
             );
             await takeSuccessScreenshot(page, jobId, "issue_details_filled");
           }
@@ -770,7 +784,7 @@ export async function automateNeedHelpProcess(
                 await fileInput.uploadFile(csvFilePathToUpload);
                 await dualLogInfo(
                   `✅ Uploaded CSV file: ${csvFilePathToUpload} with selector: ${selector}`,
-                  { jobId }
+                  { jobId },
                 );
                 stepResults.csvUploaded = true;
 
@@ -781,7 +795,7 @@ export async function automateNeedHelpProcess(
                     undefined,
                     99,
                     "agoda_csv_file_uploaded",
-                    undefined
+                    undefined,
                   );
                   await takeSuccessScreenshot(page, jobId, "csv_file_uploaded");
                 }
@@ -824,7 +838,7 @@ export async function automateNeedHelpProcess(
           await page.type(selector, phoneNumber);
           await dualLogInfo(
             `✅ Filled phone number with selector: ${selector}`,
-            { jobId }
+            { jobId },
           );
           stepResults.phoneFilled = true;
           if (jobId) {
@@ -851,11 +865,23 @@ export async function automateNeedHelpProcess(
     // Fail if critical steps did not succeed instead of reporting success
     const criticalSteps = [
       { key: "needHelpClicked" as const, label: "Need Help button clicked" },
-      { key: "contactAgodaSent" as const, label: "'contact agoda' message sent" },
-      { key: "submitRequestButtonClicked" as const, label: "Submit request button clicked" },
-      { key: "issueTypeSelected" as const, label: "Issue type (Other) selected" },
+      {
+        key: "contactAgodaSent" as const,
+        label: "'contact agoda' message sent",
+      },
+      {
+        key: "submitRequestButtonClicked" as const,
+        label: "Submit request button clicked",
+      },
+      {
+        key: "issueTypeSelected" as const,
+        label: "Issue type (Other) selected",
+      },
       { key: "issueDetailsFilled" as const, label: "Issue details filled" },
-      { key: "finalSubmitClicked" as const, label: "Final submit button clicked" },
+      {
+        key: "finalSubmitClicked" as const,
+        label: "Final submit button clicked",
+      },
     ];
     const failedSteps = criticalSteps.filter((s) => !stepResults[s.key]);
     if (failedSteps.length > 0) {
@@ -872,7 +898,7 @@ export async function automateNeedHelpProcess(
         undefined,
         100,
         "agoda_need_help_process_completed",
-        undefined
+        undefined,
       );
     }
 
@@ -882,7 +908,7 @@ export async function automateNeedHelpProcess(
         jobId,
         timeSession: timeManager.getSessionInfo(),
         stepResults,
-      }
+      },
     );
     if (jobId) {
       await takeSuccessScreenshot(page, jobId, "need_help_process_completed");
@@ -903,7 +929,7 @@ export async function automateNeedHelpProcess(
       {
         jobId,
         timeSession: timeManager.getSessionInfo(),
-      }
+      },
     );
     if (jobId) {
       await takeErrorScreenshot(page, jobId, "need_help_process_failed");
@@ -918,7 +944,7 @@ export async function automateNeedHelpProcess(
           agodaId,
           propertyName,
           timeSession: timeManager.getSessionInfo(),
-        }
+        },
       );
 
       const cleanupResult = await cleanupOnError(jobId, {
@@ -937,13 +963,13 @@ export async function automateNeedHelpProcess(
           totalFilesProcessed: cleanupResult.totalFilesProcessed,
           errors: cleanupResult.errors.length,
           timeSession: timeManager.getSessionInfo(),
-        }
+        },
       );
     } catch (cleanupError: any) {
       await dualLogError(
         "Error during standardized cleanup (continuing with error handling):",
         cleanupError.message,
-        { jobId }
+        { jobId },
       );
       // Don't throw cleanup error - continue with original error handling
     }
@@ -955,7 +981,7 @@ export async function automateNeedHelpProcess(
         undefined,
         undefined,
         "agoda_need_help_process_error",
-        undefined
+        undefined,
       );
 
       // Explicitly fail the job in the database with failed_reason
@@ -965,17 +991,20 @@ export async function automateNeedHelpProcess(
         await jobService.updateJobStatusWithReason(
           jobId,
           JobStatus.Failed,
-          failedReason
-        );
-        await dualLogInfo("❌ Job marked as Failed in database with failed_reason", {
-          jobId,
           failedReason,
-        });
+        );
+        await dualLogInfo(
+          "❌ Job marked as Failed in database with failed_reason",
+          {
+            jobId,
+            failedReason,
+          },
+        );
       } catch (failError: any) {
         await dualLogError(
           "Failed to update job status to Failed:",
           failError.message,
-          { jobId }
+          { jobId },
         );
       }
     }
@@ -990,7 +1019,7 @@ export async function automateNeedHelpProcess(
 async function cleanupCsvFiles(
   agodaId?: string,
   propertyName?: string,
-  jobId?: string
+  jobId?: string,
 ): Promise<void> {
   try {
     await dualLogInfo("🧹 Starting CSV cleanup process...", {
@@ -1009,19 +1038,19 @@ async function cleanupCsvFiles(
           fs.rmSync(jobDownloadsDir, { recursive: true, force: true });
           await dualLogInfo(
             `✅ Removed job downloads folder: ${jobDownloadsDir}`,
-            { jobId }
+            { jobId },
           );
         } catch (error) {
           await dualLogError(
             `Failed to remove job downloads folder: ${jobDownloadsDir}`,
             error,
-            { jobId }
+            { jobId },
           );
         }
       } else {
         await dualLogInfo(
           `Job downloads folder does not exist: ${jobDownloadsDir}`,
-          { jobId }
+          { jobId },
         );
       }
     } else if (agodaId) {
@@ -1048,7 +1077,7 @@ async function cleanupCsvFiles(
               await dualLogError(
                 `Failed to delete download file: ${file}`,
                 error,
-                { jobId }
+                { jobId },
               );
             }
           }
@@ -1067,13 +1096,13 @@ async function cleanupCsvFiles(
           fs.rmSync(jobImportDir, { recursive: true, force: true });
           await dualLogInfo(
             `✅ Deleted job-specific import folder: ${jobImportDir}`,
-            { jobId }
+            { jobId },
           );
         } catch (error) {
           await dualLogError(
             `Failed to delete job-specific import folder: ${jobImportDir}`,
             error,
-            { jobId }
+            { jobId },
           );
         }
       }
@@ -1103,7 +1132,7 @@ async function cleanupCsvFiles(
                   await dualLogError(
                     `Failed to delete import file: ${file}`,
                     error,
-                    { jobId }
+                    { jobId },
                   );
                 }
               }
@@ -1121,7 +1150,7 @@ async function cleanupCsvFiles(
                   await dualLogError(
                     `Failed to delete import file: ${file}`,
                     error,
-                    { jobId }
+                    { jobId },
                   );
                 }
               }
@@ -1146,7 +1175,7 @@ async function cleanupCsvFiles(
  */
 async function extractCleanupInfo(
   csvFilePath?: string,
-  jobId?: string
+  jobId?: string,
 ): Promise<{ agodaId?: string; propertyName?: string }> {
   try {
     if (jobId) {
@@ -1185,7 +1214,7 @@ async function extractCleanupInfo(
 
     await dualLogInfo(
       "No cleanup info could be extracted, this may be expected for new standardized naming",
-      { jobId, csvFilePath }
+      { jobId, csvFilePath },
     );
     return {};
   } catch (error) {
@@ -1206,7 +1235,7 @@ export async function quickNeedHelp(page: Page, jobId?: string): Promise<void> {
  */
 export async function quickNeedHelpWithCleanup(
   page: Page,
-  jobId?: string
+  jobId?: string,
 ): Promise<void> {
   return automateNeedHelpProcess(page, { jobId, cleanupAfter: true });
 }
@@ -1216,7 +1245,7 @@ export async function quickNeedHelpWithCleanup(
  */
 export async function automateNeedHelpWithCleanup(
   page: Page,
-  options: NeedHelpOptions = {}
+  options: NeedHelpOptions = {},
 ): Promise<void> {
   try {
     // Run the Need Help process
@@ -1232,36 +1261,37 @@ export async function automateNeedHelpWithCleanup(
 
         const updateResult = await jobService.updateJobCaseOpen(
           options.jobId,
-          true
+          true,
         );
 
         await dualLogInfo(
-          `✅ Updated case_open to true for job ${updateResult?._id || options.jobId
+          `✅ Updated case_open to true for job ${
+            updateResult?._id || options.jobId
           }`,
           {
             jobId: options.jobId,
             timeSession: timeManager.getSessionInfo(),
-          }
+          },
         );
       } catch (caseOpenError: any) {
         await dualLogError(
           "❌ Error updating case_open field (continuing with cleanup):",
           caseOpenError.message,
-          { jobId: options.jobId }
+          { jobId: options.jobId },
         );
         // Don't throw error - continue with cleanup even if case_open update fails
       }
     } else {
       await dualLogInfo(
         "⚠️ No jobId provided - skipping case_open field update",
-        { timeSession: timeManager.getSessionInfo() }
+        { timeSession: timeManager.getSessionInfo() },
       );
     }
 
     // Extract cleanup information
     const { agodaId, propertyName } = await extractCleanupInfo(
       options.csvFilePath,
-      options.jobId
+      options.jobId,
     );
 
     // Clean up CSV files
@@ -1270,7 +1300,7 @@ export async function automateNeedHelpWithCleanup(
     await dualLogError(
       "❌ Need Help automation with cleanup failed:",
       error.message,
-      { jobId: options.jobId }
+      { jobId: options.jobId },
     );
 
     // Emergency cleanup on complete failure
@@ -1280,7 +1310,7 @@ export async function automateNeedHelpWithCleanup(
         {
           jobId: options.jobId,
           timeSession: timeManager.getSessionInfo(),
-        }
+        },
       );
 
       // Use standardized emergency cleanup
@@ -1303,7 +1333,7 @@ export async function automateNeedHelpWithCleanup(
       await dualLogError(
         "Error during emergency folder cleanup:",
         cleanupError.message,
-        { jobId: options.jobId }
+        { jobId: options.jobId },
       );
       // Don't throw cleanup error - continue with original error handling
     }
