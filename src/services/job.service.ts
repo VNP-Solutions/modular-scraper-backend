@@ -355,10 +355,12 @@ export class JobService {
 
   /**
    * Update job status
+   * @param workerAssigned When status is Running, stored on the job (e.g. `WORKER_ID:pool-worker-0`) so parallel jobs are distinguishable.
    */
   async updateJobStatus(
     jobId: string,
-    status: JobStatus
+    status: JobStatus,
+    workerAssigned?: string
   ): Promise<IJob | null> {
     try {
       const objectId = this.validateObjectId(jobId, "jobId");
@@ -370,7 +372,8 @@ export class JobService {
 
       // If changing to Running status, assign current worker and clear previous screenshot trail
       if (status === JobStatus.Running) {
-        updateData.worker_assigned = process.env.WORKER_ID || "scraper-worker";
+        updateData.worker_assigned =
+          workerAssigned ?? (process.env.WORKER_ID || "scraper-worker");
         updateData.screenshot_urls = [];
         updateData.failed_reason = null;
       }
@@ -385,8 +388,15 @@ export class JobService {
   /**
    * Start job - Update status to Running
    */
-  async startJob(jobId: string): Promise<IJob | null> {
-    return await this.updateJobStatus(jobId, JobStatus.Running);
+  async startJob(
+    jobId: string,
+    workerAssigned?: string
+  ): Promise<IJob | null> {
+    return await this.updateJobStatus(
+      jobId,
+      JobStatus.Running,
+      workerAssigned
+    );
   }
 
   /**
@@ -417,7 +427,8 @@ export class JobService {
   async updateJobStatusWithReason(
     jobId: string,
     status: JobStatus,
-    failedReason?: string | null
+    failedReason?: string | null,
+    workerAssigned?: string
   ): Promise<IJob | null> {
     try {
       const objectId = this.validateObjectId(jobId, "jobId");
@@ -426,7 +437,8 @@ export class JobService {
         updatedAt: new Date(),
       };
       if (status === JobStatus.Running) {
-        updateData.worker_assigned = process.env.WORKER_ID || "scraper-worker";
+        updateData.worker_assigned =
+          workerAssigned ?? (process.env.WORKER_ID || "scraper-worker");
         updateData.screenshot_urls = [];
         updateData.failed_reason = null;
       }

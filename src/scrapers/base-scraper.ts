@@ -44,6 +44,14 @@ export interface TwoFactorAuthOptions {
   page?: Page;
 }
 
+export interface BookingGroupScrapeStep {
+  jobId: string;
+  propertyIdForDb?: string;
+  /** Booking.com hotel / property id for navigation and VCCS. */
+  bookingId: string;
+  portfolioId?: string;
+}
+
 export interface ScrapingJobParams {
   jobId?: string;
   propertyId?: string;
@@ -53,6 +61,16 @@ export interface ScrapingJobParams {
   credentials?: LoginCredentials;
   maxPages?: number;
   timeoutMinutes?: number;
+  /** When set, BookingScraper logs in once then runs scrapeData per step (same session). */
+  bookingGroupSteps?: BookingGroupScrapeStep[];
+  /** Phone/OTP lease job id (usually first job in group); used when releasing after last property. */
+  groupOtpLeaseJobId?: string;
+  /** If false, skip worker OTP/phone release at start of scrapeData (group middle steps). Default true. */
+  releaseOtpAtScrapeStart?: boolean;
+  /** Target job id for releaseOtpFromWorker; defaults to jobId. */
+  otpReleaseJobId?: string;
+  /** Passed from worker for DB `worker_assigned` on Running jobs (parallel workers). */
+  workerAssignmentTag?: string;
 }
 
 export interface ScrapingResult {

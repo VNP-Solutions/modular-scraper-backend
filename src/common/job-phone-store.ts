@@ -120,6 +120,14 @@ export function getOurContactForJob(jobId: string | undefined): string {
 }
 
 /**
+ * Default OTP phone when a credential group omits phone_number (null / missing / blank).
+ * Uses OUR_CONTACT, else built-in fallback (same as single-contact OTP path).
+ */
+export function getDefaultOtpPhoneForGroupedRequest(): string {
+  return process.env.OUR_CONTACT?.trim() || DEFAULT_FALLBACK;
+}
+
+/**
  * Clears the stored contact for this job. Call when job ends.
  */
 export function clearJobPhone(jobId: string): void {

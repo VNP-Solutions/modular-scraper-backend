@@ -11,6 +11,8 @@ import { ScraperFactory, SupportedPlatforms, ScrapingJobParams, detectPlatform }
 
 dotenv.config();
 
+import type { BookingGroupScrapeStep } from "./scrapers/base-scraper.js";
+
 interface MultiPlatformJobParams {
   platform?: SupportedPlatforms | string;
   propertyId?: string;
@@ -21,6 +23,9 @@ interface MultiPlatformJobParams {
   user_email?: string;
   user_password?: string;
   url?: string; // For platform detection
+  bookingGroupSteps?: BookingGroupScrapeStep[];
+  groupOtpLeaseJobId?: string;
+  workerAssignmentTag?: string;
 }
 
 async function mainMultiPlatform(params: MultiPlatformJobParams): Promise<void> {
@@ -59,12 +64,19 @@ async function mainMultiPlatform(params: MultiPlatformJobParams): Promise<void> 
       await dualLogInfo(`No platform specified, defaulting to: ${platform}`);
     }
 
-    // Validate credentials
+    // Validate credentials (stored passwords are encrypted JSON; plain strings pass through)
     const email = params.user_email;
-    const password = params.user_password ? decryptPassword(params.user_password) : undefined;
+    let password: string | undefined;
+    if (params.user_password) {
+      try {
+        password = decryptPassword(params.user_password);
+      } catch {
+        password = params.user_password;
+      }
+    }
 
     if (!email || !password) {
-      throw new Error('Login credentials are required');
+      throw new Error("Login credentials are required");
     }
 
     // Create scraper instance
@@ -95,32 +107,54 @@ async function mainMultiPlatform(params: MultiPlatformJobParams): Promise<void> 
       endDate: params.endDate,
       credentials: {
         email,
-        password
-      }
+        password,
+      },
+      bookingGroupSteps: params.bookingGroupSteps,
+      groupOtpLeaseJobId: params.groupOtpLeaseJobId,
+      workerAssignmentTag: params.workerAssignmentTag,
     };
+
+    if (
+      platform === SupportedPlatforms.BOOKING &&
+      params.bookingGroupSteps &&
+      params.bookingGroupSteps.length > 0
+    ) {
+      const first = params.bookingGroupSteps[0];
+      scrapingParams.propertyId = params.propertyId ?? first.bookingId;
+      scrapingParams.propertyIdForDb =
+        params.propertyIdForDb ?? first.propertyIdForDb;
+      scrapingParams.jobId =
+        params.groupOtpLeaseJobId ?? params.jobId ?? first.jobId;
+      scrapingParams.groupOtpLeaseJobId =
+        params.groupOtpLeaseJobId ?? params.jobId ?? first.jobId;
+    }
 
     // Execute scraping
     await dualLogInfo(`Starting ${platform} scraping process`);
     const result = await scraper.executeScraping(scrapingParams);
 
-    if (result.success) {
-      await dualLogInfo(`${platform} scraping completed successfully`, {
-        dataKeys: result.data ? Object.keys(result.data) : [],
-        screenshots: result.screenshots?.length || 0
-      });
-
-      // Finalize logging with success status
-      if (params.jobId) {
-        await finalizeJobLogging("success");
-      }
-    } else {
+    if (!result.success) {
       await dualLogError(`${platform} scraping failed:`, result.error);
-      
-      // Finalize logging with failed status
+      if (
+        params.bookingGroupSteps &&
+        params.bookingGroupSteps.length > 0
+      ) {
+        throw new Error(result.error || "Booking group scrape failed");
+      }
       if (params.jobId) {
-        await finalizeJobLogging("failed");        }
+        await finalizeJobLogging("failed");
+      }
+      return;
     }
 
+    await dualLogInfo(`${platform} scraping completed successfully`, {
+      dataKeys: result.data ? Object.keys(result.data) : [],
+      screenshots: result.screenshots?.length || 0,
+    });
+
+    if (params.jobId) {
+      await finalizeJobLogging("success");
+    }
   } catch (error) {
     await dualLogError("Multi-platform scraping error:", error);
 

@@ -24,14 +24,19 @@ import { emailNotifier } from "../common/email-notifier.js";
 import { decryptPassword } from "../common/encription.js";
 import {
   FAILED_REASON,
+  getFailedReasonForUser,
   hasFailedReasonCode,
+  isStatusAlreadySaved,
+  markStatusSaved,
   setFailedReasonCode,
 } from "../common/failed-reason.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
+import { otpStatusManager } from "../common/otp-status-manager.js";
 import { generateRandomPassword } from "../common/password-generator.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import { SelectorUtils } from "../common/selector-utils.js";
 import { timeoutManager } from "../common/timeout-manager.js";
+import { JobStatus } from "../models/job.model.js";
 import { Property } from "../models/property.model.js";
 import handleBookingOtpVerification from "../otp-verification/booking-otp-verification.js";
 import { getPasswordResetUrl } from "../otp-verification/email-verification-utils.js";
@@ -42,6 +47,7 @@ import {
 import { cookieStorageService } from "../services/cookie-storage.service.js";
 import { propertyCredentialsService } from "../services/job-credentials.service.js";
 import { jobService } from "../services/job.service.js";
+import { phoneNumberSlotService } from "../services/phone-number-slot.service.js";
 import { propertyCredentialsService as propertyPasswordUpdateService } from "../services/property-credentials.service.js";
 import {
   vccsManagementService,
@@ -1322,10 +1328,10 @@ export class BookingScraper extends BaseScraper {
             action: "handle_captcha",
           }
         );
-        const { otpStatusManager } = await import(
-          "../common/otp-status-manager.js"
-        );
-        await otpStatusManager.forceReleaseOtp();
+        if (this.jobId && Types.ObjectId.isValid(this.jobId)) {
+          await phoneNumberSlotService.releaseByJobId(this.jobId);
+          await otpStatusManager.releaseBookingOtpMirrorByJobId(this.jobId);
+        }
         return false;
       }
 
@@ -3454,18 +3460,197 @@ export class BookingScraper extends BaseScraper {
     }
   }
 
+  override async executeScraping(
+    params: ScrapingJobParams
+  ): Promise<ScrapingResult> {
+    if (params.bookingGroupSteps && params.bookingGroupSteps.length > 0) {
+      return this.executeBookingGroupScraping(params);
+    }
+    return super.executeScraping(params);
+  }
+
+  /**
+   * One login for the account, then scrape each hotel (VCCS → view all → reservations → cards) in sequence.
+   */
+  private async executeBookingGroupScraping(
+    params: ScrapingJobParams
+  ): Promise<ScrapingResult> {
+    const steps = params.bookingGroupSteps!;
+    const leaseJobId =
+      params.groupOtpLeaseJobId ?? params.jobId ?? steps[0].jobId;
+    let anyStepCompleted = false;
+
+    try {
+      this.jobId = leaseJobId;
+      this.propertyIdForDb = steps[0].propertyIdForDb;
+      if (this.jobId && (this as any).captchaService) {
+        (this as any).captchaService.setJobId(this.jobId);
+      }
+
+      await scrapingStateManager.waitWhilePaused();
+      if (!scrapingStateManager.isRunning()) {
+        const err = new Error("Scraping was stopped before starting");
+        setFailedReasonCode(err, FAILED_REASON.BOOKING_SCRAPING_STOPPED);
+        throw err;
+      }
+
+      const { browser, page } = await this.setupBrowser(leaseJobId);
+      this.browser = browser;
+      this.page = page;
+
+      if (!params.credentials) {
+        throw new Error("Credentials required for booking group scrape");
+      }
+      this.credentials = params.credentials;
+
+      await dualLogInfo("Booking group: single login, then multiple properties", {
+        propertyCount: steps.length,
+        leaseJobId,
+      });
+
+      const workerTag = params.workerAssignmentTag;
+      for (let j = 1; j < steps.length; j++) {
+        await jobService.updateJobStatus(steps[j].jobId, JobStatus.InQueue);
+      }
+      await jobService.startJob(leaseJobId, workerTag);
+
+      await this.throwIfScrapingShouldStop("login");
+      await this.login(params.credentials, steps[0].bookingId);
+      const captchaHandled = await this.handleCaptcha();
+      if (!captchaHandled) {
+        await this.logError("Captcha handling failed");
+      }
+      const twoFAHandled = await this.handle2FA();
+      if (!twoFAHandled) {
+        await this.logInfo("2FA not required or skipped");
+      }
+
+      const aggregateResults: Array<{
+        jobId: string;
+        finalStatus: JobStatus;
+        progress: unknown;
+      }> = [];
+
+      for (let i = 0; i < steps.length; i++) {
+        const step = steps[i];
+        await this.throwIfScrapingShouldStop("scrape_data", {
+          jobId: step.jobId,
+          propertyId: step.bookingId,
+        });
+
+        this.jobId = step.jobId;
+        this.propertyIdForDb = step.propertyIdForDb;
+        if ((this as any).captchaService) {
+          (this as any).captchaService.setJobId(step.jobId);
+        }
+
+        scrapingStateManager.startScraping(step.bookingId, step.jobId);
+        if (i > 0) {
+          await jobService.startJob(step.jobId, workerTag);
+        }
+
+        const stepParams: ScrapingJobParams = {
+          ...params,
+          jobId: step.jobId,
+          propertyId: step.bookingId,
+          propertyIdForDb: step.propertyIdForDb,
+          releaseOtpAtScrapeStart: i === steps.length - 1,
+          otpReleaseJobId: leaseJobId,
+        };
+
+        const result = await this.scrapeData(stepParams);
+
+        if (!result.success) {
+          await jobService.failJobSafe(
+            step.jobId,
+            result.error || "Property scrape failed"
+          );
+          throw new Error(
+            result.error || `Booking group scrape failed for job ${step.jobId}`
+          );
+        }
+
+        const progress = await jobService.getJobProgress(step.jobId);
+        let finalStatus = JobStatus.Completed;
+        if (progress.totalItems === 0) {
+          finalStatus = JobStatus.Failed;
+        } else if (progress.completionPercentage < 100) {
+          finalStatus = JobStatus.Partial;
+        }
+        if (finalStatus === JobStatus.Failed) {
+          await jobService.updateJobStatusWithReason(
+            step.jobId,
+            JobStatus.Failed,
+            "No reservations found for the specified date range."
+          );
+        } else {
+          await jobService.updateJobStatus(step.jobId, finalStatus);
+        }
+
+        anyStepCompleted = true;
+        aggregateResults.push({ jobId: step.jobId, finalStatus, progress });
+      }
+
+      scrapingStateManager.stopScraping();
+      await dualLogInfo("Booking group scrape completed", {
+        count: steps.length,
+        leaseJobId,
+      });
+
+      return {
+        success: true,
+        data: {
+          platform: "booking",
+          group: true,
+          leaseJobId,
+          results: aggregateResults,
+        },
+      };
+    } catch (error) {
+      await dualLogError("Booking group scraping failed", error, {
+        leaseJobId,
+        platform: "booking",
+      });
+      scrapingStateManager.stopScraping();
+      if (
+        leaseJobId &&
+        !anyStepCompleted &&
+        !isStatusAlreadySaved(error)
+      ) {
+        try {
+          await jobService.failJobSafe(
+            leaseJobId,
+            getFailedReasonForUser(error) ||
+              "Booking group scrape failed."
+          );
+          markStatusSaved(error);
+        } catch {
+          /* ignore */
+        }
+      }
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Group scrape failed",
+      };
+    } finally {
+      await this.cleanup();
+    }
+  }
+
   async scrapeData(params: ScrapingJobParams): Promise<ScrapingResult> {
     try {
-      // Release OTP for booking.com - notify main thread
-      const releaseOtp = (global as any).releaseOtpFromWorker;
-      if (releaseOtp) {
-        releaseOtp(params.jobId);
-      } else {
-        // Fallback for non-worker environments
-        const { otpStatusManager } = await import(
-          "../common/otp-status-manager.js"
-        );
-        await otpStatusManager.forceReleaseOtp();
+      const shouldReleaseStart = params.releaseOtpAtScrapeStart !== false;
+      if (shouldReleaseStart) {
+        const releaseTargetId = params.otpReleaseJobId ?? params.jobId;
+        const releaseOtp = (global as any).releaseOtpFromWorker;
+        if (releaseOtp && releaseTargetId) {
+          releaseOtp(releaseTargetId);
+        } else if (releaseTargetId && Types.ObjectId.isValid(releaseTargetId)) {
+          await phoneNumberSlotService.releaseByJobId(releaseTargetId);
+          await otpStatusManager.releaseBookingOtpMirrorByJobId(
+            releaseTargetId
+          );
+        }
       }
       await this.logInfo(
         "Starting complete Booking.com scraping process",

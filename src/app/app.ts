@@ -5,6 +5,7 @@ import { isMainThread } from "worker_threads";
 import { emailNotifier } from "../common/email-notifier.js";
 import createError from "../common/error.js";
 import { setCurrentWorkerId } from "../common/log-helper.js";
+import { getDefaultOtpPhoneForGroupedRequest } from "../common/job-phone-store.js";
 import { otpAwareWorkerPool } from "../common/otp-aware-worker-pool.js";
 import { progressManager } from "../common/progress-manager.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
@@ -1260,6 +1261,480 @@ app.post("/api/booking/bulk-property-run-job", (async (
     });
   } catch (err: any) {
     console.error("Error in /api/booking/bulk-property-run-job:", err);
+
+    res.status(500).json({
+      status: 500,
+      message: "Error processing bulk booking run jobs",
+      error: err.message,
+    });
+  }
+}) as any);
+
+/** One credential group in POST /api/booking/bulk-property-run-job-grouped */
+interface BookingBulkCredentialGroup {
+  job_ids: string[];
+  phone_number?: string | null;
+  slot?: number | null;
+  booking_username: string;
+  booking_password: string;
+}
+
+function resolveGroupedCredentialContact(g: BookingBulkCredentialGroup): {
+  phone: string;
+  port?: string;
+} {
+  const defPhone = getDefaultOtpPhoneForGroupedRequest();
+
+  const raw = g.phone_number;
+  const hasPhone =
+    raw != null && typeof raw === "string" && raw.trim() !== "";
+  const hasSlot = g.slot != null && typeof g.slot === "number";
+
+  const phone = hasPhone ? raw.trim() : defPhone;
+  if (hasSlot) {
+    return { phone, port: String(g.slot) };
+  }
+  return { phone };
+}
+
+/**
+ * @swagger
+ * /api/booking/bulk-property-run-job-grouped:
+ *   post:
+ *     tags:
+ *       - Booking Jobs
+ *     summary: Bulk start booking scraping jobs (grouped endpoint)
+ *     description: |
+ *       Accepts credential_groups (job_ids plus booking_username/booking_password per group, optional phone_number and slot).
+ *       Omitted or null phone_number uses OUR_CONTACT (else built-in fallback). Omitted or null slot means no port (single-phone / IFTTT-style OTP path).
+ *       Resolved phone/port are passed as selectedContact on each job; worker pool does not overwrite them.
+ *       Each credential group is submitted as one booking-run-group job (single browser session: one login, then each property in job_ids order). Up to totalWorkers groups run in parallel on distinct workers; additional groups wait in FIFO order.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - credential_groups
+ *             properties:
+ *               credential_groups:
+ *                 type: array
+ *                 minItems: 1
+ *                 items:
+ *                   type: object
+ *                   required:
+ *                     - job_ids
+ *                     - booking_username
+ *                     - booking_password
+ *                   properties:
+ *                     job_ids:
+ *                       type: array
+ *                       minItems: 1
+ *                       items:
+ *                         type: string
+ *                     phone_number:
+ *                       type: string
+ *                       nullable: true
+ *                     slot:
+ *                       type: integer
+ *                       nullable: true
+ *                     booking_username:
+ *                       type: string
+ *                     booking_password:
+ *                       type: string
+ *               scheduler_id:
+ *                 type: string
+ *                 description: Optional scheduler ID to update with invalid job IDs
+ *                 example: "6892f4bf9df8bc296bdcdff2"
+ *     responses:
+ *       200:
+ *         description: Jobs submitted successfully, with details on valid and invalid jobs.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: number
+ *                 message:
+ *                   type: string
+ *                 results:
+ *                   type: object
+ *                   properties:
+ *                     submitted:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           jobId: { type: string }
+ *                           status: { type: string, enum: ["submitted", "failed"] }
+ *                     invalid:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           jobId: { type: string }
+ *                           reason: { type: string }
+ *                           currentStatus: { type: string }
+ *                     errors:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           jobId: { type: string }
+ *                           error: { type: string }
+ *       400:
+ *         description: Missing required parameters in request body
+ *       500:
+ *         description: Error processing bulk booking run jobs
+ */
+app.post("/api/booking/bulk-property-run-job-grouped", (async (
+  req: express.Request,
+  res: express.Response
+) => {
+  try {
+    const { credential_groups, scheduler_id } = req.body;
+
+    if (
+      !credential_groups ||
+      !Array.isArray(credential_groups) ||
+      credential_groups.length === 0
+    ) {
+      return res.status(400).json({
+        status: 400,
+        message:
+          "credential_groups is required and must be a non-empty array",
+      });
+    }
+
+    for (let i = 0; i < credential_groups.length; i++) {
+      const g = credential_groups[i];
+      if (!g || typeof g !== "object") {
+        return res.status(400).json({
+          status: 400,
+          message: `credential_groups[${i}] must be an object`,
+        });
+      }
+      if (!Array.isArray(g.job_ids) || g.job_ids.length === 0) {
+        return res.status(400).json({
+          status: 400,
+          message: `credential_groups[${i}].job_ids must be a non-empty array`,
+        });
+      }
+      const badJobId = g.job_ids.find(
+        (id: unknown) => typeof id !== "string" || id.trim() === ""
+      );
+      if (badJobId !== undefined) {
+        return res.status(400).json({
+          status: 400,
+          message: `credential_groups[${i}].job_ids must contain only non-empty strings`,
+        });
+      }
+      if (
+        typeof g.booking_username !== "string" ||
+        g.booking_username.trim() === ""
+      ) {
+        return res.status(400).json({
+          status: 400,
+          message: `credential_groups[${i}].booking_username is required`,
+        });
+      }
+      if (typeof g.booking_password !== "string") {
+        return res.status(400).json({
+          status: 400,
+          message: `credential_groups[${i}].booking_password must be a string`,
+        });
+      }
+      if (
+        g.phone_number !== null &&
+        g.phone_number !== undefined &&
+        typeof g.phone_number !== "string"
+      ) {
+        return res.status(400).json({
+          status: 400,
+          message: `credential_groups[${i}].phone_number must be a string or null`,
+        });
+      }
+      if (
+        g.slot !== null &&
+        g.slot !== undefined &&
+        typeof g.slot !== "number"
+      ) {
+        return res.status(400).json({
+          status: 400,
+          message: `credential_groups[${i}].slot must be a number or null`,
+        });
+      }
+    }
+
+    const groups = credential_groups as BookingBulkCredentialGroup[];
+    const jobIdToSelectedContact = new Map<
+      string,
+      { phone: string; port?: string }
+    >();
+    for (const g of groups) {
+      const contact = resolveGroupedCredentialContact(g);
+      for (const id of g.job_ids) {
+        jobIdToSelectedContact.set(id, contact);
+      }
+    }
+
+    const job_ids = groups.flatMap((g) => g.job_ids);
+
+    // Check if worker threads are available
+    if (
+      !otpAwareWorkerPool.hasAvailableWorkers() &&
+      otpAwareWorkerPool.isQueueFull()
+    ) {
+      return res.status(200).json({
+        status: 200,
+        message: "All server busy, try again",
+        workerStatus: otpAwareWorkerPool.getStatus(),
+      });
+    }
+
+    // Validate all jobs exist and can be run
+    const jobValidations = await Promise.all(
+      job_ids.map(async (jobId: string) => {
+        const validation = await jobService.validateJob(jobId);
+        return { jobId, validation };
+      })
+    );
+
+    // Separate valid and invalid jobs
+    const validJobs = jobValidations.filter(
+      (j) => j.validation.exists && j.validation.canRun
+    );
+    const invalidJobs = jobValidations.filter(
+      (j) => !j.validation.exists || !j.validation.canRun
+    );
+
+    // Get job data for valid jobs only (credentials come from credential_groups, not DB)
+    const jobsData = await Promise.all(
+      validJobs.map(async ({ jobId }) => {
+        try {
+          const jobData = await jobService.getBookingIdFromJob(jobId);
+          const bookingCredentials =
+            await propertyCredentialsService.getBookingCredentialsFromJob(
+              jobId
+            );
+
+          if (!jobData || !jobData.bookingId) {
+            return {
+              jobId,
+              error: `Cannot retrieve valid booking_id for job ${jobId}. Property may not have booking_id assigned or booking_id is "0".`,
+            };
+          }
+
+          if (!jobData.propertyId) {
+            return {
+              jobId,
+              error: `Cannot retrieve valid portfolioId or propertyId for job ${jobId}. Job may be missing required references.`,
+            };
+          }
+
+          return { jobId, jobData, bookingCredentials };
+        } catch (error) {
+          return {
+            jobId,
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
+      })
+    );
+
+    // Separate jobs with valid data from those with errors
+    const validJobsData = jobsData.filter(
+      (
+        j
+      ): j is {
+        jobId: string;
+        jobData: any;
+        bookingCredentials: any;
+      } => !("error" in j)
+    );
+    const jobsWithErrors = jobsData.filter((j) => "error" in j);
+
+    // Submit all jobs asynchronously without waiting - fire and forget
+    const results: {
+      submitted: Array<{ jobId: string; status: string; data?: any }>;
+      invalid: Array<{ jobId: string; reason: string; currentStatus?: string }>;
+      errors: Array<{ jobId: string; error: string }>;
+    } = {
+      submitted: [],
+      invalid: [],
+      errors: [],
+    };
+
+    // Add invalid jobs to results
+    invalidJobs.forEach(({ jobId, validation }) => {
+      results.invalid.push({
+        jobId,
+        reason: !validation.exists
+          ? "Job not found"
+          : "Job is not in a runnable state",
+        currentStatus: validation.job?.job_status || undefined,
+      });
+    });
+
+    // Add jobs with errors to results
+    jobsWithErrors.forEach((job) => {
+      if ("error" in job && job.error) {
+        results.errors.push({
+          jobId: job.jobId,
+          error: job.error,
+        });
+      }
+    });
+
+    // Same group → same worker, jobs sequential. totalWorkers pipelines pull groups from a FIFO queue (extra groups wait).
+    type ValidJobEntry = (typeof validJobsData)[number];
+    const validJobById = new Map(
+      validJobsData.map((j) => [j.jobId, j] as const)
+    );
+    const totalWorkers = Math.max(
+      1,
+      otpAwareWorkerPool.getStatus().totalWorkers
+    );
+
+    type GroupRun = {
+      jobs: ValidJobEntry[];
+      booking_username: string;
+      booking_password: string;
+    };
+    const groupRuns: GroupRun[] = [];
+    for (const g of groups) {
+      const jobsInGroup = g.job_ids
+        .map((id: string) => validJobById.get(id))
+        .filter((j): j is ValidJobEntry => j != null);
+      if (jobsInGroup.length > 0) {
+        groupRuns.push({
+          jobs: jobsInGroup,
+          booking_username: g.booking_username.trim(),
+          booking_password: g.booking_password,
+        });
+      }
+    }
+
+    for (const run of groupRuns) {
+      for (const job of run.jobs) {
+        results.submitted.push({
+          jobId: job.jobId,
+          status: "submitted",
+        });
+      }
+    }
+
+    let nextGroupIndex = 0;
+    const takeNextGroup = (): GroupRun | null => {
+      if (nextGroupIndex >= groupRuns.length) {
+        return null;
+      }
+      const run = groupRuns[nextGroupIndex];
+      nextGroupIndex += 1;
+      return run;
+    };
+
+    const runPipeline = async (pinnedWorkerId: string) => {
+      for (;;) {
+        const run = takeNextGroup();
+        if (!run) {
+          break;
+        }
+        const jobsInGroup = run.jobs;
+        const leaseJobId = jobsInGroup[0].jobId;
+        const selectedContact = jobIdToSelectedContact.get(leaseJobId);
+        const workerJobData: WorkerJobData = {
+          jobType: JobType.BookingRunGroup,
+          jobId: leaseJobId,
+          user_email: run.booking_username,
+          user_password: run.booking_password,
+          bookingGroup: jobsInGroup.map((j) => ({
+            jobId: j.jobId,
+            portfolioId: j.jobData.portfolioId,
+            propertyId: j.jobData.propertyId,
+            bookingId: j.jobData.bookingId,
+          })),
+          pinnedWorkerId,
+          ...(selectedContact ? { selectedContact } : {}),
+        };
+
+        try {
+          await otpAwareWorkerPool.executeJob(workerJobData);
+        } catch (error) {
+          console.error(
+            `Error submitting booking group (lease ${leaseJobId}):`,
+            error
+          );
+          for (const j of jobsInGroup) {
+            try {
+              await jobService.updateJobStatus(j.jobId, JobStatus.Failed);
+            } catch (statusError) {
+              console.error(
+                `Error updating job ${j.jobId} status to Failed:`,
+                statusError
+              );
+            }
+          }
+        }
+      }
+    };
+
+    void (async () => {
+      await Promise.all(
+        Array.from({ length: totalWorkers }, (_, wi) =>
+          runPipeline(`worker-${wi}`)
+        )
+      );
+    })();
+
+    // Update scheduled job comment with invalid job IDs if scheduler_id is provided
+    if (scheduler_id) {
+      try {
+        const invalidJobIds = [
+          ...results.invalid.map((j) => j.jobId),
+          ...results.errors.map((j) => j.jobId),
+        ];
+
+        if (invalidJobIds.length > 0) {
+          const invalidJobIdsString = invalidJobIds.join(", ");
+          const scheduledJob = await ScheduledJob.findById(scheduler_id);
+
+          if (scheduledJob) {
+            const existingComment = scheduledJob.comment || "";
+            const newComment = existingComment
+              ? `${existingComment}\nInvalid job IDs: ${invalidJobIdsString}`
+              : `Invalid job IDs: ${invalidJobIdsString}`;
+
+            await ScheduledJob.findByIdAndUpdate(scheduler_id, {
+              comment: newComment,
+            });
+            console.log(
+              `Updated scheduled job ${scheduler_id} comment with invalid job IDs`
+            );
+          } else {
+            console.warn(
+              `Scheduled job ${scheduler_id} not found, skipping comment update`
+            );
+          }
+        }
+      } catch (schedulerError) {
+        console.error(
+          `Error updating scheduled job ${scheduler_id} comment:`,
+          schedulerError
+        );
+        // Don't fail the request if scheduler update fails
+      }
+    }
+
+    return res.status(200).json({
+      status: 200,
+      message: `Processed ${job_ids.length} jobs. ${results.submitted.length} submitted, ${results.invalid.length} invalid, ${results.errors.length} with errors.`,
+      results,
+    });
+  } catch (err: any) {
+    console.error("Error in /api/booking/bulk-property-run-job-grouped:", err);
 
     res.status(500).json({
       status: 500,

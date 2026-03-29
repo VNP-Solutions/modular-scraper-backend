@@ -335,6 +335,8 @@ export class WorkerPool extends EventEmitter {
     activeWorker.resolve = resolve;
     activeWorker.reject = reject;
 
+    jobData.assignedWorkerPoolId = workerId;
+
     // Send job to worker
     try {
       activeWorker.worker.postMessage(jobData);

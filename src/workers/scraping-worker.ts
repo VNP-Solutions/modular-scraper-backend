@@ -61,6 +61,13 @@ class ScrapingWorker {
   private currentJobId?: string;
   private isShuttingDown = false;
 
+  /** Distinct value per pool worker thread for `job.worker_assigned` when Running. */
+  private workerPoolAssignmentTag(jobData: WorkerJobData): string {
+    const base = process.env.WORKER_ID || "scraper-worker";
+    const pool = jobData.assignedWorkerPoolId;
+    return pool ? `${base}:${pool}` : base;
+  }
+
   constructor() {
     // Set the thread ID for logging immediately when worker starts
     // Worker threads will be Thread-2, Thread-3, Thread-4, etc.
@@ -205,6 +212,10 @@ class ScrapingWorker {
           result = await this.handleBookingRun(jobData);
           break;
 
+        case JobType.BookingRunGroup:
+          result = await this.handleBookingRunGroup(jobData);
+          break;
+
         case JobType.BookingRerunFailed:
           result = await this.handleBookingRerunFailed(jobData);
           break;
@@ -290,7 +301,7 @@ class ScrapingWorker {
 
     // 3. Update job status to Running
     console.log(`Worker: Starting job ${jobId}...`);
-    await jobService.startJob(jobId);
+    await jobService.startJob(jobId, this.workerPoolAssignmentTag(jobData));
 
     // 4. Initialize job logging
     initializeJobLogging(jobId);
@@ -428,7 +439,7 @@ class ScrapingWorker {
     await jobService.updateJobStatus(jobId, JobStatus.Pending);
 
     console.log(`Worker: Starting job ${jobId}...`);
-    await jobService.startJob(jobId);
+    await jobService.startJob(jobId, this.workerPoolAssignmentTag(jobData));
 
     // 6. Initialize job logging
     initializeJobLogging(jobId);
@@ -640,7 +651,7 @@ class ScrapingWorker {
 
     // 3. Update job status to Running
     await dualLogInfo(`Worker: Starting booking job ${jobId}...`);
-    await jobService.startJob(jobId);
+    await jobService.startJob(jobId, this.workerPoolAssignmentTag(jobData));
 
     // 4. Initialize job logging
     initializeJobLogging(jobId);
@@ -798,6 +809,85 @@ class ScrapingWorker {
       });
 
       throw error;
+    }
+  }
+
+  private async handleBookingRunGroup(jobData: WorkerJobData): Promise<any> {
+    const bookingGroup = jobData.bookingGroup as Array<{
+      jobId: string;
+      portfolioId?: string;
+      propertyId?: string;
+      bookingId: number;
+    }>;
+    const leaseJobId = jobData.jobId;
+    const { user_email, user_password } = jobData;
+
+    if (!bookingGroup?.length) {
+      throw new Error("bookingGroup is required for booking-run-group");
+    }
+    if (!leaseJobId) {
+      throw new Error("jobId (lease) is required for booking-run-group");
+    }
+    if (!user_email || !user_password) {
+      throw new Error(
+        "user_email and user_password are required for booking-run-group"
+      );
+    }
+
+    for (const step of bookingGroup) {
+      const validation = await jobService.validateJob(step.jobId);
+      if (!validation.exists) {
+        throw new Error(`Job with ID ${step.jobId} not found`);
+      }
+      if (!validation.canRun) {
+        throw new Error(
+          `Job ${step.jobId} is not in a runnable state. Current status: ${validation.job?.job_status}`
+        );
+      }
+    }
+
+    await dualLogInfo(
+      `Worker: booking-run-group lease ${leaseJobId}, ${bookingGroup.length} property job(s) (one login)`
+    );
+
+    scrapingStateManager.startScraping(
+      String(bookingGroup[0].bookingId),
+      leaseJobId
+    );
+
+    try {
+      await mainMultiPlatform({
+        platform: "booking",
+        jobId: leaseJobId,
+        groupOtpLeaseJobId: leaseJobId,
+        user_email,
+        user_password,
+        bookingGroupSteps: bookingGroup.map((s) => ({
+          jobId: s.jobId,
+          portfolioId: s.portfolioId,
+          propertyIdForDb: s.propertyId,
+          bookingId: String(s.bookingId),
+        })),
+        propertyId: String(bookingGroup[0].bookingId),
+        propertyIdForDb: bookingGroup[0].propertyId,
+        workerAssignmentTag: this.workerPoolAssignmentTag(jobData),
+      });
+
+      return {
+        status: 200,
+        message: "Booking group scraping completed",
+        jobId: leaseJobId,
+        groupSize: bookingGroup.length,
+        finalStatus: JobStatus.Completed,
+        trackingStatus: JobStatus.Completed,
+      };
+    } catch (error: any) {
+      await progressManager.handleJobError(leaseJobId, error).catch(() => {});
+      throw error;
+    } finally {
+      if (scrapingStateManager.isRunning()) {
+        scrapingStateManager.stopScraping();
+      }
     }
   }
 

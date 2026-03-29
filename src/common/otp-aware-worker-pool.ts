@@ -7,9 +7,15 @@ import { Worker } from "worker_threads";
 import { JobStatus } from "../models/job.model.js";
 import { OtpPlatform } from "../models/otp-status.model.js";
 import { jobService } from "../services/job.service.js";
+import { phoneNumberSlotService } from "../services/phone-number-slot.service.js";
 import { otpStatusManager, OtpStatusManager } from "./otp-status-manager.js";
+import {
+  DEFAULT_BOOKING_OTP_LANE,
+  getBookingPhoneSlotForLock,
+} from "./booking-otp-lane.js";
 import { getNextContactForJob } from "./job-phone-store.js";
 import {
+  JobType,
   WorkerInfo,
   WorkerJobData,
   WorkerMessage,
@@ -175,7 +181,7 @@ export class OtpAwareWorkerPool extends EventEmitter {
       case "job-progress":
         // Check if this is OTP completion
         if (message.data?.otpCompleted === true) {
-          this.handleOtpCompleted(workerId, message.jobId);
+          await this.handleOtpCompleted(workerId, message.jobId);
         }
 
         console.log(
@@ -218,10 +224,11 @@ export class OtpAwareWorkerPool extends EventEmitter {
 
       case "otp-release":
         console.log(
-          `\x1b[32m[OTP-RELEASE] Worker ${workerId} requested OTP release for job ${message.jobId}\x1b[0m`
+          `\x1b[32m[OTP-RELEASE] Worker ${workerId} requested phone slot + otp_status mirror release for job ${message.jobId}\x1b[0m`
         );
-        // Release OTP on main thread
-        await this.otpManager.forceReleaseOtp();
+        await phoneNumberSlotService.releaseByJobId(message.jobId);
+        await this.otpManager.releaseBookingOtpMirrorByJobId(message.jobId);
+        await this.processQueue();
         break;
     }
   }
@@ -232,14 +239,11 @@ export class OtpAwareWorkerPool extends EventEmitter {
   ): Promise<void> {
     console.log(`OTP work completed for job ${jobId} on worker ${workerId}`);
 
-    // Release OTP so other jobs can use it
-    const released = await this.otpManager.releaseOtp(jobId);
-    if (released) {
-      console.log(`OTP released for job ${jobId}, processing queue...`);
-      // Process queue will be triggered by the otpReleased event
-    } else {
-      console.warn(`Failed to release OTP for job ${jobId}`);
-    }
+    const activeWorker = this.workers.get(workerId);
+    const jobType = activeWorker?.info.currentJobType;
+    await this.releaseJobOtpResources(jobId, jobType);
+    await this.processQueue();
+    console.log(`OTP / phone slot released for job ${jobId}`);
   }
 
   private async handleJobComplete(
@@ -249,9 +253,13 @@ export class OtpAwareWorkerPool extends EventEmitter {
     const activeWorker = this.workers.get(workerId);
     if (!activeWorker) return;
 
+    const jobType = activeWorker.info.currentJobType;
+    await this.releaseJobOtpResources(message.jobId, jobType);
+
     // Mark worker as available
     activeWorker.info.isAvailable = true;
     activeWorker.info.currentJobId = undefined;
+    activeWorker.info.currentJobType = undefined;
     activeWorker.info.startTime = undefined;
 
     // Resolve the promise
@@ -290,13 +298,14 @@ export class OtpAwareWorkerPool extends EventEmitter {
 
     // If this job had reserved OTP, release it
     if (activeWorker.info.currentJobId === jobId) {
-      console.log(`Releasing OTP for failed job ${jobId}`);
-      await this.otpManager.releaseOtp(jobId);
+      console.log(`Releasing OTP / phone slot for failed job ${jobId}`);
+      await this.releaseJobOtpResources(jobId, activeWorker.info.currentJobType);
     }
 
     // Mark worker as available
     activeWorker.info.isAvailable = true;
     activeWorker.info.currentJobId = undefined;
+    activeWorker.info.currentJobType = undefined;
     activeWorker.info.startTime = undefined;
 
     // Reject the promise
@@ -333,9 +342,13 @@ export class OtpAwareWorkerPool extends EventEmitter {
     // If this worker had a job that reserved OTP, release it
     if (activeWorker.info.currentJobId) {
       console.log(
-        `Releasing OTP for worker error on job ${activeWorker.info.currentJobId}`
+        `Releasing OTP / phone slot for worker error on job ${activeWorker.info.currentJobId}`
       );
-      await this.otpManager.releaseOtp(activeWorker.info.currentJobId);
+      await this.releaseJobOtpResources(
+        activeWorker.info.currentJobId,
+        activeWorker.info.currentJobType
+      );
+      await this.processQueue();
     }
 
     // Reject current job if any
@@ -359,9 +372,13 @@ export class OtpAwareWorkerPool extends EventEmitter {
     // If this worker had a job that reserved OTP, release it
     if (activeWorker.info.currentJobId) {
       console.log(
-        `Releasing OTP for worker exit on job ${activeWorker.info.currentJobId}`
+        `Releasing OTP / phone slot for worker exit on job ${activeWorker.info.currentJobId}`
       );
-      await this.otpManager.releaseOtp(activeWorker.info.currentJobId);
+      await this.releaseJobOtpResources(
+        activeWorker.info.currentJobId,
+        activeWorker.info.currentJobType
+      );
+      await this.processQueue();
     }
 
     // Reject current job if any
@@ -412,8 +429,8 @@ export class OtpAwareWorkerPool extends EventEmitter {
       // Determine if this job requires OTP
       const requiresOtp = this.jobRequiresOtp(jobData);
 
-      // Assign contact in round-robin for even distribution (no contact picked more than others)
-      if (requiresOtp) {
+      // Assign contact in round-robin unless caller already set selectedContact (e.g. grouped booking API)
+      if (requiresOtp && !jobData.selectedContact?.phone) {
         jobData.selectedContact = getNextContactForJob();
       }
 
@@ -440,6 +457,8 @@ export class OtpAwareWorkerPool extends EventEmitter {
       "graphql-run",
       "agoda-property-run",
       "booking-run",
+      "booking-run-group",
+      "booking-rerun-failed",
     ].includes(jobData.jobType);
   }
 
@@ -460,6 +479,29 @@ export class OtpAwareWorkerPool extends EventEmitter {
     }
   }
 
+  /**
+   * For `booking-run-group`, every property job id should show InQueue while waiting — not only the lease id.
+   */
+  private async applyInQueueStatusForJobData(
+    jobData: WorkerJobData
+  ): Promise<void> {
+    if (
+      jobData.jobType === JobType.BookingRunGroup &&
+      Array.isArray(jobData.bookingGroup)
+    ) {
+      const seen = new Set<string>();
+      for (const step of jobData.bookingGroup) {
+        const id = step?.jobId;
+        if (id && !seen.has(id)) {
+          seen.add(id);
+          await this.updateJobStatusToInQueue(id);
+        }
+      }
+      return;
+    }
+    await this.updateJobStatusToInQueue(jobData.jobId);
+  }
+
   private getJobPlatform(jobData: WorkerJobData): OtpPlatform {
     // Determine platform based on job type
     if (
@@ -476,7 +518,9 @@ export class OtpAwareWorkerPool extends EventEmitter {
     ) {
       return OtpPlatform.Agoda;
     } else if (
-      ["booking-run", "booking-rerun-failed"].includes(jobData.jobType)
+      ["booking-run", "booking-run-group", "booking-rerun-failed"].includes(
+        jobData.jobType
+      )
     ) {
       return OtpPlatform.Booking;
     }
@@ -484,46 +528,129 @@ export class OtpAwareWorkerPool extends EventEmitter {
     return OtpPlatform.Expedia;
   }
 
+  /** Booking uses phone_number_slots; other OTP job types use otp_status default lane. */
+  private usesBookingPhoneNumberSlot(jobData: WorkerJobData): boolean {
+    return (
+      jobData.jobType === JobType.BookingRun ||
+      jobData.jobType === JobType.BookingRunGroup ||
+      jobData.jobType === JobType.BookingRerunFailed
+    );
+  }
+
+  private getOtpLaneKey(_jobData: WorkerJobData): string {
+    return DEFAULT_BOOKING_OTP_LANE;
+  }
+
+  private jobUsesPhoneSlotOnly(jobType: string | undefined): boolean {
+    if (!jobType) return false;
+    return (
+      jobType === JobType.BookingRun ||
+      jobType === JobType.BookingRunGroup ||
+      jobType === JobType.BookingRerunFailed
+    );
+  }
+
+  /**
+   * Booking: only `phone_number_slots`. Expedia/Agoda OTP jobs: only `otp_status`.
+   * If job type is unknown, release both (idempotent where unused).
+   */
+  private async releaseJobOtpResources(
+    jobId: string,
+    jobType: string | undefined
+  ): Promise<void> {
+    if (this.jobUsesPhoneSlotOnly(jobType)) {
+      await phoneNumberSlotService.releaseByJobId(jobId);
+      await this.otpManager.releaseBookingOtpMirrorByJobId(jobId);
+      return;
+    }
+    if (jobType) {
+      await this.otpManager.releaseOtp(jobId);
+      return;
+    }
+    await phoneNumberSlotService.releaseByJobId(jobId);
+    await this.otpManager.releaseOtp(jobId);
+    await this.otpManager.releaseBookingOtpMirrorByJobId(jobId);
+  }
+
   private async tryAssignJob(queuedJob: QueuedJob): Promise<void> {
-    // Check worker availability
-    const availableWorker = this.getAvailableWorker();
+    // Check worker availability (optionally pinned to a specific worker)
+    const availableWorker = this.getAvailableWorker(
+      queuedJob.jobData.pinnedWorkerId
+    );
     if (!availableWorker) {
       // No workers available, add to queue
       this.jobQueue.push(queuedJob);
-      await this.updateJobStatusToInQueue(queuedJob.jobData.jobId);
+      await this.applyInQueueStatusForJobData(queuedJob.jobData);
       console.log(
         `\x1b[33mJob ${queuedJob.jobData.jobId} queued (no workers). Queue size: ${this.jobQueue.length}\x1b[0m`
       );
       return;
     }
 
-    // If job requires OTP, check OTP availability
+    // Booking: lock phone_number_slots; other OTP jobs: lock otp_status (default lane)
     if (queuedJob.requiresOtp) {
-      const isOtpAvailable = this.otpManager.isOtpAvailable();
-      if (!isOtpAvailable) {
-        // OTP not available, add to queue
-        this.jobQueue.push(queuedJob);
-        await this.updateJobStatusToInQueue(queuedJob.jobData.jobId);
-        console.log(
-          `\x1b[33mJob ${queuedJob.jobData.jobId} queued (OTP occupied). Queue size: ${this.jobQueue.length}\x1b[0m`
+      if (this.usesBookingPhoneNumberSlot(queuedJob.jobData)) {
+        const { phone_number, slot } = getBookingPhoneSlotForLock({
+          selectedContact: queuedJob.jobData.selectedContact,
+        });
+        const slotFree = await phoneNumberSlotService.isSlotAvailable(
+          phone_number,
+          slot
         );
-        return;
-      }
-
-      // Reserve OTP before assigning job
-      const platform = this.getJobPlatform(queuedJob.jobData);
-      const otpReserved = await this.otpManager.reserveOtp(
-        queuedJob.jobData.jobId,
-        platform
-      );
-      if (!otpReserved) {
-        // Failed to reserve OTP (race condition), add to queue
-        this.jobQueue.push(queuedJob);
-        await this.updateJobStatusToInQueue(queuedJob.jobData.jobId);
-        console.log(
-          `Job ${queuedJob.jobData.jobId} queued (OTP reservation failed). Queue size: ${this.jobQueue.length}`
+        if (!slotFree) {
+          this.jobQueue.push(queuedJob);
+          await this.applyInQueueStatusForJobData(queuedJob.jobData);
+          console.log(
+            `\x1b[33mJob ${queuedJob.jobData.jobId} queued (phone ${phone_number} slot ${slot} occupied). Queue size: ${this.jobQueue.length}\x1b[0m`
+          );
+          return;
+        }
+        const reserved = await phoneNumberSlotService.reserveSlot(
+          queuedJob.jobData.jobId,
+          phone_number,
+          slot
         );
-        return;
+        if (!reserved) {
+          this.jobQueue.push(queuedJob);
+          await this.applyInQueueStatusForJobData(queuedJob.jobData);
+          console.log(
+            `Job ${queuedJob.jobData.jobId} queued (phone slot reservation failed). Queue size: ${this.jobQueue.length}`
+          );
+          return;
+        }
+        await this.otpManager.setBookingOtpMirrorOccupied(
+          queuedJob.jobData.jobId,
+          phone_number,
+          slot
+        );
+      } else {
+        const platform = this.getJobPlatform(queuedJob.jobData);
+        const laneKey = this.getOtpLaneKey(queuedJob.jobData);
+        const isOtpAvailable = await this.otpManager.isOtpAvailableForLane(
+          platform,
+          laneKey
+        );
+        if (!isOtpAvailable) {
+          this.jobQueue.push(queuedJob);
+          await this.applyInQueueStatusForJobData(queuedJob.jobData);
+          console.log(
+            `\x1b[33mJob ${queuedJob.jobData.jobId} queued (OTP lane "${laneKey}" busy). Queue size: ${this.jobQueue.length}\x1b[0m`
+          );
+          return;
+        }
+        const otpReserved = await this.otpManager.reserveOtp(
+          queuedJob.jobData.jobId,
+          platform,
+          laneKey
+        );
+        if (!otpReserved) {
+          this.jobQueue.push(queuedJob);
+          await this.applyInQueueStatusForJobData(queuedJob.jobData);
+          console.log(
+            `Job ${queuedJob.jobData.jobId} queued (OTP reservation failed). Queue size: ${this.jobQueue.length}`
+          );
+          return;
+        }
       }
     }
 
@@ -545,7 +672,17 @@ export class OtpAwareWorkerPool extends EventEmitter {
     );
   }
 
-  private getAvailableWorker(): string | null {
+  /**
+   * @param pinnedWorkerId If set, only that worker id is considered (must exist and be available).
+   */
+  private getAvailableWorker(pinnedWorkerId?: string): string | null {
+    if (pinnedWorkerId) {
+      const pinned = this.workers.get(pinnedWorkerId);
+      if (pinned?.info.isAvailable) {
+        return pinnedWorkerId;
+      }
+      return null;
+    }
     for (const [workerId, activeWorker] of this.workers) {
       if (activeWorker.info.isAvailable) {
         return workerId;
@@ -569,9 +706,12 @@ export class OtpAwareWorkerPool extends EventEmitter {
     // Mark worker as busy
     activeWorker.info.isAvailable = false;
     activeWorker.info.currentJobId = jobData.jobId;
+    activeWorker.info.currentJobType = jobData.jobType;
     activeWorker.info.startTime = new Date();
     activeWorker.resolve = resolve;
     activeWorker.reject = reject;
+
+    jobData.assignedWorkerPoolId = workerId;
 
     // Send job to worker
     try {
@@ -589,6 +729,7 @@ export class OtpAwareWorkerPool extends EventEmitter {
       // Reset worker state
       activeWorker.info.isAvailable = true;
       activeWorker.info.currentJobId = undefined;
+      activeWorker.info.currentJobType = undefined;
       activeWorker.info.startTime = undefined;
       activeWorker.resolve = undefined;
       activeWorker.reject = undefined;
@@ -602,32 +743,49 @@ export class OtpAwareWorkerPool extends EventEmitter {
 
     this.isProcessingQueue = true;
 
-    // Find the first job that can be processed
+    // Find the first queued job whose pinned worker (if any) and OTP requirements can be met
     for (let i = 0; i < this.jobQueue.length; i++) {
       const queuedJob = this.jobQueue[i];
 
-      // Check if requirements are met
-      const availableWorker = this.getAvailableWorker();
+      const availableWorker = this.getAvailableWorker(
+        queuedJob.jobData.pinnedWorkerId
+      );
       if (!availableWorker) {
-        // No workers available, stop processing
-        break;
+        continue;
       }
 
-      const isOtpAvailable = await this.otpManager.isOtpAvailable();
-      const otpAvailable = !queuedJob.requiresOtp || isOtpAvailable;
-
-      if (otpAvailable) {
-        // Remove job from queue
-        this.jobQueue.splice(i, 1);
-
-        console.log(
-          `\x1b[36mProcessing queued job ${queuedJob.jobData.jobId}. Queue size: ${this.jobQueue.length}\x1b[0m`
-        );
-
-        // Try to assign the job
-        await this.tryAssignJob(queuedJob);
-        break; // Process one job at a time
+      let resourceFree = true;
+      if (queuedJob.requiresOtp) {
+        if (this.usesBookingPhoneNumberSlot(queuedJob.jobData)) {
+          const { phone_number, slot } = getBookingPhoneSlotForLock({
+            selectedContact: queuedJob.jobData.selectedContact,
+          });
+          resourceFree = await phoneNumberSlotService.isSlotAvailable(
+            phone_number,
+            slot
+          );
+        } else {
+          const platform = this.getJobPlatform(queuedJob.jobData);
+          const laneKey = this.getOtpLaneKey(queuedJob.jobData);
+          resourceFree = await this.otpManager.isOtpAvailableForLane(
+            platform,
+            laneKey
+          );
+        }
       }
+
+      if (!resourceFree) {
+        continue;
+      }
+
+      this.jobQueue.splice(i, 1);
+
+      console.log(
+        `\x1b[36mProcessing queued job ${queuedJob.jobData.jobId}. Queue size: ${this.jobQueue.length}\x1b[0m`
+      );
+
+      await this.tryAssignJob(queuedJob);
+      break;
     }
 
     this.isProcessingQueue = false;
@@ -711,8 +869,10 @@ export class OtpAwareWorkerPool extends EventEmitter {
     }
 
     try {
-      // Release OTP if this job had reserved it
-      await this.otpManager.releaseOtp(jobId);
+      await this.releaseJobOtpResources(
+        jobId,
+        targetWorker.info.currentJobType
+      );
 
       // Send stop message to worker first (if worker supports it)
       targetWorker.worker.postMessage({ type: "stop", jobId });
