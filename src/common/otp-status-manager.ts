@@ -7,7 +7,6 @@ import {
   OtpStatus,
   OtpStatusValue,
 } from "../models/otp-status.model.js";
-import { DEFAULT_BOOKING_OTP_LANE } from "./booking-otp-lane.js";
 import { phoneNumberSlotService } from "../services/phone-number-slot.service.js";
 
 dotenv.config();
@@ -75,11 +74,6 @@ export class OtpStatusManager extends EventEmitter {
     return FALLBACK_OTP_DB_PLATFORM;
   }
 
-  private normalizeLaneKey(laneKey: string): string {
-    const s = (laneKey || DEFAULT_BOOKING_OTP_LANE).trim() || DEFAULT_BOOKING_OTP_LANE;
-    return s.slice(0, 256);
-  }
-
   /** Legacy installs used non-enum platform strings; Mongoose rejects them on create/save. */
   private async migrateLegacyOtpPlatforms(): Promise<void> {
     await OtpStatus.collection.updateMany(
@@ -88,43 +82,35 @@ export class OtpStatusManager extends EventEmitter {
     );
   }
 
-  private async migrateLaneKeys(): Promise<void> {
-    const missing = await OtpStatus.find({
-      $or: [
-        { otp_lane_key: { $exists: false } },
-        { otp_lane_key: null },
-        { otp_lane_key: "" },
-      ],
-    }).lean();
-
-    for (let i = 0; i < missing.length; i++) {
-      const doc = missing[i];
-      const key =
-        i === 0
-          ? DEFAULT_BOOKING_OTP_LANE
-          : `legacy_${String(doc._id)}`;
-      await OtpStatus.updateOne(
-        { _id: doc._id },
-        { $set: { otp_lane_key: key } }
-      );
+  /** One `otp_status` row per `platform` value. */
+  private async dedupeOtpStatusByPlatform(): Promise<void> {
+    for (const p of Object.values(OtpPlatform)) {
+      const docs = await OtpStatus.find({ platform: p })
+        .sort({ updatedAt: -1 })
+        .exec();
+      if (docs.length <= 1) {
+        continue;
+      }
+      const occupied = docs.find((d) => d.status === OtpStatusValue.Occupied);
+      const keeper = occupied ?? docs[0];
+      await OtpStatus.deleteMany({
+        platform: p,
+        _id: { $ne: keeper._id },
+      });
     }
   }
 
-  private async ensureDefaultLaneDoc(): Promise<void> {
+  private async ensurePlatformDoc(): Promise<void> {
     const envPlatform = this.getOtpDbPlatform();
     if (envPlatform === OtpPlatform.Booking) {
       return;
     }
-    const existing = await OtpStatus.findOne({
-      platform: envPlatform,
-      otp_lane_key: DEFAULT_BOOKING_OTP_LANE,
-    });
+    const existing = await OtpStatus.findOne({ platform: envPlatform });
     if (!existing) {
       await OtpStatus.create({
         status: OtpStatusValue.Released,
         platform: envPlatform,
         job_id: null,
-        otp_lane_key: DEFAULT_BOOKING_OTP_LANE,
       });
     }
   }
@@ -160,11 +146,11 @@ export class OtpStatusManager extends EventEmitter {
 
     try {
       await this.migrateLegacyOtpPlatforms();
-      await this.migrateLaneKeys();
-      await this.ensureDefaultLaneDoc();
+      await this.dedupeOtpStatusByPlatform();
+      await this.ensurePlatformDoc();
       await this.syncCurrentStatusFromDb();
       this.isInitialized = true;
-      console.log("OTP Status Manager initialized (per-lane):", this.currentStatus);
+      console.log("OTP Status Manager initialized:", this.currentStatus);
     } catch (error) {
       console.error("Failed to initialize OTP Status Manager:", error);
       throw error;
@@ -176,31 +162,15 @@ export class OtpStatusManager extends EventEmitter {
   }
 
   /**
-   * True if the default lane is free (backward compatible “global” check).
+   * True if the OTP row for `OTP_PLATFORM` is free (or missing).
    */
   public async isOtpAvailable(): Promise<boolean> {
-    return this.isOtpAvailableForLane(
-      this.getOtpDbPlatform(),
-      DEFAULT_BOOKING_OTP_LANE
-    );
-  }
-
-  /**
-   * True if this phone/slot lane has no active OTP holder (or row does not exist yet).
-   */
-  public async isOtpAvailableForLane(
-    _platform: OtpPlatform,
-    laneKey: string
-  ): Promise<boolean> {
     if (!this.isInitialized) {
       await this.initialize();
     }
 
-    const key = this.normalizeLaneKey(laneKey);
-    const doc = await OtpStatus.findOne({
-      platform: this.getOtpDbPlatform(),
-      otp_lane_key: key,
-    }).lean();
+    const envPlatform = this.getOtpDbPlatform();
+    const doc = await OtpStatus.findOne({ platform: envPlatform }).lean();
 
     if (!doc) {
       return true;
@@ -208,16 +178,14 @@ export class OtpStatusManager extends EventEmitter {
     return doc.status === OtpStatusValue.Released;
   }
 
-  private async ensureLaneRow(laneKey: string): Promise<void> {
-    const key = this.normalizeLaneKey(laneKey);
+  private async ensurePlatformRow(): Promise<void> {
     const envPlatform = this.getOtpDbPlatform();
     await OtpStatus.updateOne(
-      { platform: envPlatform, otp_lane_key: key },
+      { platform: envPlatform },
       {
         $setOnInsert: {
           status: OtpStatusValue.Released,
           platform: envPlatform,
-          otp_lane_key: key,
           job_id: null,
         },
       },
@@ -226,13 +194,10 @@ export class OtpStatusManager extends EventEmitter {
   }
 
   /**
-   * Reserve OTP for a job on a lane (phone+slot for booking, "default" otherwise).
+   * Reserve OTP for a job in `otp_status` for the current `OTP_PLATFORM` (Expedia/Agoda).
+   * Booking uses `phone_number_slots`, not this.
    */
-  public async reserveOtp(
-    jobId: string,
-    _platform: OtpPlatform,
-    laneKey: string = DEFAULT_BOOKING_OTP_LANE
-  ): Promise<boolean> {
+  public async reserveOtp(jobId: string): Promise<boolean> {
     if (!this.isInitialized) {
       await this.initialize();
     }
@@ -242,22 +207,19 @@ export class OtpStatusManager extends EventEmitter {
       return false;
     }
 
-    const key = this.normalizeLaneKey(laneKey);
     const envPlatform = this.getOtpDbPlatform();
 
     try {
-      await this.ensureLaneRow(key);
+      await this.ensurePlatformRow();
 
       const result = await OtpStatus.findOneAndUpdate(
         {
           status: OtpStatusValue.Released,
           platform: envPlatform,
-          otp_lane_key: key,
         },
         {
           status: OtpStatusValue.Occupied,
           platform: envPlatform,
-          otp_lane_key: key,
           job_id: new mongoose.Types.ObjectId(jobId),
         },
         { new: true }
@@ -265,15 +227,13 @@ export class OtpStatusManager extends EventEmitter {
 
       if (result) {
         await this.syncCurrentStatusFromDb();
-        console.log(
-          `OTP reserved for job ${jobId} lane "${key}" (${envPlatform})`
-        );
+        console.log(`OTP reserved for job ${jobId} (${envPlatform})`);
         this.emit("otpReserved", jobId, envPlatform);
         return true;
       }
 
       console.log(
-        `Failed to reserve OTP for job ${jobId} lane "${key}" — lane busy`
+        `Failed to reserve OTP for job ${jobId} — slot busy (${envPlatform})`
       );
       return false;
     } catch (error) {
@@ -283,7 +243,7 @@ export class OtpStatusManager extends EventEmitter {
   }
 
   /**
-   * Release the lane held by this job (matches job_id).
+   * Release the row held by this job (matches job_id).
    */
   public async releaseOtp(jobId: string): Promise<boolean> {
     if (!this.isInitialized) {
@@ -319,76 +279,6 @@ export class OtpStatusManager extends EventEmitter {
   }
 
   /**
-   * Visibility mirror for Booking: same moment as `phone_number_slots` reserve (lease `jobId` for groups).
-   * Does not gate concurrency — locking stays on `phone_number_slots`.
-   */
-  public async setBookingOtpMirrorOccupied(
-    jobId: string,
-    phone_number: string,
-    slot: number
-  ): Promise<void> {
-    if (!this.isInitialized) {
-      await this.initialize();
-    }
-    if (!Types.ObjectId.isValid(jobId)) {
-      return;
-    }
-    const key = this.normalizeLaneKey(`booking:${phone_number}:${slot}`);
-    try {
-      await OtpStatus.updateOne(
-        { platform: OtpPlatform.Booking, otp_lane_key: key },
-        {
-          $set: {
-            status: OtpStatusValue.Occupied,
-            job_id: new mongoose.Types.ObjectId(jobId),
-            platform: OtpPlatform.Booking,
-            otp_lane_key: key,
-          },
-        },
-        { upsert: true }
-      );
-      await this.syncCurrentStatusFromDb();
-      this.emit("otpReserved", jobId, OtpPlatform.Booking);
-    } catch (error) {
-      console.error(
-        `[OtpStatus] setBookingOtpMirrorOccupied failed for job ${jobId}:`,
-        error
-      );
-    }
-  }
-
-  /** Clear Booking mirror row(s) for this job id (lease id for `booking-run-group`). */
-  public async releaseBookingOtpMirrorByJobId(jobId: string): Promise<void> {
-    if (!this.isInitialized) {
-      await this.initialize();
-    }
-    if (!Types.ObjectId.isValid(jobId)) {
-      return;
-    }
-    try {
-      const oid = new mongoose.Types.ObjectId(jobId);
-      const r = await OtpStatus.updateMany(
-        { platform: OtpPlatform.Booking, job_id: oid },
-        {
-          $set: {
-            status: OtpStatusValue.Released,
-            job_id: null,
-          },
-        }
-      );
-      if (r.modifiedCount > 0) {
-        await this.syncCurrentStatusFromDb();
-        this.emit("otpReleased", jobId);
-      }
-    } catch (error) {
-      console.error(
-        `[OtpStatus] releaseBookingOtpMirrorByJobId failed for job ${jobId}:`,
-        error
-      );
-    }
-  }
-
-  /**
    * Admin / shutdown: release all `phone_number_slots` (Booking) and all `otp_status` rows (Expedia/Agoda).
    */
   public async forceReleaseOtp(): Promise<boolean> {
@@ -409,7 +299,7 @@ export class OtpStatusManager extends EventEmitter {
 
       await this.syncCurrentStatusFromDb();
       console.log(
-        `\x1b[32m[OTP] All OTP lanes force-released — emitting 'otpReleased'\x1b[0m`
+        `\x1b[32m[OTP] All OTP rows force-released — emitting 'otpReleased'\x1b[0m`
       );
       this.emit("otpReleased", null);
       return true;

@@ -17,14 +17,24 @@ const COLORS = {
 let currentJobLogger: JobLogger | null = null;
 let currentJobId: string | null = null;
 let currentWorkerId: string | null = null;
+/** When set, dual-log prefix shows lease + active property job (booking-run-group). */
+let bookingGroupStepJobId: string | null = null;
 
 /**
  * Initialize logging for a job
  */
 export function initializeJobLogging(jobId: string): JobLogger {
+  bookingGroupStepJobId = null;
   currentJobLogger = JobLogger.getInstance(jobId);
   currentJobId = jobId;
   return currentJobLogger;
+}
+
+/**
+ * Set the active property job id for booking group runs (log prefix only; file stays on lease logger).
+ */
+export function setBookingGroupLogStepJobId(jobId: string | null): void {
+  bookingGroupStepJobId = jobId;
 }
 
 /**
@@ -124,6 +134,7 @@ export async function finalizeJobLogging(
 
       currentJobLogger = null; // Clear the reference
       currentJobId = null; // Clear the job ID
+      bookingGroupStepJobId = null;
       return s3Url;
     } catch (error) {
       console.error(
@@ -132,6 +143,7 @@ export async function finalizeJobLogging(
       );
       currentJobLogger = null; // Clear the reference even on error
       currentJobId = null; // Clear the job ID even on error
+      bookingGroupStepJobId = null;
       return null;
     }
   }
@@ -163,9 +175,17 @@ function formatLogPrefix(level: "INFO" | "WARN" | "ERROR"): string {
   const threadPart = currentWorkerId
     ? `${COLORS.gray}[${currentWorkerId}]${COLORS.reset}`
     : "";
-  const jobPart = currentJobId
-    ? `${COLORS.magenta}[Job:${currentJobId.slice(-8)}]${COLORS.reset}`
-    : "";
+  let jobPart = "";
+  if (currentJobId) {
+    if (
+      bookingGroupStepJobId &&
+      bookingGroupStepJobId !== currentJobId
+    ) {
+      jobPart = `${COLORS.magenta}[Lease:${currentJobId.slice(-8)}][Step:${bookingGroupStepJobId.slice(-8)}]${COLORS.reset}`;
+    } else {
+      jobPart = `${COLORS.magenta}[Job:${currentJobId.slice(-8)}]${COLORS.reset}`;
+    }
+  }
 
   let levelColor = COLORS.cyan;
   if (level === "WARN") levelColor = COLORS.yellow;

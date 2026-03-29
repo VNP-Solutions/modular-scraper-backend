@@ -30,8 +30,11 @@ import {
   markStatusSaved,
   setFailedReasonCode,
 } from "../common/failed-reason.js";
-import { dualLogError, dualLogInfo } from "../common/log-helper.js";
-import { otpStatusManager } from "../common/otp-status-manager.js";
+import {
+  dualLogError,
+  dualLogInfo,
+  setBookingGroupLogStepJobId,
+} from "../common/log-helper.js";
 import { generateRandomPassword } from "../common/password-generator.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import { SelectorUtils } from "../common/selector-utils.js";
@@ -1330,7 +1333,6 @@ export class BookingScraper extends BaseScraper {
         );
         if (this.jobId && Types.ObjectId.isValid(this.jobId)) {
           await phoneNumberSlotService.releaseByJobId(this.jobId);
-          await otpStatusManager.releaseBookingOtpMirrorByJobId(this.jobId);
         }
         return false;
       }
@@ -3514,6 +3516,8 @@ export class BookingScraper extends BaseScraper {
       }
       await jobService.startJob(leaseJobId, workerTag);
 
+      setBookingGroupLogStepJobId(leaseJobId);
+
       await this.throwIfScrapingShouldStop("login");
       await this.login(params.credentials, steps[0].bookingId);
       const captchaHandled = await this.handleCaptcha();
@@ -3540,6 +3544,7 @@ export class BookingScraper extends BaseScraper {
 
         this.jobId = step.jobId;
         this.propertyIdForDb = step.propertyIdForDb;
+        setBookingGroupLogStepJobId(step.jobId);
         if ((this as any).captchaService) {
           (this as any).captchaService.setJobId(step.jobId);
         }
@@ -3633,6 +3638,7 @@ export class BookingScraper extends BaseScraper {
         error: error instanceof Error ? error.message : "Group scrape failed",
       };
     } finally {
+      setBookingGroupLogStepJobId(null);
       await this.cleanup();
     }
   }
@@ -3647,9 +3653,6 @@ export class BookingScraper extends BaseScraper {
           releaseOtp(releaseTargetId);
         } else if (releaseTargetId && Types.ObjectId.isValid(releaseTargetId)) {
           await phoneNumberSlotService.releaseByJobId(releaseTargetId);
-          await otpStatusManager.releaseBookingOtpMirrorByJobId(
-            releaseTargetId
-          );
         }
       }
       await this.logInfo(

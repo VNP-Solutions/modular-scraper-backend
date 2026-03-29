@@ -2,8 +2,6 @@
  * Booking OTP is keyed by contact so different phone/slot pairs can run in parallel.
  */
 
-export const DEFAULT_BOOKING_OTP_LANE = "default";
-
 /** Normalized phone digits (or "default") + numeric slot for PhoneNumberSlot rows. */
 export function getBookingPhoneSlotForLock(jobData: {
   selectedContact?: { phone?: string; port?: string };
