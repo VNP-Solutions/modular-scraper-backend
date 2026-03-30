@@ -45,7 +45,8 @@ async function makeGraphQLRequest(
   expediaId?: string,
   startDate?: string,
   endDate?: string,
-  jobId?: string
+  jobId?: string,
+  isFirstDay?: boolean
 ): Promise<void> {
   try {
     console.log("🚀 Making GraphQL API request...");
@@ -788,14 +789,20 @@ async function makeGraphQLRequest(
             .includes("not authorized") ||
           firstMessage.toLowerCase().includes("forbidden") ||
           (responseData.errors[0]?.extensions?.classification || "").toLowerCase() === "forbidden";
+
+        // On day 1, an "not authorized" error almost always means the property ID
+        // doesn't exist on Expedia (wrong ID) rather than a temporary API issue.
+        const failedCode = isUnauthorized
+          ? (isFirstDay ? FAILED_REASON.PROPERTY_NOT_FOUND : FAILED_REASON.GRAPHQL_NOT_AUTHORIZED)
+          : FAILED_REASON.GRAPHQL_ERROR;
+
         const userFriendlyMessage = isUnauthorized
-          ? "GraphQL issue: This is likely a temporary issue with Expedia's reservation search API."
+          ? (isFirstDay
+              ? `Property not found.`
+              : "GraphQL issue: This is likely a temporary issue with Expedia's reservation search API.")
           : firstMessage || `GraphQL query errors: ${JSON.stringify(responseData.errors)}`;
         const graphqlErr = new Error(userFriendlyMessage);
-        setFailedReasonCode(
-          graphqlErr,
-          isUnauthorized ? FAILED_REASON.GRAPHQL_NOT_AUTHORIZED : FAILED_REASON.GRAPHQL_ERROR
-        );
+        setFailedReasonCode(graphqlErr, failedCode);
         throw graphqlErr;
       } else {
         console.warn("⚠️ No reservation data found in response");
@@ -1739,7 +1746,8 @@ async function runScrapingWithRestart(
                   expediaId,
                   singleDate, // Use the current single date
                   singleDate, // Same start and end date for single day
-                  jobId
+                  jobId,
+                  i === 0   // isFirstDay: true only for the very first date
                 );
                 graphqlSuccess = true;
               } catch (graphqlRetryError: any) {
