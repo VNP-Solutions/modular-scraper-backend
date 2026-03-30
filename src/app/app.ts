@@ -5,6 +5,7 @@ import createError from "../common/error.js";
 import { otpAwareWorkerPool } from "../common/otp-aware-worker-pool.js";
 import { progressManager } from "../common/progress-manager.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
+import { brightDataFieldsForExpediaJob } from "../common/job-isolation.js";
 import { WorkerJobData } from "../common/worker-types.js";
 import { specs, swaggerUi } from "../config/swagger.js";
 import { getAccess, getOauth2Callback } from "../get-access/access.js";
@@ -478,6 +479,7 @@ app.post("/api/scraping/resume", (async (
         expediaId,
         user_email,
         user_password,
+        ...brightDataFieldsForExpediaJob(jobId),
       };
     } else if (normalizedOtaProvider === "Agoda") {
       // Get Agoda credentials and data (scraping_mode is ignored for Agoda)
@@ -1009,6 +1011,7 @@ app.post("/api/expedia/rerun-failed-job", (async (
         user_email,
         user_password,
         originalStatus,
+        ...brightDataFieldsForExpediaJob(jobId),
       };
     } else if (normalizedOtaProvider === "Agoda") {
       // Get Agoda credentials and data (scraping_mode is ignored for Agoda)
@@ -1320,6 +1323,7 @@ app.post("/api/expedia/property-run-job", (async (
       expediaId,
       user_email,
       user_password,
+      ...brightDataFieldsForExpediaJob(jobId),
     };
 
     // 4. Execute job in worker thread
@@ -2200,6 +2204,7 @@ app.post("/api/expedia/graphql-run-job", (async (
       expediaId,
       user_email,
       user_password,
+      ...brightDataFieldsForExpediaJob(jobId),
     };
 
     // 4. Execute job in worker thread
@@ -2473,6 +2478,7 @@ app.post("/api/expedia/bulk-property-run-job", (async (
         expediaId: job.jobData.expediaId,
         user_email: job.jobData.user_email,
         user_password: job.jobData.user_password,
+        ...brightDataFieldsForExpediaJob(job.jobId),
       };
 
       // executeJob will automatically:
@@ -2769,6 +2775,7 @@ app.post("/api/expedia/bulk-graphql-run-job", (async (
         expediaId: job.jobData.expediaId,
         user_email: job.jobData.user_email,
         user_password: job.jobData.user_password,
+        ...brightDataFieldsForExpediaJob(job.jobId),
       };
 
       // executeJob will automatically:

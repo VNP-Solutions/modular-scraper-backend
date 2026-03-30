@@ -33,6 +33,7 @@ import {
   CreateJobItemData,
   jobService,
 } from "./services/job.service.js";
+import type { ExpediaBrightDataOptions } from "./common/job-isolation.js";
 
 dotenv.config();
 
@@ -1237,7 +1238,8 @@ async function graphqlScraping(
   endDate?: string,
   jobId?: string,
   expediaUsername?: string,
-  expediaPassword?: string
+  expediaPassword?: string,
+  expediaBrightData?: ExpediaBrightDataOptions
 ): Promise<void> {
   let jobLogger = null;
   let browser = null;
@@ -1294,7 +1296,8 @@ async function graphqlScraping(
         endDate,
         jobId,
         expediaUsername,
-        expediaPassword
+        expediaPassword,
+        expediaBrightData
       );
 
       // End time session on successful completion
@@ -1481,7 +1484,8 @@ async function runScrapingWithRestart(
   endDate?: string,
   jobId?: string,
   expediaUsername?: string,
-  expediaPassword?: string
+  expediaPassword?: string,
+  expediaBrightData?: ExpediaBrightDataOptions
 ): Promise<void> {
   const environment = process.env.ENVIRONMENT || "production";
   let currentStartDate = startDate;
@@ -1543,7 +1547,14 @@ async function runScrapingWithRestart(
     if (environment === "production") {
       setupResult = await browserSetupProduction(jobId, "expedia");
     } else {
-      setupResult = await browserSetupLocal(jobId, "expedia");
+      setupResult = await browserSetupLocal(
+        jobId,
+        "expedia",
+        expediaBrightData?.brightDataSessionId,
+        expediaBrightData?.windowSize,
+        expediaBrightData?.timezone,
+        expediaBrightData?.acceptLanguage
+      );
     }
     globalBrowser = setupResult.browser;
     globalPage = setupResult.page;

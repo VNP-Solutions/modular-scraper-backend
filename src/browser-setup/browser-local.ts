@@ -7,13 +7,20 @@ import {
   dualLogInfo,
   dualLogWarn,
 } from "../common/log-helper.js";
+import {
+  getBrightDataCountry,
+} from "../common/job-isolation.js";
 import { timeoutManager } from "../common/timeout-manager.js";
 import { configs } from "../config/index.js";
 dotenv.config();
 
 export async function browserSetupLocal(
   jobId?: string,
-  platform?: "expedia" | "agoda"
+  platform?: "expedia" | "agoda",
+  brightDataSessionId?: string,
+  windowSize?: { width: number; height: number },
+  timezone?: string,
+  acceptLanguage?: string
 ): Promise<{
   browser: Browser;
   page: Page;
@@ -21,15 +28,29 @@ export async function browserSetupLocal(
   let browser: Browser | null = null;
 
   try {
+    const launchArgs = [...BROWSER_CONFIG.LAUNCH_ARGS];
+
+    if (windowSize) {
+      launchArgs.push(`--window-size=${windowSize.width},${windowSize.height}`);
+    }
+
+    if (brightDataSessionId && process.env.BRIGHT_DATA_PROXY_HOST) {
+      const proxyHost = process.env.BRIGHT_DATA_PROXY_HOST;
+      launchArgs.push(`--proxy-server=${proxyHost}`);
+      await dualLogInfo(
+        `Using Bright Data proxy with session: ${brightDataSessionId}`,
+        { jobId, proxyHost, windowSize, platform }
+      );
+    }
+
     try {
       browser = await puppeteer.launch({
-        headless: configs.headless_browser,
+        headless: configs.headless_browser as any,
         defaultViewport: null,
-        args: BROWSER_CONFIG.LAUNCH_ARGS,
+        args: launchArgs,
       });
     } catch (error: any) {
       await dualLogError("Error launching browser:", error);
-      // Send email notification for browser launch error
       if (jobId) {
         try {
         } catch (emailError) {
@@ -42,59 +63,171 @@ export async function browserSetupLocal(
       throw error;
     }
 
-    // Get timeout configuration for this job
     const loadingTimeout = await timeoutManager.getLoadingTimeout(jobId);
     const selectorTimeout = await timeoutManager.getSelectorTimeout(jobId);
 
     const page: Page = await browser.newPage();
 
-    // Set user agent to match GraphQL API headers exactly
+    if (
+      brightDataSessionId &&
+      process.env.BRIGHT_DATA_USERNAME &&
+      process.env.BRIGHT_DATA_PASSWORD
+    ) {
+      const brightDataUsername = process.env.BRIGHT_DATA_USERNAME;
+      const brightDataPassword = process.env.BRIGHT_DATA_PASSWORD;
+      const countryCode = getBrightDataCountry(jobId || "");
+      let proxyUsername = `${brightDataUsername}-session-${brightDataSessionId}`;
+      if (countryCode) {
+        proxyUsername += `-country-${countryCode}`;
+      }
+      await page.authenticate({
+        username: proxyUsername,
+        password: brightDataPassword,
+      });
+      await dualLogInfo(`Authenticated with Bright Data proxy`, {
+        jobId,
+        sessionId: brightDataSessionId,
+        platform,
+        countryCode: countryCode || "auto",
+      });
+    }
+
+    if (windowSize) {
+      await page.setViewport({
+        width: windowSize.width,
+        height: windowSize.height,
+      });
+      await dualLogInfo(
+        `Set viewport size: ${windowSize.width}x${windowSize.height}`,
+        { jobId, windowSize }
+      );
+    }
+
+    if (brightDataSessionId) {
+      try {
+        await dualLogInfo("Detecting residential IP and location...", {
+          jobId,
+        });
+        const ipResponse = await page.goto(
+          "https://api.ipify.org?format=json",
+          {
+            waitUntil: "networkidle0",
+            timeout: 10000,
+          }
+        );
+        if (ipResponse && ipResponse.ok()) {
+          const ipData = (await ipResponse.json()) as { ip?: string };
+          const ipAddress = ipData.ip;
+          if (ipAddress) {
+            try {
+              const geoResponse = await page.goto(
+                `https://ipapi.co/${ipAddress}/json/`,
+                { waitUntil: "networkidle0", timeout: 10000 }
+              );
+              if (geoResponse && geoResponse.ok()) {
+                const geoData = (await geoResponse.json()) as Record<
+                  string,
+                  string
+                >;
+                const country =
+                  geoData.country_name || geoData.country || "Unknown";
+                const city = geoData.city || "Unknown";
+                const region = geoData.region || "Unknown";
+                await dualLogInfo(
+                  `✅ Bright Data Residential IP Detected: ${ipAddress} | Country: ${country} | City: ${city}, ${region}`,
+                  {
+                    jobId,
+                    sessionId: brightDataSessionId,
+                    ipAddress,
+                    country,
+                  }
+                );
+              } else {
+                await dualLogInfo(
+                  `✅ Bright Data Residential IP Detected: ${ipAddress}`,
+                  { jobId, sessionId: brightDataSessionId, ipAddress }
+                );
+              }
+            } catch {
+              await dualLogInfo(
+                `✅ Bright Data Residential IP Detected: ${ipAddress} (Country detection failed)`,
+                { jobId, sessionId: brightDataSessionId, ipAddress }
+              );
+            }
+          }
+        }
+      } catch (ipError: any) {
+        await dualLogWarn("Failed to detect IP address (non-critical)", {
+          jobId,
+          error: ipError.message,
+        });
+      }
+    }
+
+    if (timezone) {
+      try {
+        const cdp = await page.target().createCDPSession();
+        await cdp.send("Emulation.setTimezoneOverride", {
+          timezoneId: timezone,
+        });
+        await dualLogInfo(`Set timezone: ${timezone}`, { jobId, timezone });
+      } catch (timezoneError: any) {
+        await dualLogWarn("Failed to set timezone (non-critical)", {
+          jobId,
+          error: timezoneError.message,
+        });
+      }
+    }
+
     await page.setUserAgent(BROWSER_CONFIG.USER_AGENT);
 
-    // Set additional headers to match real browser behavior
-    await page.setExtraHTTPHeaders(BROWSER_CONFIG.HEADERS);
-
-    // Hide automation indicators
-    await page.evaluateOnNewDocument(() => {
-      // Remove webdriver property
-      delete (navigator as any).webdriver;
-
-      // Override the plugins property to use a real value
-      Object.defineProperty(navigator, "plugins", {
-        get: () => [1, 2, 3, 4, 5],
+    const headers = { ...BROWSER_CONFIG.HEADERS };
+    if (acceptLanguage) {
+      headers["Accept-Language"] = acceptLanguage;
+      await dualLogInfo(`Set Accept-Language: ${acceptLanguage}`, {
+        jobId,
+        acceptLanguage,
       });
+    }
+    await page.setExtraHTTPHeaders(headers);
 
-      // Override the languages property to use a real value
-      Object.defineProperty(navigator, "languages", {
-        get: () => ["en-US", "en"],
-      });
+    const languageList = acceptLanguage
+      ? acceptLanguage.split(",").map((l) => l.trim().split(";")[0])
+      : ["en-US", "en"];
 
-      // Override chrome property
-      (window as any).chrome = {
-        runtime: {},
-      };
+    await page.evaluateOnNewDocument(
+      (config: { languages: string[] }) => {
+        delete (navigator as any).webdriver;
+        Object.defineProperty(navigator, "plugins", {
+          get: () => [1, 2, 3, 4, 5],
+        });
+        Object.defineProperty(navigator, "languages", {
+          get: () => config.languages,
+        });
+        (window as any).chrome = {
+          runtime: {},
+        };
+        const originalQuery = window.navigator.permissions.query;
+        window.navigator.permissions.query = (parameters) => {
+          if (parameters.name === "notifications") {
+            return Promise.resolve({
+              state: Notification.permission,
+              name: "notifications",
+              onchange: null,
+              addEventListener: () => {},
+              removeEventListener: () => {},
+              dispatchEvent: () => false,
+            } as PermissionStatus);
+          }
+          return originalQuery(parameters);
+        };
+      },
+      { languages: languageList }
+    );
 
-      // Mock permissions
-      const originalQuery = window.navigator.permissions.query;
-      window.navigator.permissions.query = (parameters) => {
-        if (parameters.name === "notifications") {
-          return Promise.resolve({
-            state: Notification.permission,
-            name: "notifications",
-            onchange: null,
-            addEventListener: () => {},
-            removeEventListener: () => {},
-            dispatchEvent: () => false,
-          } as PermissionStatus);
-        }
-        return originalQuery(parameters);
-      };
-    });
-    // Set default timeouts based on job configuration
     await page.setDefaultNavigationTimeout(loadingTimeout);
     await page.setDefaultTimeout(selectorTimeout);
 
-    // Navigate to partner central with retry logic
     const platformName = platform === "agoda" ? "Agoda" : "Expedia";
     await dualLogInfo(`Navigating to ${platformName} platform...`);
 
@@ -123,7 +256,6 @@ export async function browserSetupLocal(
           });
           await page.waitForNavigation({ waitUntil: "networkidle0" });
         } else {
-          // Default to Expedia for backward compatibility
           await page.goto(
             "https://www.expediapartnercentral.com/Account/Logon?signedOff=true",
             {
@@ -133,10 +265,7 @@ export async function browserSetupLocal(
           );
         }
 
-        // Wait for page to stabilize
         await delay(3000);
-
-        // Check if page loaded successfully by looking for a common element
         await page.waitForSelector("body", { timeout: selectorTimeout });
 
         navigationSuccess = true;
@@ -150,13 +279,11 @@ export async function browserSetupLocal(
 
         if (attempt < maxRetries) {
           await dualLogInfo("Retrying navigation...", { attempt });
-          await delay(2000); // Wait before retry
+          await delay(2000);
         } else {
           await dualLogError("All navigation attempts failed", navError, {
             maxRetries,
           });
-
-          // Send email notification for navigation failure
           if (jobId) {
             try {
             } catch (emailError) {
@@ -166,7 +293,6 @@ export async function browserSetupLocal(
               );
             }
           }
-
           throw navError;
         }
       }
@@ -176,8 +302,6 @@ export async function browserSetupLocal(
       const error = new Error(
         "Failed to navigate to the target page after all attempts"
       );
-
-      // Send email notification for navigation failure
       if (jobId) {
         try {
         } catch (emailError) {
@@ -187,7 +311,6 @@ export async function browserSetupLocal(
           );
         }
       }
-
       throw error;
     }
 
@@ -195,8 +318,6 @@ export async function browserSetupLocal(
     return { browser, page };
   } catch (error: any) {
     await dualLogError("Browser setup failed:", error);
-
-    // Send email notification for general browser setup error
     if (jobId) {
       try {
       } catch (emailError) {
@@ -206,17 +327,13 @@ export async function browserSetupLocal(
         );
       }
     }
-
-    // Clean up browser if it was created
     if (browser) {
       try {
         await browser.close();
-        // await session.release();
       } catch (closeError) {
         await dualLogError("Error closing browser:", closeError);
       }
     }
-
     throw error;
   }
 }

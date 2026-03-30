@@ -18,6 +18,11 @@ export interface WorkerJobData {
   agodaPassword?: string;
   reservations?: any[];
   originalStatus?: string;
+  /** Expedia local browser + Bright Data (optional overrides; worker fills from jobId) */
+  brightDataSessionId?: string;
+  windowSize?: { width: number; height: number };
+  timezone?: string;
+  acceptLanguage?: string;
 }
 
 export interface WorkerMessage {

@@ -27,6 +27,7 @@ import {
 import {
   jobService,
 } from "../services/job.service.js";
+import { resolveExpediaBrightData } from "../common/job-isolation.js";
 
 // Load environment variables
 dotenv.config();
@@ -302,6 +303,7 @@ class ScrapingWorker {
     );
 
     try {
+      const expediaBrightData = resolveExpediaBrightData(jobId, jobData);
       // 6. Run the main scraping function
       await main(
         finalExpediaId,
@@ -309,7 +311,8 @@ class ScrapingWorker {
         endDate,
         jobId,
         finalUserEmail,
-        finalUserPassword
+        finalUserPassword,
+        expediaBrightData
       );
 
       // 7. Get final job statistics
@@ -449,6 +452,7 @@ class ScrapingWorker {
     scrapingStateManager.startScraping(expediaId, jobId, startDate, endDate);
 
     try {
+      const expediaBrightData = resolveExpediaBrightData(jobId, jobData);
       // 8. Run the main scraping function
       await main(
         expediaId,
@@ -456,7 +460,8 @@ class ScrapingWorker {
         endDate,
         jobId,
         user_email,
-        user_password
+        user_password,
+        expediaBrightData
       );
 
       // 9. Get final job statistics
@@ -670,6 +675,7 @@ class ScrapingWorker {
     );
 
     try {
+      const expediaBrightData = resolveExpediaBrightData(jobId, jobData);
       // 6. Run the GraphQL scraping function
       await graphqlScraping(
         finalExpediaId,
@@ -677,7 +683,8 @@ class ScrapingWorker {
         endDate,
         jobId,
         finalUserEmail,
-        finalUserPassword
+        finalUserPassword,
+        expediaBrightData
       );
 
       // 7. Get final job statistics

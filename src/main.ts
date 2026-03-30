@@ -31,6 +31,7 @@ import {
   getFailedReasonForUser,
   jobService,
 } from "./services/job.service.js";
+import type { ExpediaBrightDataOptions } from "./common/job-isolation.js";
 
 dotenv.config();
 
@@ -40,7 +41,8 @@ async function main(
   endDate?: string,
   jobId?: string,
   user_email?: string,
-  user_password?: string
+  user_password?: string,
+  expediaBrightData?: ExpediaBrightDataOptions
 ): Promise<void> {
   let jobLogger = null;
   let browser = null;
@@ -97,7 +99,8 @@ async function main(
         endDate,
         jobId,
         user_email,
-        user_password
+        user_password,
+        expediaBrightData
       );
 
       // End time session on successful completion
@@ -286,7 +289,8 @@ async function runScrapingWithRestart(
   endDate?: string,
   jobId?: string,
   user_email?: string,
-  user_password?: string
+  user_password?: string,
+  expediaBrightData?: ExpediaBrightDataOptions
 ): Promise<void> {
   const environment = process.env.ENVIRONMENT || "browserless";
   let currentStartDate = startDate;
@@ -328,7 +332,14 @@ async function runScrapingWithRestart(
       if (environment === "browserless") {
         setupResult = await browserSetupProduction(jobId, "expedia");
       } else {
-        setupResult = await browserSetupLocal(jobId, "expedia");
+        setupResult = await browserSetupLocal(
+          jobId,
+          "expedia",
+          expediaBrightData?.brightDataSessionId,
+          expediaBrightData?.windowSize,
+          expediaBrightData?.timezone,
+          expediaBrightData?.acceptLanguage
+        );
       }
       browser = setupResult.browser;
       page = setupResult.page;
