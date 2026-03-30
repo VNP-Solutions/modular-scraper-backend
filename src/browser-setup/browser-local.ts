@@ -34,13 +34,42 @@ export async function browserSetupLocal(
       launchArgs.push(`--window-size=${windowSize.width},${windowSize.height}`);
     }
 
+    const bdHasSession = Boolean(brightDataSessionId);
+    const bdHasProxyHost = Boolean(process.env.BRIGHT_DATA_PROXY_HOST);
+    const bdHasCredentials = Boolean(
+      process.env.BRIGHT_DATA_USERNAME && process.env.BRIGHT_DATA_PASSWORD
+    );
+
+    if (bdHasSession && bdHasProxyHost && bdHasCredentials) {
+      await dualLogInfo(
+        "[Bright Data] ENABLED — proxy host, sticky session id, and credentials are set; browser traffic will route through Bright Data.",
+        {
+          jobId,
+          platform,
+          sessionId: brightDataSessionId,
+          proxyHost: process.env.BRIGHT_DATA_PROXY_HOST,
+        }
+      );
+    } else if (bdHasSession && bdHasProxyHost && !bdHasCredentials) {
+      await dualLogWarn(
+        "[Bright Data] INCOMPLETE — BRIGHT_DATA_PROXY_HOST is set but BRIGHT_DATA_USERNAME or BRIGHT_DATA_PASSWORD is missing; proxy auth will not run.",
+        { jobId, platform, sessionId: brightDataSessionId }
+      );
+    } else if (bdHasSession && !bdHasProxyHost) {
+      await dualLogWarn(
+        "[Bright Data] NOT ACTIVE — job has a session id but BRIGHT_DATA_PROXY_HOST is unset; using direct connection (no Bright Data proxy).",
+        { jobId, platform, sessionId: brightDataSessionId }
+      );
+    } else if (!bdHasSession) {
+      await dualLogInfo(
+        "[Bright Data] NOT USED — no sticky session id passed for this run (direct connection).",
+        { jobId, platform }
+      );
+    }
+
     if (brightDataSessionId && process.env.BRIGHT_DATA_PROXY_HOST) {
       const proxyHost = process.env.BRIGHT_DATA_PROXY_HOST;
       launchArgs.push(`--proxy-server=${proxyHost}`);
-      await dualLogInfo(
-        `Using Bright Data proxy with session: ${brightDataSessionId}`,
-        { jobId, proxyHost, windowSize, platform }
-      );
     }
 
     try {
@@ -84,12 +113,20 @@ export async function browserSetupLocal(
         username: proxyUsername,
         password: brightDataPassword,
       });
-      await dualLogInfo(`Authenticated with Bright Data proxy`, {
-        jobId,
-        sessionId: brightDataSessionId,
-        platform,
-        countryCode: countryCode || "auto",
-      });
+      await dualLogInfo(
+        "[Bright Data] Proxy authentication applied (username includes session + country routing).",
+        {
+          jobId,
+          sessionId: brightDataSessionId,
+          platform,
+          countryCode: countryCode || "auto",
+        }
+      );
+    } else if (brightDataSessionId && bdHasProxyHost && !bdHasCredentials) {
+      await dualLogWarn(
+        "[Bright Data] Skipping page.authenticate — set BRIGHT_DATA_USERNAME and BRIGHT_DATA_PASSWORD.",
+        { jobId, platform }
+      );
     }
 
     if (windowSize) {
@@ -103,11 +140,12 @@ export async function browserSetupLocal(
       );
     }
 
-    if (brightDataSessionId) {
+    if (brightDataSessionId && bdHasProxyHost && bdHasCredentials) {
       try {
-        await dualLogInfo("Detecting residential IP and location...", {
-          jobId,
-        });
+        await dualLogInfo(
+          "[Bright Data] Verifying egress IP via ipify (through proxy) — compare this IP with your Bright Data session if needed.",
+          { jobId, sessionId: brightDataSessionId }
+        );
         const ipResponse = await page.goto(
           "https://api.ipify.org?format=json",
           {
@@ -134,33 +172,58 @@ export async function browserSetupLocal(
                 const city = geoData.city || "Unknown";
                 const region = geoData.region || "Unknown";
                 await dualLogInfo(
-                  `✅ Bright Data Residential IP Detected: ${ipAddress} | Country: ${country} | City: ${city}, ${region}`,
+                  `[Bright Data] VERIFIED — public egress IP: ${ipAddress} | ${country} | ${city}, ${region} (this is the IP sites see for this browser).`,
                   {
                     jobId,
                     sessionId: brightDataSessionId,
                     ipAddress,
                     country,
+                    brightDataEgressVerified: true,
                   }
                 );
               } else {
                 await dualLogInfo(
-                  `✅ Bright Data Residential IP Detected: ${ipAddress}`,
-                  { jobId, sessionId: brightDataSessionId, ipAddress }
+                  `[Bright Data] VERIFIED — public egress IP: ${ipAddress} (geo lookup failed; proxy still likely OK).`,
+                  {
+                    jobId,
+                    sessionId: brightDataSessionId,
+                    ipAddress,
+                    brightDataEgressVerified: true,
+                  }
                 );
               }
             } catch {
               await dualLogInfo(
-                `✅ Bright Data Residential IP Detected: ${ipAddress} (Country detection failed)`,
-                { jobId, sessionId: brightDataSessionId, ipAddress }
+                `[Bright Data] VERIFIED — public egress IP: ${ipAddress} (geo lookup failed; proxy still likely OK).`,
+                {
+                  jobId,
+                  sessionId: brightDataSessionId,
+                  ipAddress,
+                  brightDataEgressVerified: true,
+                }
               );
             }
+          } else {
+            await dualLogWarn(
+              "[Bright Data] IP check returned no address — compare logs with Bright Data dashboard if unsure.",
+              { jobId }
+            );
           }
+        } else {
+          await dualLogWarn(
+            "[Bright Data] IP check HTTP failed — cannot confirm egress IP from ipify.",
+            { jobId }
+          );
         }
       } catch (ipError: any) {
-        await dualLogWarn("Failed to detect IP address (non-critical)", {
-          jobId,
-          error: ipError.message,
-        });
+        await dualLogWarn(
+          "[Bright Data] IP verification failed (non-critical). Proxy may still work; check error and Bright Data dashboard.",
+          {
+            jobId,
+            error: ipError.message,
+            hadProxyConfigured: bdHasProxyHost && bdHasCredentials,
+          }
+        );
       }
     }
 
