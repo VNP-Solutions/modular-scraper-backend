@@ -38,6 +38,7 @@ import {
   setJobContact,
   clearJobPhone,
   getJobPhone,
+  getJobPhoneAndPort,
   getJobPort,
 } from "../common/job-phone-store.js";
 import { notificationService } from "../services/notification.service.js";
@@ -173,8 +174,34 @@ class ScrapingWorker {
     // Lock phone/port for this job: use round-robin assignment from main thread, or pick random
     if (jobData.selectedContact) {
       setJobContact(jobData.jobId, jobData.selectedContact);
+      if (
+        jobData.jobType === JobType.BookingRunGroup &&
+        Array.isArray(jobData.bookingGroup)
+      ) {
+        for (const step of jobData.bookingGroup) {
+          if (step?.jobId) {
+            setJobContact(step.jobId, jobData.selectedContact);
+          }
+        }
+      }
     } else {
       pickRandomPhoneForJob(jobData.jobId);
+      if (
+        jobData.jobType === JobType.BookingRunGroup &&
+        Array.isArray(jobData.bookingGroup)
+      ) {
+        const locked = getJobPhoneAndPort(jobData.jobId);
+        if (locked?.phone) {
+          for (const step of jobData.bookingGroup) {
+            if (step?.jobId) {
+              setJobContact(step.jobId, {
+                phone: locked.phone,
+                port: locked.port,
+              });
+            }
+          }
+        }
+      }
     }
     const lockedPhone = jobData.selectedContact?.phone ?? getJobPhone(jobData.jobId) ?? "";
     const lastThree = lockedPhone.replace(/\D/g, "").slice(-3);
@@ -244,6 +271,16 @@ class ScrapingWorker {
       });
     } finally {
       clearJobPhone(jobData.jobId);
+      if (
+        jobData.jobType === JobType.BookingRunGroup &&
+        Array.isArray(jobData.bookingGroup)
+      ) {
+        for (const step of jobData.bookingGroup) {
+          if (step?.jobId) {
+            clearJobPhone(step.jobId);
+          }
+        }
+      }
       this.currentJobId = undefined;
     }
   }
@@ -614,35 +651,38 @@ class ScrapingWorker {
       );
     }
 
-    // 2. Get booking_id and credentials from job's property if not provided
+    // 2. Resolve booking_id and credentials. DB is source of truth for password (and username when
+    //    stored) so runs stay correct after Booking.com password updates; request body may be stale.
     let finalBookingId = bookingId;
-    let finalUserEmail = user_email;
-    let finalUserPassword = user_password;
+    const bookingCredentials =
+      await propertyCredentialsService.getBookingCredentialsFromJob(jobId);
 
-    if (!finalBookingId || !finalUserEmail || !finalUserPassword) {
-      await dualLogInfo(`Getting job data for booking job ${jobId}...`);
-      const jobData = await jobService.getBookingIdFromJob(jobId);
-      const bookingCredentials =
-        await propertyCredentialsService.getBookingCredentialsFromJob(jobId);
-
-      if (!jobData || !jobData.bookingId) {
+    if (!finalBookingId) {
+      await dualLogInfo(`Getting booking_id for job ${jobId}...`);
+      const jobBookingData = await jobService.getBookingIdFromJob(jobId);
+      if (!jobBookingData?.bookingId) {
         throw new Error(
           `Cannot retrieve valid booking_id for job ${jobId}. Property may not have booking_id assigned or booking_id is 0.`
         );
       }
+      finalBookingId = jobBookingData.bookingId;
+    }
 
-      if (
-        !bookingCredentials?.bookingUsername ||
-        !bookingCredentials?.bookingPassword
-      ) {
-        throw new Error(
-          `Cannot retrieve valid booking credentials for job ${jobId}. Property may not have booking username or password assigned.`
-        );
-      }
+    const finalUserEmail =
+      bookingCredentials?.bookingUsername ?? user_email ?? undefined;
+    const finalUserPassword =
+      bookingCredentials?.bookingPassword ?? user_password ?? undefined;
 
-      finalBookingId = jobData.bookingId;
-      finalUserEmail = bookingCredentials.bookingUsername;
-      finalUserPassword = bookingCredentials.bookingPassword;
+    if (!finalUserEmail || !finalUserPassword) {
+      throw new Error(
+        `Cannot retrieve valid booking credentials for job ${jobId}. Property may not have booking username/password and none were provided on the job.`
+      );
+    }
+
+    if (bookingCredentials?.bookingPassword) {
+      await dualLogInfo(
+        `Worker: Using booking credentials from database for job ${jobId} (password always from DB when present)`
+      );
     }
 
     await dualLogInfo(
@@ -828,9 +868,10 @@ class ScrapingWorker {
     if (!leaseJobId) {
       throw new Error("jobId (lease) is required for booking-run-group");
     }
+
     if (!user_email || !user_password) {
       throw new Error(
-        "user_email and user_password are required for booking-run-group"
+        "user_email and user_password are required for booking-run-group (fallback if DB incomplete)"
       );
     }
 

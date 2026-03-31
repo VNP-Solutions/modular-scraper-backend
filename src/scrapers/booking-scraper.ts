@@ -676,6 +676,45 @@ export class BookingScraper extends BaseScraper {
     }
   }
 
+  /**
+   * Loads username/password from the property linked to jobId. Used for booking groups so each
+   * step uses that job's row in the DB (e.g. after job 1 updates the password, job 2 reads the new value).
+   */
+  private async applyBookingCredentialsForJob(
+    jobId: string,
+    fallback?: LoginCredentials
+  ): Promise<void> {
+    try {
+      const latest =
+        await propertyCredentialsService.getBookingCredentialsFromJob(jobId);
+      if (latest?.bookingUsername && latest?.bookingPassword) {
+        this.credentials = {
+          email: latest.bookingUsername,
+          password: decryptPassword(latest.bookingPassword),
+        };
+        await this.logInfo(
+          `Using Booking credentials from database for job ${jobId}`
+        );
+        return;
+      }
+    } catch (err) {
+      await this.logWarn(
+        `Could not load Booking credentials from database for job ${jobId}`,
+        err
+      );
+    }
+    if (fallback?.email && fallback.password) {
+      this.credentials = { ...fallback };
+      await this.logWarn(
+        `Using fallback credentials for job ${jobId} (database incomplete or missing)`
+      );
+      return;
+    }
+    throw new Error(
+      `No Booking credentials for job ${jobId} (database and fallback both unavailable)`
+    );
+  }
+
   async login(
     credentials?: LoginCredentials,
     propertyId?: string,
@@ -3500,11 +3539,6 @@ export class BookingScraper extends BaseScraper {
       this.browser = browser;
       this.page = page;
 
-      if (!params.credentials) {
-        throw new Error("Credentials required for booking group scrape");
-      }
-      this.credentials = params.credentials;
-
       await dualLogInfo("Booking group: single login, then multiple properties", {
         propertyCount: steps.length,
         leaseJobId,
@@ -3519,7 +3553,11 @@ export class BookingScraper extends BaseScraper {
       setBookingGroupLogStepJobId(leaseJobId);
 
       await this.throwIfScrapingShouldStop("login");
-      await this.login(params.credentials, steps[0].bookingId);
+      await this.applyBookingCredentialsForJob(
+        steps[0].jobId,
+        params.credentials
+      );
+      await this.login(this.credentials, steps[0].bookingId);
       const captchaHandled = await this.handleCaptcha();
       if (!captchaHandled) {
         await this.logError("Captcha handling failed");
@@ -3549,6 +3587,8 @@ export class BookingScraper extends BaseScraper {
           (this as any).captchaService.setJobId(step.jobId);
         }
 
+        await this.applyBookingCredentialsForJob(step.jobId, params.credentials);
+
         scrapingStateManager.startScraping(step.bookingId, step.jobId);
         if (i > 0) {
           await jobService.startJob(step.jobId, workerTag);
@@ -3561,6 +3601,7 @@ export class BookingScraper extends BaseScraper {
           propertyIdForDb: step.propertyIdForDb,
           releaseOtpAtScrapeStart: i === steps.length - 1,
           otpReleaseJobId: leaseJobId,
+          credentials: this.credentials,
         };
 
         const result = await this.scrapeData(stepParams);
