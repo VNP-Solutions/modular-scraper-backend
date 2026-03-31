@@ -15,9 +15,24 @@ import { oauth2Client } from "../config/google-config.js";
 
 dotenv.config();
 
-/** Subject phrase for Partner Central OTP emails (Gmail query + header check). */
-const PARTNER_CENTRAL_OTP_SUBJECT_TEMPLATE =
+/**
+ * Partner Central OTP notification subject (e.g. SMS → email / IFTTT). Full example:
+ * Login attempt from ASHBURN, US to Partner Central Your verification code is 584207. Don't share this code; we will never ask for it.
+ */
+const PARTNER_CENTRAL_OTP_SUBJECT_LOGIN_PREFIX = "Login attempt from ASHBURN";
+const PARTNER_CENTRAL_OTP_SUBJECT_CODE_PHRASE =
   "Partner Central Your verification code is";
+
+/** Gmail list: both fragments appear in the subject line. */
+const PARTNER_CENTRAL_OTP_GMAIL_QUERY = `subject:"${PARTNER_CENTRAL_OTP_SUBJECT_LOGIN_PREFIX}" subject:"${PARTNER_CENTRAL_OTP_SUBJECT_CODE_PHRASE}"`;
+
+function subjectMatchesPartnerCentralOtpTemplate(subject: string): boolean {
+  const s = subject.trim();
+  return (
+    s.includes(PARTNER_CENTRAL_OTP_SUBJECT_LOGIN_PREFIX) &&
+    s.includes(PARTNER_CENTRAL_OTP_SUBJECT_CODE_PHRASE)
+  );
+}
 
 /** Landing UI after OTP — avoids networkidle0 timeouts on Partner Central (SPA + background traffic). */
 const PARTNER_CENTRAL_LANDING_WELCOME_SELECTOR =
@@ -97,13 +112,18 @@ function extractPlainBodyFromPayload(
   return "";
 }
 
-function extractCodeFromEmailBody(emailBody: string): string | null {
-  const codeMatch = emailBody.match(/Your verification code is (\d{6})/i);
-  if (codeMatch?.[1]) {
-    return codeMatch[1];
+/** Prefer explicit phrase; code often appears in subject as well as body. */
+function extractPartnerCentralOtpCode(
+  subject: string,
+  emailBody: string
+): string | null {
+  const combined = `${subject}\n${emailBody}`;
+  const primary = combined.match(/Your verification code is (\d{6})/i);
+  if (primary?.[1]) {
+    return primary[1];
   }
-  const fallbackMatch = emailBody.match(/\b\d{6}\b/);
-  return fallbackMatch ? fallbackMatch[0] : null;
+  const fallbackBody = emailBody.match(/\b\d{6}\b/);
+  return fallbackBody ? fallbackBody[0] : null;
 }
 
 /**
@@ -125,7 +145,7 @@ async function fetchPartnerCentralOtpCodesFromGmail(): Promise<string[]> {
     const res = await gmail.users.messages.list({
       userId: "me",
       maxResults: 40,
-      q: `subject:"${PARTNER_CENTRAL_OTP_SUBJECT_TEMPLATE}"`,
+      q: PARTNER_CENTRAL_OTP_GMAIL_QUERY,
     });
 
     if (!res.data.messages?.length) {
@@ -172,7 +192,7 @@ async function fetchPartnerCentralOtpCodesFromGmail(): Promise<string[]> {
         (header) => header.name?.toLowerCase() === "subject"
       );
       const subject = subjectHeader?.value || "";
-      if (!subject.includes(PARTNER_CENTRAL_OTP_SUBJECT_TEMPLATE)) {
+      if (!subjectMatchesPartnerCentralOtpTemplate(subject)) {
         continue;
       }
 
@@ -181,7 +201,7 @@ async function fetchPartnerCentralOtpCodesFromGmail(): Promise<string[]> {
         emailBody = email.data.snippet || "";
       }
 
-      const code = extractCodeFromEmailBody(emailBody);
+      const code = extractPartnerCentralOtpCode(subject, emailBody);
       if (!code) {
         continue;
       }
