@@ -28,8 +28,11 @@ const OTP_VERIFY_MAX_ATTEMPTS = 4;
 /** One minute before first Gmail read (same as legacy `delay(60000)` on email flow). */
 const OTP_WAIT_BEFORE_FIRST_CODE_MS = 60 * 1000;
 
-const OTP_WAIT_BETWEEN_RETRY_MS =
-  Number(process.env.OTP_WAIT_BETWEEN_RETRY_MS) || 15 * 1000;
+/** Brief pause between VERIFY clicks when cycling codes from the same batch (no Gmail refetch). */
+const OTP_WAIT_BETWEEN_SUBMIT_MS =
+  Number(process.env.OTP_WAIT_BETWEEN_SUBMIT_MS) ||
+  Number(process.env.OTP_WAIT_BETWEEN_RETRY_MS) ||
+  2 * 1000;
 
 const OTP_POST_SUBMIT_CHECK_MS =
   Number(process.env.OTP_POST_SUBMIT_CHECK_MS) || 5 * 1000;
@@ -84,9 +87,21 @@ function extractPlainBodyFromPayload(
   return "";
 }
 
-async function getVerificationCode(excludeCodes?: Set<string>) {
+function extractCodeFromEmailBody(emailBody: string): string | null {
+  const codeMatch = emailBody.match(/Your verification code is (\d{6})/i);
+  if (codeMatch?.[1]) {
+    return codeMatch[1];
+  }
+  const fallbackMatch = emailBody.match(/\b\d{6}\b/);
+  return fallbackMatch ? fallbackMatch[0] : null;
+}
+
+/**
+ * Single Gmail pass: all Partner Central OTP messages in the time window, then
+ * distinct 6-digit codes ordered newest-first (by message internalDate).
+ */
+async function fetchPartnerCentralOtpCodesFromGmail(): Promise<string[]> {
   try {
-    // Load credentials before making API calls
     const credentialsLoaded = await loadCredentials();
     if (!credentialsLoaded) {
       throw new Error(
@@ -103,18 +118,19 @@ async function getVerificationCode(excludeCodes?: Set<string>) {
       q: `subject:"${PARTNER_CENTRAL_OTP_SUBJECT_TEMPLATE}"`,
     });
 
-    if (!res.data.messages) {
+    if (!res.data.messages?.length) {
       await dualLogInfo(
         "No verification emails found with Partner Central verification code."
       );
-      return null;
+      return [];
     }
 
     await dualLogInfo(
-      `OTP email search: template subject, internalDate within last ${OTP_EMAIL_MAX_AGE_MS / 60000} min (${res.data.messages.length} candidate id(s))`
+      `OTP batch fetch (one Gmail scan): up to ${res.data.messages.length} id(s), window ${OTP_EMAIL_MAX_AGE_MS / 60000} min`
     );
 
-    const inWindowIds: string[] = [];
+    type Entry = { internalMs: number; code: string };
+    const entries: Entry[] = [];
 
     for (const msg of res.data.messages) {
       if (!msg.id) {
@@ -128,94 +144,60 @@ async function getVerificationCode(excludeCodes?: Set<string>) {
       });
 
       if (email.data.internalDate == null) {
-        await dualLogInfo(`Skipping email id ${msg.id} — no internalDate`);
         continue;
       }
       const internalMs = Number(email.data.internalDate);
       if (!Number.isFinite(internalMs)) {
-        await dualLogInfo(`Skipping email id ${msg.id} — invalid internalDate`);
         continue;
       }
       if (internalMs < cutoffMs) {
         await dualLogInfo(
-          `Reached messages older than OTP window; stopping scan (last checked id ${msg.id})`
+          `Reached messages older than OTP window; stopping scan (id ${msg.id})`
         );
         break;
       }
 
       const headers = email.data.payload?.headers || [];
-      const fromHeader = headers.find(
-        (header) => header.name?.toLowerCase() === "from"
-      );
       const subjectHeader = headers.find(
         (header) => header.name?.toLowerCase() === "subject"
       );
-
-      const fromEmail = fromHeader?.value || "";
       const subject = subjectHeader?.value || "";
-
-      await dualLogInfo(`Email from: ${fromEmail}`);
-      await dualLogInfo(`Email subject: ${subject}`);
-
       if (!subject.includes(PARTNER_CENTRAL_OTP_SUBJECT_TEMPLATE)) {
-        await dualLogInfo(
-          "Skipping email - doesn't contain Partner Central verification code pattern"
-        );
         continue;
       }
 
-      inWindowIds.push(msg.id);
-
       let emailBody = extractPlainBodyFromPayload(email.data.payload);
-
       if (!emailBody) {
         emailBody = email.data.snippet || "";
       }
 
-      await dualLogInfo("Email body content:", emailBody);
-
-      const codeMatch = emailBody.match(/Your verification code is (\d{6})/i);
-      await dualLogInfo("Code match result:", codeMatch);
-
-      if (codeMatch && codeMatch[1]) {
-        const candidate = codeMatch[1];
-        if (excludeCodes?.has(candidate)) {
-          await dualLogInfo(
-            `Skipping code from email (already attempted): ${candidate}`
-          );
-          continue;
-        }
-        await dualLogInfo(
-          `Found verification code: ${candidate} (newest template match in window; ${inWindowIds.length} template match(es) in window)`
-        );
-        return candidate;
+      const code = extractCodeFromEmailBody(emailBody);
+      if (!code) {
+        continue;
       }
 
-      const fallbackMatch = emailBody.match(/\b\d{6}\b/);
-      if (fallbackMatch) {
-        const candidate = fallbackMatch[0];
-        if (excludeCodes?.has(candidate)) {
-          await dualLogInfo(
-            `Skipping fallback code from email (already attempted): ${candidate}`
-          );
-          continue;
-        }
-        await dualLogInfo(
-          `Found fallback code: ${candidate} (newest template match in window; ${inWindowIds.length} template match(es) in window)`
-        );
-        return candidate;
+      entries.push({ internalMs, code });
+    }
+
+    entries.sort((a, b) => b.internalMs - a.internalMs);
+
+    const seen = new Set<string>();
+    const ordered: string[] = [];
+    for (const e of entries) {
+      if (seen.has(e.code)) {
+        continue;
       }
+      seen.add(e.code);
+      ordered.push(e.code);
     }
 
     await dualLogInfo(
-      inWindowIds.length
-        ? `No verification code in body for ${inWindowIds.length} template email(s) within the last ${OTP_EMAIL_MAX_AGE_MS / 60000} min.`
-        : "No Partner Central template emails in the OTP time window."
+      `OTP batch fetch done: ${entries.length} message(s) with a code, ${ordered.length} distinct code(s) newest-first`
     );
-    return null;
+    return ordered;
   } catch (error: any) {
     await dualLogError("Error fetching emails:", error.message);
-    return null;
+    return [];
   }
 }
 
@@ -270,8 +252,8 @@ async function passcodeInputShowsFailure(page: Page): Promise<boolean> {
 }
 
 /**
- * Wait for email, then enter OTP and submit up to OTP_VERIFY_MAX_ATTEMPTS times.
- * On visible passcode validation error, clears the field, excludes the failed code, waits, and fetches the next code from Gmail.
+ * Wait for email, then one Gmail batch fetch for all in-window codes (newest first).
+ * Submits up to OTP_VERIFY_MAX_ATTEMPTS times using that list only — no refetch between attempts.
  */
 async function enterPasscodeFromEmailWithRetries(
   page: Page,
@@ -285,18 +267,25 @@ async function enterPasscodeFromEmailWithRetries(
   await dualLogInfo("Waiting for verification email...");
   await delay(initialDelayMs);
 
-  const excludeCodes = new Set<string>();
+  const codeQueue = await fetchPartnerCentralOtpCodesFromGmail();
+  if (!codeQueue.length) {
+    throw new Error("Failed to get verification code from email");
+  }
+
+  const rejectedCodes = new Set<string>();
 
   for (let attempt = 1; attempt <= OTP_VERIFY_MAX_ATTEMPTS; attempt++) {
-    await dualLogInfo(
-      `OTP submit attempt ${attempt}/${OTP_VERIFY_MAX_ATTEMPTS}`
-    );
-
-    const code = await getVerificationCode(excludeCodes);
+    const code = codeQueue.find((c) => !rejectedCodes.has(c));
     if (!code) {
-      throw new Error("Failed to get verification code from email");
+      throw new Error(
+        "No untried verification codes left from the Gmail batch for this OTP page."
+      );
     }
-    await dualLogInfo("Got verification code:", code);
+
+    await dualLogInfo(
+      `OTP submit attempt ${attempt}/${OTP_VERIFY_MAX_ATTEMPTS} (code from batch, no Gmail refetch)`
+    );
+    await dualLogInfo("Trying verification code:", code);
 
     await clearPasscodeInput(page);
     await page.type('input[name="passcode-input"]', code, { delay: 100 });
@@ -334,9 +323,9 @@ async function enterPasscodeFromEmailWithRetries(
       return;
     }
 
-    excludeCodes.add(code);
+    rejectedCodes.add(code);
     await dualLogInfo(
-      "Partner Central reported passcode error; clearing field and will try a different code if attempts remain."
+      "Partner Central reported passcode error; will try next code from the same batch if any."
     );
 
     if (attempt >= OTP_VERIFY_MAX_ATTEMPTS) {
@@ -346,9 +335,9 @@ async function enterPasscodeFromEmailWithRetries(
     }
 
     await dualLogInfo(
-      `Waiting ${OTP_WAIT_BETWEEN_RETRY_MS / 1000}s before fetching next code...`
+      `Waiting ${OTP_WAIT_BETWEEN_SUBMIT_MS / 1000}s before next submit (same Gmail batch)...`
     );
-    await delay(OTP_WAIT_BETWEEN_RETRY_MS);
+    await delay(OTP_WAIT_BETWEEN_SUBMIT_MS);
   }
 }
 
