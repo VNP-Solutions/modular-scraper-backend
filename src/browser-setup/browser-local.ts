@@ -14,6 +14,24 @@ import { timeoutManager } from "../common/timeout-manager.js";
 import { configs } from "../config/index.js";
 dotenv.config();
 
+/**
+ * BRIGHT_DATA_ENABLED: explicit toggle (recommended).
+ * - true / 1 / yes → use Bright Data proxy when BRIGHT_DATA_PROXY_HOST and session id are set
+ * - false / 0 / no → never use the proxy (ignores BRIGHT_DATA_PROXY_HOST)
+ * - unset → backward compatible: same as true when BRIGHT_DATA_PROXY_HOST is set (proxy on if host + session)
+ */
+function brightDataMode():
+  | "off"
+  | "on"
+  | "auto" {
+  const raw = process.env.BRIGHT_DATA_ENABLED;
+  if (raw === undefined || String(raw).trim() === "") return "auto";
+  const v = String(raw).trim().toLowerCase();
+  if (["true", "1", "yes"].includes(v)) return "on";
+  if (["false", "0", "no"].includes(v)) return "off";
+  return "auto";
+}
+
 export async function browserSetupLocal(
   jobId?: string,
   platform?: "expedia" | "agoda",
@@ -39,8 +57,31 @@ export async function browserSetupLocal(
     const bdHasCredentials = Boolean(
       process.env.BRIGHT_DATA_USERNAME && process.env.BRIGHT_DATA_PASSWORD
     );
+    const bdMode = brightDataMode();
+    const bdUseProxy =
+      bdMode !== "off" &&
+      bdHasSession &&
+      bdHasProxyHost &&
+      (bdMode === "on" || bdMode === "auto");
 
-    if (bdHasSession && bdHasProxyHost && bdHasCredentials) {
+    if (bdMode === "off") {
+      await dualLogInfo(
+        "[Bright Data] OFF — BRIGHT_DATA_ENABLED=false; direct connection (proxy settings ignored).",
+        { jobId, platform, sessionId: brightDataSessionId }
+      );
+    } else if (bdMode === "on" && (!bdHasProxyHost || !bdHasSession)) {
+      await dualLogWarn(
+        "[Bright Data] BRIGHT_DATA_ENABLED=true but BRIGHT_DATA_PROXY_HOST or session id is missing; cannot enable proxy.",
+        {
+          jobId,
+          platform,
+          hasProxyHost: bdHasProxyHost,
+          hasSession: bdHasSession,
+        }
+      );
+    }
+
+    if (bdUseProxy && bdHasCredentials) {
       await dualLogInfo(
         "[Bright Data] ENABLED — proxy host, sticky session id, and credentials are set; browser traffic will route through Bright Data.",
         {
@@ -48,26 +89,27 @@ export async function browserSetupLocal(
           platform,
           sessionId: brightDataSessionId,
           proxyHost: process.env.BRIGHT_DATA_PROXY_HOST,
+          brightDataMode: bdMode,
         }
       );
-    } else if (bdHasSession && bdHasProxyHost && !bdHasCredentials) {
+    } else if (bdUseProxy && !bdHasCredentials) {
       await dualLogWarn(
-        "[Bright Data] INCOMPLETE — BRIGHT_DATA_PROXY_HOST is set but BRIGHT_DATA_USERNAME or BRIGHT_DATA_PASSWORD is missing; proxy auth will not run.",
+        "[Bright Data] INCOMPLETE — proxy is active but BRIGHT_DATA_USERNAME or BRIGHT_DATA_PASSWORD is missing; proxy auth will not run.",
         { jobId, platform, sessionId: brightDataSessionId }
       );
-    } else if (bdHasSession && !bdHasProxyHost) {
+    } else if (bdMode !== "off" && bdHasSession && !bdHasProxyHost) {
       await dualLogWarn(
         "[Bright Data] NOT ACTIVE — job has a session id but BRIGHT_DATA_PROXY_HOST is unset; using direct connection (no Bright Data proxy).",
         { jobId, platform, sessionId: brightDataSessionId }
       );
-    } else if (!bdHasSession) {
+    } else if (!bdHasSession && bdMode !== "off") {
       await dualLogInfo(
         "[Bright Data] NOT USED — no sticky session id passed for this run (direct connection).",
         { jobId, platform }
       );
     }
 
-    if (brightDataSessionId && process.env.BRIGHT_DATA_PROXY_HOST) {
+    if (bdUseProxy) {
       const proxyHost = process.env.BRIGHT_DATA_PROXY_HOST;
       launchArgs.push(`--proxy-server=${proxyHost}`);
     }
@@ -98,7 +140,7 @@ export async function browserSetupLocal(
     const page: Page = await browser.newPage();
 
     if (
-      brightDataSessionId &&
+      bdUseProxy &&
       process.env.BRIGHT_DATA_USERNAME &&
       process.env.BRIGHT_DATA_PASSWORD
     ) {
@@ -122,7 +164,7 @@ export async function browserSetupLocal(
           countryCode: countryCode || "auto",
         }
       );
-    } else if (brightDataSessionId && bdHasProxyHost && !bdHasCredentials) {
+    } else if (bdUseProxy && !bdHasCredentials) {
       await dualLogWarn(
         "[Bright Data] Skipping page.authenticate — set BRIGHT_DATA_USERNAME and BRIGHT_DATA_PASSWORD.",
         { jobId, platform }
@@ -140,7 +182,7 @@ export async function browserSetupLocal(
       );
     }
 
-    if (brightDataSessionId && bdHasProxyHost && bdHasCredentials) {
+    if (bdUseProxy && bdHasCredentials) {
       try {
         await dualLogInfo(
           "[Bright Data] Verifying egress IP via ipify (through proxy) — compare this IP with your Bright Data session if needed.",
@@ -221,7 +263,7 @@ export async function browserSetupLocal(
           {
             jobId,
             error: ipError.message,
-            hadProxyConfigured: bdHasProxyHost && bdHasCredentials,
+            hadProxyConfigured: bdUseProxy && bdHasCredentials,
           }
         );
       }
@@ -335,6 +377,13 @@ export async function browserSetupLocal(
         await dualLogInfo("Navigation successful!", { attempt });
         break;
       } catch (navError: any) {
+        const msg = String(navError?.message ?? navError);
+        if (msg.includes("ERR_INVALID_AUTH_CREDENTIALS") && bdUseProxy) {
+          await dualLogWarn(
+            "Navigation failed with ERR_INVALID_AUTH_CREDENTIALS: the HTTP proxy rejected authentication (this is not the Expedia account password). Verify BRIGHT_DATA_USERNAME / BRIGHT_DATA_PASSWORD and the Bright Data username pattern for your zone. To bypass the proxy, set BRIGHT_DATA_ENABLED=false or unset BRIGHT_DATA_PROXY_HOST.",
+            { jobId, platform, attempt, error: msg }
+          );
+        }
         await dualLogWarn(`Navigation attempt ${attempt} failed:`, {
           attempt,
           error: navError.message,
