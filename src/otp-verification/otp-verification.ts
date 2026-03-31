@@ -15,6 +15,25 @@ import { oauth2Client } from "../config/google-config.js";
 
 dotenv.config();
 
+/** Subject phrase for Partner Central OTP emails (Gmail query + header check). */
+const PARTNER_CENTRAL_OTP_SUBJECT_TEMPLATE =
+  "Partner Central Your verification code is";
+
+const OTP_EMAIL_MAX_AGE_MS =
+  Number(process.env.OTP_EMAIL_WINDOW_MS) || 5 * 60 * 1000;
+
+/** Max submit attempts when Partner Central rejects the passcode (visible validation error). */
+const OTP_VERIFY_MAX_ATTEMPTS = 4;
+
+/** One minute before first Gmail read (same as legacy `delay(60000)` on email flow). */
+const OTP_WAIT_BEFORE_FIRST_CODE_MS = 60 * 1000;
+
+const OTP_WAIT_BETWEEN_RETRY_MS =
+  Number(process.env.OTP_WAIT_BETWEEN_RETRY_MS) || 15 * 1000;
+
+const OTP_POST_SUBMIT_CHECK_MS =
+  Number(process.env.OTP_POST_SUBMIT_CHECK_MS) || 5 * 1000;
+
 // Function to load and set credentials from S3
 async function loadCredentials() {
   try {
@@ -35,7 +54,37 @@ async function loadCredentials() {
   }
 }
 
-async function getVerificationCode() {
+/** Minimal shape for recursive MIME walk (Gmail API message payload parts). */
+interface GmailMessagePart {
+  mimeType?: string | null;
+  body?: { data?: string | null } | null;
+  parts?: GmailMessagePart[] | null;
+}
+
+function extractPlainBodyFromPayload(
+  payload: GmailMessagePart | undefined
+): string {
+  if (!payload) {
+    return "";
+  }
+  if (payload.mimeType === "text/plain" && payload.body?.data) {
+    return Buffer.from(payload.body.data, "base64").toString();
+  }
+  if (payload.body?.data && !payload.parts?.length) {
+    return Buffer.from(payload.body.data, "base64").toString();
+  }
+  if (payload.parts) {
+    for (const part of payload.parts) {
+      const found = extractPlainBodyFromPayload(part);
+      if (found) {
+        return found;
+      }
+    }
+  }
+  return "";
+}
+
+async function getVerificationCode(excludeCodes?: Set<string>) {
   try {
     // Load credentials before making API calls
     const credentialsLoaded = await loadCredentials();
@@ -46,10 +95,12 @@ async function getVerificationCode() {
     }
 
     const gmail = google.gmail({ version: "v1", auth: oauth2Client });
+    const cutoffMs = Date.now() - OTP_EMAIL_MAX_AGE_MS;
+
     const res = await gmail.users.messages.list({
       userId: "me",
-      maxResults: 5,
-      q: "subject:Partner Central Your verification code is", // Search by subject pattern
+      maxResults: 40,
+      q: `subject:"${PARTNER_CENTRAL_OTP_SUBJECT_TEMPLATE}"`,
     });
 
     if (!res.data.messages) {
@@ -59,6 +110,12 @@ async function getVerificationCode() {
       return null;
     }
 
+    await dualLogInfo(
+      `OTP email search: template subject, internalDate within last ${OTP_EMAIL_MAX_AGE_MS / 60000} min (${res.data.messages.length} candidate id(s))`
+    );
+
+    const inWindowIds: string[] = [];
+
     for (const msg of res.data.messages) {
       if (!msg.id) {
         continue;
@@ -67,10 +124,25 @@ async function getVerificationCode() {
       const email = await gmail.users.messages.get({
         userId: "me",
         id: msg.id,
-        format: "full", // Get full email content instead of just snippet
+        format: "full",
       });
 
-      // Check if email is from the correct sender
+      if (email.data.internalDate == null) {
+        await dualLogInfo(`Skipping email id ${msg.id} — no internalDate`);
+        continue;
+      }
+      const internalMs = Number(email.data.internalDate);
+      if (!Number.isFinite(internalMs)) {
+        await dualLogInfo(`Skipping email id ${msg.id} — invalid internalDate`);
+        continue;
+      }
+      if (internalMs < cutoffMs) {
+        await dualLogInfo(
+          `Reached messages older than OTP window; stopping scan (last checked id ${msg.id})`
+        );
+        break;
+      }
+
       const headers = email.data.payload?.headers || [];
       const fromHeader = headers.find(
         (header) => header.name?.toLowerCase() === "from"
@@ -85,62 +157,198 @@ async function getVerificationCode() {
       await dualLogInfo(`Email from: ${fromEmail}`);
       await dualLogInfo(`Email subject: ${subject}`);
 
-      // Verify it has the correct subject pattern
-      if (!subject.includes("Partner Central Your verification code is")) {
+      if (!subject.includes(PARTNER_CENTRAL_OTP_SUBJECT_TEMPLATE)) {
         await dualLogInfo(
           "Skipping email - doesn't contain Partner Central verification code pattern"
         );
         continue;
       }
 
-      // Get email body content
-      let emailBody = "";
+      inWindowIds.push(msg.id);
 
-      // Try to get the email body from different payload structures
-      if (email.data.payload?.body?.data) {
-        emailBody = Buffer.from(
-          email.data.payload.body.data,
-          "base64"
-        ).toString();
-      } else if (email.data.payload?.parts) {
-        // Handle multipart emails
-        for (const part of email.data.payload.parts) {
-          if (part.mimeType === "text/plain" && part.body?.data) {
-            emailBody = Buffer.from(part.body.data, "base64").toString();
-            break;
-          }
-        }
-      }
+      let emailBody = extractPlainBodyFromPayload(email.data.payload);
 
-      // If no body found, try snippet as fallback
       if (!emailBody) {
         emailBody = email.data.snippet || "";
       }
 
       await dualLogInfo("Email body content:", emailBody);
 
-      // Look for verification code pattern: "Your verification code is XXXXXX"
       const codeMatch = emailBody.match(/Your verification code is (\d{6})/i);
       await dualLogInfo("Code match result:", codeMatch);
 
       if (codeMatch && codeMatch[1]) {
-        await dualLogInfo(`Found verification code: ${codeMatch[1]}`);
-        return codeMatch[1];
+        const candidate = codeMatch[1];
+        if (excludeCodes?.has(candidate)) {
+          await dualLogInfo(
+            `Skipping code from email (already attempted): ${candidate}`
+          );
+          continue;
+        }
+        await dualLogInfo(
+          `Found verification code: ${candidate} (newest template match in window; ${inWindowIds.length} template match(es) in window)`
+        );
+        return candidate;
       }
 
-      // Fallback: look for any 6-digit code in the email
       const fallbackMatch = emailBody.match(/\b\d{6}\b/);
       if (fallbackMatch) {
-        await dualLogInfo(`Found fallback code: ${fallbackMatch[0]}`);
-        return fallbackMatch[0];
+        const candidate = fallbackMatch[0];
+        if (excludeCodes?.has(candidate)) {
+          await dualLogInfo(
+            `Skipping fallback code from email (already attempted): ${candidate}`
+          );
+          continue;
+        }
+        await dualLogInfo(
+          `Found fallback code: ${candidate} (newest template match in window; ${inWindowIds.length} template match(es) in window)`
+        );
+        return candidate;
       }
     }
 
-    await dualLogInfo("No verification code found in Partner Central emails.");
+    await dualLogInfo(
+      inWindowIds.length
+        ? `No verification code in body for ${inWindowIds.length} template email(s) within the last ${OTP_EMAIL_MAX_AGE_MS / 60000} min.`
+        : "No Partner Central template emails in the OTP time window."
+    );
     return null;
   } catch (error: any) {
     await dualLogError("Error fetching emails:", error.message);
     return null;
+  }
+}
+
+async function clearPasscodeInput(page: Page): Promise<void> {
+  await page.focus('input[name="passcode-input"]').catch(() => undefined);
+  await page.evaluate(() => {
+    const el = document.querySelector<HTMLInputElement>(
+      'input[name="passcode-input"]'
+    );
+    if (el) {
+      el.value = "";
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  });
+}
+
+async function passcodeInputShowsFailure(page: Page): Promise<boolean> {
+  return page.evaluate(() => {
+    const err = document.querySelector('[data-testid="passcode-input-error"]');
+    if (!err) {
+      return false;
+    }
+    const t = (err.textContent || "").trim();
+    if (!t) {
+      return false;
+    }
+    const lower = t.toLowerCase();
+    const looksFailed =
+      lower.includes("failed") ||
+      lower.includes("expired") ||
+      lower.includes("try again") ||
+      lower.includes("request a new code");
+    if (!looksFailed) {
+      return false;
+    }
+    const el = err as HTMLElement;
+    const style = window.getComputedStyle(el);
+    if (
+      style.display === "none" ||
+      style.visibility === "hidden" ||
+      style.opacity === "0"
+    ) {
+      return false;
+    }
+    const rect = el.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0) {
+      return false;
+    }
+    return true;
+  });
+}
+
+/**
+ * Wait for email, then enter OTP and submit up to OTP_VERIFY_MAX_ATTEMPTS times.
+ * On visible passcode validation error, clears the field, excludes the failed code, waits, and fetches the next code from Gmail.
+ */
+async function enterPasscodeFromEmailWithRetries(
+  page: Page,
+  jobId: string | undefined,
+  entityType: "job" | "retrieval",
+  options?: { initialDelayMs?: number }
+): Promise<void> {
+  const initialDelayMs =
+    options?.initialDelayMs ?? OTP_WAIT_BEFORE_FIRST_CODE_MS;
+
+  await dualLogInfo("Waiting for verification email...");
+  await delay(initialDelayMs);
+
+  const excludeCodes = new Set<string>();
+
+  for (let attempt = 1; attempt <= OTP_VERIFY_MAX_ATTEMPTS; attempt++) {
+    await dualLogInfo(
+      `OTP submit attempt ${attempt}/${OTP_VERIFY_MAX_ATTEMPTS}`
+    );
+
+    const code = await getVerificationCode(excludeCodes);
+    if (!code) {
+      throw new Error("Failed to get verification code from email");
+    }
+    await dualLogInfo("Got verification code:", code);
+
+    await clearPasscodeInput(page);
+    await page.type('input[name="passcode-input"]', code, { delay: 100 });
+    await delay(1000);
+
+    const verifyButtonHandle = await page.$(
+      'button[data-testid="passcode-submit-button"]'
+    );
+    if (!verifyButtonHandle) {
+      throw new Error("Verify button not found");
+    }
+
+    const isDisabled = await page.evaluate(
+      (button) => button.disabled,
+      verifyButtonHandle
+    );
+    if (isDisabled) {
+      throw new Error("Verify button is disabled");
+    }
+
+    await verifyButtonHandle.click();
+    await dualLogInfo("Clicked VERIFY DEVICE / passcode submit.");
+
+    await delay(OTP_POST_SUBMIT_CHECK_MS);
+    const failed = await passcodeInputShowsFailure(page);
+    if (!failed) {
+      await takeScreenshot(
+        page,
+        jobId ?? "",
+        "otp_submitted",
+        "step",
+        "expedia",
+        entityType
+      );
+      return;
+    }
+
+    excludeCodes.add(code);
+    await dualLogInfo(
+      "Partner Central reported passcode error; clearing field and will try a different code if attempts remain."
+    );
+
+    if (attempt >= OTP_VERIFY_MAX_ATTEMPTS) {
+      throw new Error(
+        "OTP verification failed: code rejected or expired after maximum attempts."
+      );
+    }
+
+    await dualLogInfo(
+      `Waiting ${OTP_WAIT_BETWEEN_RETRY_MS / 1000}s before fetching next code...`
+    );
+    await delay(OTP_WAIT_BETWEEN_RETRY_MS);
   }
 }
 
@@ -212,88 +420,11 @@ async function handleOtpVerification(
         "Phone numbers match! Using email verification flow..."
       );
 
-      // Add delay before fetching verification code
-      await dualLogInfo("Waiting for verification email...");
-      await delay(60000); // Wait 30 seconds for email to arrive
-
-      // Get verification code
       try {
-        const code = await getVerificationCode();
-        if (!code) {
-          const error = new Error("Failed to get verification code from email");
-
-          // Send email notification for verification code error
-          if (jobId) {
-            try {
-            } catch (emailError) {
-              await dualLogError(
-                "Failed to send verification code error notification:",
-                emailError
-              );
-            }
-          }
-
-          throw error;
-        }
-        await dualLogInfo("Got verification code:", code);
-
-        // Enter verification code using the correct selector
-        await page.type('input[name="passcode-input"]', code, { delay: 100 });
-        await delay(1000);
-
-        const verifyButtonHandle = await page.$(
-          'button[data-testid="passcode-submit-button"]'
-        );
-
-        if (!verifyButtonHandle) {
-          const error = new Error("Verify button not found");
-
-          // Send email notification for verify button error
-          if (jobId) {
-            try {
-            } catch (emailError) {
-              await dualLogError(
-                "Failed to send verify button error notification:",
-                emailError
-              );
-            }
-          }
-
-          throw error;
-        }
-
-        // Check if the button is disabled
-        const isDisabled = await page.evaluate(
-          (button) => button.disabled,
-          verifyButtonHandle
-        );
-
-        if (isDisabled) {
-          const error = new Error("Verify button is disabled");
-
-          // Send email notification for disabled button error
-          if (jobId) {
-            try {
-            } catch (emailError) {
-              await dualLogError(
-                "Failed to send disabled button error notification:",
-                emailError
-              );
-            }
-          }
-
-          throw error;
-        }
-
-        // Click the button
-        await verifyButtonHandle.click();
-        await dualLogInfo("Clicked the verify button successfully!");
-        // Screenshot: OTP code submitted
-        await takeScreenshot(page, jobId ?? "", "otp_submitted", "step", "expedia", entityType);
+        await enterPasscodeFromEmailWithRetries(page, jobId, entityType);
       } catch (error: any) {
         await dualLogError("Error in primary verification flow:", error);
 
-        // Send email notification for primary verification error
         if (jobId) {
           try {
           } catch (emailError) {
@@ -530,36 +661,9 @@ async function handleOtpVerification(
             await dualLogInfo(
               "SMS verification page loaded, trying to get verification code from email..."
             );
-            await delay(30000);
-
-            const code = await getVerificationCode();
-            if (!code) {
-              throw new Error("Failed to get verification code from email");
-            }
-            await dualLogInfo("Got verification code:", code);
-
-            await page.type('input[name="passcode-input"]', code, {
-              delay: 100,
+            await enterPasscodeFromEmailWithRetries(page, jobId, entityType, {
+              initialDelayMs: 30 * 1000,
             });
-            await delay(1000);
-
-            const verifyButtonHandle = await page.$(
-              'button[data-testid="passcode-submit-button"]'
-            );
-            if (!verifyButtonHandle) {
-              throw new Error("Verify button not found");
-            }
-
-            const isDisabled = await page.evaluate(
-              (button) => button.disabled,
-              verifyButtonHandle
-            );
-            if (isDisabled) {
-              throw new Error("Verify button is disabled");
-            }
-
-            await verifyButtonHandle.click();
-            await dualLogInfo("Clicked the verify button successfully!");
           } else {
             throw new Error(
               `Both primary and alternative approaches failed: ${alternativeClick.error}`
@@ -630,40 +734,9 @@ async function handleOtpVerification(
             "SMS verification page loaded, trying to get verification code from email..."
           );
 
-          // Add delay before fetching verification code
-          await delay(30000); // Wait 30 seconds for email to arrive
-
-          const code = await getVerificationCode();
-          if (!code) {
-            throw new Error("Failed to get verification code from email");
-          }
-          console.log("Got verification code:", code);
-
-          // Enter verification code using the correct selector
-          await page.type('input[name="passcode-input"]', code, { delay: 100 });
-          await delay(1000);
-
-          const verifyButtonHandle = await page.$(
-            'button[data-testid="passcode-submit-button"]'
-          );
-
-          if (!verifyButtonHandle) {
-            throw new Error("Verify button not found");
-          }
-
-          // Check if the button is disabled
-          const isDisabled = await page.evaluate(
-            (button) => button.disabled,
-            verifyButtonHandle
-          );
-
-          if (isDisabled) {
-            throw new Error("Verify button is disabled");
-          }
-
-          // Click the button
-          await verifyButtonHandle.click();
-          console.log("Clicked the verify button successfully!");
+          await enterPasscodeFromEmailWithRetries(page, jobId, entityType, {
+            initialDelayMs: 30 * 1000,
+          });
         } else {
           throw new Error(
             `No matching phone number found in fallback options. Expected ending with ${ourLastThree}. Available options: ${
