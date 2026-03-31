@@ -19,6 +19,11 @@ dotenv.config();
 const PARTNER_CENTRAL_OTP_SUBJECT_TEMPLATE =
   "Partner Central Your verification code is";
 
+/** Landing UI after OTP — avoids networkidle0 timeouts on Partner Central (SPA + background traffic). */
+const PARTNER_CENTRAL_LANDING_WELCOME_SELECTOR =
+  "h2.hero-banner-image__welcome-message";
+const PARTNER_CENTRAL_LANDING_WELCOME_TEXT = "Welcome back to Partner Central";
+
 const OTP_EMAIL_MAX_AGE_MS =
   Number(process.env.OTP_EMAIL_WINDOW_MS) || 5 * 60 * 1000;
 
@@ -213,6 +218,26 @@ async function clearPasscodeInput(page: Page): Promise<void> {
       el.dispatchEvent(new Event("change", { bubbles: true }));
     }
   });
+}
+
+async function waitForPartnerCentralLandingAfterOtp(
+  page: Page,
+  timeoutMs: number
+): Promise<void> {
+  await dualLogInfo(
+    "Waiting for Partner Central post-OTP landing (welcome banner text)..."
+  );
+  await page.waitForFunction(
+    (selector, expected) => {
+      const el = document.querySelector(selector);
+      const t = el?.textContent?.trim() ?? "";
+      return t.includes(expected);
+    },
+    { timeout: timeoutMs },
+    PARTNER_CENTRAL_LANDING_WELCOME_SELECTOR,
+    PARTNER_CENTRAL_LANDING_WELCOME_TEXT
+  );
+  await dualLogInfo("Partner Central landing detected after OTP.");
 }
 
 async function passcodeInputShowsFailure(page: Page): Promise<boolean> {
@@ -757,18 +782,18 @@ async function handleOtpVerification(
       }
     }
 
-    // Wait for successful login
+    // Partner Central is SPA-heavy; networkidle0 often never settles. Wait for the
+    // known post-login hero instead (same as seeing "Welcome back to Partner Central").
     const loadingTimeout = await timeoutManager.getLoadingTimeout(jobId);
     try {
-      await page.waitForNavigation({
-        waitUntil: "networkidle0",
-        timeout: loadingTimeout,
-      });
-      console.log("Login successful!");
+      await waitForPartnerCentralLandingAfterOtp(page, loadingTimeout);
+      await dualLogInfo("Login successful after OTP (landing UI present).");
     } catch (error: any) {
-      await dualLogError("Error waiting for navigation after OTP:", error);
+      await dualLogError(
+        "Error waiting for Partner Central landing after OTP:",
+        error
+      );
 
-      // Send email notification for navigation error
       if (jobId) {
         try {
         } catch (emailError) {
