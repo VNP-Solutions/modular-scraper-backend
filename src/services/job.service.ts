@@ -318,10 +318,8 @@ export class JobService {
 
       // Set or clear failed_reason for UI
       if (status === JobStatus.Failed || status === JobStatus.Partial) {
-        updateData.failed_reason =
-          failedReason != null && failedReason !== ""
-            ? String(failedReason).slice(0, 1000)
-            : undefined;
+        const reasonStr = typeof failedReason === "string" ? failedReason.trim() : "";
+        updateData.failed_reason = reasonStr ? reasonStr.slice(0, 1000) : undefined;
       } else {
         updateData.failed_reason = null;
       }

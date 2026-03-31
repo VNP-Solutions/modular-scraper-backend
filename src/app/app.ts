@@ -2785,8 +2785,11 @@ app.post("/api/expedia/bulk-graphql-run-job", (async (
       otpAwareWorkerPool.executeJob(workerJobData).catch(async (error) => {
         console.error(`Error submitting GraphQL job ${job.jobId}:`, error);
         // Update job status to Failed if submission fails
+        const rawMsg = (error as any)?.message;
         const failedReason =
-          (error as any)?.message || String(error) || "GraphQL job submission failed";
+          typeof rawMsg === "string" && rawMsg.trim()
+            ? rawMsg
+            : "GraphQL job submission failed";
         try {
           await jobService.updateJobStatus(
             job.jobId,
