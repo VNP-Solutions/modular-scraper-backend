@@ -24,6 +24,11 @@ const PARTNER_CENTRAL_LANDING_WELCOME_SELECTOR =
   "h2.hero-banner-image__welcome-message";
 const PARTNER_CENTRAL_LANDING_WELCOME_TEXT = "Welcome back to Partner Central";
 
+/** Alternate post-OTP route: property picker / search (multi-property accounts). */
+const PARTNER_CENTRAL_MANAGE_PROPERTY_ROOT = "div.manage-property";
+const PARTNER_CENTRAL_MANAGE_PROPERTY_HEADING = "Manage a property";
+const PARTNER_CENTRAL_MANAGE_PROPERTY_SEARCH = "#search_box";
+
 const OTP_EMAIL_MAX_AGE_MS =
   Number(process.env.OTP_EMAIL_WINDOW_MS) || 5 * 60 * 1000;
 
@@ -225,17 +230,36 @@ async function waitForPartnerCentralLandingAfterOtp(
   timeoutMs: number
 ): Promise<void> {
   await dualLogInfo(
-    "Waiting for Partner Central post-OTP landing (welcome banner text)..."
+    "Waiting for Partner Central post-OTP landing (welcome home or manage-property)..."
   );
   await page.waitForFunction(
-    (selector, expected) => {
-      const el = document.querySelector(selector);
-      const t = el?.textContent?.trim() ?? "";
-      return t.includes(expected);
+    (welcomeSel, welcomeText, manageRootSel, manageHeading, searchSel) => {
+      const welcomeEl = document.querySelector(welcomeSel);
+      if (welcomeEl) {
+        const wt = welcomeEl.textContent?.trim() ?? "";
+        if (wt.includes(welcomeText)) {
+          return true;
+        }
+      }
+
+      const manageRoot = document.querySelector(manageRootSel);
+      if (!manageRoot) {
+        return false;
+      }
+      const h3 = manageRoot.querySelector("h3");
+      const h3t = h3?.textContent?.trim() ?? "";
+      if (!h3t.includes(manageHeading)) {
+        return false;
+      }
+      const search = document.querySelector(searchSel);
+      return !!search;
     },
     { timeout: timeoutMs },
     PARTNER_CENTRAL_LANDING_WELCOME_SELECTOR,
-    PARTNER_CENTRAL_LANDING_WELCOME_TEXT
+    PARTNER_CENTRAL_LANDING_WELCOME_TEXT,
+    PARTNER_CENTRAL_MANAGE_PROPERTY_ROOT,
+    PARTNER_CENTRAL_MANAGE_PROPERTY_HEADING,
+    PARTNER_CENTRAL_MANAGE_PROPERTY_SEARCH
   );
   await dualLogInfo("Partner Central landing detected after OTP.");
 }
@@ -782,8 +806,8 @@ async function handleOtpVerification(
       }
     }
 
-    // Partner Central is SPA-heavy; networkidle0 often never settles. Wait for the
-    // known post-login hero instead (same as seeing "Welcome back to Partner Central").
+    // Partner Central is SPA-heavy; networkidle0 often never settles. Wait for known
+    // post-login UIs: welcome home hero or "Manage a property" + #search_box.
     const loadingTimeout = await timeoutManager.getLoadingTimeout(jobId);
     try {
       await waitForPartnerCentralLandingAfterOtp(page, loadingTimeout);
