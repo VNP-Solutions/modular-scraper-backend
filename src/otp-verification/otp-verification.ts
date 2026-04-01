@@ -34,15 +34,11 @@ function subjectMatchesPartnerCentralOtpTemplate(subject: string): boolean {
   );
 }
 
-/** Landing UI after OTP — avoids networkidle0 timeouts on Partner Central (SPA + background traffic). */
-const PARTNER_CENTRAL_LANDING_WELCOME_SELECTOR =
-  "h2.hero-banner-image__welcome-message";
-const PARTNER_CENTRAL_LANDING_WELCOME_TEXT = "Welcome back to Partner Central";
-
-/** Alternate post-OTP route: property picker / search (multi-property accounts). */
-const PARTNER_CENTRAL_MANAGE_PROPERTY_ROOT = "div.manage-property";
-const PARTNER_CENTRAL_MANAGE_PROPERTY_HEADING = "Manage a property";
-const PARTNER_CENTRAL_MANAGE_PROPERTY_SEARCH = "#search_box";
+/**
+ * Partner Central MFA / passcode step lives here (e.g. after login).
+ * https://www.expediapartnercentral.com/account/mfa/initiate
+ */
+const PARTNER_CENTRAL_MFA_INITIATE_PATH = "/account/mfa/initiate";
 
 const OTP_EMAIL_MAX_AGE_MS =
   Number(process.env.OTP_EMAIL_WINDOW_MS) || 5 * 60 * 1000;
@@ -245,43 +241,62 @@ async function clearPasscodeInput(page: Page): Promise<void> {
   });
 }
 
-async function waitForPartnerCentralLandingAfterOtp(
+function urlPathnameIndicatesMfaInitiatePage(url: string): boolean {
+  try {
+    const pathname = new URL(url).pathname.replace(/\/+$/, "") || "/";
+    return pathname.includes(PARTNER_CENTRAL_MFA_INITIATE_PATH);
+  } catch {
+    return url.includes(PARTNER_CENTRAL_MFA_INITIATE_PATH);
+  }
+}
+
+function normalizeUrlForCompare(url: string): string {
+  try {
+    const u = new URL(url);
+    const path = u.pathname.replace(/\/+$/, "") || "/";
+    return `${u.origin}${path}${u.search}`;
+  } catch {
+    return url;
+  }
+}
+
+/**
+ * After VERIFY, success = browser leaves the MFA initiate URL (SPA may not fire networkidle).
+ * If checkpoint was not on MFA path, fall back to "any URL change" vs normalized checkpoint.
+ */
+async function waitUntilUrlLeavesMfaOtpPage(
   page: Page,
+  otpCheckpointUrl: string,
   timeoutMs: number
 ): Promise<void> {
-  await dualLogInfo(
-    "Waiting for Partner Central post-OTP landing (welcome home or manage-property)..."
-  );
-  await page.waitForFunction(
-    (welcomeSel, welcomeText, manageRootSel, manageHeading, searchSel) => {
-      const welcomeEl = document.querySelector(welcomeSel);
-      if (welcomeEl) {
-        const wt = welcomeEl.textContent?.trim() ?? "";
-        if (wt.includes(welcomeText)) {
-          return true;
-        }
-      }
+  const start = Date.now();
+  const checkpointNorm = normalizeUrlForCompare(otpCheckpointUrl);
+  const useMfaPathRule = urlPathnameIndicatesMfaInitiatePage(otpCheckpointUrl);
 
-      const manageRoot = document.querySelector(manageRootSel);
-      if (!manageRoot) {
-        return false;
-      }
-      const h3 = manageRoot.querySelector("h3");
-      const h3t = h3?.textContent?.trim() ?? "";
-      if (!h3t.includes(manageHeading)) {
-        return false;
-      }
-      const search = document.querySelector(searchSel);
-      return !!search;
-    },
-    { timeout: timeoutMs },
-    PARTNER_CENTRAL_LANDING_WELCOME_SELECTOR,
-    PARTNER_CENTRAL_LANDING_WELCOME_TEXT,
-    PARTNER_CENTRAL_MANAGE_PROPERTY_ROOT,
-    PARTNER_CENTRAL_MANAGE_PROPERTY_HEADING,
-    PARTNER_CENTRAL_MANAGE_PROPERTY_SEARCH
+  await dualLogInfo(
+    useMfaPathRule
+      ? `Waiting until URL leaves MFA initiate (${PARTNER_CENTRAL_MFA_INITIATE_PATH})...`
+      : `Waiting until URL changes from OTP checkpoint (not on expected MFA path)...`
   );
-  await dualLogInfo("Partner Central landing detected after OTP.");
+
+  const pollMs = 400;
+  while (Date.now() - start < timeoutMs) {
+    const current = page.url();
+    if (useMfaPathRule) {
+      if (!urlPathnameIndicatesMfaInitiatePage(current)) {
+        await dualLogInfo(`Left MFA / OTP page. New URL: ${current}`);
+        return;
+      }
+    } else if (normalizeUrlForCompare(current) !== checkpointNorm) {
+      await dualLogInfo(`OTP checkpoint URL changed. New URL: ${current}`);
+      return;
+    }
+    await delay(pollMs);
+  }
+
+  throw new Error(
+    `Timed out after ${timeoutMs}ms: still on MFA/OTP URL (${page.url()}). Checkpoint was ${otpCheckpointUrl}`
+  );
 }
 
 async function passcodeInputShowsFailure(page: Page): Promise<boolean> {
@@ -323,15 +338,22 @@ async function passcodeInputShowsFailure(page: Page): Promise<boolean> {
 /**
  * Wait for email, then one Gmail batch fetch for all in-window codes (newest first).
  * Submits up to OTP_VERIFY_MAX_ATTEMPTS times using that list only — no refetch between attempts.
+ * After VERIFY with no inline error, waits until the URL leaves the MFA initiate page (see checkpoint).
  */
 async function enterPasscodeFromEmailWithRetries(
   page: Page,
   jobId: string | undefined,
   entityType: "job" | "retrieval",
-  options?: { initialDelayMs?: number }
+  options: {
+    otpCheckpointUrl: string;
+    postVerifyUrlWaitMs: number;
+    initialDelayMs?: number;
+  }
 ): Promise<void> {
-  const initialDelayMs =
-    options?.initialDelayMs ?? OTP_WAIT_BEFORE_FIRST_CODE_MS;
+  const { otpCheckpointUrl, postVerifyUrlWaitMs, initialDelayMs } = {
+    initialDelayMs: OTP_WAIT_BEFORE_FIRST_CODE_MS,
+    ...options,
+  };
 
   await dualLogInfo("Waiting for verification email...");
   await delay(initialDelayMs);
@@ -381,6 +403,11 @@ async function enterPasscodeFromEmailWithRetries(
     await delay(OTP_POST_SUBMIT_CHECK_MS);
     const failed = await passcodeInputShowsFailure(page);
     if (!failed) {
+      await waitUntilUrlLeavesMfaOtpPage(
+        page,
+        otpCheckpointUrl,
+        postVerifyUrlWaitMs
+      );
       await takeScreenshot(
         page,
         jobId ?? "",
@@ -425,6 +452,7 @@ async function handleOtpVerification(
 
     // Get timeout configuration for this job
     const selectorTimeout = await timeoutManager.getSelectorTimeout(jobId);
+    const loadingTimeout = await timeoutManager.getLoadingTimeout(jobId);
 
     // Wait for verification code page using the correct selector
     await dualLogInfo("Waiting for verification page...");
@@ -450,6 +478,12 @@ async function handleOtpVerification(
       }
       throw error;
     }
+
+    const otpCheckpointUrl = page.url();
+    await dualLogInfo(
+      `OTP page checkpoint URL (expect to leave this after successful VERIFY): ${otpCheckpointUrl}`
+    );
+
     const ourContact = process.env.OUR_CONTACT || "01828704004";
 
     // Extract the phone number from the verification message
@@ -479,7 +513,10 @@ async function handleOtpVerification(
       );
 
       try {
-        await enterPasscodeFromEmailWithRetries(page, jobId, entityType);
+        await enterPasscodeFromEmailWithRetries(page, jobId, entityType, {
+          otpCheckpointUrl,
+          postVerifyUrlWaitMs: loadingTimeout,
+        });
       } catch (error: any) {
         await dualLogError("Error in primary verification flow:", error);
 
@@ -719,7 +756,13 @@ async function handleOtpVerification(
             await dualLogInfo(
               "SMS verification page loaded, trying to get verification code from email..."
             );
+            const smsOtpCheckpointUrl = page.url();
+            await dualLogInfo(
+              `OTP checkpoint URL (SMS path): ${smsOtpCheckpointUrl}`
+            );
             await enterPasscodeFromEmailWithRetries(page, jobId, entityType, {
+              otpCheckpointUrl: smsOtpCheckpointUrl,
+              postVerifyUrlWaitMs: loadingTimeout,
               initialDelayMs: 30 * 1000,
             });
           } else {
@@ -792,7 +835,13 @@ async function handleOtpVerification(
             "SMS verification page loaded, trying to get verification code from email..."
           );
 
+          const smsOtpCheckpointUrl = page.url();
+          await dualLogInfo(
+            `OTP checkpoint URL (SMS path): ${smsOtpCheckpointUrl}`
+          );
           await enterPasscodeFromEmailWithRetries(page, jobId, entityType, {
+            otpCheckpointUrl: smsOtpCheckpointUrl,
+            postVerifyUrlWaitMs: loadingTimeout,
             initialDelayMs: 30 * 1000,
           });
         } else {
@@ -826,30 +875,9 @@ async function handleOtpVerification(
       }
     }
 
-    // Partner Central is SPA-heavy; networkidle0 often never settles. Wait for known
-    // post-login UIs: welcome home hero or "Manage a property" + #search_box.
-    const loadingTimeout = await timeoutManager.getLoadingTimeout(jobId);
-    try {
-      await waitForPartnerCentralLandingAfterOtp(page, loadingTimeout);
-      await dualLogInfo("Login successful after OTP (landing UI present).");
-    } catch (error: any) {
-      await dualLogError(
-        "Error waiting for Partner Central landing after OTP:",
-        error
-      );
-
-      if (jobId) {
-        try {
-        } catch (emailError) {
-          await dualLogError(
-            "Failed to send navigation error notification:",
-            emailError
-          );
-        }
-      }
-
-      throw error;
-    }
+    await dualLogInfo(
+      "OTP verification finished: URL left MFA initiate (or checkpoint) after successful VERIFY."
+    );
   } catch (error: any) {
     await dualLogError("Error in handleOtpVerification:", error);
     // Screenshot: OTP verification failed
