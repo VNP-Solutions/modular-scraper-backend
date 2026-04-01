@@ -108,6 +108,14 @@ export function getJobPhoneAndPort(jobId: string): JobContact | undefined {
 }
 
 /**
+ * OUR_CONTACT env only (no job lock). Used when Booking’s phone picker does not list the
+ * job-assigned number — retry matching last-3 against the shared env number.
+ */
+export function getOurContactFromEnv(): string {
+  return process.env.OUR_CONTACT?.trim() || DEFAULT_FALLBACK;
+}
+
+/**
  * Returns the phone to use for OTP/verification for this job.
  * Uses job-locked phone if set, otherwise OUR_CONTACT, otherwise default.
  */
@@ -116,7 +124,7 @@ export function getOurContactForJob(jobId: string | undefined): string {
     const locked = jobContacts.get(jobId)?.phone;
     if (locked) return locked;
   }
-  return process.env.OUR_CONTACT?.trim() || DEFAULT_FALLBACK;
+  return getOurContactFromEnv();
 }
 
 /**
@@ -124,7 +132,7 @@ export function getOurContactForJob(jobId: string | undefined): string {
  * Uses OUR_CONTACT, else built-in fallback (same as single-contact OTP path).
  */
 export function getDefaultOtpPhoneForGroupedRequest(): string {
-  return process.env.OUR_CONTACT?.trim() || DEFAULT_FALLBACK;
+  return getOurContactFromEnv();
 }
 
 /**

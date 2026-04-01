@@ -9,7 +9,10 @@ import {
 } from "../common/failed-reason.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
 import { notificationService } from "../services/notification.service.js";
-import { getOurContactForJob } from "../common/job-phone-store.js";
+import {
+  getOurContactForJob,
+  getOurContactFromEnv,
+} from "../common/job-phone-store.js";
 import { getBookingVerificationCodes } from "./email-verification-utils.js";
 import {
   getTimeoutConfig,
@@ -638,106 +641,153 @@ async function handleBookingOtpVerification(
   }
 }
 
+function bookingPhoneLastThree(phone: string): string {
+  return phone.replace(/\D/g, "").slice(-3);
+}
+
 async function selectCorrectPhoneNumber(
   page: Page,
   jobId?: string
 ): Promise<boolean> {
   try {
-    const ourContact = getOurContactForJob(jobId);
-    const ourLastThree = ourContact.replace(/\D/g, "").slice(-3);
+    const primaryContact = getOurContactForJob(jobId);
+    const envContact = getOurContactFromEnv();
 
-    await dualLogInfo(`Looking for phone number ending with: ${ourLastThree}`);
+    const attempts: { label: string; contact: string }[] = [
+      { label: "job / assigned phone", contact: primaryContact },
+    ];
+    if (bookingPhoneLastThree(envContact) !== bookingPhoneLastThree(primaryContact)) {
+      attempts.push({ label: "OUR_CONTACT env", contact: envContact });
+    }
 
-    // Wait for phone selection elements to load
+    // Wait for phone selection elements to load (once before tries)
     await delay(3000);
 
-    // Check if we're on the phone selection page and find the correct phone
-    // Options in DOM look like: +15*****0638, +16*****0408, +15*****6664 (last 3 digits identify the number)
-    const phoneSelected = await page.evaluate((ourContact) => {
-      try {
-        const targetLastThree = ourContact.replace(/\D/g, "").slice(-3);
-
-        const phoneSelect = document.querySelector(
-          'select[name="selected_phone"]'
-        ) as HTMLSelectElement;
-        if (phoneSelect) {
-          const options = Array.from(phoneSelect.options);
-          for (const option of options) {
-            const phoneText = option.textContent?.trim() || "";
-            const phoneLastThree = phoneText.replace(/\D/g, "").slice(-3);
-            if (phoneText.includes("*") && phoneLastThree === targetLastThree) {
-              phoneSelect.value = option.value;
-              phoneSelect.dispatchEvent(new Event("change", { bubbles: true }));
-              return {
-                success: true,
-                phoneNumber: phoneText,
-                method: "dropdown",
-              };
-            }
-          }
+    let phoneSelected:
+      | {
+          success: true;
+          phoneNumber: string;
+          method: string;
         }
+      | {
+          success: false;
+          error?: string;
+        } = { success: false, error: "No attempt" };
 
-        // Fallback to original method - look for phone number elements
-        const phoneElements = document.querySelectorAll(
-          'div[class*="phone"], span[class*="phone"], .verification-phone, [data-testid*="phone"], option'
-        );
+    for (let ai = 0; ai < attempts.length; ai++) {
+      const attempt = attempts[ai];
+      const lastThree = bookingPhoneLastThree(attempt.contact);
+      await dualLogInfo(
+        `Looking for phone number ending with: ${lastThree} (${attempt.label})`
+      );
 
-        for (const element of phoneElements) {
-          const phoneText = element.textContent?.trim() || "";
-          if (phoneText.includes("*") || phoneText.includes("••")) {
-            const phoneLastThree = phoneText.replace(/\D/g, "").slice(-3);
-            if (phoneLastThree === targetLastThree) {
-              // Look for associated click element (button, link, etc.)
-              const clickableParent = element.closest(
-                'button, a, [role="button"], .clickable'
-              ) as HTMLElement;
-              if (clickableParent) {
-                clickableParent.click();
+      // Options in DOM look like: +15*****0638, +16*****0408, +15*****6664 (last 3 digits identify the number)
+      const result = await page.evaluate((ourContact) => {
+        try {
+          const targetLastThree = ourContact.replace(/\D/g, "").slice(-3);
+
+          const phoneSelect = document.querySelector(
+            'select[name="selected_phone"]'
+          ) as HTMLSelectElement;
+          if (phoneSelect) {
+            const options = Array.from(phoneSelect.options);
+            for (const option of options) {
+              const phoneText = option.textContent?.trim() || "";
+              const phoneLastThree = phoneText.replace(/\D/g, "").slice(-3);
+              if (phoneText.includes("*") && phoneLastThree === targetLastThree) {
+                phoneSelect.value = option.value;
+                phoneSelect.dispatchEvent(
+                  new Event("change", { bubbles: true })
+                );
                 return {
                   success: true,
                   phoneNumber: phoneText,
-                  method: "click_parent",
+                  method: "dropdown",
                 };
               }
-
-              // If parent not clickable, try clicking the element itself
-              (element as HTMLElement).click();
-              return {
-                success: true,
-                phoneNumber: phoneText,
-                method: "click_element",
-              };
             }
           }
-        }
 
-        // Additional fallback: look for any clickable element with phone pattern
-        const clickableElements = document.querySelectorAll(
-          'button, a, [role="button"], .clickable'
-        );
-        for (const element of clickableElements) {
-          const text = element.textContent?.trim() || "";
-          if (text.includes("*") || text.includes("••")) {
-            const phoneLastThree = text.replace(/\D/g, "").slice(-3);
-            if (phoneLastThree === targetLastThree) {
-              (element as HTMLElement).click();
-              return {
-                success: true,
-                phoneNumber: text,
-                method: "click_fallback",
-              };
+          const phoneElements = document.querySelectorAll(
+            'div[class*="phone"], span[class*="phone"], .verification-phone, [data-testid*="phone"], option'
+          );
+
+          for (const element of phoneElements) {
+            const phoneText = element.textContent?.trim() || "";
+            if (phoneText.includes("*") || phoneText.includes("••")) {
+              const phoneLastThree = phoneText.replace(/\D/g, "").slice(-3);
+              if (phoneLastThree === targetLastThree) {
+                const clickableParent = element.closest(
+                  'button, a, [role="button"], .clickable'
+                ) as HTMLElement;
+                if (clickableParent) {
+                  clickableParent.click();
+                  return {
+                    success: true,
+                    phoneNumber: phoneText,
+                    method: "click_parent",
+                  };
+                }
+
+                (element as HTMLElement).click();
+                return {
+                  success: true,
+                  phoneNumber: phoneText,
+                  method: "click_element",
+                };
+              }
             }
           }
-        }
 
-        return { success: false, error: "No matching phone number found" };
-      } catch (error) {
-        return {
-          success: false,
-          error: error instanceof Error ? error.message : "Unknown error",
+          const clickableElements = document.querySelectorAll(
+            'button, a, [role="button"], .clickable'
+          );
+          for (const element of clickableElements) {
+            const text = element.textContent?.trim() || "";
+            if (text.includes("*") || text.includes("••")) {
+              const phoneLastThree = text.replace(/\D/g, "").slice(-3);
+              if (phoneLastThree === targetLastThree) {
+                (element as HTMLElement).click();
+                return {
+                  success: true,
+                  phoneNumber: text,
+                  method: "click_fallback",
+                };
+              }
+            }
+          }
+
+          return { success: false, error: "No matching phone number found" };
+        } catch (error) {
+          return {
+            success: false,
+            error: error instanceof Error ? error.message : "Unknown error",
+          };
+        }
+      }, attempt.contact);
+
+      if (
+        result.success &&
+        "phoneNumber" in result &&
+        "method" in result &&
+        result.phoneNumber &&
+        result.method
+      ) {
+        phoneSelected = {
+          success: true,
+          phoneNumber: result.phoneNumber,
+          method: result.method,
         };
+        break;
       }
-    }, ourContact);
+
+      const hasMore = ai < attempts.length - 1;
+      await dualLogInfo(
+        `No Booking.com option matched last 3 (${lastThree}) for ${attempt.label}${
+          hasMore ? "; trying OUR_CONTACT from env" : ""
+        }`
+      );
+    }
 
     if (phoneSelected.success) {
       await dualLogInfo(
