@@ -58,6 +58,7 @@ import {
 } from "../services/vccs-management.service.js";
 import {
   BaseScraper,
+  BookingGroupScrapeStep,
   CaptchaHandlerOptions,
   LoginCredentials,
   ScrapingJobParams,
@@ -3511,6 +3512,44 @@ export class BookingScraper extends BaseScraper {
   }
 
   /**
+   * After a property step fails (e.g. VCCS nav lost session), re-login for the next hotel when the
+   * browser is on Booking sign-in so the following step can run.
+   */
+  private async recoverGroupSessionBeforeNextStep(
+    params: ScrapingJobParams,
+    nextStep: BookingGroupScrapeStep
+  ): Promise<void> {
+    if (!this.page) {
+      return;
+    }
+    const url = this.page.url().toLowerCase();
+    const onSignIn =
+      url.includes("account.booking.com/sign-in") ||
+      (url.includes("booking.com") && url.includes("/sign-in"));
+
+    if (!onSignIn) {
+      await dualLogInfo(
+        `[booking] Group: continuing to next property ${nextStep.bookingId} (no sign-in page detected)`
+      );
+      return;
+    }
+
+    await dualLogInfo(
+      `[booking] Group: session signed out after step failure; re-logging in for property ${nextStep.bookingId}`
+    );
+    await this.applyBookingCredentialsForJob(nextStep.jobId, params.credentials);
+    await this.login(this.credentials, nextStep.bookingId);
+    const captchaHandled = await this.handleCaptcha();
+    if (!captchaHandled) {
+      await this.logError("Captcha handling failed after group re-login");
+    }
+    const twoFAHandled = await this.handle2FA();
+    if (!twoFAHandled) {
+      await this.logInfo("2FA not required or skipped after group re-login");
+    }
+  }
+
+  /**
    * One login for the account, then scrape each hotel (VCCS → view all → reservations → cards) in sequence.
    */
   private async executeBookingGroupScraping(
@@ -3571,6 +3610,7 @@ export class BookingScraper extends BaseScraper {
         jobId: string;
         finalStatus: JobStatus;
         progress: unknown;
+        error?: string;
       }> = [];
 
       for (let i = 0; i < steps.length; i++) {
@@ -3607,13 +3647,29 @@ export class BookingScraper extends BaseScraper {
         const result = await this.scrapeData(stepParams);
 
         if (!result.success) {
-          await jobService.failJobSafe(
-            step.jobId,
-            result.error || "Property scrape failed"
+          const failMsg = result.error || "Property scrape failed";
+          await jobService.failJobSafe(step.jobId, failMsg);
+          aggregateResults.push({
+            jobId: step.jobId,
+            finalStatus: JobStatus.Failed,
+            progress: null,
+            error: failMsg,
+          });
+
+          const hasMore = i < steps.length - 1;
+          if (hasMore) {
+            await dualLogInfo(
+              `[booking] Group: step failed for job ${step.jobId} (${failMsg}); attempting recovery and next property`
+            );
+            await this.recoverGroupSessionBeforeNextStep(params, steps[i + 1]);
+            continue;
+          }
+
+          await dualLogError(
+            `[booking] Group: last step failed for job ${step.jobId}`,
+            new Error(failMsg)
           );
-          throw new Error(
-            result.error || `Booking group scrape failed for job ${step.jobId}`
-          );
+          break;
         }
 
         const progress = await jobService.getJobProgress(step.jobId);
@@ -3638,9 +3694,34 @@ export class BookingScraper extends BaseScraper {
       }
 
       scrapingStateManager.stopScraping();
-      await dualLogInfo("Booking group scrape completed", {
+
+      if (!anyStepCompleted) {
+        const lastErr =
+          aggregateResults[aggregateResults.length - 1]?.error ||
+          "All properties in the group failed to scrape";
+        await dualLogError(
+          "Booking group: no property completed successfully",
+          new Error(lastErr),
+          { leaseJobId, results: aggregateResults }
+        );
+        return {
+          success: false,
+          error: lastErr,
+          data: {
+            platform: "booking",
+            group: true,
+            leaseJobId,
+            results: aggregateResults,
+          },
+        };
+      }
+
+      await dualLogInfo("Booking group scrape finished (partial or full)", {
         count: steps.length,
         leaseJobId,
+        completedSteps: aggregateResults.filter(
+          (r) => r.finalStatus !== JobStatus.Failed
+        ).length,
       });
 
       return {
