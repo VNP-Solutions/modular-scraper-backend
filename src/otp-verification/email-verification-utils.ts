@@ -1,7 +1,11 @@
 import dotenv from "dotenv";
 import fs from "fs";
 import { google } from "googleapis";
-import { getJobPhoneAndPort } from "../common/job-phone-store.js";
+import {
+  clearBookingOtpUseNoSlotEmailForJob,
+  getBookingOtpShouldUseNoSlotEmail,
+  getJobPhoneAndPort,
+} from "../common/job-phone-store.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
 import { oauth2Client } from "../config/google-config.js";
 
@@ -237,6 +241,7 @@ export async function getVerificationCode(jobId?: string): Promise<string | null
  * - Multi-phone with port: NEW behaviour – filter by From/To and slot (PORT X / Receiver).
  */
 export async function getBookingVerificationCodes(jobId?: string): Promise<string[]> {
+  let clearNoSlotOverride = false;
   try {
     const credentialsLoaded = await loadCredentials();
     if (!credentialsLoaded) {
@@ -245,8 +250,17 @@ export async function getBookingVerificationCodes(jobId?: string): Promise<strin
       );
     }
 
+    const preferNoSlot =
+      Boolean(jobId) && getBookingOtpShouldUseNoSlotEmail(jobId);
+    if (preferNoSlot) {
+      clearNoSlotOverride = true;
+      await dualLogInfo(
+        `Booking OTP: using no-slot IFTTT email flow (SMS via OUR_CONTACT UI) for job ${jobId}`
+      );
+    }
+
     const jobContact = jobId ? getJobPhoneAndPort(jobId) : undefined;
-    const usePortFlow = Boolean(jobContact?.port);
+    const usePortFlow = Boolean(jobContact?.port) && !preferNoSlot;
 
     const gmail = google.gmail({ version: "v1", auth: oauth2Client });
 
@@ -346,6 +360,10 @@ export async function getBookingVerificationCodes(jobId?: string): Promise<strin
   } catch (error: any) {
     await dualLogError("Error fetching verification codes:", error.message);
     return [];
+  } finally {
+    if (jobId && clearNoSlotOverride) {
+      clearBookingOtpUseNoSlotEmailForJob(jobId);
+    }
   }
 }
 

@@ -17,6 +17,12 @@ export interface JobContact {
 /** jobId -> { phone, port? } for that job */
 const jobContacts = new Map<string, JobContact>();
 
+/**
+ * Booking SMS was sent using OUR_CONTACT from env (UI fallback). OTP email must use legacy
+ * IFTTT path without slot filter — 408-style lines often don't match the job's locked port.
+ */
+const bookingOtpUseNoSlotEmail = new Map<string, boolean>();
+
 /** Round-robin index for even distribution (used when assignContactRoundRobin is true) */
 let nextRoundRobinIndex = 0;
 
@@ -135,9 +141,32 @@ export function getDefaultOtpPhoneForGroupedRequest(): string {
   return getOurContactFromEnv();
 }
 
+export function setBookingOtpUseNoSlotEmailForJob(
+  jobId: string,
+  enabled: boolean
+): void {
+  if (enabled) {
+    bookingOtpUseNoSlotEmail.set(jobId, true);
+  } else {
+    bookingOtpUseNoSlotEmail.delete(jobId);
+  }
+}
+
+export function getBookingOtpShouldUseNoSlotEmail(
+  jobId: string | undefined
+): boolean {
+  if (!jobId) return false;
+  return bookingOtpUseNoSlotEmail.get(jobId) === true;
+}
+
+export function clearBookingOtpUseNoSlotEmailForJob(jobId: string): void {
+  bookingOtpUseNoSlotEmail.delete(jobId);
+}
+
 /**
  * Clears the stored contact for this job. Call when job ends.
  */
 export function clearJobPhone(jobId: string): void {
   jobContacts.delete(jobId);
+  bookingOtpUseNoSlotEmail.delete(jobId);
 }

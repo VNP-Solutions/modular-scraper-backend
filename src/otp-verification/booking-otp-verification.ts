@@ -12,6 +12,7 @@ import { notificationService } from "../services/notification.service.js";
 import {
   getOurContactForJob,
   getOurContactFromEnv,
+  setBookingOtpUseNoSlotEmailForJob,
 } from "../common/job-phone-store.js";
 import { getBookingVerificationCodes } from "./email-verification-utils.js";
 import {
@@ -143,8 +144,8 @@ async function handleBookingOtpVerification(
         });
 
       // Look for phone selection page and select the correct phone number
-      const phoneSelected = await selectCorrectPhoneNumber(page, jobId);
-      if (!phoneSelected) {
+      const phonePick = await selectCorrectPhoneNumber(page, jobId);
+      if (!phonePick.ok) {
         const error = new Error("Failed to select correct phone number");
         setFailedReasonCode(error, FAILED_REASON.BOOKING_OTP_FAILED);
 
@@ -167,6 +168,10 @@ async function handleBookingOtpVerification(
         }
 
         throw error;
+      }
+
+      if (phonePick.usedOurContactEnv && jobId) {
+        setBookingOtpUseNoSlotEmailForJob(jobId, true);
       }
 
       await dualLogInfo("Phone number selected, waiting for OTP input page...");
@@ -648,7 +653,7 @@ function bookingPhoneLastThree(phone: string): string {
 async function selectCorrectPhoneNumber(
   page: Page,
   jobId?: string
-): Promise<boolean> {
+): Promise<{ ok: boolean; usedOurContactEnv?: boolean }> {
   try {
     const primaryContact = getOurContactForJob(jobId);
     const envContact = getOurContactFromEnv();
@@ -662,6 +667,8 @@ async function selectCorrectPhoneNumber(
 
     // Wait for phone selection elements to load (once before tries)
     await delay(3000);
+
+    let matchedByOurContactEnv = false;
 
     let phoneSelected:
       | {
@@ -778,6 +785,7 @@ async function selectCorrectPhoneNumber(
           phoneNumber: result.phoneNumber,
           method: result.method,
         };
+        matchedByOurContactEnv = attempt.label === "OUR_CONTACT env";
         break;
       }
 
@@ -843,20 +851,20 @@ async function selectCorrectPhoneNumber(
 
       if (sendButtonClicked) {
         await dualLogInfo('Clicked "Send verification code" button');
-        return true;
+        return { ok: true, usedOurContactEnv: matchedByOurContactEnv };
       } else {
         await dualLogError(
           'Failed to find and click "Send verification code" button'
         );
-        return false;
+        return { ok: false };
       }
     } else {
       await dualLogError(`Failed to select phone: ${phoneSelected.error}`);
-      return false;
+      return { ok: false };
     }
   } catch (error) {
     await dualLogError("Error selecting phone number:", error);
-    return false;
+    return { ok: false };
   }
 }
 
