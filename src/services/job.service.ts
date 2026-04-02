@@ -604,6 +604,32 @@ export class JobService {
   }
 
   /**
+   * Booking VCCS: store how many reservations matched the charge-before filter
+   * after Phase 1 list pagination (for UI / reporting).
+   */
+  async updateBookingVccsFilteredReservationCount(
+    jobId: string,
+    count: number
+  ): Promise<IJob | null> {
+    try {
+      const objectId = this.validateObjectId(jobId, "jobId");
+      return await Job.findByIdAndUpdate(
+        objectId,
+        {
+          booking_vccs_filtered_reservation_count: count,
+          updatedAt: new Date(),
+        },
+        { new: true }
+      );
+    } catch (error) {
+      console.error(
+        `Error updating booking VCCS filtered reservation count: ${error}`
+      );
+      return null;
+    }
+  }
+
+  /**
    * Check if job exists and is in valid state
    */
   async validateJob(

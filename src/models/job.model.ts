@@ -71,6 +71,11 @@ export interface IJob extends Document {
     timestamp: string;
     type: "step" | "error";
   }[];
+  /**
+   * Booking VCCS Phase 1: count of reservations after the charge-before / end_date
+   * filter (matches log "Total reservations collected").
+   */
+  booking_vccs_filtered_reservation_count?: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -228,6 +233,10 @@ const JobSchema = new Schema<IJob>(
       ],
       required: false,
       default: [],
+    },
+    booking_vccs_filtered_reservation_count: {
+      type: Number,
+      required: false,
     },
   },
   {

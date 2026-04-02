@@ -3985,6 +3985,13 @@ export class BookingScraper extends BaseScraper {
         `Phase 1 complete. Total reservations collected: ${allVccs.length} across ${collectPage} page(s).`
       );
 
+      if (params.jobId) {
+        await jobService.updateBookingVccsFilteredReservationCount(
+          params.jobId,
+          allVccs.length
+        );
+      }
+
       // ── Phase 2: Process card details one by one ──────────────────────────
       // The session is still fresh (we never left admin.booking.com in Phase 1).
       // We build a synthetic VccsApiResponse that wraps the full collected list
