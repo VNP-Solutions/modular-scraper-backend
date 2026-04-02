@@ -831,6 +831,32 @@ export class JobService {
   }
 
   /**
+   * Reservation IDs for this job that already have VCC card data persisted.
+   * Used to skip browser/API card fetches on job rerun after partial completion.
+   */
+  async getReservationIdsWithCompleteCardForJob(
+    jobId: string
+  ): Promise<string[]> {
+    try {
+      const objectId = this.validateObjectId(jobId, "jobId");
+      const docs = await JobItem.find({
+        job_id: objectId,
+        has_card_info: true,
+        "card_info.card_number": { $exists: true, $nin: [null, ""] },
+      })
+        .select("reservation_id")
+        .lean()
+        .exec();
+      return docs.map((d) => String((d as { reservation_id: string }).reservation_id));
+    } catch (error) {
+      console.error(
+        `Error listing reservation IDs with complete card for job: ${error}`
+      );
+      return [];
+    }
+  }
+
+  /**
    * Check if reservation already exists for job
    */
   async reservationExists(

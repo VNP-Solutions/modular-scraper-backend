@@ -72,6 +72,7 @@ async function testVccsManagement() {
 
     console.log("✅ VCCS processing completed:", {
       processed: processingResult.processed,
+      skippedResume: processingResult.skippedResume,
       errors: processingResult.errors,
       total: processingResult.results.length,
     });

@@ -4019,12 +4019,15 @@ export class BookingScraper extends BaseScraper {
         );
 
       await this.logInfo(
-        `Phase 2 complete. Processed: ${processingResult.processed}, Errors: ${processingResult.errors}`
+        `Phase 2 complete. Processed: ${processingResult.processed}, Skipped (already in DB): ${processingResult.skippedResume}, Errors: ${processingResult.errors}`
       );
 
       await this.logInfo("VCCS API Processing Results:");
       await this.logInfo(
         `Successfully processed: ${processingResult.processed} reservations`
+      );
+      await this.logInfo(
+        `Skipped (resume): ${processingResult.skippedResume} reservations`
       );
       await this.logInfo(`Errors encountered: ${processingResult.errors}`);
 
@@ -4043,6 +4046,7 @@ export class BookingScraper extends BaseScraper {
         },
         vccsProcessing: {
           processed: processingResult.processed,
+          skippedResume: processingResult.skippedResume,
           errors: processingResult.errors,
           method: "api",
         },

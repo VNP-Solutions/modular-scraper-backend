@@ -944,11 +944,13 @@ export class VccsManagementService {
   ): Promise<{
     processed: number;
     errors: number;
+    skippedResume: number;
     results: Array<{
       reservationId: string;
       vccsData: any;
       cardDetails: CardDetailsResponse | null;
       saved: boolean;
+      resumeSkipped?: boolean;
     }>;
   }> {
     const results: Array<{
@@ -956,19 +958,44 @@ export class VccsManagementService {
       vccsData: any;
       cardDetails: CardDetailsResponse | null;
       saved: boolean;
+      resumeSkipped?: boolean;
     }> = [];
 
     let processed = 0;
     let errors = 0;
+    let skippedResume = 0;
     let latestAuthenticatedUrl: string | undefined = undefined; // Store LATEST authenticated URL (updated after EVERY successful fetch)
+
+    const completedReservationIds = jobId
+      ? new Set(
+          await jobService.getReservationIdsWithCompleteCardForJob(jobId)
+        )
+      : new Set<string>();
 
     dualLogInfo("Starting VCCS reservation processing", {
       totalVccs: vccsData.data.vccs.length,
       jobId,
       propertyIdForDb,
+      resumeSkipCount: completedReservationIds.size,
     });
 
     for (const vccs of vccsData.data.vccs) {
+      const resId = String(vccs.hres_id);
+      if (completedReservationIds.has(resId)) {
+        skippedResume++;
+        dualLogInfo(
+          `Skipping reservation ${resId} (card already stored for this job)`
+        );
+        results.push({
+          reservationId: resId,
+          vccsData: vccs,
+          cardDetails: null,
+          saved: true,
+          resumeSkipped: true,
+        });
+        continue;
+      }
+
       try {
         dualLogInfo(`Processing reservation ${vccs.hres_id}`);
 
@@ -1064,12 +1091,14 @@ export class VccsManagementService {
     dualLogInfo("VCCS reservation processing completed", {
       processed,
       errors,
+      skippedResume,
       total: vccsData.data.vccs.length,
     });
 
     return {
       processed,
       errors,
+      skippedResume,
       results,
     };
   }
@@ -1088,11 +1117,13 @@ export class VccsManagementService {
   ): Promise<{
     processed: number;
     errors: number;
+    skippedResume: number;
     results: Array<{
       reservationId: string;
       vccsData: any;
       cardDetails: CardDetailsResponse | null;
       saved: boolean;
+      resumeSkipped?: boolean;
     }>;
   }> {
     const results: Array<{
@@ -1100,18 +1131,43 @@ export class VccsManagementService {
       vccsData: any;
       cardDetails: CardDetailsResponse | null;
       saved: boolean;
+      resumeSkipped?: boolean;
     }> = [];
 
     let processed = 0;
     let errors = 0;
+    let skippedResume = 0;
+
+    const completedReservationIds = jobId
+      ? new Set(
+          await jobService.getReservationIdsWithCompleteCardForJob(jobId)
+        )
+      : new Set<string>();
 
     dualLogInfo("Starting VCCS reservation processing", {
       totalVccs: vccsData.data.vccs.length,
       jobId,
       propertyId,
+      resumeSkipCount: completedReservationIds.size,
     });
 
     for (const vccs of vccsData.data.vccs) {
+      const resId = String(vccs.hres_id);
+      if (completedReservationIds.has(resId)) {
+        skippedResume++;
+        dualLogInfo(
+          `Skipping reservation ${resId} (card already stored for this job)`
+        );
+        results.push({
+          reservationId: resId,
+          vccsData: vccs,
+          cardDetails: null,
+          saved: true,
+          resumeSkipped: true,
+        });
+        continue;
+      }
+
       try {
         dualLogInfo(`Processing reservation ${vccs.hres_id}`);
 
@@ -1196,12 +1252,14 @@ export class VccsManagementService {
     dualLogInfo("VCCS reservation processing completed", {
       processed,
       errors,
+      skippedResume,
       total: vccsData.data.vccs.length,
     });
 
     return {
       processed,
       errors,
+      skippedResume,
       results,
     };
   }
