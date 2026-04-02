@@ -5,6 +5,7 @@ import {
   dualLogInfo,
   finalizeJobLogging,
   initializeJobLogging,
+  isJobLoggingActive,
 } from "./common/log-helper.js";
 import { scrapingStateManager } from "./common/scraping-state.js";
 import { ScraperFactory, SupportedPlatforms, ScrapingJobParams, detectPlatform } from "./scrapers/scraper-factory.js";
@@ -30,6 +31,9 @@ interface MultiPlatformJobParams {
 
 async function mainMultiPlatform(params: MultiPlatformJobParams): Promise<void> {
   let jobLogger = null;
+  const isBookingGroup = Boolean(
+    params.bookingGroupSteps && params.bookingGroupSteps.length > 0
+  );
 
   try {
     // Initialize job logging if jobId is provided
@@ -92,7 +96,7 @@ async function mainMultiPlatform(params: MultiPlatformJobParams): Promise<void> 
     await scrapingStateManager.waitWhilePaused();
     if (!scrapingStateManager.isRunning()) {
       await dualLogInfo("Scraping was stopped before execution");
-      if (params.jobId) {
+      if (params.jobId && isJobLoggingActive()) {
         await finalizeJobLogging("failed");
       }
       return;
@@ -141,7 +145,7 @@ async function mainMultiPlatform(params: MultiPlatformJobParams): Promise<void> 
       ) {
         throw new Error(result.error || "Booking group scrape failed");
       }
-      if (params.jobId) {
+      if (params.jobId && isJobLoggingActive()) {
         await finalizeJobLogging("failed");
       }
       return;
@@ -153,13 +157,16 @@ async function mainMultiPlatform(params: MultiPlatformJobParams): Promise<void> 
     });
 
     if (params.jobId) {
-      await finalizeJobLogging("success");
+      if (!isBookingGroup) {
+        await finalizeJobLogging("success");
+      } else if (isJobLoggingActive()) {
+        await finalizeJobLogging("success");
+      }
     }
   } catch (error) {
     await dualLogError("Multi-platform scraping error:", error);
 
-    // Finalize logging with failed status
-    if (params.jobId) {
+    if (params.jobId && isJobLoggingActive()) {
       await finalizeJobLogging("failed");
     }
     throw error;

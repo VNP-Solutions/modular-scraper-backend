@@ -108,6 +108,13 @@ export abstract class BaseScraper {
   abstract scrapeData(params: ScrapingJobParams): Promise<ScrapingResult>;
   abstract cleanup(): Promise<void>;
 
+  /**
+   * Optional: duplicate screenshot DB entries to these job IDs (booking group shared login).
+   */
+  protected getScreenshotMirrorJobIds(): string[] | undefined {
+    return undefined;
+  }
+
   // Common methods that can be shared across platforms
   protected async takeScreenshot(stepName?: string): Promise<void> {
     if (!this.page) return;
@@ -135,7 +142,8 @@ export abstract class BaseScraper {
       jobId,
       step,
       type,
-      this.platform
+      this.platform,
+      this.getScreenshotMirrorJobIds()
     );
   }
 

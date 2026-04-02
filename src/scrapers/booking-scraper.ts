@@ -33,6 +33,9 @@ import {
 import {
   dualLogError,
   dualLogInfo,
+  finalizeJobLogging,
+  initializeJobLogging,
+  isJobLoggingActive,
   setBookingGroupLogStepJobId,
 } from "../common/log-helper.js";
 import { generateRandomPassword } from "../common/password-generator.js";
@@ -70,6 +73,14 @@ export enum ScraperContext {
   JOB = "job",
   TRUST_VERIFICATION = "trust-verification",
 }
+function jobStatusToLogFinalize(
+  status: JobStatus
+): "success" | "failed" | "partial" {
+  if (status === JobStatus.Completed) return "success";
+  if (status === JobStatus.Partial) return "partial";
+  return "failed";
+}
+
 export class BookingScraper extends BaseScraper {
   private browserlessToken: string;
   private sessionUrl?: string;
@@ -77,6 +88,8 @@ export class BookingScraper extends BaseScraper {
   private context?: ScraperContext;
   private captchaService: CaptchaService;
   private sessionParams?: { ses: string; lang: string }; // Store session and language parameters
+  /** During shared group login, copy screenshot_urls to other property jobs in the group. */
+  private bookingGroupScreenshotMirrorJobIds: string[] | null = null;
 
   constructor(context?: ScraperContext) {
     super("booking", "https://admin.booking.com");
@@ -95,6 +108,10 @@ export class BookingScraper extends BaseScraper {
       enableBasicAuto: process.env.ENABLE_BASIC_AUTO !== "false",
       jobId: this.jobId,
     });
+  }
+
+  protected override getScreenshotMirrorJobIds(): string[] | undefined {
+    return this.bookingGroupScreenshotMirrorJobIds ?? undefined;
   }
 
   public setBrowserData(page: Page, browser: Browser): void {
@@ -3591,6 +3608,9 @@ export class BookingScraper extends BaseScraper {
 
       setBookingGroupLogStepJobId(leaseJobId);
 
+      this.bookingGroupScreenshotMirrorJobIds =
+        steps.length > 1 ? steps.slice(1).map((s) => s.jobId) : null;
+
       await this.throwIfScrapingShouldStop("login");
       await this.applyBookingCredentialsForJob(
         steps[0].jobId,
@@ -3605,6 +3625,8 @@ export class BookingScraper extends BaseScraper {
       if (!twoFAHandled) {
         await this.logInfo("2FA not required or skipped");
       }
+
+      this.bookingGroupScreenshotMirrorJobIds = null;
 
       const aggregateResults: Array<{
         jobId: string;
@@ -3662,13 +3684,18 @@ export class BookingScraper extends BaseScraper {
               `[booking] Group: step failed for job ${step.jobId} (${failMsg}); attempting recovery and next property`
             );
             await this.recoverGroupSessionBeforeNextStep(params, steps[i + 1]);
-            continue;
+          } else {
+            await dualLogError(
+              `[booking] Group: last step failed for job ${step.jobId}`,
+              new Error(failMsg)
+            );
           }
 
-          await dualLogError(
-            `[booking] Group: last step failed for job ${step.jobId}`,
-            new Error(failMsg)
-          );
+          await finalizeJobLogging("failed");
+          if (hasMore) {
+            initializeJobLogging(steps[i + 1].jobId);
+            continue;
+          }
           break;
         }
 
@@ -3691,6 +3718,11 @@ export class BookingScraper extends BaseScraper {
 
         anyStepCompleted = true;
         aggregateResults.push({ jobId: step.jobId, finalStatus, progress });
+
+        await finalizeJobLogging(jobStatusToLogFinalize(finalStatus));
+        if (i < steps.length - 1) {
+          initializeJobLogging(steps[i + 1].jobId);
+        }
       }
 
       scrapingStateManager.stopScraping();
@@ -3734,6 +3766,9 @@ export class BookingScraper extends BaseScraper {
         },
       };
     } catch (error) {
+      if (isJobLoggingActive()) {
+        await finalizeJobLogging("failed").catch(() => {});
+      }
       await dualLogError("Booking group scraping failed", error, {
         leaseJobId,
         platform: "booking",
@@ -3760,6 +3795,7 @@ export class BookingScraper extends BaseScraper {
         error: error instanceof Error ? error.message : "Group scrape failed",
       };
     } finally {
+      this.bookingGroupScreenshotMirrorJobIds = null;
       setBookingGroupLogStepJobId(null);
       await this.cleanup();
     }

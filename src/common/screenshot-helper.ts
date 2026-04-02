@@ -34,15 +34,17 @@ export class ScreenshotHelper {
    * @param jobId     Job ID — used for S3 path and DB update
    * @param step      Human-readable step name, e.g. "login_completed"
    * @param type      "step" for normal flow, "error" for error captures
-   * @param platform  Optional platform label (default "booking")
-   * @returns         S3 URL string, or null if anything failed
+   * @param platform       Optional platform label (default "booking")
+   * @param mirrorJobIds   Same S3 entry is also appended to these jobs (e.g. shared login for booking-run-group)
+   * @returns              S3 URL string, or null if anything failed
    */
   public static async takeScreenshot(
     page: Page | null,
     jobId: string,
     step: string,
     type: "step" | "error",
-    platform: string = "booking"
+    platform: string = "booking",
+    mirrorJobIds?: string[]
   ): Promise<string | null> {
     if (!page || !jobId) {
       await dualLogError("takeScreenshot: missing page or jobId", {
@@ -87,6 +89,15 @@ export class ScreenshotHelper {
         };
 
         await jobService.addScreenshotUrl(jobId, entry);
+
+        if (mirrorJobIds?.length) {
+          const seen = new Set<string>([jobId]);
+          for (const jid of mirrorJobIds) {
+            if (!jid || seen.has(jid)) continue;
+            seen.add(jid);
+            await jobService.addScreenshotUrl(jid, { ...entry });
+          }
+        }
 
         await dualLogInfo(`Screenshot captured: ${step}`, {
           jobId,
