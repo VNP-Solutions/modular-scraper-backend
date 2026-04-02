@@ -1605,7 +1605,8 @@ app.post("/api/booking/bulk-property-run-job-grouped", (async (
       }
     });
 
-    // Same group → same worker, jobs sequential. totalWorkers pipelines pull groups from a FIFO queue (extra groups wait).
+    // Same group runs on one worker (one executeJob); totalWorkers parallel feeders pull from a FIFO with a mutex.
+    // No pinnedWorkerId: any idle worker can take the next group when the booking phone slot is free (see otp-aware-worker-pool).
     type ValidJobEntry = (typeof validJobsData)[number];
     const validJobById = new Map(
       validJobsData.map((j) => [j.jobId, j] as const)
@@ -1644,18 +1645,30 @@ app.post("/api/booking/bulk-property-run-job-grouped", (async (
     }
 
     let nextGroupIndex = 0;
-    const takeNextGroup = (): GroupRun | null => {
-      if (nextGroupIndex >= groupRuns.length) {
-        return null;
+    let groupTakeChain: Promise<void> = Promise.resolve();
+    const takeNextGroup = async (): Promise<GroupRun | null> => {
+      let release!: () => void;
+      const gate = new Promise<void>((r) => {
+        release = r;
+      });
+      const prev = groupTakeChain;
+      groupTakeChain = prev.then(() => gate);
+      await prev;
+      try {
+        if (nextGroupIndex >= groupRuns.length) {
+          return null;
+        }
+        const run = groupRuns[nextGroupIndex];
+        nextGroupIndex += 1;
+        return run;
+      } finally {
+        release();
       }
-      const run = groupRuns[nextGroupIndex];
-      nextGroupIndex += 1;
-      return run;
     };
 
-    const runPipeline = async (pinnedWorkerId: string) => {
+    const runPipeline = async () => {
       for (;;) {
-        const run = takeNextGroup();
+        const run = await takeNextGroup();
         if (!run) {
           break;
         }
@@ -1673,7 +1686,6 @@ app.post("/api/booking/bulk-property-run-job-grouped", (async (
             propertyId: j.jobData.propertyId,
             bookingId: j.jobData.bookingId,
           })),
-          pinnedWorkerId,
           ...(selectedContact ? { selectedContact } : {}),
         };
 
@@ -1700,9 +1712,7 @@ app.post("/api/booking/bulk-property-run-job-grouped", (async (
 
     void (async () => {
       await Promise.all(
-        Array.from({ length: totalWorkers }, (_, wi) =>
-          runPipeline(`worker-${wi}`)
-        )
+        Array.from({ length: totalWorkers }, () => runPipeline())
       );
     })();
 
