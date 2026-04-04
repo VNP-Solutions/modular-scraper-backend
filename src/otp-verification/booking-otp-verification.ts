@@ -24,6 +24,235 @@ import {
 
 dotenv.config();
 
+/** Selectors tried in order when locating the Booking.com OTP input. */
+const BOOKING_OTP_INPUT_SELECTORS: string[] = [
+  'input[autocomplete="one-time-code"]',
+  'input[type="text"][maxlength="6"]',
+  'input[name="pin"]',
+  'input[name="code"]',
+  'input[placeholder*="code" i]',
+  'input[inputmode="numeric"]',
+  'input[type="text"][maxlength="5"]',
+  'input[type="text"][maxlength="7"]',
+  'input[type="text"][maxlength="8"]',
+  'input[type="number"]',
+  'input[name="otp"]',
+  'input[name="verification_code"]',
+  'input[name="sms_code"]',
+  'input[id*="code" i]',
+  'input[id*="otp" i]',
+  'input[id*="pin" i]',
+  'input[class*="code" i]',
+  'input[class*="otp" i]',
+  'input[class*="pin" i]',
+  'input[class*="verification" i]',
+  'input[placeholder*="Enter" i]',
+  'input[placeholder*="SMS" i]',
+  'input[placeholder*="PIN" i]',
+  'input[placeholder*="OTP" i]',
+  'input[data-testid*="code" i]',
+  'input[data-testid*="otp" i]',
+  'input[data-testid*="pin" i]',
+  'input[type="text"]:not([type="email"]):not([type="password"])',
+  'input[type="tel"]',
+];
+
+function isStalePageContextError(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e);
+  return (
+    msg.includes("detached Frame") ||
+    msg.includes("detached frame") ||
+    msg.includes("Execution context was destroyed") ||
+    msg.includes("Cannot find context") ||
+    msg.includes("Target closed")
+  );
+}
+
+/**
+ * Finds a visible OTP input on the current document. Safe to call again after navigation or reload.
+ */
+async function findBookingOtpInputSelector(
+  page: Page,
+  perSelectorTimeoutMs: number
+): Promise<string | null> {
+  let otpInputSelector: string | null = null;
+
+  for (const selector of BOOKING_OTP_INPUT_SELECTORS) {
+    try {
+      await page.waitForSelector(selector, {
+        visible: true,
+        timeout: perSelectorTimeoutMs,
+      });
+
+      const element = await page.$(selector);
+      if (element) {
+        const isVisible = await element.isIntersectingViewport();
+        const boundingBox = await element.boundingBox();
+
+        if (isVisible && boundingBox) {
+          otpInputSelector = selector;
+          await dualLogInfo(`Found OTP input field: ${selector}`);
+          break;
+        }
+        await dualLogInfo(
+          `Selector ${selector} found but element not visible/interactable`
+        );
+      }
+    } catch (e) {
+      await dualLogInfo(
+        `Selector ${selector} failed: ${
+          e instanceof Error ? e.message : "Unknown error"
+        }`
+      );
+    }
+  }
+
+  if (otpInputSelector) {
+    return otpInputSelector;
+  }
+
+  await dualLogInfo(
+    "No specific OTP selectors worked, trying generic approach..."
+  );
+
+  const fallbackResult = await page.evaluate(() => {
+    const inputs = Array.from(
+      document.querySelectorAll(
+        'input[type="text"], input[type="number"], input[type="tel"]'
+      )
+    );
+
+    for (const input of inputs) {
+      const inputElement = input as HTMLInputElement;
+      const maxLen = inputElement.maxLength;
+      const placeholder = inputElement.placeholder?.toLowerCase() || "";
+      const name = inputElement.name?.toLowerCase() || "";
+      const id = inputElement.id?.toLowerCase() || "";
+      const className = inputElement.className?.toLowerCase() || "";
+
+      if (
+        (maxLen > 0 && maxLen <= 10) ||
+        placeholder.includes("code") ||
+        placeholder.includes("otp") ||
+        placeholder.includes("pin") ||
+        placeholder.includes("verification") ||
+        name.includes("code") ||
+        name.includes("otp") ||
+        name.includes("pin") ||
+        id.includes("code") ||
+        id.includes("otp") ||
+        id.includes("pin") ||
+        className.includes("code") ||
+        className.includes("otp") ||
+        className.includes("pin")
+      ) {
+        let selector = "";
+        if (inputElement.name) selector = `input[name="${inputElement.name}"]`;
+        else if (inputElement.id) selector = `input[id="${inputElement.id}"]`;
+        else if (inputElement.className)
+          selector = `input[class*="${inputElement.className.split(" ")[0]}"]`;
+        else selector = 'input[type="text"]';
+
+        return {
+          found: true,
+          selector,
+          element: inputElement.outerHTML.substring(0, 200),
+        };
+      }
+    }
+
+    const firstTextInput = inputs.find((input) => {
+      const inputElement = input as HTMLInputElement;
+      const rect = inputElement.getBoundingClientRect();
+      return (
+        (inputElement.type === "text" ||
+          inputElement.type === "number" ||
+          inputElement.type === "tel") &&
+        rect.width > 0 &&
+        rect.height > 0
+      );
+    });
+
+    if (firstTextInput) {
+      const inputElement = firstTextInput as HTMLInputElement;
+      let selector = "";
+      if (inputElement.name) selector = `input[name="${inputElement.name}"]`;
+      else if (inputElement.id) selector = `input[id="${inputElement.id}"]`;
+      else selector = 'input[type="text"]';
+
+      return {
+        found: true,
+        selector,
+        element: inputElement.outerHTML.substring(0, 200),
+      };
+    }
+
+    return { found: false, selector: null, element: null };
+  });
+
+  if (fallbackResult.found && fallbackResult.selector) {
+    try {
+      await page.waitForSelector(fallbackResult.selector, {
+        visible: true,
+        timeout: 5000,
+      });
+      otpInputSelector = fallbackResult.selector;
+      await dualLogInfo(
+        `Found OTP input using fallback: ${fallbackResult.selector}`
+      );
+      await dualLogInfo(`Element HTML: ${fallbackResult.element}`);
+    } catch (e) {
+      await dualLogError(
+        `Fallback selector also failed: ${fallbackResult.selector}`
+      );
+    }
+  }
+
+  return otpInputSelector;
+}
+
+/**
+ * Ensures the OTP input exists on the *current* document. Re-scans if the page reloaded (detached frame).
+ */
+async function ensureBookingOtpInputSelector(
+  page: Page,
+  preferredSelector: string | null,
+  discoveryPerSelectorMs: number
+): Promise<string> {
+  if (preferredSelector) {
+    try {
+      await page.waitForSelector(preferredSelector, {
+        visible: true,
+        timeout: 15000,
+      });
+      return preferredSelector;
+    } catch (e) {
+      if (isStalePageContextError(e)) {
+        await dualLogInfo(
+          "Page context stale while waiting for OTP field; re-scanning..."
+        );
+      } else {
+        await dualLogInfo(
+          `OTP selector wait failed (${preferredSelector}), re-scanning...`
+        );
+      }
+    }
+  }
+
+  const found = await findBookingOtpInputSelector(
+    page,
+    discoveryPerSelectorMs
+  );
+  if (!found) {
+    const error = new Error(
+      "OTP input field not found after exhaustive search"
+    );
+    setFailedReasonCode(error, FAILED_REASON.BOOKING_OTP_FAILED);
+    throw error;
+  }
+  return found;
+}
+
 async function handleBookingOtpVerification(
   page: Page,
   jobId?: string,
@@ -194,185 +423,9 @@ async function handleBookingOtpVerification(
 
     // Log page URL and title for debugging
     const currentUrl = page.url();
-    const pageTitle = await page.title();
     await dualLogInfo(`Current page URL: ${currentUrl}`);
 
-    // Wait for OTP input field using multiple possible selectors
-    let otpInputSelector = null;
-    const otpSelectors = [
-      // Original selectors
-      'input[autocomplete="one-time-code"]',
-      'input[type="text"][maxlength="6"]',
-      'input[name="pin"]',
-      'input[name="code"]',
-      'input[placeholder*="code" i]',
-      'input[inputmode="numeric"]',
-      // Additional comprehensive selectors
-      'input[type="text"][maxlength="5"]',
-      'input[type="text"][maxlength="7"]',
-      'input[type="text"][maxlength="8"]',
-      'input[type="number"]',
-      'input[name="otp"]',
-      'input[name="verification_code"]',
-      'input[name="sms_code"]',
-      'input[id*="code" i]',
-      'input[id*="otp" i]',
-      'input[id*="pin" i]',
-      'input[class*="code" i]',
-      'input[class*="otp" i]',
-      'input[class*="pin" i]',
-      'input[class*="verification" i]',
-      'input[placeholder*="Enter" i]',
-      'input[placeholder*="SMS" i]',
-      'input[placeholder*="PIN" i]',
-      'input[placeholder*="OTP" i]',
-      'input[data-testid*="code" i]',
-      'input[data-testid*="otp" i]',
-      'input[data-testid*="pin" i]',
-      // Broader selectors as fallbacks
-      'input[type="text"]:not([type="email"]):not([type="password"])',
-      'input[type="tel"]',
-    ];
-
-    for (const selector of otpSelectors) {
-      try {
-        await page.waitForSelector(selector, {
-          visible: true,
-          timeout: 3000,
-        });
-
-        const element = await page.$(selector);
-        if (element) {
-          const isVisible = await element.isIntersectingViewport();
-          const boundingBox = await element.boundingBox();
-
-          if (isVisible && boundingBox) {
-            otpInputSelector = selector;
-            await dualLogInfo(`Found OTP input field: ${selector}`);
-            break;
-          } else {
-            await dualLogInfo(
-              `Selector ${selector} found but element not visible/interactable`
-            );
-          }
-        }
-      } catch (e) {
-        await dualLogInfo(
-          `Selector ${selector} failed: ${
-            e instanceof Error ? e.message : "Unknown error"
-          }`
-        );
-        continue;
-      }
-    }
-
-    if (!otpInputSelector) {
-      // Final fallback: look for any input that might be for OTP
-      await dualLogInfo(
-        "No specific OTP selectors worked, trying generic approach..."
-      );
-
-      const fallbackResult = await page.evaluate(() => {
-        const inputs = Array.from(
-          document.querySelectorAll(
-            'input[type="text"], input[type="number"], input[type="tel"]'
-          )
-        );
-
-        // Look for input that seems like OTP field based on characteristics
-        for (const input of inputs) {
-          const inputElement = input as HTMLInputElement;
-          const maxLen = inputElement.maxLength;
-          const placeholder = inputElement.placeholder?.toLowerCase() || "";
-          const name = inputElement.name?.toLowerCase() || "";
-          const id = inputElement.id?.toLowerCase() || "";
-          const className = inputElement.className?.toLowerCase() || "";
-
-          // Check if it looks like an OTP field
-          if (
-            (maxLen > 0 && maxLen <= 10) || // Reasonable length for OTP
-            placeholder.includes("code") ||
-            placeholder.includes("otp") ||
-            placeholder.includes("pin") ||
-            placeholder.includes("verification") ||
-            name.includes("code") ||
-            name.includes("otp") ||
-            name.includes("pin") ||
-            id.includes("code") ||
-            id.includes("otp") ||
-            id.includes("pin") ||
-            className.includes("code") ||
-            className.includes("otp") ||
-            className.includes("pin")
-          ) {
-            let selector = "";
-            if (inputElement.name)
-              selector = `input[name="${inputElement.name}"]`;
-            else if (inputElement.id)
-              selector = `input[id="${inputElement.id}"]`;
-            else if (inputElement.className)
-              selector = `input[class*="${
-                inputElement.className.split(" ")[0]
-              }"]`;
-            else selector = 'input[type="text"]';
-
-            return {
-              found: true,
-              selector,
-              element: inputElement.outerHTML.substring(0, 200),
-            };
-          }
-        }
-
-        // If still nothing, just return the first text input that's visible
-        const firstTextInput = inputs.find((input) => {
-          const inputElement = input as HTMLInputElement;
-          const rect = inputElement.getBoundingClientRect();
-          return (
-            (inputElement.type === "text" ||
-              inputElement.type === "number" ||
-              inputElement.type === "tel") &&
-            rect.width > 0 &&
-            rect.height > 0
-          );
-        });
-
-        if (firstTextInput) {
-          const inputElement = firstTextInput as HTMLInputElement;
-          let selector = "";
-          if (inputElement.name)
-            selector = `input[name="${inputElement.name}"]`;
-          else if (inputElement.id) selector = `input[id="${inputElement.id}"]`;
-          else selector = 'input[type="text"]';
-
-          return {
-            found: true,
-            selector,
-            element: inputElement.outerHTML.substring(0, 200),
-          };
-        }
-
-        return { found: false, selector: null, element: null };
-      });
-
-      if (fallbackResult.found && fallbackResult.selector) {
-        try {
-          await page.waitForSelector(fallbackResult.selector, {
-            visible: true,
-            timeout: 5000,
-          });
-          otpInputSelector = fallbackResult.selector;
-          await dualLogInfo(
-            `Found OTP input using fallback: ${fallbackResult.selector}`
-          );
-          await dualLogInfo(`Element HTML: ${fallbackResult.element}`);
-        } catch (e) {
-          await dualLogError(
-            `Fallback selector also failed: ${fallbackResult.selector}`
-          );
-        }
-      }
-    }
+    let otpInputSelector = await findBookingOtpInputSelector(page, 3000);
 
     if (!otpInputSelector) {
       // Log page content for debugging
@@ -447,6 +500,17 @@ async function handleBookingOtpVerification(
     }
     await dualLogInfo(`Got ${codes.length} verification codes`);
 
+    // Long wait above: main frame may reload; always re-attach to the live OTP field.
+    const otpPerSelectorMs = Math.min(8000, Math.max(4000, selectorTimeout / 4));
+    await dualLogInfo(
+      "Re-resolving OTP input after email wait (page may have reloaded)..."
+    );
+    otpInputSelector = await ensureBookingOtpInputSelector(
+      page,
+      otpInputSelector,
+      otpPerSelectorMs
+    );
+
     // Try up to 3 codes (1st, 2nd, 3rd)
     const maxAttempts = Math.min(3, codes.length);
     let otpSuccess = false;
@@ -458,8 +522,29 @@ async function handleBookingOtpVerification(
         `Attempt ${attempt + 1}/${maxAttempts}: Trying OTP ${code}`
       );
 
-      // Enter verification code
-      await page.type(otpInputSelector, code, { delay: 100 });
+      otpInputSelector = await ensureBookingOtpInputSelector(
+        page,
+        otpInputSelector,
+        otpPerSelectorMs
+      );
+
+      try {
+        await page.type(otpInputSelector, code, { delay: 100 });
+      } catch (e) {
+        if (isStalePageContextError(e)) {
+          await dualLogInfo(
+            "Detached frame while typing OTP; re-resolving input and retrying once..."
+          );
+          otpInputSelector = await ensureBookingOtpInputSelector(
+            page,
+            null,
+            otpPerSelectorMs
+          );
+          await page.type(otpInputSelector, code, { delay: 100 });
+        } else {
+          throw e;
+        }
+      }
       await delay(1000);
 
       // Click submit button
@@ -483,12 +568,7 @@ async function handleBookingOtpVerification(
           return bodyText.includes("Enter a valid verification code");
         });
       } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        if (
-          msg.includes("Execution context was destroyed") ||
-          msg.includes("Cannot find context") ||
-          msg.includes("Target closed")
-        ) {
+        if (isStalePageContextError(e)) {
           await dualLogInfo(
             "Navigation occurred after submit; assuming OTP succeeded"
           );
@@ -538,6 +618,11 @@ async function handleBookingOtpVerification(
 
         // More robust clearing approach - try multiple methods
         try {
+          otpInputSelector = await ensureBookingOtpInputSelector(
+            page,
+            otpInputSelector,
+            otpPerSelectorMs
+          );
           // Method 1: Triple-click to select all, then delete
           await page.click(otpInputSelector, { clickCount: 3 });
           await delay(200);
