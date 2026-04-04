@@ -604,6 +604,90 @@ export class BookingScraper extends BaseScraper {
     }
   }
 
+  private isStalePageNavigationError(error: unknown): boolean {
+    const msg = error instanceof Error ? error.message : String(error);
+    return (
+      msg.includes("detached Frame") ||
+      msg.includes("detached frame") ||
+      msg.includes("Execution context was destroyed") ||
+      msg.includes("Target closed") ||
+      msg.includes("Navigating frame was detached")
+    );
+  }
+
+  /**
+   * Extranet flows can detach the main frame or leave `this.page` on a stale tab. Ensure we target an
+   * attached page (prefer admin.booking.com) before `goto`.
+   */
+  private async ensureUsablePageForNavigation(): Promise<boolean> {
+    if (!this.browser) {
+      await this.logError("ensureUsablePageForNavigation: browser not initialized");
+      return false;
+    }
+
+    const probe = async (p: Page): Promise<boolean> => {
+      if (p.isClosed()) return false;
+      try {
+        await p.evaluate(() => true);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    if (this.page && (await probe(this.page))) {
+      return true;
+    }
+
+    const pages = await this.browser.pages();
+    const open = pages.filter((p) => !p.isClosed());
+
+    const adopt = async (p: Page): Promise<boolean> => {
+      if (!(await probe(p))) return false;
+      this.page = p;
+      try {
+        await p.bringToFront();
+      } catch {
+        /* non-fatal */
+      }
+      let url = "";
+      try {
+        url = p.url();
+      } catch {
+        url = "(url unreadable)";
+      }
+      await this.logInfo(
+        `[booking] Using attached page for navigation: ${url}`
+      );
+      return true;
+    };
+
+    for (const p of [...open].reverse()) {
+      let url = "";
+      try {
+        url = p.url();
+      } catch {
+        continue;
+      }
+      if (
+        url.includes("admin.booking.com") ||
+        url.includes("extranet_ng") ||
+        url.includes("account.booking.com")
+      ) {
+        if (await adopt(p)) return true;
+      }
+    }
+
+    for (const p of [...open].reverse()) {
+      if (await adopt(p)) return true;
+    }
+
+    await this.logError(
+      "ensureUsablePageForNavigation: no attached page found in browser"
+    );
+    return false;
+  }
+
   /**
    * Navigate directly to VCCS management page using session parameters
    * This bypasses the need to click through menus
@@ -635,11 +719,33 @@ export class BookingScraper extends BaseScraper {
         `🚀 Navigating directly to VCCS management: ${vccsUrl}`
       );
 
-      // Navigate to the URL
-      await this.page.goto(vccsUrl, {
-        waitUntil: "networkidle2",
-        timeout: 60000,
-      });
+      const maxNavAttempts = 2;
+      for (let attempt = 1; attempt <= maxNavAttempts; attempt++) {
+        const usable = await this.ensureUsablePageForNavigation();
+        if (!usable || !this.page) {
+          await this.logError("No usable page for direct VCCS navigation");
+          return false;
+        }
+        try {
+          await this.page.goto(vccsUrl, {
+            waitUntil: "networkidle2",
+            timeout: 60000,
+          });
+          break;
+        } catch (navErr) {
+          const retry =
+            attempt < maxNavAttempts &&
+            this.isStalePageNavigationError(navErr);
+          if (retry) {
+            await this.logWarn(
+              "[booking] VCCS direct navigation hit detached/stale page; recovering tab and retrying once",
+              navErr
+            );
+            continue;
+          }
+          throw navErr;
+        }
+      }
 
       await this.delay(2000);
       await this.takeScreenshot();
