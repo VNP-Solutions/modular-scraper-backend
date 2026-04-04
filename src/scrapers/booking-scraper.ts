@@ -3566,6 +3566,156 @@ export class BookingScraper extends BaseScraper {
     }
   }
 
+  private getBookingGroupLoginMaxAttempts(): number {
+    const raw = process.env.BOOKING_GROUP_LOGIN_MAX_ATTEMPTS;
+    const n = raw !== undefined ? parseInt(raw, 10) : 3;
+    if (!Number.isFinite(n)) return 3;
+    return Math.min(Math.max(1, n), 10);
+  }
+
+  private getBookingGroupLoginRetryDelayMs(): number {
+    const raw = process.env.BOOKING_GROUP_LOGIN_RETRY_DELAY_MS;
+    const n = raw !== undefined ? parseInt(raw, 10) : 5000;
+    if (!Number.isFinite(n) || n < 0) return 5000;
+    return Math.min(n, 120_000);
+  }
+
+  /**
+   * Before a repeat group login attempt: drop session params, clear Booking cookies, open sign-in.
+   */
+  private async resetBrowserStateForGroupLoginRetry(): Promise<void> {
+    if (!this.page) {
+      return;
+    }
+    this.sessionParams = undefined;
+    try {
+      const cdp = await this.page.createCDPSession();
+      await cdp.send("Network.enable");
+      await cdp.send("Network.clearBrowserCookies");
+    } catch (e) {
+      await this.logWarn(
+        "[booking] Group: could not clear cookies via CDP before login retry",
+        e
+      );
+    }
+    await this.page.goto("https://admin.booking.com/sign-in", {
+      waitUntil: "networkidle2",
+      timeout: 90_000,
+    });
+    await this.delay(1500);
+  }
+
+  /**
+   * Login → post-login captcha/2FA → VCCS check for first property; retry from sign-in if verification fails.
+   */
+  private async runBookingGroupInitialAuthWithRetries(
+    params: ScrapingJobParams,
+    steps: NonNullable<ScrapingJobParams["bookingGroupSteps"]>
+  ): Promise<void> {
+    const maxAttempts = this.getBookingGroupLoginMaxAttempts();
+    const delayMs = this.getBookingGroupLoginRetryDelayMs();
+    let lastError: unknown;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      await this.throwIfScrapingShouldStop("login");
+
+      if (attempt > 1) {
+        await dualLogInfo(
+          `[booking] Group: login or VCCS verification failed — retry ${attempt}/${maxAttempts} after ${delayMs}ms (fresh sign-in)`,
+          {
+            previousError:
+              lastError instanceof Error
+                ? lastError.message
+                : String(lastError),
+          }
+        );
+        await delay(delayMs);
+        await this.resetBrowserStateForGroupLoginRetry();
+      }
+
+      try {
+        await this.applyBookingCredentialsForJob(
+          steps[0].jobId,
+          params.credentials
+        );
+        await this.login(this.credentials, steps[0].bookingId);
+        const captchaHandled = await this.handleCaptcha();
+        if (!captchaHandled) {
+          await this.logError("Captcha handling failed");
+        }
+        const twoFAHandled = await this.handle2FA();
+        if (!twoFAHandled) {
+          await this.logInfo("2FA not required or skipped");
+        }
+        await this.verifyGroupSessionWithFirstPropertyHotelId(steps[0].bookingId);
+        if (attempt > 1) {
+          await dualLogInfo(
+            `[booking] Group: login and VCCS verification succeeded on attempt ${attempt}/${maxAttempts}`
+          );
+        }
+        return;
+      } catch (err: any) {
+        lastError = err;
+        if (err?.failedReasonCode === FAILED_REASON.BOOKING_SCRAPING_STOPPED) {
+          throw err;
+        }
+        if (attempt >= maxAttempts) {
+          throw err;
+        }
+      }
+    }
+  }
+
+  /**
+   * After group login + captcha + 2FA, confirm the session can open VCCS for the first property's
+   * Booking hotel_id. If not, treat as failed login (credentials/session not usable for that hotel).
+   */
+  private async verifyGroupSessionWithFirstPropertyHotelId(
+    firstBookingHotelId: string
+  ): Promise<void> {
+    await this.extractSessionParams();
+    await this.logInfo(
+      `[booking] Group: verifying session by opening VCCS for first property (hotel_id=${firstBookingHotelId})…`
+    );
+    const ok = await this.navigateDirectlyToVCCS(firstBookingHotelId);
+    if (!ok) {
+      const err = new Error(
+        `Group login verification failed: could not open VCCS management for the first property (hotel_id ${firstBookingHotelId}). Session is not valid for this property.`
+      );
+      setFailedReasonCode(err, FAILED_REASON.BOOKING_LOGIN_FAILED);
+      throw err;
+    }
+    // Re-read ses/lang from the VCCS page URL so the first scrapeData() uses this session for direct nav.
+    await this.extractSessionParams();
+    await this.logInfo(
+      "[booking] Group: session verified — VCCS management reachable for first property; session params synced from VCCS URL"
+    );
+  }
+
+  /** Mark every job in the group (plus lease job if distinct) failed when we exit before any step completes. */
+  private async failAllBookingGroupJobsOnEarlyExit(
+    steps: NonNullable<ScrapingJobParams["bookingGroupSteps"]>,
+    leaseJobId: string,
+    message: string
+  ): Promise<void> {
+    const ids = new Set<string>();
+    if (leaseJobId && Types.ObjectId.isValid(leaseJobId)) {
+      ids.add(leaseJobId);
+    }
+    for (const s of steps) {
+      if (s.jobId && Types.ObjectId.isValid(s.jobId)) {
+        ids.add(s.jobId);
+      }
+    }
+    for (const id of ids) {
+      try {
+        await jobService.failJobSafe(id, message);
+      } catch {
+        /* ignore per-job errors */
+      }
+    }
+  }
+
   /**
    * One login for the account, then scrape each hotel (VCCS → view all → reservations → cards) in sequence.
    */
@@ -3611,20 +3761,7 @@ export class BookingScraper extends BaseScraper {
       this.bookingGroupScreenshotMirrorJobIds =
         steps.length > 1 ? steps.slice(1).map((s) => s.jobId) : null;
 
-      await this.throwIfScrapingShouldStop("login");
-      await this.applyBookingCredentialsForJob(
-        steps[0].jobId,
-        params.credentials
-      );
-      await this.login(this.credentials, steps[0].bookingId);
-      const captchaHandled = await this.handleCaptcha();
-      if (!captchaHandled) {
-        await this.logError("Captcha handling failed");
-      }
-      const twoFAHandled = await this.handle2FA();
-      if (!twoFAHandled) {
-        await this.logInfo("2FA not required or skipped");
-      }
+      await this.runBookingGroupInitialAuthWithRetries(params, steps);
 
       this.bookingGroupScreenshotMirrorJobIds = null;
 
@@ -3774,16 +3911,14 @@ export class BookingScraper extends BaseScraper {
         platform: "booking",
       });
       scrapingStateManager.stopScraping();
-      if (
-        leaseJobId &&
-        !anyStepCompleted &&
-        !isStatusAlreadySaved(error)
-      ) {
+      if (!anyStepCompleted && !isStatusAlreadySaved(error)) {
         try {
-          await jobService.failJobSafe(
+          const msg =
+            getFailedReasonForUser(error) || "Booking group scrape failed.";
+          await this.failAllBookingGroupJobsOnEarlyExit(
+            steps,
             leaseJobId,
-            getFailedReasonForUser(error) ||
-              "Booking group scrape failed."
+            msg
           );
           markStatusSaved(error);
         } catch {
@@ -3825,6 +3960,10 @@ export class BookingScraper extends BaseScraper {
       });
 
       // Step 1: Navigate to VCCS Management
+      // After auth (or group verify), current URL usually carries ses/lang — refresh so the first
+      // property hit uses session-based direct URL, not only menu fallback.
+      await this.extractSessionParams();
+
       // Try direct navigation first if session params are available
       let navigationSuccess = false;
 
