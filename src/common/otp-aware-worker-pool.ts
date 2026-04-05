@@ -551,6 +551,13 @@ export class OtpAwareWorkerPool extends EventEmitter {
       return;
     }
 
+    /**
+     * Another `tryAssignJob` can claim the worker while we await DB (phone slot / OTP).
+     * If we reserved resources then discover no worker, release them and queue — avoids
+     * "Worker not available" after PhoneNumberSlot reserved and orphaned slots.
+     */
+    let reservedOtpOrPhoneSlot = false;
+
     // Booking: lock phone_number_slots; other OTP jobs: lock otp_status (one row per OTP_PLATFORM)
     if (queuedJob.requiresOtp) {
       if (this.usesBookingPhoneNumberSlot(queuedJob.jobData)) {
@@ -582,6 +589,7 @@ export class OtpAwareWorkerPool extends EventEmitter {
           );
           return;
         }
+        reservedOtpOrPhoneSlot = true;
       } else {
         const isOtpAvailable = await this.otpManager.isOtpAvailable();
         if (!isOtpAvailable) {
@@ -603,21 +611,40 @@ export class OtpAwareWorkerPool extends EventEmitter {
           );
           return;
         }
+        reservedOtpOrPhoneSlot = true;
       }
+    }
+
+    const workerToUse = this.getAvailableWorker(
+      queuedJob.jobData.pinnedWorkerId
+    );
+    if (!workerToUse) {
+      if (reservedOtpOrPhoneSlot) {
+        await this.releaseJobOtpResources(
+          queuedJob.jobData.jobId,
+          queuedJob.jobData.jobType
+        );
+      }
+      this.jobQueue.push(queuedJob);
+      await this.applyInQueueStatusForJobData(queuedJob.jobData);
+      console.log(
+        `\x1b[33mJob ${queuedJob.jobData.jobId} queued (worker busy after OTP/phone reservation; released slot and re-queued). Queue size: ${this.jobQueue.length}\x1b[0m`
+      );
+      return;
     }
 
     // Both worker and OTP (if needed) are available - assign job immediately
     console.log(
       `\x1b[32mJob ${
         queuedJob.jobData.jobId
-      } can start immediately (worker: ${availableWorker}, OTP: ${
+      } can start immediately (worker: ${workerToUse}, OTP: ${
         queuedJob.requiresOtp ? "reserved" : "not needed"
       })\x1b[0m`
     );
 
     // Assign job to worker
     this.assignJobToWorker(
-      availableWorker,
+      workerToUse,
       queuedJob.jobData,
       queuedJob.resolve,
       queuedJob.reject
