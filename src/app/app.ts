@@ -1308,7 +1308,7 @@ function resolveGroupedCredentialContact(g: BookingBulkCredentialGroup): {
  *       Accepts credential_groups (job_ids plus booking_username/booking_password per group, optional phone_number and slot).
  *       Omitted or null phone_number uses OUR_CONTACT (else built-in fallback). Omitted or null slot means no port (single-phone / IFTTT-style OTP path).
  *       Resolved phone/port are passed as selectedContact on each job; worker pool does not overwrite them.
- *       Each credential group is submitted as one booking-run-group job (single browser session: one login, then each property in job_ids order on one worker thread). Parallelism across groups requires distinct phone_number+slot OTP lanes; groups that share the same phone and slot are serialized by the worker pool.
+ *       Each credential group is submitted as one booking-run-group job (single browser session: one login, then each property in job_ids order on one worker thread). OTP worker-pool locking is per phone number: different numbers can run on different workers at once; same number is serialized. `slot` is only for OTP/email matching in the worker, not a separate lock lane.
  *     requestBody:
  *       required: true
  *       content:
@@ -1469,19 +1469,19 @@ app.post("/api/booking/bulk-property-run-job-grouped", (async (
     }
 
     const groups = credential_groups as BookingBulkCredentialGroup[];
-    const slotKeyForGroup = (g: BookingBulkCredentialGroup): string => {
+    const phoneKeyForGroup = (g: BookingBulkCredentialGroup): string => {
       const c = resolveGroupedCredentialContact(g);
-      return `${c.phone}|${c.port ?? ""}`;
+      return c.phone;
     };
-    const slotUsage = new Map<string, number>();
+    const phoneUsage = new Map<string, number>();
     for (const g of groups) {
-      const k = slotKeyForGroup(g);
-      slotUsage.set(k, (slotUsage.get(k) ?? 0) + 1);
+      const k = phoneKeyForGroup(g);
+      phoneUsage.set(k, (phoneUsage.get(k) ?? 0) + 1);
     }
-    for (const [slotKey, n] of slotUsage) {
+    for (const [phoneKey, n] of phoneUsage) {
       if (n > 1) {
         console.warn(
-          `[bulk-property-run-job-grouped] ${n} credential_groups share the same phone/slot (${slotKey}). Only one group can hold that OTP slot at a time — extra groups wait in queue and run sequentially, even if multiple workers are free.`
+          `[bulk-property-run-job-grouped] ${n} credential_groups share the same phone (${phoneKey}). OTP is locked per phone — extra groups for that number queue until the lane is free, even if other workers are idle.`
         );
       }
     }

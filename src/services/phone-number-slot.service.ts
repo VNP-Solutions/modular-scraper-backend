@@ -21,6 +21,21 @@ function slotFromPort(port: string | undefined): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+/** Match import rows whether DB stores 10- or 11-digit US-style keys. */
+function phoneVariantsForLookup(digits: string): string[] {
+  if (!digits || digits === "default") {
+    return ["default"];
+  }
+  const v = new Set<string>([digits]);
+  if (digits.length === 10) {
+    v.add(`1${digits}`);
+  }
+  if (digits.length === 11 && digits.startsWith("1")) {
+    v.add(digits.slice(1));
+  }
+  return [...v];
+}
+
 class PhoneNumberSlotService {
   getPhoneAndSlot(selectedContact?: {
     phone?: string;
@@ -33,65 +48,89 @@ class PhoneNumberSlotService {
   }
 
   /**
-   * Row must exist (created at job import). Free only when status is Released.
-   * Missing row → not available (nothing to reserve).
+   * At least one `phone_number_slots` row for this phone exists and is Released,
+   * and no row for this phone is Occupied.
+   * Lock is per phone number only (port/slot does not define a separate lane).
    */
-  async isSlotAvailable(
-    phone_number: string,
-    slot: number
-  ): Promise<boolean> {
-    const doc = await PhoneNumberSlot.findOne({ phone_number, slot }).lean();
-    if (!doc) {
+  async isPhoneLaneAvailable(phone_number: string): Promise<boolean> {
+    const variants = phoneVariantsForLookup(phone_number);
+    const docs = await PhoneNumberSlot.find({
+      phone_number: { $in: variants },
+    }).lean();
+    if (docs.length === 0) {
       return false;
     }
-    return doc.status === PhoneNumberSlotStatus.Released;
+    if (
+      docs.some((d) => d.status === PhoneNumberSlotStatus.Occupied)
+    ) {
+      return false;
+    }
+    return docs.some((d) => d.status === PhoneNumberSlotStatus.Released);
+  }
+
+  async getPhoneLaneState(
+    phone_number: string
+  ): Promise<"missing" | "occupied" | "released"> {
+    const variants = phoneVariantsForLookup(phone_number);
+    const docs = await PhoneNumberSlot.find({
+      phone_number: { $in: variants },
+    }).lean();
+    if (docs.length === 0) {
+      return "missing";
+    }
+    if (docs.some((d) => d.status === PhoneNumberSlotStatus.Occupied)) {
+      return "occupied";
+    }
+    if (docs.some((d) => d.status === PhoneNumberSlotStatus.Released)) {
+      return "released";
+    }
+    return "occupied";
   }
 
   /**
-   * Atomically occupy an existing Released row for jobId.
-   * Does not insert rows — `(phone_number, slot)` must already exist from import.
+   * Occupy one Released row for this phone (any matching `phone_number` variant).
+   * Import should create row(s); we do not insert here.
    */
-  async reserveSlot(
+  async reservePhoneLane(
     jobId: string,
-    phone_number: string,
-    slot: number
+    phone_number: string
   ): Promise<boolean> {
     if (!Types.ObjectId.isValid(jobId)) {
       return false;
     }
 
     try {
+      const variants = phoneVariantsForLookup(phone_number);
       const result = await PhoneNumberSlot.findOneAndUpdate(
         {
-          phone_number,
-          slot,
+          phone_number: { $in: variants },
           status: PhoneNumberSlotStatus.Released,
         },
         {
           status: PhoneNumberSlotStatus.Occupied,
           job_id: new mongoose.Types.ObjectId(jobId),
         },
-        { new: true }
+        { new: true, sort: { slot: 1 } }
       );
 
       if (result) {
         console.log(
-          `PhoneNumberSlot reserved: ${phone_number} slot ${slot} -> job ${jobId}`
+          `PhoneNumberSlot reserved (by phone): ${result.phone_number} -> job ${jobId}`
         );
         return true;
       }
 
-      const exists = await PhoneNumberSlot.findOne({ phone_number, slot })
-        .select("_id")
-        .lean();
-      if (!exists) {
+      const state = await this.getPhoneLaneState(phone_number);
+      if (state === "missing") {
         console.warn(
-          `PhoneNumberSlot.reserveSlot: no row for phone ${phone_number} slot ${slot} — create it at job import`
+          `PhoneNumberSlot.reservePhoneLane: no row for phone (variants ${variants.join(
+            ", "
+          )}) — create at job import`
         );
       }
       return false;
     } catch (error) {
-      console.error("PhoneNumberSlot.reserveSlot error:", error);
+      console.error("PhoneNumberSlot.reservePhoneLane error:", error);
       return false;
     }
   }

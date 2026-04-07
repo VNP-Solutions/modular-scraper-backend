@@ -534,9 +534,18 @@ export class OtpAwareWorkerPool extends EventEmitter {
       if (!slotFree) {
         this.jobQueue.push(queuedJob);
         await this.applyInQueueStatusForJobData(queuedJob.jobData);
-        console.log(
-          `\x1b[33mJob ${queuedJob.jobData.jobId} queued (phone slot occupied for this contact). Queue size: ${this.jobQueue.length}\x1b[0m`
+        const lane = await this.otpManager.getBookingPhoneLaneDiagnostics(
+          queuedJob.jobData.selectedContact
         );
+        if (lane.state === "missing") {
+          console.log(
+            `\x1b[33mJob ${queuedJob.jobData.jobId} queued — no DB row for phone ${lane.phone_number} (import must create it). Queue size: ${this.jobQueue.length}\x1b[0m`
+          );
+        } else {
+          console.log(
+            `\x1b[33mJob ${queuedJob.jobData.jobId} queued — phone ${lane.phone_number} already in use (another job holds this number). Queue size: ${this.jobQueue.length}\x1b[0m`
+          );
+        }
         return;
       }
       const reserved = await this.otpManager.reserveBookingPhoneSlot(
@@ -547,7 +556,7 @@ export class OtpAwareWorkerPool extends EventEmitter {
         this.jobQueue.push(queuedJob);
         await this.applyInQueueStatusForJobData(queuedJob.jobData);
         console.log(
-          `Job ${queuedJob.jobData.jobId} queued (phone slot reservation failed). Queue size: ${this.jobQueue.length}`
+          `Job ${queuedJob.jobData.jobId} queued (phone lane reservation failed — race or number busy). Queue size: ${this.jobQueue.length}`
         );
         return;
       }

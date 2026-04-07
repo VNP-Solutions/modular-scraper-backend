@@ -8,7 +8,7 @@ import {
   IPhoneNumberSlot,
 } from "../models/phone-number-slot.model.js";
 import { phoneNumberSlotService } from "../services/phone-number-slot.service.js";
-import { getBookingPhoneSlotForLock } from "./booking-otp-lane.js";
+import { getBookingPhoneForLock } from "./booking-otp-lane.js";
 
 dotenv.config();
 
@@ -18,8 +18,8 @@ export type BookingSelectedContact = {
 };
 
 /**
- * High-level occupancy snapshot only. Phone + slot live on `PhoneNumberSlot` docs
- * (created at job import); use `getDetailedStatus()` for per-row truth.
+ * High-level occupancy snapshot. Worker pool locks one OTP lane per phone number
+ * (`phone_number_slots`); use `getDetailedStatus()` for per-row truth.
  */
 export interface OtpStatusInfo {
   status: OtpStatusValue;
@@ -91,7 +91,7 @@ export class OtpStatusManager extends EventEmitter {
   }
 
   /**
-   * Whether the `(phone_number, slot)` for this contact is free (or row missing).
+   * Whether this phone number's lane is free (Released row exists, none Occupied for that phone).
    */
   public async isBookingSlotAvailable(
     selectedContact?: BookingSelectedContact
@@ -99,10 +99,22 @@ export class OtpStatusManager extends EventEmitter {
     if (!this.isInitialized) {
       await this.initialize();
     }
-    const { phone_number, slot } = getBookingPhoneSlotForLock({
-      selectedContact,
-    });
-    return phoneNumberSlotService.isSlotAvailable(phone_number, slot);
+    const { phone_number } = getBookingPhoneForLock({ selectedContact });
+    return phoneNumberSlotService.isPhoneLaneAvailable(phone_number);
+  }
+
+  public async getBookingPhoneLaneDiagnostics(
+    selectedContact?: BookingSelectedContact
+  ): Promise<{
+    phone_number: string;
+    state: "missing" | "occupied" | "released";
+  }> {
+    if (!this.isInitialized) {
+      await this.initialize();
+    }
+    const { phone_number } = getBookingPhoneForLock({ selectedContact });
+    const state = await phoneNumberSlotService.getPhoneLaneState(phone_number);
+    return { phone_number, state };
   }
 
   /**
@@ -121,20 +133,17 @@ export class OtpStatusManager extends EventEmitter {
       return false;
     }
 
-    const { phone_number, slot } = getBookingPhoneSlotForLock({
-      selectedContact,
-    });
+    const { phone_number } = getBookingPhoneForLock({ selectedContact });
 
     try {
-      const ok = await phoneNumberSlotService.reserveSlot(
+      const ok = await phoneNumberSlotService.reservePhoneLane(
         jobId,
-        phone_number,
-        slot
+        phone_number
       );
       if (ok) {
         await this.syncCurrentStatusFromDb();
         console.log(
-          `PhoneNumberSlot reserved (OTP gate): ${phone_number} slot ${slot} -> job ${jobId}`
+          `PhoneNumberSlot reserved (OTP gate, by phone): ${phone_number} -> job ${jobId}`
         );
         this.emit("otpReserved", jobId);
       }
