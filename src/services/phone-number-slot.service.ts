@@ -32,37 +32,24 @@ class PhoneNumberSlotService {
     };
   }
 
+  /**
+   * Row must exist (created at job import). Free only when status is Released.
+   * Missing row → not available (nothing to reserve).
+   */
   async isSlotAvailable(
     phone_number: string,
     slot: number
   ): Promise<boolean> {
     const doc = await PhoneNumberSlot.findOne({ phone_number, slot }).lean();
     if (!doc) {
-      return true;
+      return false;
     }
     return doc.status === PhoneNumberSlotStatus.Released;
   }
 
-  private async ensureReleasedRow(
-    phone_number: string,
-    slot: number
-  ): Promise<void> {
-    await PhoneNumberSlot.updateOne(
-      { phone_number, slot },
-      {
-        $setOnInsert: {
-          phone_number,
-          slot,
-          status: PhoneNumberSlotStatus.Released,
-          job_id: null,
-        },
-      },
-      { upsert: true }
-    );
-  }
-
   /**
-   * Atomically occupy this phone+slot for jobId. Other jobs must wait until releaseByJobId.
+   * Atomically occupy an existing Released row for jobId.
+   * Does not insert rows — `(phone_number, slot)` must already exist from import.
    */
   async reserveSlot(
     jobId: string,
@@ -74,8 +61,6 @@ class PhoneNumberSlotService {
     }
 
     try {
-      await this.ensureReleasedRow(phone_number, slot);
-
       const result = await PhoneNumberSlot.findOneAndUpdate(
         {
           phone_number,
@@ -94,6 +79,15 @@ class PhoneNumberSlotService {
           `PhoneNumberSlot reserved: ${phone_number} slot ${slot} -> job ${jobId}`
         );
         return true;
+      }
+
+      const exists = await PhoneNumberSlot.findOne({ phone_number, slot })
+        .select("_id")
+        .lean();
+      if (!exists) {
+        console.warn(
+          `PhoneNumberSlot.reserveSlot: no row for phone ${phone_number} slot ${slot} — create it at job import`
+        );
       }
       return false;
     } catch (error) {

@@ -1,47 +1,34 @@
 import dotenv from "dotenv";
 import { EventEmitter } from "events";
-import mongoose, { Types } from "mongoose";
+import { Types } from "mongoose";
+import { OtpStatusValue } from "../models/otp-status.model.js";
 import {
-  IOtpStatus,
-  OtpPlatform,
-  OtpStatus,
-  OtpStatusValue,
-} from "../models/otp-status.model.js";
+  PhoneNumberSlot,
+  PhoneNumberSlotStatus,
+  IPhoneNumberSlot,
+} from "../models/phone-number-slot.model.js";
 import { phoneNumberSlotService } from "../services/phone-number-slot.service.js";
+import { getBookingPhoneSlotForLock } from "./booking-otp-lane.js";
 
 dotenv.config();
 
+export type BookingSelectedContact = {
+  phone?: string;
+  port?: string;
+};
+
+/**
+ * High-level occupancy snapshot only. Phone + slot live on `PhoneNumberSlot` docs
+ * (created at job import); use `getDetailedStatus()` for per-row truth.
+ */
 export interface OtpStatusInfo {
   status: OtpStatusValue;
-  platform: OtpPlatform | null;
+  /** Job holding a slot when `Occupied` (newest occupied row); null when all released. */
   jobId: string | null;
   lastUpdated: Date;
 }
 
 let instance: OtpStatusManager | null = null;
-
-/** Default platform for `otp_status` rows (Expedia/Agoda). Booking uses `phone_number_slots`, not this collection. */
-const FALLBACK_OTP_DB_PLATFORM = OtpPlatform.Expedia;
-
-/** Map env / legacy DB values to schema enum (`expedia` | `agoda` | `booking`). */
-function normalizeOtpPlatformInput(
-  raw: string | undefined
-): OtpPlatform | null {
-  if (raw == null || String(raw).trim() === "") {
-    return null;
-  }
-  const r = String(raw).trim().toLowerCase();
-  if (r === "expedia" || r === "expedia_retrieval") {
-    return OtpPlatform.Expedia;
-  }
-  if (r === "agoda") {
-    return OtpPlatform.Agoda;
-  }
-  if (r === "booking") {
-    return OtpPlatform.Booking;
-  }
-  return null;
-}
 
 export class OtpStatusManager extends EventEmitter {
   private currentStatus: OtpStatusInfo | null = null;
@@ -58,66 +45,9 @@ export class OtpStatusManager extends EventEmitter {
     return instance;
   }
 
-  private getOtpDbPlatform(): OtpPlatform {
-    const fromEnv = normalizeOtpPlatformInput(process.env.OTP_PLATFORM);
-    if (fromEnv != null) {
-      return fromEnv;
-    }
-    if (
-      process.env.OTP_PLATFORM != null &&
-      String(process.env.OTP_PLATFORM).trim() !== ""
-    ) {
-      console.warn(
-        `[OtpStatusManager] OTP_PLATFORM=${JSON.stringify(process.env.OTP_PLATFORM)} is not expedia, expedia_retrieval, agoda, or booking; using otp_status default platform ${FALLBACK_OTP_DB_PLATFORM}`
-      );
-    }
-    return FALLBACK_OTP_DB_PLATFORM;
-  }
-
-  /** Legacy installs used non-enum platform strings; Mongoose rejects them on create/save. */
-  private async migrateLegacyOtpPlatforms(): Promise<void> {
-    await OtpStatus.collection.updateMany(
-      { platform: "expedia_retrieval" },
-      { $set: { platform: OtpPlatform.Expedia } }
-    );
-  }
-
-  /** One `otp_status` row per `platform` value. */
-  private async dedupeOtpStatusByPlatform(): Promise<void> {
-    for (const p of Object.values(OtpPlatform)) {
-      const docs = await OtpStatus.find({ platform: p })
-        .sort({ updatedAt: -1 })
-        .exec();
-      if (docs.length <= 1) {
-        continue;
-      }
-      const occupied = docs.find((d) => d.status === OtpStatusValue.Occupied);
-      const keeper = occupied ?? docs[0];
-      await OtpStatus.deleteMany({
-        platform: p,
-        _id: { $ne: keeper._id },
-      });
-    }
-  }
-
-  private async ensurePlatformDoc(): Promise<void> {
-    const envPlatform = this.getOtpDbPlatform();
-    if (envPlatform === OtpPlatform.Booking) {
-      return;
-    }
-    const existing = await OtpStatus.findOne({ platform: envPlatform });
-    if (!existing) {
-      await OtpStatus.create({
-        status: OtpStatusValue.Released,
-        platform: envPlatform,
-        job_id: null,
-      });
-    }
-  }
-
   private async syncCurrentStatusFromDb(): Promise<void> {
-    const occupied = await OtpStatus.findOne({
-      status: OtpStatusValue.Occupied,
+    const occupied = await PhoneNumberSlot.findOne({
+      status: PhoneNumberSlotStatus.Occupied,
     })
       .sort({ updatedAt: -1 })
       .lean();
@@ -125,18 +55,17 @@ export class OtpStatusManager extends EventEmitter {
     if (occupied) {
       this.currentStatus = {
         status: OtpStatusValue.Occupied,
-        platform: occupied.platform || FALLBACK_OTP_DB_PLATFORM,
         jobId: occupied.job_id?.toString() || null,
         lastUpdated: occupied.updatedAt,
       };
-    } else {
-      this.currentStatus = {
-        status: OtpStatusValue.Released,
-        platform: this.getOtpDbPlatform(),
-        jobId: null,
-        lastUpdated: new Date(),
-      };
+      return;
     }
+
+    this.currentStatus = {
+      status: OtpStatusValue.Released,
+      jobId: null,
+      lastUpdated: new Date(),
+    };
   }
 
   public async initialize(): Promise<void> {
@@ -145,12 +74,12 @@ export class OtpStatusManager extends EventEmitter {
     }
 
     try {
-      await this.migrateLegacyOtpPlatforms();
-      await this.dedupeOtpStatusByPlatform();
-      await this.ensurePlatformDoc();
       await this.syncCurrentStatusFromDb();
       this.isInitialized = true;
-      console.log("OTP Status Manager initialized:", this.currentStatus);
+      console.log(
+        "OTP Status Manager initialized (Booking phone_number_slots):",
+        this.currentStatus
+      );
     } catch (error) {
       console.error("Failed to initialize OTP Status Manager:", error);
       throw error;
@@ -162,88 +91,62 @@ export class OtpStatusManager extends EventEmitter {
   }
 
   /**
-   * True if the OTP row for `OTP_PLATFORM` is free (or missing).
+   * Whether the `(phone_number, slot)` for this contact is free (or row missing).
    */
-  public async isOtpAvailable(): Promise<boolean> {
+  public async isBookingSlotAvailable(
+    selectedContact?: BookingSelectedContact
+  ): Promise<boolean> {
     if (!this.isInitialized) {
       await this.initialize();
     }
-
-    const envPlatform = this.getOtpDbPlatform();
-    const doc = await OtpStatus.findOne({ platform: envPlatform }).lean();
-
-    if (!doc) {
-      return true;
-    }
-    return doc.status === OtpStatusValue.Released;
-  }
-
-  private async ensurePlatformRow(): Promise<void> {
-    const envPlatform = this.getOtpDbPlatform();
-    await OtpStatus.updateOne(
-      { platform: envPlatform },
-      {
-        $setOnInsert: {
-          status: OtpStatusValue.Released,
-          platform: envPlatform,
-          job_id: null,
-        },
-      },
-      { upsert: true }
-    );
+    const { phone_number, slot } = getBookingPhoneSlotForLock({
+      selectedContact,
+    });
+    return phoneNumberSlotService.isSlotAvailable(phone_number, slot);
   }
 
   /**
-   * Reserve OTP for a job in `otp_status` for the current `OTP_PLATFORM` (Expedia/Agoda).
-   * Booking uses `phone_number_slots`, not this.
+   * Atomically occupy `phone_number_slots` for this job + contact (Booking OTP gate).
    */
-  public async reserveOtp(jobId: string): Promise<boolean> {
+  public async reserveBookingPhoneSlot(
+    jobId: string,
+    selectedContact?: BookingSelectedContact
+  ): Promise<boolean> {
     if (!this.isInitialized) {
       await this.initialize();
     }
 
     if (!Types.ObjectId.isValid(jobId)) {
-      console.error(`reserveOtp: invalid jobId ${jobId}`);
+      console.error(`reserveBookingPhoneSlot: invalid jobId ${jobId}`);
       return false;
     }
 
-    const envPlatform = this.getOtpDbPlatform();
+    const { phone_number, slot } = getBookingPhoneSlotForLock({
+      selectedContact,
+    });
 
     try {
-      await this.ensurePlatformRow();
-
-      const result = await OtpStatus.findOneAndUpdate(
-        {
-          status: OtpStatusValue.Released,
-          platform: envPlatform,
-        },
-        {
-          status: OtpStatusValue.Occupied,
-          platform: envPlatform,
-          job_id: new mongoose.Types.ObjectId(jobId),
-        },
-        { new: true }
+      const ok = await phoneNumberSlotService.reserveSlot(
+        jobId,
+        phone_number,
+        slot
       );
-
-      if (result) {
+      if (ok) {
         await this.syncCurrentStatusFromDb();
-        console.log(`OTP reserved for job ${jobId} (${envPlatform})`);
-        this.emit("otpReserved", jobId, envPlatform);
-        return true;
+        console.log(
+          `PhoneNumberSlot reserved (OTP gate): ${phone_number} slot ${slot} -> job ${jobId}`
+        );
+        this.emit("otpReserved", jobId);
       }
-
-      console.log(
-        `Failed to reserve OTP for job ${jobId} — slot busy (${envPlatform})`
-      );
-      return false;
+      return ok;
     } catch (error) {
-      console.error(`Error reserving OTP for job ${jobId}:`, error);
+      console.error(`Error reserving phone slot for job ${jobId}:`, error);
       return false;
     }
   }
 
   /**
-   * Release the row held by this job (matches job_id).
+   * Release the `phone_number_slots` row held by this job_id.
    */
   public async releaseOtp(jobId: string): Promise<boolean> {
     if (!this.isInitialized) {
@@ -255,32 +158,22 @@ export class OtpStatusManager extends EventEmitter {
         return false;
       }
 
-      const result = await OtpStatus.findOneAndUpdate(
-        { job_id: new mongoose.Types.ObjectId(jobId) },
-        {
-          status: OtpStatusValue.Released,
-          job_id: null,
-        },
-        { new: true }
-      );
+      const result = await phoneNumberSlotService.releaseByJobId(jobId);
 
       if (result) {
         await this.syncCurrentStatusFromDb();
-        console.log(`\x1b[32mOTP released by job ${jobId}\x1b[0m`);
+        console.log(`\x1b[32mPhone slot released by job ${jobId}\x1b[0m`);
         this.emit("otpReleased", jobId);
         return true;
       }
 
       return true;
     } catch (error) {
-      console.error(`Error releasing OTP for job ${jobId}:`, error);
+      console.error(`Error releasing phone slot for job ${jobId}:`, error);
       return false;
     }
   }
 
-  /**
-   * Admin / shutdown: release all `phone_number_slots` (Booking) and all `otp_status` rows (Expedia/Agoda).
-   */
   public async forceReleaseOtp(): Promise<boolean> {
     if (!this.isInitialized) {
       await this.initialize();
@@ -288,56 +181,23 @@ export class OtpStatusManager extends EventEmitter {
 
     try {
       await phoneNumberSlotService.releaseAllOccupied();
-
-      await OtpStatus.updateMany(
-        {},
-        {
-          status: OtpStatusValue.Released,
-          job_id: null,
-        }
-      );
-
       await this.syncCurrentStatusFromDb();
       console.log(
-        `\x1b[32m[OTP] All OTP rows force-released — emitting 'otpReleased'\x1b[0m`
+        `\x1b[32m[OTP] All phone_number_slots force-released — emitting 'otpReleased'\x1b[0m`
       );
       this.emit("otpReleased", null);
       return true;
     } catch (error) {
-      console.error("Error force releasing OTP:", error);
+      console.error("Error force releasing phone slots:", error);
       return false;
     }
   }
 
-  public async waitForOtpAvailable(
-    timeoutMs: number = 60000
-  ): Promise<boolean> {
-    const ok = await this.isOtpAvailable();
-    if (ok) {
-      return true;
-    }
-
-    return new Promise((resolve) => {
-      const timeout = setTimeout(() => {
-        this.removeListener("otpReleased", onOtpReleased);
-        resolve(false);
-      }, timeoutMs);
-
-      const onOtpReleased = () => {
-        clearTimeout(timeout);
-        this.removeListener("otpReleased", onOtpReleased);
-        resolve(true);
-      };
-
-      this.once("otpReleased", onOtpReleased);
-    });
-  }
-
-  public async getDetailedStatus(): Promise<IOtpStatus[]> {
+  public async getDetailedStatus(): Promise<IPhoneNumberSlot[]> {
     try {
-      return (await OtpStatus.find({}).lean()) as IOtpStatus[];
+      return await phoneNumberSlotService.listAll();
     } catch (error) {
-      console.error("Error getting detailed OTP status:", error);
+      console.error("Error listing phone_number_slots:", error);
       return [];
     }
   }
@@ -353,11 +213,7 @@ export class OtpStatusManager extends EventEmitter {
         if (this.currentStatus.status === OtpStatusValue.Released) {
           this.emit("otpReleased", this.currentStatus.jobId);
         } else {
-          this.emit(
-            "otpReserved",
-            this.currentStatus.jobId,
-            this.currentStatus.platform
-          );
+          this.emit("otpReserved", this.currentStatus.jobId);
         }
       }
     } catch (error) {

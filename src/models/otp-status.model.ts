@@ -1,3 +1,9 @@
+/**
+ * `otp_statuses` collection (legacy / optional). Booking OTP gating uses
+ * `phone_number_slots` via `OtpStatusManager`; this model remains for existing
+ * data, migrations, or non-Booking tooling.
+ */
+
 import mongoose, { Document, Schema, Types } from "mongoose";
 
 export enum OtpStatusValue {
