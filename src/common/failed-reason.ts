@@ -4,6 +4,23 @@
  * error messages.
  */
 
+/** Explicit union so callers always see stable keys (e.g. GRAPHQL_ERROR) on FAILED_REASON. */
+export type FailedReasonCode =
+  | "SCRAPING_STOPPED"
+  | "OTP_VERIFICATION_FAILED"
+  | "OTP_VERIFICATION_CODE_NOT_FOUND"
+  | "OTP_VERIFICATION_PAGE_TIMEOUT"
+  | "LOGIN_FAILED"
+  | "PROPERTY_NOT_FOUND"
+  | "GRAPHQL_ERROR"
+  | "GRAPHQL_NOT_AUTHORIZED"
+  | "GRAPHQL_TIMEOUT"
+  | "REQUEST_TIMEOUT"
+  | "NO_RESERVATIONS_FOUND"
+  | "MAX_RESTART_ATTEMPTS"
+  | "VCC_NOT_AVAILABLE"
+  | "BROWSER_SESSION_LOST";
+
 export const FAILED_REASON = {
   SCRAPING_STOPPED: "SCRAPING_STOPPED",
   OTP_VERIFICATION_FAILED: "OTP_VERIFICATION_FAILED",
@@ -19,9 +36,7 @@ export const FAILED_REASON = {
   MAX_RESTART_ATTEMPTS: "MAX_RESTART_ATTEMPTS",
   VCC_NOT_AVAILABLE: "VCC_NOT_AVAILABLE",
   BROWSER_SESSION_LOST: "BROWSER_SESSION_LOST",
-} as const;
-
-export type FailedReasonCode = (typeof FAILED_REASON)[keyof typeof FAILED_REASON];
+} as const satisfies { readonly [K in FailedReasonCode]: K };
 
 const FAILED_REASON_MESSAGES: Record<FailedReasonCode, string> = {
   [FAILED_REASON.SCRAPING_STOPPED]: "Scraping was stopped",
@@ -155,4 +170,14 @@ export function getFailedReasonForUser(
   }
   const raw = typeof message === "string" && message.trim() ? message : fallback;
   return raw.slice(0, 1000);
+}
+
+/**
+ * Explicit two-argument entry point (some TS language service versions mis-resolve overloads on getFailedReasonForUser).
+ */
+export function getFailedReasonWithFallback(
+  error: unknown,
+  fallback: string
+): string {
+  return getFailedReasonForUser(error, fallback);
 }

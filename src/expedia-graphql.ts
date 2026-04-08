@@ -7,11 +7,13 @@ import { emailNotifier } from "./common/email-notifier.js";
 import { decryptPassword } from "./common/encription.js";
 import {
   FAILED_REASON,
+  getFailedReasonWithFallback,
   hasFailedReasonCode,
   isStatusAlreadySaved,
   markStatusSaved,
   setFailedReasonCode,
 } from "./common/failed-reason.js";
+import type { ExpediaBrightDataOptions } from "./common/job-isolation.js";
 import {
   dualLogError,
   dualLogInfo,
@@ -20,20 +22,15 @@ import {
 } from "./common/log-helper.js";
 import { otpCompletionNotifier } from "./common/otp-completion-notifier.js";
 import { progressManager } from "./common/progress-manager.js";
-import { takeScreenshot } from "./common/screenshot-helper.js";
 import { scrapingStateManager } from "./common/scraping-state.js";
+import { takeScreenshot } from "./common/screenshot-helper.js";
 import { timeManager } from "./common/time-manager.js";
 import { getNextDateFromCompleted } from "./date-split/helper.js";
 import login from "./login/login.js";
 import { CardInfo, PaymentInfo } from "./models/job-item.model.js";
 import { JobStatus } from "./models/job.model.js";
 import handleOtpVerification from "./otp-verification/otp-verification.js";
-import {
-  getFailedReasonForUser,
-  CreateJobItemData,
-  jobService,
-} from "./services/job.service.js";
-import type { ExpediaBrightDataOptions } from "./common/job-isolation.js";
+import { CreateJobItemData, jobService } from "./services/job.service.js";
 
 dotenv.config();
 
@@ -46,7 +43,6 @@ async function makeGraphQLRequest(
   startDate?: string,
   endDate?: string,
   jobId?: string,
-  isFirstDay?: boolean
 ): Promise<void> {
   try {
     console.log("🚀 Making GraphQL API request...");
@@ -398,7 +394,7 @@ async function makeGraphQLRequest(
 
     // Configure timeout for GraphQL request (default 120 seconds, configurable)
     const graphqlTimeoutMs = parseInt(
-      process.env.GRAPHQL_API_TIMEOUT_MS || "120000"
+      process.env.GRAPHQL_API_TIMEOUT_MS || "120000",
     ); // 120 seconds default
     const abortController = new AbortController();
     const timeoutId = setTimeout(() => {
@@ -418,7 +414,7 @@ async function makeGraphQLRequest(
           },
           body: JSON.stringify(graphqlQuery),
           signal: abortController.signal,
-        }
+        },
       );
 
       clearTimeout(timeoutId);
@@ -431,14 +427,14 @@ async function makeGraphQLRequest(
         const errorText = await response.text();
         console.error("❌ GraphQL API Error Response:", errorText);
         console.error(
-          `❌ Response Status: ${response.status} ${response.statusText}`
+          `❌ Response Status: ${response.status} ${response.statusText}`,
         );
         console.error(
           `❌ Response Headers:`,
-          Object.fromEntries(response.headers.entries())
+          Object.fromEntries(response.headers.entries()),
         );
         throw new Error(
-          `GraphQL API failed with status ${response.status}: ${errorText}`
+          `GraphQL API failed with status ${response.status}: ${errorText}`,
         );
       }
 
@@ -470,20 +466,20 @@ async function makeGraphQLRequest(
                 propertyIdForDb = job.property_id.toString();
                 await dualLogInfo(
                   `Using property_id: ${propertyIdForDb} for database storage`,
-                  { propertyIdForDb, jobId }
+                  { propertyIdForDb, jobId },
                 );
               } else {
                 await dualLogError(
                   `Could not get property_id from job ${jobId}, will skip database storage`,
                   null,
-                  { jobId }
+                  { jobId },
                 );
               }
             } catch (error: any) {
               await dualLogError(
                 `Error getting property_id from job ${jobId}:`,
                 error,
-                { jobId }
+                { jobId },
               );
             }
           }
@@ -493,10 +489,10 @@ async function makeGraphQLRequest(
             // Add delay between processing reservations to avoid overwhelming the API
             if (index > 0) {
               const reservationDelay = parseInt(
-                process.env.RESERVATION_PROCESSING_DELAY_MS || "1000"
+                process.env.RESERVATION_PROCESSING_DELAY_MS || "1000",
               ); // 1 second between reservations
               console.log(
-                `⏳ Reservation processing delay: ${reservationDelay}ms...`
+                `⏳ Reservation processing delay: ${reservationDelay}ms...`,
               );
               await delay(reservationDelay);
             }
@@ -514,22 +510,22 @@ async function makeGraphQLRequest(
             console.log(
               `   EVC Card Details Exist: ${
                 paymentInfo.evcCardDetailsExist || false
-              }`
+              }`,
             );
             console.log(
               `   EVC Card Resource ID: ${
                 paymentInfo.expediaVirtualCardResourceId || "N/A"
-              }`
+              }`,
             );
             console.log(
               `   Credit Card Viewable: ${
                 paymentInfo.creditCardDetails?.viewable || false
-              }`
+              }`,
             );
             console.log(
               `   Card View Count Left: ${
                 paymentInfo.creditCardDetails?.viewCountLeft || "N/A"
-              }`
+              }`,
             );
 
             // Initialize card data and EVC data variables
@@ -543,14 +539,14 @@ async function makeGraphQLRequest(
             ) {
               try {
                 console.log(
-                  `💳 Fetching EVC card data for reservation ${index + 1}...`
+                  `💳 Fetching EVC card data for reservation ${index + 1}...`,
                 );
                 evcCardData = await fetchEVCCardData(
                   expediaId || "",
                   paymentInfo.expediaVirtualCardResourceId,
                   item.reservationItemId,
                   checkIn,
-                  cookieHeader
+                  cookieHeader,
                 );
                 console.log(`✅ EVC Card Data:`, evcCardData);
 
@@ -560,7 +556,7 @@ async function makeGraphQLRequest(
 
                   // Map EVC charge status values to desired format
                   const mapReasonForCharge = (
-                    graphqlReason: string
+                    graphqlReason: string,
                   ): string => {
                     switch (graphqlReason?.toLowerCase()) {
                       case "deactivatedduetofullcharge":
@@ -623,7 +619,7 @@ async function makeGraphQLRequest(
                     console.warn(
                       `⚠️ Missing essential card data (cardNumber: ${!!cardNumber}, cvv: ${!!cvv}) for reservation ${
                         index + 1
-                      }`
+                      }`,
                     );
                   }
                 } else if (
@@ -634,11 +630,11 @@ async function makeGraphQLRequest(
                   console.log(
                     `🔄 Using fallback card data mapping for reservation ${
                       index + 1
-                    }`
+                    }`,
                   );
 
                   const mapReasonForCharge = (
-                    graphqlReason: string
+                    graphqlReason: string,
                   ): string => {
                     switch (graphqlReason?.toLowerCase()) {
                       case "deactivatedduetofullcharge":
@@ -665,7 +661,7 @@ async function makeGraphQLRequest(
                     reason_for_charge: mapReasonForCharge(
                       evcCardData.reasonForCharge ||
                         evcCardData.reason_for_charge ||
-                        ""
+                        "",
                     ),
                   };
 
@@ -674,7 +670,7 @@ async function makeGraphQLRequest(
                   console.warn(
                     `⚠️ No valid card data in EVC response for reservation ${
                       index + 1
-                    }`
+                    }`,
                   );
                   // console.log(
                   //   `🔍 EVC Response structure:`,
@@ -686,7 +682,7 @@ async function makeGraphQLRequest(
                   `❌ Failed to fetch EVC card data for reservation ${
                     index + 1
                   }:`,
-                  cardError.message
+                  cardError.message,
                 );
               }
             }
@@ -698,7 +694,7 @@ async function makeGraphQLRequest(
                 propertyIdForDb,
                 item,
                 cardData,
-                evcCardData
+                evcCardData,
               );
             }
           }
@@ -717,7 +713,7 @@ async function makeGraphQLRequest(
           if (error.extensions?.exceptionDetails) {
             console.error(
               `❌ Exception Details ${index + 1}:`,
-              error.extensions.exceptionDetails
+              error.extensions.exceptionDetails,
             );
           }
         });
@@ -728,7 +724,7 @@ async function makeGraphQLRequest(
             error.message?.includes("network timeout") ||
             error.message?.includes("timeout") ||
             (error.extensions?.code === "INTERNAL_SERVER_ERROR" &&
-              error.message?.includes("timeout"))
+              error.message?.includes("timeout")),
         );
 
         // Check if this is a downstream service error (temporary issue)
@@ -736,12 +732,12 @@ async function makeGraphQLRequest(
           (error: any) =>
             error.extensions?.code === "DOWNSTREAM_SERVICE_ERROR" ||
             error.message?.includes("Downstream service error") ||
-            error.extensions?.classification === "DATA_SOURCE_ERROR"
+            error.extensions?.classification === "DATA_SOURCE_ERROR",
         );
 
         if (isNetworkTimeout) {
           console.warn(
-            "⚠️ Detected network timeout error - this may be temporary"
+            "⚠️ Detected network timeout error - this may be temporary",
           );
           await dualLogError(
             "Network timeout error detected - Expedia's API may be experiencing high load",
@@ -752,13 +748,13 @@ async function makeGraphQLRequest(
               startDate,
               endDate,
               errorType: "NETWORK_TIMEOUT",
-            }
+            },
           );
           // Throw a specific error that can be caught and retried
           const timeoutError = new Error(
             `GraphQL API network timeout: ${
               responseData.errors[0]?.message || "Network timeout"
-            }`
+            }`,
           );
           timeoutError.name = "NETWORK_TIMEOUT";
           throw timeoutError;
@@ -766,7 +762,7 @@ async function makeGraphQLRequest(
 
         if (isDownstreamError) {
           console.warn(
-            "⚠️ Detected downstream service error - this may be temporary"
+            "⚠️ Detected downstream service error - this may be temporary",
           );
           await dualLogError(
             "Downstream service error detected - Expedia's API may be experiencing issues",
@@ -777,32 +773,43 @@ async function makeGraphQLRequest(
               startDate,
               endDate,
               errorType: "DOWNSTREAM_SERVICE_ERROR",
-            }
+            },
           );
         }
 
-        // Throw with a user-friendly or API message so failed_reason is clear for the UI
-        const firstMessage = responseData.errors[0]?.message || "";
-        const isUnauthorized =
-          firstMessage
-            .toLowerCase()
-            .includes("not authorized") ||
-          firstMessage.toLowerCase().includes("forbidden") ||
-          (responseData.errors[0]?.extensions?.classification || "").toLowerCase() === "forbidden";
+        // Top-level message may be empty; Expedia also puts text on extensions.exception.message
+        const err0 = responseData.errors[0] as any;
+        const ext0 = err0?.extensions;
+        const nestedMsg =
+          typeof ext0?.exception?.message === "string"
+            ? ext0.exception.message.trim()
+            : "";
+        const topMsg =
+          typeof err0?.message === "string" ? err0.message.trim() : "";
+        const firstMessage = topMsg || nestedMsg;
+        const textForDetection = [topMsg, nestedMsg].filter(Boolean).join(" ");
+        const msgLower = textForDetection.toLowerCase();
 
-        // On day 1, an "not authorized" error almost always means the property ID
-        // doesn't exist on Expedia (wrong ID) rather than a temporary API issue.
-        const failedCode = isUnauthorized
-          ? (isFirstDay ? FAILED_REASON.PROPERTY_NOT_FOUND : FAILED_REASON.GRAPHQL_NOT_AUTHORIZED)
-          : FAILED_REASON.GRAPHQL_ERROR;
+        // This shape (e.g. client-name=pc-reservations-web) → show property not found in UI/DB
+        const isReservationClientAuthShape =
+          msgLower.includes("client-name") ||
+          msgLower.includes("not authorized for client") ||
+          msgLower.includes("pc-reservations-web");
 
-        const userFriendlyMessage = isUnauthorized
-          ? (isFirstDay
-              ? `Property not found.`
-              : "GraphQL issue: This is likely a temporary issue with Expedia's reservation search API.")
-          : firstMessage || `GraphQL query errors: ${JSON.stringify(responseData.errors)}`;
-        const graphqlErr = new Error(userFriendlyMessage);
-        setFailedReasonCode(graphqlErr, failedCode);
+        let graphqlErr: Error;
+        if (isReservationClientAuthShape) {
+          graphqlErr = new Error(
+            "Property not found. Please verify the Expedia property ID is correct.",
+          );
+          setFailedReasonCode(graphqlErr, FAILED_REASON.PROPERTY_NOT_FOUND);
+        } else {
+          const detail =
+            firstMessage ||
+            nestedMsg ||
+            JSON.stringify(responseData.errors).slice(0, 2000);
+          graphqlErr = new Error(`GraphQL error: ${detail}`);
+          // No failure code — getFailedReasonForUser uses Error.message so stored reason matches API text
+        }
         throw graphqlErr;
       } else {
         console.warn("⚠️ No reservation data found in response");
@@ -814,10 +821,10 @@ async function makeGraphQLRequest(
       // Handle timeout errors specifically
       if (fetchError.name === "AbortError" || abortController.signal.aborted) {
         const timeoutError = new Error(
-          `GraphQL API request timed out after ${graphqlTimeoutMs}ms. This may be due to network issues or server overload.`
+          `GraphQL API request timed out after ${graphqlTimeoutMs}ms. This may be due to network issues or server overload.`,
         );
         timeoutError.name = "NETWORK_TIMEOUT";
-        setFailedReasonCode(timeoutError, FAILED_REASON.GRAPHQL_TIMEOUT);
+        setFailedReasonCode(timeoutError, "GRAPHQL_TIMEOUT");
         throw timeoutError;
       }
 
@@ -827,10 +834,10 @@ async function makeGraphQLRequest(
         fetchError.message?.includes("network timeout")
       ) {
         const timeoutError = new Error(
-          `GraphQL API network timeout: ${fetchError.message}`
+          `GraphQL API network timeout: ${fetchError.message}`,
         );
         timeoutError.name = "NETWORK_TIMEOUT";
-        setFailedReasonCode(timeoutError, FAILED_REASON.GRAPHQL_TIMEOUT);
+        setFailedReasonCode(timeoutError, "GRAPHQL_TIMEOUT");
         throw timeoutError;
       }
 
@@ -857,33 +864,33 @@ async function saveGraphQLReservationToDatabase(
   propertyId: string,
   reservationItem: any,
   cardData: CardInfo | null,
-  evcCardData: any | null
+  evcCardData: any | null,
 ): Promise<void> {
   try {
     // Validate jobId before processing
     if (!jobId || typeof jobId !== "string") {
       throw new Error(
-        `Invalid jobId: ${jobId}. JobId must be a non-empty string.`
+        `Invalid jobId: ${jobId}. JobId must be a non-empty string.`,
       );
     }
 
     if (!propertyId || typeof propertyId !== "string") {
       throw new Error(
-        `Invalid propertyId: ${propertyId}. PropertyId must be a non-empty string.`
+        `Invalid propertyId: ${propertyId}. PropertyId must be a non-empty string.`,
       );
     }
 
     // Check if jobId looks like a valid ObjectId (24 character hex string)
     if (!/^[0-9a-fA-F]{24}$/.test(jobId)) {
       throw new Error(
-        `Invalid jobId format: ${jobId}. JobId must be a 24 character hexadecimal string (MongoDB ObjectId).`
+        `Invalid jobId format: ${jobId}. JobId must be a 24 character hexadecimal string (MongoDB ObjectId).`,
       );
     }
 
     // propertyId should also be a valid ObjectId since it comes from the job's property_id
     if (!/^[0-9a-fA-F]{24}$/.test(propertyId)) {
       throw new Error(
-        `Invalid propertyId format: ${propertyId}. PropertyId must be a 24 character hexadecimal string (MongoDB ObjectId).`
+        `Invalid propertyId format: ${propertyId}. PropertyId must be a 24 character hexadecimal string (MongoDB ObjectId).`,
       );
     }
 
@@ -922,7 +929,7 @@ async function saveGraphQLReservationToDatabase(
     const roomType =
       reservationItem.reservationInfo?.product?.unitName || "Unknown";
     const bookingAmount = parseAmount(
-      reservationItem.totalAmounts?.totalReservationAmount
+      reservationItem.totalAmounts?.totalReservationAmount,
     );
     const bookedDate =
       reservationItem.reservationInfo?.createDateTime ||
@@ -948,11 +955,11 @@ async function saveGraphQLReservationToDatabase(
 
       paymentData = {
         total_guest_payment: parseAmount(
-          reservationItem.totalAmounts.totalReservationAmount
+          reservationItem.totalAmounts.totalReservationAmount,
         ),
         cancellation_fee: 0, // Not available in current response structure
         total_payout: parseAmount(
-          reservationItem.totalAmounts.propertyBookingTotal
+          reservationItem.totalAmounts.propertyBookingTotal,
         ),
         amount_to_charge_or_refund: amountToChargeOrRefund,
         amount_to_charge_or_refund_currency: amountToChargeOrRefundCurrency,
@@ -989,7 +996,7 @@ async function saveGraphQLReservationToDatabase(
     const savedItem = await jobService.createJobItem(jobItemData);
     await dualLogInfo(
       `✅ Saved GraphQL reservation ${reservationId} to database`,
-      { jobId }
+      { jobId },
     );
     return;
   } catch (dbError: any) {
@@ -998,14 +1005,14 @@ async function saveGraphQLReservationToDatabase(
         reservationItem?.reservationItemId || "unknown"
       } to database:`,
       dbError.message,
-      { jobId }
+      { jobId },
     );
 
     // Log additional context for debugging
     await dualLogError(
       `Debug info - jobId: ${jobId}, propertyId: ${propertyId}`,
       null,
-      { jobId }
+      { jobId },
     );
 
     // Don't rethrow the error to prevent stopping the entire scraping process
@@ -1022,7 +1029,7 @@ async function fetchEVCCardData(
   cardResourceId: string,
   bookingItemId: string,
   checkInDate: string,
-  cookieHeader: string
+  cookieHeader: string,
 ): Promise<any> {
   const maxRetries = 8;
   let attempt = 0;
@@ -1039,7 +1046,7 @@ async function fetchEVCCardData(
         // Exponential backoff for retries: 8s, 16s, 32s, 60s, 60s...
         const retryDelay = Math.min(8000 * Math.pow(2, attempt - 1), 60000);
         console.log(
-          `⏳ Retry delay: waiting ${retryDelay}ms before retry ${attempt}/${maxRetries}...`
+          `⏳ Retry delay: waiting ${retryDelay}ms before retry ${attempt}/${maxRetries}...`,
         );
         await delay(retryDelay);
       } else {
@@ -1048,13 +1055,13 @@ async function fetchEVCCardData(
           Math.floor(Math.random() * (maxDelayMs - minDelayMs + 1)) +
           minDelayMs;
         console.log(
-          `⏳ Rate limiting protection: ${randomDelay}ms (random ${minDelayMs}-${maxDelayMs}ms) delay before EVC API call...`
+          `⏳ Rate limiting protection: ${randomDelay}ms (random ${minDelayMs}-${maxDelayMs}ms) delay before EVC API call...`,
         );
         await delay(randomDelay);
       }
 
       const url = `https://apps.expediapartnercentral.com/lodging/bookings/evc/getEVCCardDataByCardResourceId?htid=${propertyId}&cardResourceId=${encodeURIComponent(
-        cardResourceId
+        cardResourceId,
       )}`;
 
       // Generate a unique origin-request-id for each request
@@ -1065,7 +1072,7 @@ async function fetchEVCCardData(
             const r = (Math.random() * 16) | 0;
             const v = c === "x" ? r : (r & 0x3) | 0x8;
             return v.toString(16);
-          }
+          },
         );
       };
 
@@ -1111,12 +1118,12 @@ async function fetchEVCCardData(
           : Math.min(15000 * attempt, 120000); // Up to 2 minutes
 
         console.log(
-          `⚠️ Rate limited (429). Waiting ${waitTime}ms before retry ${attempt}/${maxRetries}...`
+          `⚠️ Rate limited (429). Waiting ${waitTime}ms before retry ${attempt}/${maxRetries}...`,
         );
 
         if (attempt >= maxRetries) {
           console.error(
-            `❌ Max retries reached for rate limiting. Will retry with longer delay...`
+            `❌ Max retries reached for rate limiting. Will retry with longer delay...`,
           );
           // Wait longer and try once more
           await delay(180000); // 3 minutes
@@ -1131,7 +1138,7 @@ async function fetchEVCCardData(
       if (!response.ok) {
         const errorText = await response.text();
         console.error(
-          `❌ EVC API Error: ${response.status} ${response.statusText}`
+          `❌ EVC API Error: ${response.status} ${response.statusText}`,
         );
         console.error(`❌ EVC API Response:`, errorText);
 
@@ -1140,13 +1147,13 @@ async function fetchEVCCardData(
           attempt++;
           const errorDelay = Math.min(5000 * attempt, 30000); // Up to 30s for errors
           console.log(
-            `🔄 Retrying EVC API call (${attempt}/${maxRetries}) in ${errorDelay}ms due to ${response.status} error...`
+            `🔄 Retrying EVC API call (${attempt}/${maxRetries}) in ${errorDelay}ms due to ${response.status} error...`,
           );
           await delay(errorDelay);
           continue;
         } else {
           console.error(
-            `❌ All retries exhausted. Returning error structure to continue processing.`
+            `❌ All retries exhausted. Returning error structure to continue processing.`,
           );
           // Return error structure but don't break the flow - we need data collection to continue
           return {
@@ -1181,17 +1188,17 @@ async function fetchEVCCardData(
       if (!hasCardData) {
         console.warn(
           `⚠️ EVC API returned response but no card data found:`,
-          cardData
+          cardData,
         );
         console.log(
           `🔍 Available keys in response:`,
-          Object.keys(cardData || {})
+          Object.keys(cardData || {}),
         );
 
         // Error 20001 means card info doesn't exist for this reservation - this is normal
         if (cardData?.errorDetails?.errorCode === 20001) {
           console.log(
-            `ℹ️ Error 20001: Card information not found for this reservation (normal case)`
+            `ℹ️ Error 20001: Card information not found for this reservation (normal case)`,
           );
         }
 
@@ -1204,12 +1211,12 @@ async function fetchEVCCardData(
       attempt++;
       console.error(
         `❌ Error fetching EVC card data (attempt ${attempt}):`,
-        error.message
+        error.message,
       );
 
       if (attempt >= maxRetries) {
         console.error(
-          `❌ All retry attempts exhausted. Returning null to continue processing.`
+          `❌ All retry attempts exhausted. Returning null to continue processing.`,
         );
         // Don't throw error, return null to continue with other reservations
         return {
@@ -1246,7 +1253,7 @@ async function graphqlScraping(
   jobId?: string,
   expediaUsername?: string,
   expediaPassword?: string,
-  expediaBrightData?: ExpediaBrightDataOptions
+  expediaBrightData?: ExpediaBrightDataOptions,
 ): Promise<void> {
   let jobLogger = null;
   let browser = null;
@@ -1277,7 +1284,7 @@ async function graphqlScraping(
             originalStartDate: startDate,
             resumeStartDate: nextStartDate,
             lastProcessedDate: resumeInfo.resumeDate,
-          }
+          },
         );
         startDate = nextStartDate;
       }
@@ -1304,7 +1311,7 @@ async function graphqlScraping(
         jobId,
         expediaUsername,
         expediaPassword,
-        expediaBrightData
+        expediaBrightData,
       );
 
       // End time session on successful completion
@@ -1325,9 +1332,9 @@ async function graphqlScraping(
         await progressManager.handleJobError(jobId, error);
       }
 
-      const failedReason = getFailedReasonForUser(
+      const failedReason = getFailedReasonWithFallback(
         error,
-        "GraphQL scraping failed; no reservations found"
+        "GraphQL scraping failed; no reservations found",
       );
 
       // Check job items count and set appropriate job status
@@ -1340,18 +1347,18 @@ async function graphqlScraping(
             await jobService.updateJobStatus(
               jobId,
               JobStatus.Partial,
-              failedReason
+              failedReason,
             );
             await dualLogInfo(
               `Job status set to Partial - found ${jobItemsCount} job items`,
-              { jobId, jobItemsCount }
+              { jobId, jobItemsCount },
             );
           } else {
             // If no job items found, set status to Failed
             await jobService.updateJobStatus(
               jobId,
               JobStatus.Failed,
-              failedReason
+              failedReason,
             );
             await dualLogInfo("Job status set to Failed - no job items found", {
               jobId,
@@ -1362,20 +1369,20 @@ async function graphqlScraping(
           await dualLogError(
             "Error updating job status based on job items count:",
             statusError,
-            { jobId }
+            { jobId },
           );
           // Fallback to Failed status if there's an error checking job items
           try {
             await jobService.updateJobStatus(
               jobId,
               JobStatus.Failed,
-              failedReason
+              failedReason,
             );
           } catch (fallbackError) {
             await dualLogError(
               "Error setting fallback Failed status:",
               fallbackError,
-              { jobId }
+              { jobId },
             );
           }
         }
@@ -1393,9 +1400,9 @@ async function graphqlScraping(
 
     // Inner catch already saved the status — skip to avoid overwriting the real failed_reason
     if (!isStatusAlreadySaved(error) && jobId) {
-      const failedReason = getFailedReasonForUser(
+      const failedReason = getFailedReasonWithFallback(
         error,
-        "GraphQL scraping failed; no reservations found"
+        "GraphQL scraping failed; no reservations found",
       );
 
       // Check job items count and set appropriate job status
@@ -1407,18 +1414,18 @@ async function graphqlScraping(
           await jobService.updateJobStatus(
             jobId,
             JobStatus.Partial,
-            failedReason
+            failedReason,
           );
           await dualLogInfo(
             `Job status set to Partial - found ${jobItemsCount} job items`,
-            { jobId, jobItemsCount }
+            { jobId, jobItemsCount },
           );
         } else {
           // If no job items found, set status to Failed
           await jobService.updateJobStatus(
             jobId,
             JobStatus.Failed,
-            failedReason
+            failedReason,
           );
           await dualLogInfo("Job status set to Failed - no job items found", {
             jobId,
@@ -1429,20 +1436,20 @@ async function graphqlScraping(
         await dualLogError(
           "Error updating job status based on job items count:",
           statusError,
-          { jobId }
+          { jobId },
         );
         // Fallback to Failed status if there's an error checking job items
         try {
           await jobService.updateJobStatus(
             jobId,
             JobStatus.Failed,
-            failedReason
+            failedReason,
           );
         } catch (fallbackError) {
           await dualLogError(
             "Error setting fallback Failed status:",
             fallbackError,
-            { jobId }
+            { jobId },
           );
         }
       }
@@ -1459,12 +1466,12 @@ async function graphqlScraping(
               progressManager.getJobProgress(jobId)?.progressPercentage,
             lastProcessedDate:
               progressManager.getJobLastProcessedDate(jobId) || undefined,
-          }
+          },
         );
       } catch (emailError) {
         await dualLogError(
           "Failed to send error notification email:",
-          emailError
+          emailError,
         );
       }
     }
@@ -1492,7 +1499,7 @@ async function runScrapingWithRestart(
   jobId?: string,
   expediaUsername?: string,
   expediaPassword?: string,
-  expediaBrightData?: ExpediaBrightDataOptions
+  expediaBrightData?: ExpediaBrightDataOptions,
 ): Promise<void> {
   const environment = process.env.ENVIRONMENT || "production";
   let currentStartDate = startDate;
@@ -1538,7 +1545,7 @@ async function runScrapingWithRestart(
   // Get all individual dates to process
   const datesToProcess = generateDateRange(startDate!, endDate!);
   console.log(
-    `📅 Date splitting: Processing ${datesToProcess.length} days individually`
+    `📅 Date splitting: Processing ${datesToProcess.length} days individually`,
   );
   console.log(`📅 Dates: ${datesToProcess.join(", ")}`);
 
@@ -1560,7 +1567,7 @@ async function runScrapingWithRestart(
         expediaBrightData?.brightDataSessionId,
         expediaBrightData?.windowSize,
         expediaBrightData?.timezone,
-        expediaBrightData?.acceptLanguage
+        expediaBrightData?.acceptLanguage,
       );
     }
     globalBrowser = setupResult.browser;
@@ -1574,7 +1581,7 @@ async function runScrapingWithRestart(
 
     if (email && password) {
       await dualLogInfo(
-        "Login credentials found, performing automatic login..."
+        "Login credentials found, performing automatic login...",
       );
 
       try {
@@ -1586,7 +1593,7 @@ async function runScrapingWithRestart(
             await jobService.updateJobStatus(
               jobId,
               JobStatus.Failed,
-              "Scraping was stopped"
+              "Scraping was stopped",
             );
             await finalizeJobLogging("failed");
           }
@@ -1595,7 +1602,7 @@ async function runScrapingWithRestart(
 
         await login(globalBrowser, globalPage, email, password, jobId);
         await dualLogInfo(
-          "Login completed successfully! User is now logged in."
+          "Login completed successfully! User is now logged in.",
         );
         await delay(5000); // Short delay after login
 
@@ -1609,7 +1616,7 @@ async function runScrapingWithRestart(
               await jobService.updateJobStatus(
                 jobId,
                 JobStatus.Failed,
-                "Scraping was stopped"
+                "Scraping was stopped",
               );
               await finalizeJobLogging("failed");
             }
@@ -1657,7 +1664,7 @@ async function runScrapingWithRestart(
           globalPage,
           jobId ?? "",
           "login_complete_cookies_extracted",
-          "step"
+          "step",
         );
       } catch (loginError: any) {
         await dualLogError("Login failed:", loginError);
@@ -1676,7 +1683,7 @@ async function runScrapingWithRestart(
     for (let i = 0; i < datesToProcess.length; i++) {
       const singleDate = datesToProcess[i];
       console.log(
-        `\n🗓️ Processing day ${i + 1}/${datesToProcess.length}: ${singleDate}`
+        `\n🗓️ Processing day ${i + 1}/${datesToProcess.length}: ${singleDate}`,
       );
 
       // Reset attempt counter for each new date
@@ -1695,7 +1702,7 @@ async function runScrapingWithRestart(
               dayProgress: `${i + 1}/${datesToProcess.length}`,
               jobId,
               timeSession: timeManager.getSessionInfo(),
-            }
+            },
           );
 
           // Use the existing browser session (no new browser setup needed)
@@ -1712,7 +1719,7 @@ async function runScrapingWithRestart(
           let page = globalPage;
 
           await dualLogInfo(
-            "Browser setup complete. Page is ready at login screen."
+            "Browser setup complete. Page is ready at login screen.",
           );
 
           // Check if scraping is paused and wait if needed
@@ -1723,7 +1730,7 @@ async function runScrapingWithRestart(
               await jobService.updateJobStatus(
                 jobId,
                 JobStatus.Failed,
-                "Scraping was stopped"
+                "Scraping was stopped",
               );
               await finalizeJobLogging("failed");
             }
@@ -1735,7 +1742,7 @@ async function runScrapingWithRestart(
             // Add retry logic for GraphQL API calls
             let graphqlRetries = 0;
             const maxGraphqlRetries = parseInt(
-              process.env.GRAPHQL_MAX_RETRIES || "5"
+              process.env.GRAPHQL_MAX_RETRIES || "5",
             ); // Increased to 5 retries for network timeouts
             let graphqlSuccess = false;
 
@@ -1747,7 +1754,6 @@ async function runScrapingWithRestart(
                   singleDate, // Use the current single date
                   singleDate, // Same start and end date for single day
                   jobId,
-                  i === 0   // isFirstDay: true only for the very first date
                 );
                 graphqlSuccess = true;
               } catch (graphqlRetryError: any) {
@@ -1763,10 +1769,10 @@ async function runScrapingWithRestart(
                 // Check if it's a downstream service error (worth retrying)
                 const isDownstreamError =
                   graphqlRetryError.message?.includes(
-                    "DOWNSTREAM_SERVICE_ERROR"
+                    "DOWNSTREAM_SERVICE_ERROR",
                   ) ||
                   graphqlRetryError.message?.includes(
-                    "Downstream service error"
+                    "Downstream service error",
                   );
 
                 const isRetryableError = isNetworkTimeout || isDownstreamError;
@@ -1778,13 +1784,13 @@ async function runScrapingWithRestart(
                     // Exponential backoff for network timeouts: 5s, 10s, 20s, 30s, 60s
                     retryDelay = Math.min(
                       5000 * Math.pow(2, graphqlRetries - 1),
-                      60000
+                      60000,
                     );
                   } else {
                     // Shorter delays for downstream errors: 1s, 2s, 4s, 8s, 10s
                     retryDelay = Math.min(
                       1000 * Math.pow(2, graphqlRetries),
-                      10000
+                      10000,
                     );
                   }
 
@@ -1792,7 +1798,7 @@ async function runScrapingWithRestart(
                     ? "NETWORK_TIMEOUT"
                     : "DOWNSTREAM_SERVICE_ERROR";
                   console.warn(
-                    `⚠️ GraphQL retry ${graphqlRetries}/${maxGraphqlRetries} (${retryReason}) in ${retryDelay}ms...`
+                    `⚠️ GraphQL retry ${graphqlRetries}/${maxGraphqlRetries} (${retryReason}) in ${retryDelay}ms...`,
                   );
                   await dualLogInfo(
                     `GraphQL API retry ${graphqlRetries}/${maxGraphqlRetries} after ${retryDelay}ms delay`,
@@ -1801,7 +1807,7 @@ async function runScrapingWithRestart(
                       date: singleDate,
                       retryReason,
                       errorMessage: graphqlRetryError.message,
-                    }
+                    },
                   );
                   await delay(retryDelay);
                 } else {
@@ -1817,7 +1823,7 @@ async function runScrapingWithRestart(
             console.log(
               `🎉 Day ${i + 1}/${
                 datesToProcess.length
-              } (${singleDate}) completed successfully!`
+              } (${singleDate}) completed successfully!`,
             );
 
             // ✅ Data stored to database via GraphQL processing above
@@ -1831,7 +1837,7 @@ async function runScrapingWithRestart(
         } catch (error: any) {
           await dualLogError(
             `Scraping attempt ${attemptCount} for date ${singleDate} failed:`,
-            error
+            error,
           );
 
           // For critical errors, stop processing all dates
@@ -1845,7 +1851,7 @@ async function runScrapingWithRestart(
             }
 
             console.error(
-              `❌ Critical error on date ${singleDate}, stopping all date processing`
+              `❌ Critical error on date ${singleDate}, stopping all date processing`,
             );
             throw error;
           }
@@ -1855,14 +1861,14 @@ async function runScrapingWithRestart(
           console.log(
             `🔄 Retrying date ${singleDate}, attempt ${
               attemptCount + 1
-            }/${maxAttempts}`
+            }/${maxAttempts}`,
           );
         }
       } // End of retry while loop for this date
 
       if (!dateCompleted) {
         console.error(
-          `❌ Failed to complete date ${singleDate} after ${maxAttempts} attempts, skipping to next date`
+          `❌ Failed to complete date ${singleDate} after ${maxAttempts} attempts, skipping to next date`,
         );
       }
 
@@ -1871,7 +1877,7 @@ async function runScrapingWithRestart(
         // Don't delay after the last date
         const randomDelay = Math.floor(Math.random() * 10) + 1;
         console.log(
-          `⏱️ Waiting ${randomDelay} seconds before processing next date...`
+          `⏱️ Waiting ${randomDelay} seconds before processing next date...`,
         );
         await dualLogInfo(
           `Adding ${randomDelay}s delay between dates to avoid detection`,
@@ -1880,7 +1886,7 @@ async function runScrapingWithRestart(
             currentDate: singleDate,
             nextDate: datesToProcess[i + 1],
             delaySeconds: randomDelay,
-          }
+          },
         );
         await delay(randomDelay * 1000); // Convert to milliseconds
         console.log(`✅ Delay complete, proceeding to next date...`);
@@ -1900,7 +1906,7 @@ async function runScrapingWithRestart(
     // Clean up browser session at the very end
     if (globalBrowser) {
       await dualLogInfo(
-        "Cleaning up browser session after all dates processed..."
+        "Cleaning up browser session after all dates processed...",
       );
       try {
         await globalBrowser.close();
