@@ -36,6 +36,51 @@ function phoneVariantsForLookup(digits: string): string[] {
   return [...v];
 }
 
+/**
+ * Lane lookup fallback: match `phone_number` field by last 3 digits only (any formatting).
+ * Assumes last-3 is unique across your OTP lines; if two full numbers share last 3, they collide.
+ */
+function digitsOnlyKey(phone_number: string): string {
+  return String(phone_number).replace(/\D/g, "");
+}
+
+function lastThreeForMatch(phone_number: string): string | null {
+  if (!phone_number || phone_number === "default") {
+    return null;
+  }
+  const d = digitsOnlyKey(phone_number);
+  if (d.length === 0) {
+    return null;
+  }
+  return d.length >= 3 ? d.slice(-3) : d;
+}
+
+/** Stored value may be "[571] 251-0412" — last three digit characters must be d1,d2,d3 in order at end. */
+function lastThreeSuffixRegex(last3: string): RegExp {
+  const body = last3
+    .split("")
+    .map((ch) => ch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("\\D*");
+  return new RegExp(`\\D*${body}$`, "i");
+}
+
+async function findLaneDocsByPhone(phone_number: string) {
+  const variants = phoneVariantsForLookup(phone_number);
+  const exact = await PhoneNumberSlot.find({
+    phone_number: { $in: variants },
+  }).lean();
+  if (exact.length > 0) {
+    return exact;
+  }
+  const last3 = lastThreeForMatch(phone_number);
+  if (!last3) {
+    return [];
+  }
+  return PhoneNumberSlot.find({
+    phone_number: lastThreeSuffixRegex(last3),
+  }).lean();
+}
+
 class PhoneNumberSlotService {
   getPhoneAndSlot(selectedContact?: {
     phone?: string;
@@ -53,10 +98,7 @@ class PhoneNumberSlotService {
    * Lock is per phone number only (port/slot does not define a separate lane).
    */
   async isPhoneLaneAvailable(phone_number: string): Promise<boolean> {
-    const variants = phoneVariantsForLookup(phone_number);
-    const docs = await PhoneNumberSlot.find({
-      phone_number: { $in: variants },
-    }).lean();
+    const docs = await findLaneDocsByPhone(phone_number);
     if (docs.length === 0) {
       return false;
     }
@@ -71,10 +113,7 @@ class PhoneNumberSlotService {
   async getPhoneLaneState(
     phone_number: string
   ): Promise<"missing" | "occupied" | "released"> {
-    const variants = phoneVariantsForLookup(phone_number);
-    const docs = await PhoneNumberSlot.find({
-      phone_number: { $in: variants },
-    }).lean();
+    const docs = await findLaneDocsByPhone(phone_number);
     if (docs.length === 0) {
       return "missing";
     }
@@ -101,17 +140,34 @@ class PhoneNumberSlotService {
 
     try {
       const variants = phoneVariantsForLookup(phone_number);
-      const result = await PhoneNumberSlot.findOneAndUpdate(
+      const update = {
+        status: PhoneNumberSlotStatus.Occupied,
+        job_id: new mongoose.Types.ObjectId(jobId),
+      };
+      const opts = { new: true as const, sort: { slot: 1 } as const };
+
+      let result = await PhoneNumberSlot.findOneAndUpdate(
         {
           phone_number: { $in: variants },
           status: PhoneNumberSlotStatus.Released,
         },
-        {
-          status: PhoneNumberSlotStatus.Occupied,
-          job_id: new mongoose.Types.ObjectId(jobId),
-        },
-        { new: true, sort: { slot: 1 } }
+        update,
+        opts
       );
+
+      if (!result) {
+        const last3 = lastThreeForMatch(phone_number);
+        if (last3) {
+          result = await PhoneNumberSlot.findOneAndUpdate(
+            {
+              phone_number: lastThreeSuffixRegex(last3),
+              status: PhoneNumberSlotStatus.Released,
+            },
+            update,
+            opts
+          );
+        }
+      }
 
       if (result) {
         console.log(
@@ -123,7 +179,7 @@ class PhoneNumberSlotService {
       const state = await this.getPhoneLaneState(phone_number);
       if (state === "missing") {
         console.warn(
-          `PhoneNumberSlot.reservePhoneLane: no row for phone (variants ${variants.join(
+          `PhoneNumberSlot.reservePhoneLane: no row for phone (digits ${variants.join(
             ", "
           )}) — create at job import`
         );

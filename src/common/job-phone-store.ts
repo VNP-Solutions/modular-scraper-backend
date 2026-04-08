@@ -7,7 +7,7 @@
 import dotenv from "dotenv";
 dotenv.config();
 
-const DEFAULT_FALLBACK = "01828704004";
+const DEFAULT_FALLBACK = "01828704008";
 
 export interface JobContact {
   phone: string;
