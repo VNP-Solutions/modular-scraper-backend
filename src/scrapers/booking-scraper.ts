@@ -493,72 +493,12 @@ export class BookingScraper extends BaseScraper {
   }
 
   /**
-   * Handle successful 2FA completion
-   */
-  private async handleSuccessful2FA(propertyId?: string): Promise<void> {
-    if (!this.page) throw new Error("Page not initialized");
-
-    await this.logInfo("✅ 2FA completed successfully");
-
-    // Extract session parameters from URL
-    await this.extractSessionParams();
-
-    const cookies = await this.page.cookies();
-
-    // Save cookies to storage if we have a property ID
-    if (this.propertyIdForDb) {
-      const success = await cookieStorageService.saveCookies(
-        this.propertyIdForDb,
-        PlatformsType.BOOKING,
-        cookies
-      );
-      if (!success) {
-        await this.logWarn("Failed to save cookies after 2FA");
-      }
-    }
-
-    await this.takeScreenshot();
-
-    // Map MongoDB ObjectId (property _id) to actual Booking hotel id if needed
-    let effectivePropertyId = propertyId;
-    if (effectivePropertyId && Types.ObjectId.isValid(effectivePropertyId)) {
-      try {
-        const propertyRecord = await Property.findById(
-          effectivePropertyId
-        ).lean();
-        if (propertyRecord && propertyRecord.booking_id) {
-          await this.logInfo(
-            `Property id passed as MongoDB id. Mapping to booking id: ${propertyRecord.booking_id}`
-          );
-          this.setPropertyIdForDb(effectivePropertyId);
-          effectivePropertyId = propertyRecord.booking_id.toString();
-        } else {
-          await this.logInfo(
-            `Property id passed as MongoDB id but booking_id not found for ${effectivePropertyId}`
-          );
-        }
-      } catch (err) {
-        await this.logError(`Error mapping MongoDB id to booking id: ${err}`);
-      }
-    }
-
-    // Skip property search if we have session parameters (will use direct navigation)
-    if (this.sessionParams) {
-      await this.logInfo(
-        "Session parameters available - skipping property search (will use direct navigation)"
-      );
-    } else {
-      await this.handlePropertySearch(effectivePropertyId);
-    }
-  }
-
-  /**
    * Check if user is already logged in
    */
-  private isAlreadyLoggedIn(): boolean {
-    if (!this.page) return false;
+  private isAlreadyLoggedInOnPage(page: Page | null | undefined): boolean {
+    if (!page) return false;
 
-    const finalUrl = this.page.url();
+    const finalUrl = page.url();
 
     const isIncluded = BOOKING_LOGIN_SUCCESS_URLS.some((url) =>
       finalUrl.includes(url)
@@ -568,6 +508,10 @@ export class BookingScraper extends BaseScraper {
     );
 
     return isIncluded && !isExcluded;
+  }
+
+  private isAlreadyLoggedIn(): boolean {
+    return this.isAlreadyLoggedInOnPage(this.page);
   }
 
   /**
@@ -1025,52 +969,54 @@ export class BookingScraper extends BaseScraper {
         .waitForNavigation({ waitUntil: "networkidle2", timeout: 30000 })
         .catch(() => {});
 
-      // Check for account locked OR password mismatch (mutually exclusive)
-      const accountWasLocked = await this.handleAccountLocked();
+      // Booking may return captcha, account lock, password reset, or 2FA in any order and more than once
+      const authResolved = await this.resolveBookingAuthInterstitials({
+        loginEmail: effectiveCredentials.email,
+      });
 
-      if (accountWasLocked) {
-        await this.logInfo("✅ Account unlocked - password reset completed");
-        return; // Exit early, login retry already happened
-      }
+      if (!authResolved || !this.isAlreadyLoggedIn()) {
+        await this.checkLoginErrors();
 
-      // Only check password mismatch if account was NOT locked
-      const passwordWasReset = await this.handlePasswordMismatch(
-        loginCredentials.email
-      );
-
-      if (passwordWasReset) {
-        await this.logInfo("✅ Password reset completed - login retry done");
-        return; // Exit early, login retry already happened
-      }
-
-      // Only check for other login errors if neither account locked nor password mismatch
-      await this.checkLoginErrors();
-
-      // Handle successful login
-      if (this.isAlreadyLoggedIn()) {
-        await this.handleSuccessfulLogin(propertyId);
-      } else {
-        await this.logInfo("🔐 2FA required - starting verification");
-
-        // Try to handle 2FA automatically
-        const twoFASuccess = await this.handle2FA();
-        if (twoFASuccess) {
-          await this.handleSuccessful2FA(propertyId);
-        } else {
+        if (!this.isAlreadyLoggedIn()) {
+          await this.takeScreenshot();
+          const currentUrl = this.page!.url();
+          const html = await this.page!.content();
+          const looksLike2FA =
+            TWO_FA_PATTERNS.some((p) => currentUrl.includes(p)) ||
+            TWO_FA_TEXT_PATTERNS.some((t) => html.includes(t));
+          if (looksLike2FA) {
+            await dualLogError(
+              getBookingErrorDescription(BookingErrorType.TWO_FA_ERROR),
+              {
+                errorType: BookingErrorType.TWO_FA_ERROR,
+                phase: BookingScrapingPhase.LOGIN,
+                platform: "booking",
+              }
+            );
+            const twoFaErr = new Error("2FA verification failed");
+            setFailedReasonCode(twoFaErr, FAILED_REASON.BOOKING_2FA_FAILED);
+            throw twoFaErr;
+          }
           await dualLogError(
-            getBookingErrorDescription(BookingErrorType.TWO_FA_ERROR),
+            getBookingErrorDescription(BookingErrorType.LOGIN_FAILED),
             {
-              errorType: BookingErrorType.TWO_FA_ERROR,
+              errorType: BookingErrorType.LOGIN_FAILED,
               phase: BookingScrapingPhase.LOGIN,
               platform: "booking",
             }
           );
-          await this.takeScreenshot();
-          const twoFaErr = new Error("2FA verification failed");
-          setFailedReasonCode(twoFaErr, FAILED_REASON.BOOKING_2FA_FAILED);
-          throw twoFaErr;
+          const incompleteErr = new Error(
+            "Login did not complete — unexpected page after auth challenges"
+          );
+          setFailedReasonCode(
+            incompleteErr,
+            FAILED_REASON.BOOKING_LOGIN_FAILED
+          );
+          throw incompleteErr;
         }
       }
+
+      await this.handleSuccessfulLogin(propertyId);
     } catch (error: any) {
       await dualLogError(
         getBookingErrorDescription(BookingErrorType.LOGIN_FAILED),
@@ -1623,6 +1569,96 @@ export class BookingScraper extends BaseScraper {
       );
       return false;
     }
+  }
+
+  /**
+   * Repeatedly handles captcha, account lock, forgot-password / mismatch, and 2FA until the
+   * session reaches a logged-in URL or max rounds. Booking often interleaves these pages.
+   */
+  async resolveBookingAuthInterstitials(options?: {
+    page?: Page;
+    loginEmail?: string;
+    maxRounds?: number;
+  }): Promise<boolean> {
+    const currentPage = options?.page ?? this.page;
+    if (!currentPage) {
+      await this.logWarn("resolveBookingAuthInterstitials: no page");
+      return false;
+    }
+
+    const maxRounds = options?.maxRounds ?? 12;
+    const loginEmail = options?.loginEmail;
+
+    for (let round = 1; round <= maxRounds; round++) {
+      await this.logInfo(
+        `Booking auth interstitials: round ${round}/${maxRounds}`
+      );
+
+      if (this.isAlreadyLoggedInOnPage(currentPage)) {
+        await this.logInfo(
+          "Success URL detected — auth interstitials complete"
+        );
+        return true;
+      }
+
+      const captchaOk = await this.handleCaptcha({
+        page: currentPage,
+        sessionUrl: this.sessionUrl,
+      });
+      if (!captchaOk) {
+        await this.logError(
+          "Captcha handling failed during auth interstitial drain"
+        );
+        return false;
+      }
+
+      await currentPage
+        .waitForNavigation({ waitUntil: "networkidle2", timeout: 15000 })
+        .catch(() => {});
+      await this.delay(1500);
+
+      if (this.isAlreadyLoggedInOnPage(currentPage)) {
+        return true;
+      }
+
+      const accountUnlocked = await this.handleAccountLocked();
+      if (this.isAlreadyLoggedInOnPage(currentPage)) {
+        return true;
+      }
+      if (accountUnlocked) {
+        continue;
+      }
+
+      if (loginEmail) {
+        const passwordFlowDone = await this.handlePasswordMismatch(loginEmail);
+        if (this.isAlreadyLoggedInOnPage(currentPage)) {
+          return true;
+        }
+        if (passwordFlowDone) {
+          continue;
+        }
+      }
+
+      const twoFAOk = await this.handle2FA({ page: currentPage });
+      if (!twoFAOk) {
+        await this.logError("2FA failed during auth interstitial drain");
+        return false;
+      }
+
+      await currentPage
+        .waitForNavigation({ waitUntil: "networkidle2", timeout: 15000 })
+        .catch(() => {});
+      await this.delay(1500);
+
+      if (this.isAlreadyLoggedInOnPage(currentPage)) {
+        return true;
+      }
+    }
+
+    await this.logWarn(
+      `Booking auth interstitials: exhausted ${maxRounds} rounds without success URL`
+    );
+    return false;
   }
 
   /**
