@@ -515,6 +515,54 @@ export class BookingScraper extends BaseScraper {
   }
 
   /**
+   * Parse `ses` and `lang` from Booking URLs. Secure-admin often uses semicolons as query
+   * separators (`?hotel_id=1;lang=xu;bn=…;ses=…`), which `URLSearchParams` does not split,
+   * so `searchParams.get("ses")` stays null and the next reservation opens without a session.
+   */
+  private parseSesAndLangFromBookingUrl(url: string): {
+    ses: string | null;
+    lang: string | null;
+  } {
+    try {
+      const urlObj = new URL(url);
+      let ses = urlObj.searchParams.get("ses");
+      let lang = urlObj.searchParams.get("lang");
+      if (ses && lang) {
+        return { ses, lang };
+      }
+      const q = urlObj.search;
+      if (!q || q === "?") {
+        return { ses, lang };
+      }
+      const raw = q.startsWith("?") ? q.slice(1) : q;
+      const params = new Map<string, string>();
+      for (const part of raw.split(/[&;]+/)) {
+        const trimmed = part.trim();
+        if (!trimmed) continue;
+        const eq = trimmed.indexOf("=");
+        if (eq === -1) continue;
+        const keyPart = trimmed.slice(0, eq).trim();
+        const valPart = trimmed.slice(eq + 1).trim();
+        let k: string;
+        let v: string;
+        try {
+          k = decodeURIComponent(keyPart);
+          v = decodeURIComponent(valPart);
+        } catch {
+          k = keyPart;
+          v = valPart;
+        }
+        if (k) params.set(k, v);
+      }
+      if (!ses) ses = params.get("ses") ?? null;
+      if (!lang) lang = params.get("lang") ?? null;
+      return { ses, lang };
+    } catch {
+      return { ses: null, lang: null };
+    }
+  }
+
+  /**
    * Extract session (ses) and language (lang) parameters from current URL
    */
   private async extractSessionParams(): Promise<void> {
@@ -529,9 +577,9 @@ export class BookingScraper extends BaseScraper {
         `Extracting session parameters from URL: ${currentUrl}`
       );
 
-      const urlObj = new URL(currentUrl);
-      const ses = urlObj.searchParams.get("ses");
-      const lang = urlObj.searchParams.get("lang");
+      const { ses, lang: langRaw } =
+        this.parseSesAndLangFromBookingUrl(currentUrl);
+      const lang = langRaw ?? (ses ? "xu" : null);
 
       if (ses && lang) {
         this.sessionParams = { ses, lang };
@@ -540,7 +588,7 @@ export class BookingScraper extends BaseScraper {
         );
       } else {
         await this.logWarn(
-          `Session parameters not found in URL. ses: ${ses}, lang: ${lang}`
+          `Session parameters not found in URL. ses: ${ses}, lang: ${langRaw}`
         );
       }
     } catch (error) {
