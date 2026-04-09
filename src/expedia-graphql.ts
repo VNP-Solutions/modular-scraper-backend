@@ -17,6 +17,7 @@ import type { ExpediaBrightDataOptions } from "./common/job-isolation.js";
 import {
   dualLogError,
   dualLogInfo,
+  dualLogWarn,
   finalizeJobLogging,
   initializeJobLogging,
 } from "./common/log-helper.js";
@@ -807,8 +808,20 @@ async function makeGraphQLRequest(
             firstMessage ||
             nestedMsg ||
             JSON.stringify(responseData.errors).slice(0, 2000);
-          graphqlErr = new Error(`GraphQL error: ${detail}`);
-          // No failure code — getFailedReasonForUser uses Error.message so stored reason matches API text
+          await dualLogWarn(
+            "Expedia GraphQL API returned an error (technical detail for support)",
+            {
+              jobId,
+              expediaId,
+              startDate,
+              endDate,
+              technicalDetail: detail.slice(0, 2000),
+            },
+          );
+          const userMessage =
+            "Expedia GraphQL API error. Please try again later.";
+          graphqlErr = new Error(userMessage);
+          setFailedReasonCode(graphqlErr, FAILED_REASON.GRAPHQL_ERROR);
         }
         throw graphqlErr;
       } else {

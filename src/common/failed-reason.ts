@@ -48,7 +48,8 @@ const FAILED_REASON_MESSAGES: Record<FailedReasonCode, string> = {
     "OTP verification timed out. The verification page did not appear in time. Please try again.",
   [FAILED_REASON.LOGIN_FAILED]: "Login failed. Please check your Expedia credentials and try again.",
   [FAILED_REASON.PROPERTY_NOT_FOUND]: "Property not found. Please verify the Expedia property ID is correct.",
-  [FAILED_REASON.GRAPHQL_ERROR]: "Failed to fetch reservation data from Expedia. Please try again.",
+  [FAILED_REASON.GRAPHQL_ERROR]:
+    "Expedia GraphQL API error. Please try again later.",
   [FAILED_REASON.GRAPHQL_NOT_AUTHORIZED]:
     "Expedia's reservation search API returned an authorization error. This is likely temporary — please try again later.",
   [FAILED_REASON.GRAPHQL_TIMEOUT]:
