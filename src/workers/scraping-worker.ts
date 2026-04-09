@@ -5,7 +5,11 @@ import { otpCompletionNotifier } from "../common/otp-completion-notifier.js";
 import { WorkerJobData, WorkerMessage } from "../common/worker-types.js";
 
 // Import the main functions
-import agoda from "../agoda.js";
+import {
+  isGoogleDriveJobItemsUploadConfigured,
+  uploadJobItemsXlsxToGoogleDrive,
+} from "../common/google-drive-job-items.js";
+import { jobItemsToChargeReportXlsxBuffer } from "../common/job-items-charge-report-xlsx.js";
 import {
   dualLogError,
   dualLogInfo,
@@ -153,6 +157,61 @@ class ScrapingWorker {
     }
   }
 
+  private isCompletedStatus(finalStatus: JobStatus | string): boolean {
+    return (
+      finalStatus === JobStatus.Completed || finalStatus === "Completed"
+    );
+  }
+
+  /**
+   * After Completed: export job_items to charge-report XLSX and upload under
+   * root/Expedia/DD-MM-YYYY on Google Drive when configured.
+   * Failures are logged only; they do not fail the job.
+   */
+  private async maybeUploadJobItemsToGoogleDrive(
+    jobId: string,
+    finalStatus: JobStatus | string
+  ): Promise<void> {
+    if (!this.isCompletedStatus(finalStatus)) return;
+    if (!isGoogleDriveJobItemsUploadConfigured()) return;
+    try {
+      const job = await jobService.getJobById(jobId);
+      if (!job) {
+        await dualLogInfo(`Google Drive: skip upload, job not found ${jobId}`, {
+          jobId,
+        });
+        return;
+      }
+      const items = await jobService.getJobItems(jobId);
+      if (items.length === 0) {
+        await dualLogInfo(
+          `Google Drive: skip job items upload (no items) for ${jobId}`,
+          { jobId }
+        );
+        return;
+      }
+      const property = await jobService.getPropertyForJob(jobId);
+      const buffer = jobItemsToChargeReportXlsxBuffer(items, job, property);
+      const url = await uploadJobItemsXlsxToGoogleDrive(buffer, {
+        portfolioName: job.portfolio_name ?? "",
+        propertyName: job.property_name ?? "",
+      });
+      if (url) {
+        await jobService.updateJobItemsFileLink(jobId, url);
+        await dualLogInfo(`Google Drive: job items XLSX uploaded`, {
+          jobId,
+          url,
+        });
+      }
+    } catch (err) {
+      await dualLogError(
+        `Google Drive: job items upload failed for ${jobId}`,
+        err,
+        { jobId }
+      );
+    }
+  }
+
   private async executeJob(jobData: WorkerJobData): Promise<void> {
     this.currentJobId = jobData.jobId;
 
@@ -190,14 +249,6 @@ class ScrapingWorker {
 
         case "graphql-run":
           result = await this.handleGraphqlRun(jobData);
-          break;
-
-        case "agoda-property-run":
-          result = await this.handleAgodaPropertyRun(jobData);
-          break;
-
-        case "agoda-rerun-failed":
-          result = await this.handleAgodaRerunFailed(jobData);
           break;
 
         case "stop":
@@ -336,6 +387,8 @@ class ScrapingWorker {
         finalStatus as any,
         failedReason
       );
+
+      await this.maybeUploadJobItemsToGoogleDrive(jobId, finalStatus);
 
       // 10. Stop scraping state manager
       scrapingStateManager.stopScraping();
@@ -485,6 +538,8 @@ class ScrapingWorker {
         finalStatus as any,
         failedReason
       );
+
+      await this.maybeUploadJobItemsToGoogleDrive(jobId, finalStatus);
 
       // 12. Stop scraping state manager
       scrapingStateManager.stopScraping();
@@ -709,6 +764,8 @@ class ScrapingWorker {
         failedReason
       );
 
+      await this.maybeUploadJobItemsToGoogleDrive(jobId, finalStatus);
+
       // 10. Stop scraping state manager
       scrapingStateManager.stopScraping();
 
@@ -760,314 +817,6 @@ class ScrapingWorker {
     }
   }
 
-  private async handleAgodaPropertyRun(jobData: WorkerJobData): Promise<any> {
-    const { jobId, startDate, endDate, agodaId, agodaUsername, agodaPassword } =
-      jobData;
-
-    if (!startDate || !endDate || !jobId) {
-      throw new Error(
-        "startDate, endDate, and jobId are required for agoda-property-run jobs"
-      );
-    }
-
-    // 1. Validate job exists and can be run
-    const validation = await jobService.validateJob(jobId);
-
-    if (!validation.exists) {
-      throw new Error(`Job with ID ${jobId} not found`);
-    }
-
-    if (!validation.canRun) {
-      throw new Error(
-        `Job ${jobId} is not in a runnable state. Current status: ${validation.job?.job_status}`
-      );
-    }
-
-    // 2. Get agoda_id from job's property if not provided
-    let finalAgodaId = agodaId;
-    let finalAgodaUsername = agodaUsername;
-    let finalAgodaPassword = agodaPassword;
-
-    if (!finalAgodaId || !finalAgodaUsername || !finalAgodaPassword) {
-      console.log(`Getting job data for job ${jobId}...`);
-
-      // Get Agoda ID from job
-      const propertyData = await jobService.getAgodaIdFromJob(jobId);
-
-      // Get Agoda credentials
-      const propertyCredentials =
-        await propertyCredentialsService.getCredentialsByJobId(jobId);
-
-      if (!propertyData || !propertyData.agodaId) {
-        throw new Error(
-          `Cannot retrieve valid agoda_id for job ${jobId}. Property may not have agoda_id assigned or agoda_id is "0".`
-        );
-      }
-
-      if (
-        !propertyCredentials?.agodaUsername ||
-        !propertyCredentials?.agodaPassword
-      ) {
-        throw new Error(
-          `Cannot retrieve valid agodaUsername or agodaPassword for job ${jobId}. Property may not have agodaUsername or agodaPassword assigned.`
-        );
-      }
-
-      finalAgodaId = propertyData.agodaId;
-      finalAgodaUsername = propertyCredentials.agodaUsername;
-      finalAgodaPassword = propertyCredentials.agodaPassword;
-    }
-
-    console.log(`Worker: Using agoda_id: ${finalAgodaId} for scraping`);
-
-    // 3. Update job status to Running
-    console.log(`Worker: Starting job ${jobId}...`);
-    await jobService.startJob(jobId);
-
-    // 4. Initialize job logging
-    initializeJobLogging(jobId);
-    await dualLogInfo(`Worker: Starting Agoda property scraping job ${jobId}`, {
-      jobId,
-      agodaId: finalAgodaId,
-      startDate,
-      endDate,
-    });
-
-    // 5. Start scraping state manager
-    scrapingStateManager.startScraping(finalAgodaId, jobId, startDate, endDate);
-
-    try {
-      // 6. Run the main Agoda scraping function
-      await agoda(
-        finalAgodaId,
-        startDate,
-        endDate,
-        jobId,
-        finalAgodaUsername,
-        finalAgodaPassword
-      );
-
-      // 7. Get final job statistics
-      const progress = await jobService.getJobProgress(jobId);
-
-      // 8. Determine final status based on completion
-      let finalStatus = JobStatus.Completed;
-      let failedReason: string | undefined;
-      if (progress.totalItems === 0) {
-        finalStatus = JobStatus.Failed;
-        failedReason = "No reservations found for the date range";
-      } else if (progress.completionPercentage < 100) {
-        finalStatus = JobStatus.Partial;
-        failedReason =
-          "Scraping completed partially; some dates could not be processed";
-      }
-
-      // 9. Update final job status
-      await jobService.updateJobStatus(jobId, finalStatus, failedReason);
-
-      // 10. Stop scraping state manager
-      scrapingStateManager.stopScraping();
-
-      // 11. Finalize logging
-      await finalizeJobLogging("success");
-
-      // Get log file information if available
-      const logger = (global as any).getCurrentJobLogger?.();
-      const logInfo = logger
-        ? {
-            logFilePath: logger.getLogFilePath(),
-            logEntriesCount: logger.getLogEntriesCount(),
-            note: "Log file uploaded to S3 and deleted locally after job completion",
-          }
-        : null;
-
-      console.log(`Worker: ✅ Agoda job ${jobId} completed successfully`);
-
-      return {
-        status: 200,
-        message: `Agoda property scraping ${finalStatus.toLowerCase()} successfully`,
-        agodaId: finalAgodaId,
-        jobId: jobId,
-        progress: progress,
-        finalStatus: finalStatus,
-        logInfo: logInfo,
-      };
-    } catch (scrapingError) {
-      // Mark job as failed on scraping error with reason for UI
-      // Only write if inner catches haven't already saved a more specific reason
-      if (!isStatusAlreadySaved(scrapingError)) {
-        const failedReason = getFailedReasonForUser(
-          scrapingError,
-          "Agoda scraping failed"
-        );
-        await jobService.updateJobStatus(jobId, JobStatus.Failed, failedReason);
-        markStatusSaved(scrapingError);
-      }
-      await dualLogError(`Worker: Agoda job ${jobId} failed`, scrapingError, {
-        jobId,
-      });
-      await progressManager.handleJobError(jobId, scrapingError);
-      scrapingStateManager.stopScraping();
-
-      // Finalize logging with failed status
-      await finalizeJobLogging("failed");
-
-      throw scrapingError;
-    }
-  }
-
-  private async handleAgodaRerunFailed(jobData: WorkerJobData): Promise<any> {
-    const { jobId, originalStatus } = jobData;
-
-    if (!jobId) {
-      throw new Error("jobId is required for agoda-rerun-failed jobs");
-    }
-
-    // 1. Validate job exists
-    const validation = await jobService.validateJob(jobId);
-    if (!validation.exists) {
-      throw new Error(`Job with ID ${jobId} not found`);
-    }
-
-    // 2. Get job details
-    const job = validation.job;
-    if (!job) {
-      throw new Error(`Job ${jobId} data not found`);
-    }
-
-    // 3. Get dates from job or use provided ones
-    const startDate = jobData.startDate || "01/01/2024"; // fallback date
-    const endDate = jobData.endDate || "12/31/2024"; // fallback date
-
-    // 4. Get job data
-    const propertyData = await jobService.getAgodaIdFromJob(jobId);
-    const propertyCredentials =
-      await propertyCredentialsService.getCredentialsByJobId(jobId);
-
-    if (!propertyData || !propertyData.agodaId) {
-      throw new Error(`Cannot retrieve valid agoda_id for job ${jobId}`);
-    }
-
-    if (
-      !propertyCredentials?.agodaUsername ||
-      !propertyCredentials?.agodaPassword
-    ) {
-      throw new Error(
-        `Cannot retrieve valid Agoda credentials for job ${jobId}`
-      );
-    }
-
-    const { agodaId } = propertyData;
-    const { agodaUsername, agodaPassword } = propertyCredentials;
-
-    console.log(
-      `Worker: Rerunning failed/partial Agoda job ${jobId} with agoda_id: ${agodaId}`
-    );
-
-    // 5. Reset job status to Pending, then to Running
-    console.log(
-      `Worker: Resetting job ${jobId} status from ${originalStatus} to Pending...`
-    );
-    await jobService.updateJobStatus(jobId, JobStatus.Pending);
-
-    console.log(`Worker: Starting job ${jobId}...`);
-    await jobService.startJob(jobId);
-
-    // 6. Initialize job logging
-    initializeJobLogging(jobId);
-    await dualLogInfo(`Worker: Starting Agoda job rerun for ${jobId}`, {
-      jobId,
-      originalStatus,
-      agodaId,
-      startDate,
-      endDate,
-    });
-
-    // 7. Start scraping state manager
-    scrapingStateManager.startScraping(agodaId, jobId, startDate, endDate);
-
-    try {
-      // 8. Run the main Agoda scraping function
-      await agoda(
-        agodaId,
-        startDate,
-        endDate,
-        jobId,
-        agodaUsername,
-        agodaPassword
-      );
-
-      // 9. Get final job statistics
-      const progress = await jobService.getJobProgress(jobId);
-
-      // 10. Determine final status based on completion
-      let finalStatus = JobStatus.Completed;
-      let failedReason: string | undefined;
-      if (progress.totalItems === 0) {
-        finalStatus = JobStatus.Failed;
-        failedReason = "No reservations found for the date range";
-      } else if (progress.completionPercentage < 100) {
-        finalStatus = JobStatus.Partial;
-        failedReason =
-          "Scraping completed partially; some dates could not be processed";
-      }
-
-      // 11. Update final job status
-      await jobService.updateJobStatus(jobId, finalStatus, failedReason);
-
-      // 12. Stop scraping state manager
-      scrapingStateManager.stopScraping();
-
-      // 13. Finalize logging
-      await finalizeJobLogging("success");
-
-      // Get log file information
-      const logger = (global as any).getCurrentJobLogger?.();
-      const logInfo = logger
-        ? {
-            logFilePath: logger.getLogFilePath(),
-            logEntriesCount: logger.getLogEntriesCount(),
-            note: "Log file uploaded to S3 and deleted locally after job completion",
-          }
-        : undefined;
-
-      console.log(`Worker: ✅ Agoda job ${jobId} rerun completed successfully`);
-
-      return {
-        status: 200,
-        message: `Agoda ${originalStatus} job rerun completed successfully`,
-        jobId,
-        originalStatus,
-        finalStatus,
-        progress,
-        logInfo,
-      };
-    } catch (error) {
-      console.error(`Worker: ❌ Error during Agoda job ${jobId} rerun:`, error);
-      if (!isStatusAlreadySaved(error)) {
-        const failedReason = getFailedReasonForUser(
-          error,
-          "Agoda job rerun failed"
-        );
-        await jobService.updateJobStatus(jobId, JobStatus.Failed, failedReason);
-        markStatusSaved(error);
-      }
-      await dualLogError(`Worker: Agoda job ${jobId} rerun failed`, error, {
-        jobId,
-      });
-
-      // Update job status to Failed
-      await progressManager.handleJobError(jobId, error);
-
-      // Stop scraping state manager
-      scrapingStateManager.stopScraping();
-
-      // Finalize logging with failed status
-      await finalizeJobLogging("failed");
-
-      throw error;
-    }
-  }
 
   private async shutdown(): Promise<void> {
     this.isShuttingDown = true;

@@ -292,6 +292,18 @@ export class JobService {
     }
   }
 
+  /** Property linked to the job (for Hotel ID / name in Drive exports). */
+  async getPropertyForJob(jobId: string): Promise<IProperty | null> {
+    const job = await this.getJobById(jobId);
+    if (!job?.property_id) return null;
+    try {
+      return await Property.findById(job.property_id);
+    } catch (error) {
+      console.error(`Error getting property for job: ${error}`);
+      return null;
+    }
+  }
+
   /**
    * Update job status. When status is Failed or Partial, pass failedReason so the UI can show why the job failed.
    * When status is Running, Completed, Pending, or InQueue, failed_reason is cleared.
@@ -382,6 +394,30 @@ export class JobService {
       );
     } catch (error) {
       console.error(`Error updating job log link: ${error}`);
+      return null;
+    }
+  }
+
+  /**
+   * Update link to exported job_items file (e.g. Google Drive XLSX URL).
+   */
+  async updateJobItemsFileLink(
+    jobId: string,
+    fileLink: string,
+  ): Promise<IJob | null> {
+    try {
+      const objectId = this.validateObjectId(jobId, "jobId");
+
+      return await Job.findByIdAndUpdate(
+        objectId,
+        {
+          job_items_file_link: fileLink,
+          updatedAt: new Date(),
+        },
+        { new: true },
+      );
+    } catch (error) {
+      console.error(`Error updating job items file link: ${error}`);
       return null;
     }
   }
