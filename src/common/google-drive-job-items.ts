@@ -2,7 +2,12 @@ import { Readable } from "stream";
 import { GoogleAuth, JWT } from "google-auth-library";
 import { google } from "googleapis";
 
-const DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file";
+/**
+ * `drive.file` is too narrow for many shared-folder / Shared Drive setups and can
+ * trigger "Service Accounts do not have storage quota". Full `drive` scope lets the
+ * SA write into folders shared with it or into Shared drives (recommended).
+ */
+const DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"];
 
 /** Inner folder under the env root (shared) folder, per product requirement */
 const EXPEDIA_FOLDER_NAME = "Expedia";
@@ -99,7 +104,7 @@ async function getAuthorizedClient(): Promise<JWT> {
   if (creds) {
     const auth = new GoogleAuth({
       credentials: creds,
-      scopes: [DRIVE_SCOPE],
+      scopes: DRIVE_SCOPES,
     });
     const client = await auth.getClient();
     if (!(client instanceof JWT)) {
@@ -111,7 +116,7 @@ async function getAuthorizedClient(): Promise<JWT> {
   if (path) {
     const auth = new GoogleAuth({
       keyFile: path,
-      scopes: [DRIVE_SCOPE],
+      scopes: DRIVE_SCOPES,
     });
     const client = await auth.getClient();
     if (!(client instanceof JWT)) {
@@ -133,6 +138,7 @@ async function findChildFolderId(
     q: `'${parentId}' in parents and mimeType='application/vnd.google-apps.folder' and name='${safeName}' and trashed=false`,
     fields: "files(id,name)",
     spaces: "drive",
+    corpora: "allDrives",
     supportsAllDrives: true,
     includeItemsFromAllDrives: true,
     pageSize: 10,
@@ -181,6 +187,7 @@ async function listXlsxFileIdsByNameInFolder(
     q: `'${parentId}' in parents and name='${safeName}' and mimeType='${XLSX_MIME}' and trashed=false`,
     fields: "files(id)",
     spaces: "drive",
+    corpora: "allDrives",
     supportsAllDrives: true,
     includeItemsFromAllDrives: true,
     pageSize: 100,
