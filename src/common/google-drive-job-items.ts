@@ -8,7 +8,9 @@ import { google } from "googleapis";
  */
 const DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"];
 
-/** First-level folder under the env root (Shared drive recommended for new SAs). */
+/**
+ * booking-thread-vcc: only Booking exports use this folder. Other OTAs are not wired here.
+ */
 const BOOKING_DRIVE_SUBFOLDER = "Booking";
 
 const XLSX_MIME =
@@ -46,14 +48,23 @@ export function resolveGoogleDriveRootFolderId(): string | null {
 }
 
 export function isGoogleDriveJobItemsUploadConfigured(): boolean {
+  return getGoogleDriveJobItemsConfigurationIssue() === null;
+}
+
+/** If Drive job upload is not active, returns why (for logs). Otherwise null. */
+export function getGoogleDriveJobItemsConfigurationIssue(): string | null {
   if (process.env.GOOGLE_DRIVE_JOB_ITEMS_UPLOAD_ENABLED === "false") {
-    return false;
+    return "GOOGLE_DRIVE_JOB_ITEMS_UPLOAD_ENABLED=false";
   }
-  if (!resolveGoogleDriveRootFolderId()) return false;
+  if (!resolveGoogleDriveRootFolderId()) {
+    return "missing root folder (set GOOGLE_DRIVE_ROOT_FOLDER_LINK, GOOGLE_DRIVE_FOLDER_LINK, or GOOGLE_DRIVE_JOB_ITEMS_FOLDER_ID)";
+  }
   const creds = readCredentials();
   const path = process.env.GOOGLE_DRIVE_CREDENTIALS_PATH?.trim();
-  if (!creds && !path) return false;
-  return true;
+  if (!creds && !path) {
+    return "missing credentials (set GOOGLE_DRIVE_CREDENTIALS_PATH or GOOGLE_DRIVE_CREDENTIALS_JSON)";
+  }
+  return null;
 }
 
 function escapeDriveQueryLiteral(name: string): string {

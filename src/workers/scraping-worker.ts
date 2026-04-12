@@ -24,7 +24,7 @@ import {
 import { progressManager } from "../common/progress-manager.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import {
-  isGoogleDriveJobItemsUploadConfigured,
+  getGoogleDriveJobItemsConfigurationIssue,
   uploadBookingJobItemsXlsxToGoogleDrive,
 } from "../common/google-drive-job-items.js";
 import { jobItemsBookingVccToXlsxBuffer } from "../common/job-items-booking-vcc-xlsx.js";
@@ -68,15 +68,47 @@ class ScrapingWorker {
   private isShuttingDown = false;
 
   /**
-   * After a Booking job is Completed: export job_items to XLSX and upload under
-   * Drive root/Booking/DD-MM-YYYY (reuses same filename to replace file). Errors are logged only.
+   * **Booking-only (this branch).** When a Booking job is `Completed` or `Partial` in MongoDB,
+   * export `job_items` to XLSX and upload under Drive `root/Booking/DD-MM-YYYY`. Expedia / Agoda /
+   * other job types do not use this path — `handleBookingRun`, `handleBookingRunGroup` (finally),
+   * and booking reruns call it. Skips if Drive env is missing, wrong `ota_provider`, status not
+   * Completed/Partial, or no items.
    */
   private async maybeUploadBookingJobItemsToDrive(jobId: string): Promise<void> {
-    if (!isGoogleDriveJobItemsUploadConfigured()) return;
+    const configIssue = getGoogleDriveJobItemsConfigurationIssue();
+    if (configIssue) {
+      await dualLogInfo(
+        `Google Drive: Booking upload skipped — ${configIssue}`,
+        { jobId }
+      );
+      return;
+    }
     try {
       const job = await jobService.getJobById(jobId);
-      if (!job || job.ota_provider !== OTAProvider.Booking) return;
-      if (job.job_status !== JobStatus.Completed) return;
+      if (!job) {
+        await dualLogInfo(
+          `Google Drive: Booking upload skipped — job not found`,
+          { jobId }
+        );
+        return;
+      }
+      if (job.ota_provider !== OTAProvider.Booking) {
+        await dualLogInfo(
+          `Google Drive: Booking upload skipped — job ota_provider is "${String(job.ota_provider)}", expected Booking`,
+          { jobId }
+        );
+        return;
+      }
+      const uploadable =
+        job.job_status === JobStatus.Completed ||
+        job.job_status === JobStatus.Partial;
+      if (!uploadable) {
+        await dualLogInfo(
+          `Google Drive: Booking upload skipped — job_status is "${String(job.job_status)}", expected Completed or Partial`,
+          { jobId }
+        );
+        return;
+      }
 
       const items = await jobService.getJobItems(jobId);
       if (items.length === 0) {
@@ -785,6 +817,7 @@ class ScrapingWorker {
         await jobService.updateJobStatus(jobId, finalStatus);
       }
 
+      // Booking-only: Drive XLSX (after status is persisted), whether scrape used single or multi platform inside mainMultiPlatform
       await this.maybeUploadBookingJobItemsToDrive(jobId);
 
       // 10. Stop scraping state manager
@@ -963,10 +996,6 @@ class ScrapingWorker {
         workerAssignmentTag: this.workerPoolAssignmentTag(jobData),
       });
 
-      for (const step of bookingGroup) {
-        await this.maybeUploadBookingJobItemsToDrive(step.jobId);
-      }
-
       return {
         status: 200,
         message: "Booking group scraping completed",
@@ -979,6 +1008,11 @@ class ScrapingWorker {
       await progressManager.handleJobError(leaseJobId, error).catch(() => {});
       throw error;
     } finally {
+      // Bulk / booking-run-group: upload for every property job even if the group throws after
+      // some steps (earlier jobs may already be Completed or Partial in MongoDB).
+      for (const step of bookingGroup) {
+        await this.maybeUploadBookingJobItemsToDrive(step.jobId);
+      }
       if (scrapingStateManager.isRunning()) {
         scrapingStateManager.stopScraping();
       }
