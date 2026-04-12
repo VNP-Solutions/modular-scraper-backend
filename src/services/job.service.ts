@@ -20,6 +20,7 @@ import {
   JobStatus,
   OTAProvider,
   PostingType,
+  resolveJobOtaProvider,
 } from "../models/job.model.js";
 import { PropertyCredentials } from "../models/Property-credentials.js";
 import { IProperty, Property } from "../models/property.model.js";
@@ -346,7 +347,24 @@ export class JobService {
   async getJobById(jobId: string): Promise<IJob | null> {
     try {
       const objectId = this.validateObjectId(jobId, "jobId");
-      return await Job.findById(objectId);
+      const job = await Job.findById(objectId);
+      if (!job) return null;
+      const resolved = resolveJobOtaProvider(job);
+      if (
+        resolved !== undefined &&
+        resolved !== null &&
+        String(resolved).trim() !== ""
+      ) {
+        const cur = job.ota_provider;
+        const empty =
+          cur === undefined ||
+          cur === null ||
+          (typeof cur === "string" && cur.trim() === "");
+        if (empty) {
+          job.set("ota_provider", resolved as OTAProvider);
+        }
+      }
+      return job;
     } catch (error) {
       console.error(`Error getting job by ID: ${error}`);
       return null;

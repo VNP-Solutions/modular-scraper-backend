@@ -82,8 +82,37 @@ export interface IJob extends Document {
   updatedAt: Date;
 }
 
+/**
+ * Legacy MongoDB field name for the **provider** (e.g. `"Booking"`). Not the same concept as
+ * `posting_type === PostingType.OTA` ("OTA" vs "OTA_PLUS"). Do not read this from app code — use
+ * `resolveJobOtaProvider()` or `ota_provider` after `jobService.getJobById()` normalizes the doc.
+ */
+const LEGACY_OTA_PROVIDER_BSON_KEY = "OTA" as const;
+
+/**
+ * Effective OTA provider: `ota_provider`, else legacy BSON key `OTA` (see module constant).
+ */
+export function resolveJobOtaProvider(job: unknown): unknown {
+  if (!job || typeof job !== "object") return undefined;
+  const o = job as Record<string, unknown>;
+  const p = o.ota_provider;
+  if (p !== null && p !== undefined && String(p).trim() !== "") {
+    return p;
+  }
+  const legacy = o[LEGACY_OTA_PROVIDER_BSON_KEY];
+  if (legacy !== null && legacy !== undefined && String(legacy).trim() !== "") {
+    return legacy;
+  }
+  return undefined;
+}
+
+/** @internal Schema only: maps legacy BSON `OTA` without putting `OTA` on public {@link IJob}. */
+type IJobWithLegacyOtaBson = IJob & {
+  OTA?: OTAProvider | string;
+};
+
 // Mongoose Schema (read-only, updates only)
-const JobSchema = new Schema<IJob>(
+const JobSchema = new Schema<IJobWithLegacyOtaBson>(
   {
     name: {
       type: String,
@@ -142,6 +171,11 @@ const JobSchema = new Schema<IJob>(
     },
     end_date: {
       type: String,
+      required: false,
+    },
+    OTA: {
+      type: String,
+      enum: Object.values(OTAProvider),
       required: false,
     },
     ota_provider: {
@@ -256,4 +290,8 @@ JobSchema.index({ _id: 1, job_status: 1 });
 JobSchema.index({ user_id: 1, job_status: 1 });
 JobSchema.index({ property_id: 1, job_status: 1 });
 
-export const Job = mongoose.model<IJob>("Job", JobSchema);
+/** Typed as `IJob` so callers never see ambiguous `OTA`; legacy BSON is still loaded at runtime. */
+export const Job = mongoose.model<IJobWithLegacyOtaBson>(
+  "Job",
+  JobSchema
+) as mongoose.Model<IJob>;

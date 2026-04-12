@@ -29,7 +29,11 @@ import {
 } from "../common/google-drive-job-items.js";
 import { jobItemsBookingVccToXlsxBuffer } from "../common/job-items-booking-vcc-xlsx.js";
 import { mainMultiPlatform } from "../main-multi-platform.js";
-import { JobStatus, OTAProvider } from "../models/job.model.js";
+import {
+  JobStatus,
+  OTAProvider,
+  resolveJobOtaProvider,
+} from "../models/job.model.js";
 import reservation from "../reservation/reservation.js";
 import { propertyCredentialsService } from "../services/job-credentials.service.js";
 import { jobService } from "../services/job.service.js";
@@ -47,6 +51,24 @@ import {
   getJobPort,
 } from "../common/job-phone-store.js";
 import { notificationService } from "../services/notification.service.js";
+
+/**
+ * `maybeUploadBookingJobItemsToDrive` runs only on Booking worker paths. Uses
+ * `resolveJobOtaProvider` (`ota_provider` or legacy BSON `OTA`). Treat missing as Booking
+ * for this path; block only when clearly another OTA.
+ */
+function isJobEligibleForBookingDriveExport(ota: unknown): boolean {
+  if (ota === null || ota === undefined) return true;
+  if (typeof ota !== "string") {
+    return ota === OTAProvider.Booking;
+  }
+  const t = ota.trim();
+  if (t === "") return true;
+  if (t === OTAProvider.Booking) return true;
+  if (t.toLowerCase() === "booking") return true;
+  if (t === OTAProvider.Expedia || t === OTAProvider.Agoda) return false;
+  return false;
+}
 
 // Global function to release OTP from worker
 (global as any).releaseOtpFromWorker = (jobId: string) => {
@@ -71,8 +93,8 @@ class ScrapingWorker {
    * **Booking-only (this branch).** When a Booking job is `Completed` or `Partial` in MongoDB,
    * export `job_items` to XLSX and upload under Drive `root/Booking/DD-MM-YYYY`. Expedia / Agoda /
    * other job types do not use this path — `handleBookingRun`, `handleBookingRunGroup` (finally),
-   * and booking reruns call it. Skips if Drive env is missing, wrong `ota_provider`, status not
-   * Completed/Partial, or no items.
+   * and booking reruns call it. Skips if Drive env is missing, resolved OTA is clearly non-Booking,
+   * status not Completed/Partial, or no items. Legacy jobs may only have BSON field `OTA`.
    */
   private async maybeUploadBookingJobItemsToDrive(jobId: string): Promise<void> {
     const configIssue = getGoogleDriveJobItemsConfigurationIssue();
@@ -92,9 +114,10 @@ class ScrapingWorker {
         );
         return;
       }
-      if (job.ota_provider !== OTAProvider.Booking) {
+      const effectiveOta = resolveJobOtaProvider(job);
+      if (!isJobEligibleForBookingDriveExport(effectiveOta)) {
         await dualLogInfo(
-          `Google Drive: Booking upload skipped — job ota_provider is "${String(job.ota_provider)}", expected Booking`,
+          `Google Drive: Booking upload skipped — resolved OTA is "${String(effectiveOta)}" (ota_provider="${String(job.ota_provider)}"), expected Booking`,
           { jobId }
         );
         return;
