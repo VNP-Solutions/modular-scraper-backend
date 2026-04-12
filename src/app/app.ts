@@ -2037,6 +2037,7 @@ app.get("/api/jobs/:jobId/progress", (async (
         status: job.job_status,
         property_name: job.property_name,
         portfolio_name: job.portfolio_name,
+        job_items_file_link: job.job_items_file_link,
       },
       progress: progress,
       recentItems: items,
@@ -2135,6 +2136,7 @@ app.get("/api/jobs/:jobId/log", (async (
         status: job.job_status,
         property_name: job.property_name,
         log_link: job.log_link,
+        job_items_file_link: job.job_items_file_link,
       },
     });
   } catch (err: any) {
@@ -2142,6 +2144,42 @@ app.get("/api/jobs/:jobId/log", (async (
     res.status(500).json({
       status: 500,
       message: "Error retrieving job log link",
+      error: err.message,
+    });
+  }
+}) as any);
+
+app.get("/api/jobs/:jobId/job-items-file", (async (
+  req: express.Request,
+  res: express.Response
+) => {
+  try {
+    const { jobId } = req.params;
+    const job = await jobService.getJobById(jobId);
+    if (!job) {
+      return res.status(404).json({ status: 404, message: "Job not found" });
+    }
+    if (!job.job_items_file_link) {
+      return res.status(404).json({
+        status: 404,
+        message: "No job items file link available for this job",
+      });
+    }
+    res.status(200).json({
+      status: 200,
+      message: "Job items file link retrieved successfully",
+      job: {
+        id: job._id,
+        status: job.job_status,
+        property_name: job.property_name,
+        job_items_file_link: job.job_items_file_link,
+      },
+    });
+  } catch (err: any) {
+    console.error("Error getting job items file link:", err);
+    res.status(500).json({
+      status: 500,
+      message: "Error retrieving job items file link",
       error: err.message,
     });
   }

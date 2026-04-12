@@ -58,6 +58,8 @@ export interface IJob extends Document {
   job_backoff_length_loading: number;
   job_backoff_length_selector: number;
   log_link?: string;
+  /** Google Drive URL for exported Booking job_items XLSX after Completed */
+  job_items_file_link?: string;
   live_url?: string;
   watcher_emails?: string[];
   queue_name?: string;
@@ -194,6 +196,10 @@ const JobSchema = new Schema<IJob>(
       required: true,
     },
     log_link: {
+      type: String,
+      required: false,
+    },
+    job_items_file_link: {
       type: String,
       required: false,
     },

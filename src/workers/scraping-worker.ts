@@ -23,8 +23,13 @@ import {
 } from "../common/log-helper.js";
 import { progressManager } from "../common/progress-manager.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
+import {
+  isGoogleDriveJobItemsUploadConfigured,
+  uploadBookingJobItemsXlsxToGoogleDrive,
+} from "../common/google-drive-job-items.js";
+import { jobItemsBookingVccToXlsxBuffer } from "../common/job-items-booking-vcc-xlsx.js";
 import { mainMultiPlatform } from "../main-multi-platform.js";
-import { JobStatus } from "../models/job.model.js";
+import { JobStatus, OTAProvider } from "../models/job.model.js";
 import reservation from "../reservation/reservation.js";
 import { propertyCredentialsService } from "../services/job-credentials.service.js";
 import { jobService } from "../services/job.service.js";
@@ -61,6 +66,48 @@ dotenv.config();
 class ScrapingWorker {
   private currentJobId?: string;
   private isShuttingDown = false;
+
+  /**
+   * After a Booking job is Completed: export job_items to XLSX and upload under
+   * Drive root/Booking/DD-MM-YYYY (reuses same filename to replace file). Errors are logged only.
+   */
+  private async maybeUploadBookingJobItemsToDrive(jobId: string): Promise<void> {
+    if (!isGoogleDriveJobItemsUploadConfigured()) return;
+    try {
+      const job = await jobService.getJobById(jobId);
+      if (!job || job.ota_provider !== OTAProvider.Booking) return;
+      if (job.job_status !== JobStatus.Completed) return;
+
+      const items = await jobService.getJobItems(jobId);
+      if (items.length === 0) {
+        await dualLogInfo(
+          `Google Drive: skip Booking upload (no items) for ${jobId}`,
+          { jobId }
+        );
+        return;
+      }
+
+      const property = await jobService.getPropertyForJob(jobId);
+      const buffer = jobItemsBookingVccToXlsxBuffer(items, job, property);
+      const url = await uploadBookingJobItemsXlsxToGoogleDrive(buffer, {
+        portfolioName: job.portfolio_name ?? "",
+        propertyName: job.property_name ?? "",
+      });
+      if (url) {
+        await jobService.updateJobItemsFileLink(jobId, url);
+        await dualLogInfo(`Google Drive: Booking job items XLSX uploaded`, {
+          jobId,
+          url,
+        });
+      }
+    } catch (err) {
+      await dualLogError(
+        `Google Drive: Booking job items upload failed for ${jobId}`,
+        err,
+        { jobId }
+      );
+    }
+  }
 
   /** Distinct value per pool worker thread for `job.worker_assigned` when Running. */
   private workerPoolAssignmentTag(jobData: WorkerJobData): string {
@@ -738,6 +785,8 @@ class ScrapingWorker {
         await jobService.updateJobStatus(jobId, finalStatus);
       }
 
+      await this.maybeUploadBookingJobItemsToDrive(jobId);
+
       // 10. Stop scraping state manager
       scrapingStateManager.stopScraping();
 
@@ -913,6 +962,10 @@ class ScrapingWorker {
         propertyIdForDb: bookingGroup[0].propertyId,
         workerAssignmentTag: this.workerPoolAssignmentTag(jobData),
       });
+
+      for (const step of bookingGroup) {
+        await this.maybeUploadBookingJobItemsToDrive(step.jobId);
+      }
 
       return {
         status: 200,

@@ -353,6 +353,18 @@ export class JobService {
     }
   }
 
+  /** Property linked to the job (e.g. booking_id for Drive XLSX). */
+  async getPropertyForJob(jobId: string): Promise<IProperty | null> {
+    const job = await this.getJobById(jobId);
+    if (!job?.property_id) return null;
+    try {
+      return await Property.findById(job.property_id);
+    } catch (error) {
+      console.error(`Error getting property for job: ${error}`);
+      return null;
+    }
+  }
+
   /**
    * Update job status
    * @param workerAssigned When status is Running, stored on the job (e.g. `WORKER_ID:pool-worker-0`) so parallel jobs are distinguishable.
@@ -578,6 +590,26 @@ export class JobService {
       );
     } catch (error) {
       console.error(`Error updating job log link: ${error}`);
+      return null;
+    }
+  }
+
+  async updateJobItemsFileLink(
+    jobId: string,
+    fileLink: string
+  ): Promise<IJob | null> {
+    try {
+      const objectId = this.validateObjectId(jobId, "jobId");
+      return await Job.findByIdAndUpdate(
+        objectId,
+        {
+          job_items_file_link: fileLink,
+          updatedAt: new Date(),
+        },
+        { new: true }
+      );
+    } catch (error) {
+      console.error(`Error updating job items file link: ${error}`);
       return null;
     }
   }
