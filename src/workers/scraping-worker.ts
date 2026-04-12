@@ -25,6 +25,11 @@ import {
   isStatusAlreadySaved,
   markStatusSaved,
 } from "../common/failed-reason.js";
+import { jobItemsAgodaToXlsxBuffer } from "../common/job-items-agoda-xlsx.js";
+import {
+  getGoogleDriveJobItemsConfigurationIssue,
+  uploadAgodaJobItemsXlsxToGoogleDrive,
+} from "../common/google-drive-job-items.js";
 
 // Load environment variables
 dotenv.config();
@@ -147,6 +152,65 @@ class ScrapingWorker {
   private sendMessage(message: WorkerMessage): void {
     if (parentPort && !this.isShuttingDown) {
       parentPort.postMessage(message);
+    }
+  }
+
+  /**
+   * After Agoda job is Completed or Partial: export `job_items` to XLSX under Drive
+   * `root/Agoda/DD-MM-YYYY` (same filename replaces). Only runs from Agoda worker paths.
+   */
+  private async maybeUploadAgodaJobItemsToDrive(jobId: string): Promise<void> {
+    const issue = getGoogleDriveJobItemsConfigurationIssue();
+    if (issue) {
+      await dualLogInfo(`Google Drive: Agoda upload skipped — ${issue}`, {
+        jobId,
+      });
+      return;
+    }
+    try {
+      const job = await jobService.getJobById(jobId);
+      if (!job) {
+        await dualLogInfo(
+          `Google Drive: Agoda upload skipped — job not found`,
+          { jobId }
+        );
+        return;
+      }
+      const status = job.job_status;
+      if (status !== JobStatus.Completed && status !== JobStatus.Partial) {
+        await dualLogInfo(
+          `Google Drive: Agoda upload skipped — job_status is "${String(status)}", expected Completed or Partial`,
+          { jobId }
+        );
+        return;
+      }
+      const items = await jobService.getJobItems(jobId);
+      if (items.length === 0) {
+        await dualLogInfo(
+          `Google Drive: skip Agoda upload (no items) for ${jobId}`,
+          { jobId }
+        );
+        return;
+      }
+      const property = await jobService.getPropertyForJob(jobId);
+      const buffer = jobItemsAgodaToXlsxBuffer(items, job, property);
+      const url = await uploadAgodaJobItemsXlsxToGoogleDrive(buffer, {
+        portfolioName: job.portfolio_name ?? "",
+        propertyName: job.property_name ?? "",
+      });
+      if (url) {
+        await jobService.updateJobItemsFileLink(jobId, url);
+        await dualLogInfo(`Google Drive: Agoda job items XLSX uploaded`, {
+          jobId,
+          url,
+        });
+      }
+    } catch (err) {
+      await dualLogError(
+        `Google Drive: Agoda job items upload failed for ${jobId}`,
+        err,
+        { jobId }
+      );
     }
   }
 
@@ -867,6 +931,13 @@ class ScrapingWorker {
         await jobService.updateJobStatus(jobId, finalStatus);
       }
 
+      if (
+        finalStatus === JobStatus.Completed ||
+        finalStatus === JobStatus.Partial
+      ) {
+        await this.maybeUploadAgodaJobItemsToDrive(jobId);
+      }
+
       // 10. Stop scraping state manager
       scrapingStateManager.stopScraping();
 
@@ -1057,6 +1128,13 @@ class ScrapingWorker {
         );
       } else {
         await jobService.updateJobStatus(jobId, finalStatus);
+      }
+
+      if (
+        finalStatus === JobStatus.Completed ||
+        finalStatus === JobStatus.Partial
+      ) {
+        await this.maybeUploadAgodaJobItemsToDrive(jobId);
       }
 
       // 12. Stop scraping state manager

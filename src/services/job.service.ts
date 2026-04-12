@@ -298,6 +298,35 @@ export class JobService {
     }
   }
 
+  /** Property document for the job (e.g. `agoda_id` for Drive export). */
+  async getPropertyForJob(jobId: string): Promise<IProperty | null> {
+    try {
+      const job = await this.getJobById(jobId);
+      if (!job?.property_id) return null;
+      return await Property.findById(job.property_id);
+    } catch (error) {
+      console.error(`Error getPropertyForJob ${jobId}:`, error);
+      return null;
+    }
+  }
+
+  async updateJobItemsFileLink(
+    jobId: string,
+    url: string
+  ): Promise<IJob | null> {
+    try {
+      const objectId = this.validateObjectId(jobId, "jobId");
+      return await Job.findByIdAndUpdate(
+        objectId,
+        { job_items_file_link: url, updatedAt: new Date() },
+        { new: true }
+      );
+    } catch (error) {
+      console.error(`Error updateJobItemsFileLink ${jobId}:`, error);
+      return null;
+    }
+  }
+
   /**
    * Update job status
    */

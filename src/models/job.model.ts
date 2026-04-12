@@ -56,6 +56,8 @@ export interface IJob extends Document {
   job_backoff_length_loading: number;
   job_backoff_length_selector: number;
   log_link?: string;
+  /** Google Drive URL for exported Agoda job_items XLSX after Completed/Partial */
+  job_items_file_link?: string;
   live_url?: string;
   watcher_emails?: string[];
   case_open?: boolean;
@@ -186,6 +188,10 @@ const JobSchema = new Schema<IJob>(
       required: true,
     },
     log_link: {
+      type: String,
+      required: false,
+    },
+    job_items_file_link: {
       type: String,
       required: false,
     },
