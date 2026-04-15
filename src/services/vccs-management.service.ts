@@ -997,6 +997,10 @@ export class VccsManagementService {
     /** Consecutive trust-unavailable card pages; resets on successful card or non-trust missing card. */
     let consecutiveGuestCardTrustUnavailable = 0;
     let trustStreakAbortedThisJob = false;
+    /** Successful getCardDetailsFromBrowser calls (non–resume-skip). */
+    let cardDetailFetchAttempts = 0;
+    /** How many of those returned the guest trust-unavailable page. */
+    let trustUnavailablePageCount = 0;
 
     const completedReservationIds = jobId
       ? new Set(
@@ -1055,6 +1059,8 @@ export class VccsManagementService {
           fetchOutcome
         );
 
+        cardDetailFetchAttempts++;
+
         const hadCardDetails =
           !!cardDetails && !!String(cardDetails.cardNumber || "").trim();
 
@@ -1063,6 +1069,7 @@ export class VccsManagementService {
             consecutiveGuestCardTrustUnavailable = 0;
           } else if (fetchOutcome.guestCardTrustUnavailable) {
             consecutiveGuestCardTrustUnavailable++;
+            trustUnavailablePageCount++;
             dualLogInfo(
               `Consecutive guest-card trust-unavailable: ${consecutiveGuestCardTrustUnavailable}/${MAX_CONSECUTIVE_GUEST_CARD_TRUST_UNAVAILABLE}`,
               { reservationId: vccs.hres_id }
@@ -1174,6 +1181,30 @@ export class VccsManagementService {
           saved: false,
         });
       }
+    }
+
+    // Every opened card page returned trust-unavailable, but fewer than 10 rows (e.g. 7 total) —
+    // still treat as Trust needed (cannot reach 10 consecutive when the list is shorter).
+    if (
+      jobId &&
+      !skipTrustUnavailableStreak &&
+      !trustStreakAbortedThisJob &&
+      cardDetailFetchAttempts > 0 &&
+      trustUnavailablePageCount === cardDetailFetchAttempts &&
+      trustUnavailablePageCount < MAX_CONSECUTIVE_GUEST_CARD_TRUST_UNAVAILABLE
+    ) {
+      await jobService.updateJobStatusWithReason(
+        jobId,
+        JobStatus.Failed,
+        "Trust needed"
+      );
+      dualLogError(
+        `Job failed: all ${trustUnavailablePageCount} card fetch(es) returned guest-card trust-unavailable (fewer than ${MAX_CONSECUTIVE_GUEST_CARD_TRUST_UNAVAILABLE} reservations in this run).`,
+        new Error("Trust needed"),
+        { jobId }
+      );
+      trustStreakAbortedThisJob = true;
+      errors++;
     }
 
     dualLogInfo("VCCS reservation processing completed", {
