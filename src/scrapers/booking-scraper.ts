@@ -91,6 +91,17 @@ export class BookingScraper extends BaseScraper {
   /** During shared group login, copy screenshot_urls to other property jobs in the group. */
   private bookingGroupScreenshotMirrorJobIds: string[] | null = null;
 
+  /**
+   * Consecutive trust-unavailable card pages (legacy flow). Resets on successful card or non-trust outcome.
+   * Cleared at the start of each scrapeData / traverse run so group steps do not share a streak.
+   */
+  private consecutiveGuestCardTrustUnavailable = 0;
+
+  /**
+   * When true, trust-unavailable streak is not applied (job already had job items in DB at run start).
+   */
+  private skipTrustUnavailableStreakForJobRun = false;
+
   constructor(context?: ScraperContext) {
     super("booking", "https://admin.booking.com");
     this.browserlessToken =
@@ -3177,6 +3188,19 @@ export class BookingScraper extends BaseScraper {
     const startTime = Date.now();
 
     try {
+      this.consecutiveGuestCardTrustUnavailable = 0;
+      if (options.jobId) {
+        const existingItems = await jobService.getJobItemsCount(options.jobId);
+        this.skipTrustUnavailableStreakForJobRun = existingItems > 0;
+        if (this.skipTrustUnavailableStreakForJobRun) {
+          await this.logInfo(
+            `Trust-unavailable streak disabled: job already has ${existingItems} job item(s) in DB before this run (traverse)`
+          );
+        }
+      } else {
+        this.skipTrustUnavailableStreakForJobRun = false;
+      }
+
       // Get pagination info
       await this.logInfo("Getting pagination information...");
       const paginationInfo = await this.getPaginationInfo();
@@ -3491,7 +3515,35 @@ export class BookingScraper extends BaseScraper {
       const twoFASuccess = await this.handle2FA({ page: newPage });
       if (!twoFASuccess) return false;
 
+      const bodyText =
+        (await this.page.evaluate(() => document.body?.innerText || "")) ||
+        "";
+      const trustUnavailableGuestCardPage =
+        BookingScraper.isGuestCreditCardTrustUnavailableBodyText(bodyText);
+
       const cardData = await this.extractCardDetailsFromPage(this.page);
+
+      const hadCardDetails = !!(
+        cardData &&
+        String(cardData.cardNumber || "").trim()
+      );
+      const trustStreakOk = await this.applyGuestCardTrustUnavailableConsecutiveRule({
+        trustUnavailableGuestCardPage,
+        hadCardDetails,
+        jobId,
+      });
+      if (!trustStreakOk) {
+        try {
+          await SelectorUtils.findAndClick(
+            this.page,
+            BOOKING_SELECTORS.reservations.closeCardDetails
+          );
+        } catch {
+          /* tab may already be closing */
+        }
+        this.page = previousPage;
+        return false;
+      }
 
       await SelectorUtils.findAndClick(
         this.page,
@@ -4143,6 +4195,19 @@ export class BookingScraper extends BaseScraper {
         this.page?.url()
       );
 
+      this.consecutiveGuestCardTrustUnavailable = 0;
+      if (params.jobId) {
+        const existingItems = await jobService.getJobItemsCount(params.jobId);
+        this.skipTrustUnavailableStreakForJobRun = existingItems > 0;
+        if (this.skipTrustUnavailableStreakForJobRun) {
+          await this.logInfo(
+            `Trust-unavailable streak disabled: job already has ${existingItems} job item(s) in DB before this run`
+          );
+        }
+      } else {
+        this.skipTrustUnavailableStreakForJobRun = false;
+      }
+
       // Check if scraping should continue before starting
       await this.throwIfScrapingShouldStop("scrape_data", {
         jobId: params.jobId,
@@ -4389,6 +4454,15 @@ export class BookingScraper extends BaseScraper {
           this.propertyIdForDb,
           this
         );
+
+      if (processingResult.trustStreakAbortedThisJob) {
+        await this.takeScreenshot();
+        return {
+          success: false,
+          error: "Trust needed",
+          screenshots: [`booking-scraping-error-${Date.now()}.png`],
+        };
+      }
 
       await this.logInfo(
         `Phase 2 complete. Processed: ${processingResult.processed}, Skipped (already in DB): ${processingResult.skippedResume}, Errors: ${processingResult.errors}`
@@ -5271,6 +5345,59 @@ export class BookingScraper extends BaseScraper {
     return BookingErrorType.LOGIN_FAILED;
   }
 
+  private static isGuestCreditCardTrustUnavailableBodyText(
+    bodyText: string
+  ): boolean {
+    const n = bodyText
+      .replace(/\u2019/g, "'")
+      .replace(/\s+/g, " ")
+      .toLowerCase();
+    return (
+      n.includes("your guest's credit card details aren't available") &&
+      n.includes("the credit card cannot be shown")
+    );
+  }
+
+  /**
+   * Consecutive trust-unavailable card pages in legacy flow: +1 only on that page; reset on card
+   * or any other outcome. At 10 in a row (with jobId), mark the job failed ("Trust needed").
+   */
+  private async applyGuestCardTrustUnavailableConsecutiveRule(options: {
+    trustUnavailableGuestCardPage: boolean;
+    hadCardDetails: boolean;
+    jobId?: string;
+  }): Promise<boolean> {
+    if (!options.jobId) return true;
+
+    if (this.skipTrustUnavailableStreakForJobRun) {
+      return true;
+    }
+
+    if (options.hadCardDetails) {
+      this.consecutiveGuestCardTrustUnavailable = 0;
+      return true;
+    }
+
+    if (options.trustUnavailableGuestCardPage) {
+      this.consecutiveGuestCardTrustUnavailable++;
+      await this.logInfo(
+        `Consecutive guest-card trust-unavailable: ${this.consecutiveGuestCardTrustUnavailable}/10 (reservation flow)`
+      );
+      if (this.consecutiveGuestCardTrustUnavailable >= 10) {
+        await jobService.updateJobStatusWithReason(
+          options.jobId,
+          JobStatus.Failed,
+          "Trust needed"
+        );
+        return false;
+      }
+      return true;
+    }
+
+    this.consecutiveGuestCardTrustUnavailable = 0;
+    return true;
+  }
+
   private async clickCardDetailsFromRow(
     reservationId: string
   ): Promise<boolean> {
@@ -5723,7 +5850,33 @@ export class BookingScraper extends BaseScraper {
         return { success: false, cardInfoStored: false };
       }
 
+      const bodyText =
+        (await newPage.evaluate(() => document.body?.innerText || "")) || "";
+      const trustUnavailableGuestCardPage =
+        BookingScraper.isGuestCreditCardTrustUnavailableBodyText(bodyText);
+
       const cardData = await this.extractCardDetailsFromPage(this.page);
+
+      const hadCardDetails = !!(
+        cardData &&
+        String(cardData.cardNumber || "").trim()
+      );
+      const trustStreakOk = await this.applyGuestCardTrustUnavailableConsecutiveRule({
+        trustUnavailableGuestCardPage,
+        hadCardDetails,
+        jobId,
+      });
+      if (!trustStreakOk) {
+        try {
+          await SelectorUtils.findAndClick(
+            this.page,
+            BOOKING_SELECTORS.reservations.closeCardDetails
+          );
+        } catch {
+          /* ignore */
+        }
+        return { success: false, cardInfoStored: false };
+      }
 
       // Close page
       await SelectorUtils.findAndClick(

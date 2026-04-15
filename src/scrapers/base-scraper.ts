@@ -7,7 +7,6 @@ import {
 import {
   FAILED_REASON,
   getFailedReasonForUser,
-  hasFailedReasonCode,
   isStatusAlreadySaved,
   markStatusSaved,
   setFailedReasonCode,

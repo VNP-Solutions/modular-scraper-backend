@@ -1,6 +1,21 @@
 import fetch from "node-fetch";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
+import { JobStatus } from "../models/job.model.js";
 import { jobService } from "./job.service.js";
+
+/** Booking.com page: guest card hidden until property trust / eligibility is met. */
+function isGuestCreditCardTrustUnavailableHtml(html: string): boolean {
+  const n = html
+    .replace(/\u2019/g, "'")
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+  return (
+    n.includes("your guest's credit card details aren't available") &&
+    n.includes("the credit card cannot be shown")
+  );
+}
+
+const MAX_CONSECUTIVE_GUEST_CARD_TRUST_UNAVAILABLE = 10;
 
 export interface VccsUrlParams {
   hotel_id: string;
@@ -296,9 +311,12 @@ export class VccsManagementService {
     reservationId: string,
     params: VccsUrlParams,
     scraperInstance?: any, // BookingScraper instance for captcha/2FA handling
-    authenticatedUrlPattern?: string // Use authenticated URL pattern from first successful fetch
+    authenticatedUrlPattern?: string, // Use authenticated URL pattern from first successful fetch
+    fetchOutcome?: { guestCardTrustUnavailable?: boolean }
   ): Promise<CardDetailsResponse | null> {
     try {
+      if (fetchOutcome) fetchOutcome.guestCardTrustUnavailable = false;
+
       let cardDetailsUrl: string;
 
       // If we have an authenticated URL pattern from a previous successful fetch, use it!
@@ -672,6 +690,15 @@ export class VccsManagementService {
       // Get the HTML content
       const html = await page.content();
 
+      if (isGuestCreditCardTrustUnavailableHtml(html)) {
+        if (fetchOutcome) fetchOutcome.guestCardTrustUnavailable = true;
+        dualLogInfo(
+          "Card details page shows guest card unavailable (trust / eligibility)",
+          { reservationId }
+        );
+        return null;
+      }
+
       // Log a sample of the HTML for debugging
       dualLogInfo("Card details HTML received", {
         reservationId,
@@ -945,6 +972,8 @@ export class VccsManagementService {
     processed: number;
     errors: number;
     skippedResume: number;
+    /** Set when 10 consecutive trust-unavailable card pages triggered Trust needed for this job. */
+    trustStreakAbortedThisJob?: boolean;
     results: Array<{
       reservationId: string;
       vccsData: any;
@@ -965,6 +994,9 @@ export class VccsManagementService {
     let errors = 0;
     let skippedResume = 0;
     let latestAuthenticatedUrl: string | undefined = undefined; // Store LATEST authenticated URL (updated after EVERY successful fetch)
+    /** Consecutive trust-unavailable card pages; resets on successful card or non-trust missing card. */
+    let consecutiveGuestCardTrustUnavailable = 0;
+    let trustStreakAbortedThisJob = false;
 
     const completedReservationIds = jobId
       ? new Set(
@@ -972,17 +1004,28 @@ export class VccsManagementService {
         )
       : new Set<string>();
 
+    /** Snapshot before Phase 2: if this job already has any stored job items, do not run trust-unavailable streak (rerun / partial). */
+    const jobItemCountAtStart = jobId
+      ? await jobService.getJobItemsCount(jobId)
+      : 0;
+    const skipTrustUnavailableStreak =
+      Boolean(jobId) && jobItemCountAtStart > 0;
+
     dualLogInfo("Starting VCCS reservation processing", {
       totalVccs: vccsData.data.vccs.length,
       jobId,
       propertyIdForDb,
       resumeSkipCount: completedReservationIds.size,
+      jobItemCountAtStart,
+      skipTrustUnavailableStreak,
     });
 
     for (const vccs of vccsData.data.vccs) {
       const resId = String(vccs.hres_id);
       if (completedReservationIds.has(resId)) {
         skippedResume++;
+        // Card already in DB for this job: we do not open the card page — the trust-unavailable
+        // streak counter is not used for this row (no increment, no reset; same as "not counted").
         dualLogInfo(
           `Skipping reservation ${resId} (card already stored for this job)`
         );
@@ -999,6 +1042,8 @@ export class VccsManagementService {
       try {
         dualLogInfo(`Processing reservation ${vccs.hres_id}`);
 
+        const fetchOutcome: { guestCardTrustUnavailable?: boolean } = {};
+
         // Get card details for this reservation using browser navigation
         // Use LATEST authenticated URL from previous fetch (if available)
         const cardDetails = await this.getCardDetailsFromBrowser(
@@ -1006,8 +1051,51 @@ export class VccsManagementService {
           vccs.hres_id,
           params,
           scraperInstance, // Pass scraper instance for auth handling
-          latestAuthenticatedUrl // Use LATEST authenticated URL
+          latestAuthenticatedUrl, // Use LATEST authenticated URL
+          fetchOutcome
         );
+
+        const hadCardDetails =
+          !!cardDetails && !!String(cardDetails.cardNumber || "").trim();
+
+        if (!skipTrustUnavailableStreak) {
+          if (hadCardDetails) {
+            consecutiveGuestCardTrustUnavailable = 0;
+          } else if (fetchOutcome.guestCardTrustUnavailable) {
+            consecutiveGuestCardTrustUnavailable++;
+            dualLogInfo(
+              `Consecutive guest-card trust-unavailable: ${consecutiveGuestCardTrustUnavailable}/${MAX_CONSECUTIVE_GUEST_CARD_TRUST_UNAVAILABLE}`,
+              { reservationId: vccs.hres_id }
+            );
+            if (
+              consecutiveGuestCardTrustUnavailable >=
+                MAX_CONSECUTIVE_GUEST_CARD_TRUST_UNAVAILABLE &&
+              jobId
+            ) {
+              await jobService.updateJobStatusWithReason(
+                jobId,
+                JobStatus.Failed,
+                "Trust needed"
+              );
+              dualLogError(
+                `Job failed after ${MAX_CONSECUTIVE_GUEST_CARD_TRUST_UNAVAILABLE} consecutive guest-card trust-unavailable pages`,
+                new Error("Trust needed"),
+                { jobId, reservationId: vccs.hres_id }
+              );
+              trustStreakAbortedThisJob = true;
+              errors++;
+              results.push({
+                reservationId: vccs.hres_id,
+                vccsData: vccs,
+                cardDetails: null,
+                saved: false,
+              });
+              break;
+            }
+          } else {
+            consecutiveGuestCardTrustUnavailable = 0;
+          }
+        }
 
         // ALWAYS update the latest authenticated URL after EVERY successful fetch
         // This is important because 2FA/captcha can happen at any time and change the session
@@ -1093,12 +1181,14 @@ export class VccsManagementService {
       errors,
       skippedResume,
       total: vccsData.data.vccs.length,
+      trustStreakAbortedThisJob,
     });
 
     return {
       processed,
       errors,
       skippedResume,
+      trustStreakAbortedThisJob: trustStreakAbortedThisJob || undefined,
       results,
     };
   }

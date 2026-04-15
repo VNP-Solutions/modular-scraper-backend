@@ -139,16 +139,7 @@ async function mainMultiPlatform(params: MultiPlatformJobParams): Promise<void> 
 
     if (!result.success) {
       await dualLogError(`${platform} scraping failed:`, result.error);
-      if (
-        params.bookingGroupSteps &&
-        params.bookingGroupSteps.length > 0
-      ) {
-        throw new Error(result.error || "Booking group scrape failed");
-      }
-      if (params.jobId && isJobLoggingActive()) {
-        await finalizeJobLogging("failed");
-      }
-      return;
+      throw new Error(result.error || `${platform} scraping failed`);
     }
 
     await dualLogInfo(`${platform} scraping completed successfully`, {
