@@ -1,7 +1,41 @@
 import * as XLSX from "xlsx";
+import type { WorkSheet } from "xlsx";
 import type { IJobItem } from "../models/job-item.model.js";
 import type { IJob } from "../models/job.model.js";
 import type { IProperty } from "../models/property.model.js";
+
+/** Column order must match row objects (stable for CVV text-format pass). */
+const AGODA_HEADERS = [
+  "Portfolio",
+  "Property ID",
+  "Property Name",
+  "Booking ID",
+  "Stay Date From",
+  "Stay Date To",
+  "Guest Name",
+  "Currency",
+  "Amount to charge / remaining",
+  "Reservation status",
+  "Card number",
+  "Expiry",
+  "CVV",
+] as const;
+
+/** Excel / Google Sheets: text format so CVV keeps leading zeros and `0`. */
+const EXCEL_TEXT_FORMAT = "@";
+
+function formatColumnAsText(sheet: WorkSheet, colIndex: number): void {
+  const ref = sheet["!ref"];
+  if (!ref) return;
+  const range = XLSX.utils.decode_range(ref);
+  for (let r = range.s.r; r <= range.e.r; r++) {
+    const addr = XLSX.utils.encode_cell({ r, c: colIndex });
+    const cell = sheet[addr];
+    if (!cell) continue;
+    const text = String(cell.v ?? "");
+    sheet[addr] = { t: "s", v: text, z: EXCEL_TEXT_FORMAT };
+  }
+}
 
 function fmtYmd(d: Date | undefined): string {
   if (!d || !(d instanceof Date) || Number.isNaN(d.getTime())) return "";
@@ -20,7 +54,7 @@ export function jobItemsAgodaToXlsxBuffer(
 
   const rows = items.map((item) => ({
     Portfolio: job.portfolio_name ?? "",
-    "Property Id (Agoda)": agodaPropertyId,
+    "Property ID": agodaPropertyId,
     "Property Name": job.property_name ?? "",
     "Booking ID": item.reservation_id ?? "",
     "Stay Date From": fmtYmd(item.check_in_date as Date),
@@ -37,14 +71,18 @@ export function jobItemsAgodaToXlsxBuffer(
       item.has_card_info && item.card_info?.expiry_date
         ? item.card_info.expiry_date
         : "",
-    CVV: item.has_card_info && item.card_info?.cvv ? item.card_info.cvv : "",
-    "Reason for charge":
-      item.has_card_info && item.card_info?.reason_for_charge
-        ? item.card_info.reason_for_charge
-        : "",
+    CVV: item.has_card_info
+      ? String(item.card_info?.cvv ?? "")
+      : "",
   }));
 
-  const ws = XLSX.utils.json_to_sheet(rows);
+  const ws = XLSX.utils.json_to_sheet(rows, {
+    header: [...AGODA_HEADERS],
+  });
+  const cvvCol = AGODA_HEADERS.indexOf("CVV");
+  if (cvvCol >= 0) {
+    formatColumnAsText(ws, cvvCol);
+  }
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Job items");
   return Buffer.from(XLSX.write(wb, { type: "buffer", bookType: "xlsx" }));
