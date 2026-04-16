@@ -1,4 +1,5 @@
 import XLSX from "xlsx";
+import type { WorkSheet } from "xlsx";
 import type { IJob } from "../models/job.model.js";
 import type { IProperty } from "../models/property.model.js";
 
@@ -86,6 +87,22 @@ function rowFromItem(
   };
 }
 
+/** Excel / Google Sheets: text format so CVV keeps leading zeros and `0`. */
+const EXCEL_TEXT_FORMAT = "@";
+
+function formatColumnAsText(sheet: WorkSheet, colIndex: number): void {
+  const ref = sheet["!ref"];
+  if (!ref) return;
+  const range = XLSX.utils.decode_range(ref);
+  for (let r = range.s.r; r <= range.e.r; r++) {
+    const addr = XLSX.utils.encode_cell({ r, c: colIndex });
+    const cell = sheet[addr];
+    if (!cell) continue;
+    const text = String(cell.v ?? "");
+    sheet[addr] = { t: "s", v: text, z: EXCEL_TEXT_FORMAT };
+  }
+}
+
 /**
  * Booking.com VCC job_items → XLSX (Google Drive export).
  */
@@ -102,6 +119,10 @@ export function jobItemsBookingVccToXlsxBuffer(
   const sheet = XLSX.utils.json_to_sheet(rows, {
     header: [...BOOKING_VCC_HEADERS],
   });
+  const cvvCol = BOOKING_VCC_HEADERS.indexOf("CVV");
+  if (cvvCol >= 0) {
+    formatColumnAsText(sheet, cvvCol);
+  }
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, sheet, "Job items");
   return XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer;
