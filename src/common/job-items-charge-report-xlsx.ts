@@ -1,4 +1,5 @@
 import XLSX from "xlsx";
+import type { WorkSheet } from "xlsx";
 import type { IJob } from "../models/job.model.js";
 import type { IProperty } from "../models/property.model.js";
 
@@ -95,6 +96,25 @@ function rowFromItem(
   };
 }
 
+/** Excel text format so values (e.g. leading zeros) are not coerced to numbers. */
+const EXCEL_TEXT_FORMAT = "@";
+
+/**
+ * Apply `@` (Text) format to every cell in a column so Excel treats the column as text.
+ */
+function formatColumnAsText(sheet: WorkSheet, colIndex: number): void {
+  const ref = sheet["!ref"];
+  if (!ref) return;
+  const range = XLSX.utils.decode_range(ref);
+  for (let r = range.s.r; r <= range.e.r; r++) {
+    const addr = XLSX.utils.encode_cell({ r, c: colIndex });
+    const cell = sheet[addr];
+    if (!cell) continue;
+    const text = String(cell.v ?? "");
+    sheet[addr] = { t: "s", v: text, z: EXCEL_TEXT_FORMAT };
+  }
+}
+
 /**
  * XLSX workbook buffer: Expedia-style charge report for Google Drive upload.
  */
@@ -109,6 +129,10 @@ export function jobItemsToChargeReportXlsxBuffer(
   const sheet = XLSX.utils.json_to_sheet(rows, {
     header: [...CHARGE_REPORT_HEADERS],
   });
+  const cvvCol = CHARGE_REPORT_HEADERS.indexOf("CVV");
+  if (cvvCol >= 0) {
+    formatColumnAsText(sheet, cvvCol);
+  }
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, sheet, "Job items");
   return XLSX.write(wb, { type: "buffer", bookType: "xlsx" }) as Buffer;
