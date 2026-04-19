@@ -62,6 +62,55 @@ async function login(
   // Wait before entering password
   await dualLogInfo("Waiting for password page to load...");
 
+  // --- Early bot-detection check ---
+  // After clicking continue, Expedia redirects to account.expediagroup.com for
+  // the password step. That host is protected by Akamai Bot Manager and is the
+  // exact place datacenter IPs get blocked. If Chrome lands on a chrome-error://
+  // page or the HTML screams "Access Denied" we fail fast with a clear code.
+  await delay(2500);
+  try {
+    const postContinueUrl = page.url();
+    let postContinueHtml = "";
+    try {
+      postContinueHtml = await page.content();
+    } catch {
+      /* chrome-error page can refuse to return HTML */
+    }
+    const looksDenied =
+      postContinueUrl.startsWith("chrome-error://") ||
+      /Access Denied|You don'?t have permission|Reference\s*#\d|Pardon Our Interruption|request (?:was|has been) blocked/i.test(
+        postContinueHtml
+      );
+    if (looksDenied) {
+      await dualLogError(
+        "Akamai Bot Manager blocked the login redirect (account.expediagroup.com)",
+        { url: postContinueUrl }
+      );
+      await takeScreenshot(
+        page,
+        jobId ?? "",
+        "bot_detection_block",
+        "error",
+        "expedia",
+        entityType
+      );
+      const err = new Error(
+        "Expedia blocked the login page (bot detection). Server IP likely flagged — enable a residential proxy."
+      );
+      setFailedReasonCode(err, FAILED_REASON.BOT_DETECTION_BLOCK);
+      throw err;
+    }
+  } catch (denialCheckError: any) {
+    // If it's our own thrown denial error, bubble up. Otherwise ignore and let
+    // the existing password-selector wait handle it.
+    if (
+      denialCheckError?.message?.includes("bot detection") ||
+      denialCheckError?.failedReasonCode === FAILED_REASON.BOT_DETECTION_BLOCK
+    ) {
+      throw denialCheckError;
+    }
+  }
+
   // Check pause state before password entry
   await scrapingStateManager.waitWhilePaused();
   if (!scrapingStateManager.isRunning()) {

@@ -25,6 +25,19 @@ const HOME_URL = "https://www.expediapartnercentral.com/";
 const LOGIN_URL =
   "https://www.expediapartnercentral.com/Account/Logon?signedOff=true";
 
+const DENIAL_PATTERNS = [
+  /Access Denied/i,
+  /You don'?t have permission/i,
+  /Reference\s*#\d/i,
+  /Pardon Our Interruption/i,
+  /request (?:was|has been) blocked/i,
+];
+
+function isDeniedPage(url: string, html: string): boolean {
+  if (url.startsWith("chrome-error://")) return true;
+  return DENIAL_PATTERNS.some((re) => re.test(html));
+}
+
 export async function browserSetupProduction(
   jobId?: string,
   platform?: "expedia"
@@ -237,10 +250,18 @@ export async function browserSetupProduction(
 
         await delay(2500);
 
-        const pageContent = await page.content();
-        if (/Access Denied|Reference #\d+/i.test(pageContent)) {
+        const pageUrl = page.url();
+        let pageContent = "";
+        try {
+          pageContent = await page.content();
+        } catch {
+          /* chrome-error pages sometimes can't return HTML */
+        }
+        if (isDeniedPage(pageUrl, pageContent)) {
           await dualLogWarn(
-            "Akamai / bot-manager returned Access Denied on attempt " + attempt
+            "Akamai / bot-manager returned Access Denied on attempt " +
+              attempt,
+            { pageUrl }
           );
           throw new Error("Bot-manager Access Denied");
         }

@@ -32,6 +32,69 @@ const HOME_URL = "https://www.expediapartnercentral.com/";
 const LOGIN_URL =
   "https://www.expediapartnercentral.com/Account/Logon?signedOff=true";
 
+/**
+ * Figure out which proxy (if any) to run the browser behind. Priority:
+ *
+ *   1. BRIGHT_DATA_ENABLED=true → use BRIGHT_DATA_PROXY_HOST / USERNAME / PASSWORD
+ *   2. SCRAPER_PROXY_URL=http://user:pass@host:port → generic HTTP proxy
+ *   3. nothing set → no proxy (direct connection)
+ *
+ * Returns { server, username, password } where `server` is passed to
+ * Chrome's --proxy-server flag and the creds (if any) go to page.authenticate().
+ */
+function parseProxyFromEnv(): {
+  server?: string;
+  username?: string;
+  password?: string;
+  label?: string;
+} {
+  // 1) Bright Data toggle
+  const brightEnabled = (process.env.BRIGHT_DATA_ENABLED || "")
+    .trim()
+    .toLowerCase();
+  if (brightEnabled === "true" || brightEnabled === "1") {
+    const host = process.env.BRIGHT_DATA_PROXY_HOST?.trim();
+    const username = process.env.BRIGHT_DATA_USERNAME?.trim();
+    const password = process.env.BRIGHT_DATA_PASSWORD?.trim();
+    if (host && username && password) {
+      // Host is already in "host:port" form in our .env
+      const server = host.startsWith("http")
+        ? host
+        : `http://${host}`;
+      return { server, username, password, label: "Bright Data" };
+    }
+  }
+
+  // 2) Generic fallback
+  const raw = process.env.SCRAPER_PROXY_URL?.trim();
+  if (!raw) return {};
+  try {
+    const u = new URL(raw);
+    const server = `${u.protocol}//${u.hostname}${u.port ? ":" + u.port : ""}`;
+    return {
+      server,
+      username: u.username ? decodeURIComponent(u.username) : undefined,
+      password: u.password ? decodeURIComponent(u.password) : undefined,
+      label: "SCRAPER_PROXY_URL",
+    };
+  } catch {
+    return {};
+  }
+}
+
+const DENIAL_PATTERNS = [
+  /Access Denied/i,
+  /You don'?t have permission/i,
+  /Reference\s*#\d/i,
+  /Pardon Our Interruption/i,
+  /request (?:was|has been) blocked/i,
+];
+
+function isDeniedPage(url: string, html: string): boolean {
+  if (url.startsWith("chrome-error://")) return true;
+  return DENIAL_PATTERNS.some((re) => re.test(html));
+}
+
 export async function browserSetupLocal(
   jobId?: string,
   platform?: "expedia"
@@ -41,12 +104,26 @@ export async function browserSetupLocal(
 }> {
   let browser: Browser | null = null;
 
+  const proxy = parseProxyFromEnv();
+
   try {
     try {
+      const launchArgs = [...BROWSER_CONFIG.LAUNCH_ARGS];
+      if (proxy.server) {
+        launchArgs.push(`--proxy-server=${proxy.server}`);
+        await dualLogInfo(
+          `Launching browser behind ${proxy.label ?? "proxy"}: ${proxy.server}`
+        );
+      } else {
+        await dualLogInfo(
+          "No proxy configured (BRIGHT_DATA_ENABLED!=true and SCRAPER_PROXY_URL not set) — running direct"
+        );
+      }
+
       browser = (await puppeteerExtra.launch({
         headless: configs.headless_browser,
         defaultViewport: null,
-        args: BROWSER_CONFIG.LAUNCH_ARGS,
+        args: launchArgs,
         // Use the Chromium that ships with puppeteer so the UA we build
         // matches the actual binary version.
         executablePath: puppeteer.executablePath(),
@@ -70,6 +147,14 @@ export async function browserSetupLocal(
     const selectorTimeout = await timeoutManager.getSelectorTimeout(jobId);
 
     const page: Page = await browser.newPage();
+
+    // Authenticate against the proxy if it requires basic auth.
+    if (proxy.server && proxy.username) {
+      await page.authenticate({
+        username: proxy.username,
+        password: proxy.password ?? "",
+      });
+    }
 
     // Sync UA / client-hints with the *actual* bundled Chromium version.
     const rawUA = await browser.userAgent();
@@ -154,18 +239,19 @@ export async function browserSetupLocal(
         await delay(2500);
 
         // Quick access-denied sniff so we fail fast instead of hanging.
-        const pageContent = await page.content();
         const pageUrl = page.url();
-        const denied =
-          /Access Denied|You don't have permission|Reference #\d+/i.test(
-            pageContent
-          ) ||
-          pageUrl.includes("account.expediagroup.com") === false &&
-            /access denied/i.test(pageContent);
+        let pageContent = "";
+        try {
+          pageContent = await page.content();
+        } catch {
+          /* chrome-error pages sometimes can't return HTML */
+        }
 
-        if (denied) {
+        if (isDeniedPage(pageUrl, pageContent)) {
           await dualLogWarn(
-            "Akamai / bot-manager returned Access Denied on attempt " + attempt
+            "Akamai / bot-manager returned Access Denied on attempt " +
+              attempt,
+            { pageUrl }
           );
           throw new Error("Bot-manager Access Denied");
         }

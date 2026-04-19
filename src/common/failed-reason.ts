@@ -20,6 +20,7 @@ export const FAILED_REASON = {
   MAX_RESTART_ATTEMPTS: "MAX_RESTART_ATTEMPTS",
   VCC_NOT_AVAILABLE: "VCC_NOT_AVAILABLE",
   BROWSER_SESSION_LOST: "BROWSER_SESSION_LOST",
+  BOT_DETECTION_BLOCK: "BOT_DETECTION_BLOCK",
 } as const;
 
 export type FailedReasonCode = (typeof FAILED_REASON)[keyof typeof FAILED_REASON];
@@ -52,6 +53,8 @@ const FAILED_REASON_MESSAGES: Record<FailedReasonCode, string> = {
   [FAILED_REASON.VCC_NOT_AVAILABLE]: "VCC / virtual card not available",
   [FAILED_REASON.BROWSER_SESSION_LOST]:
     "Browser session was lost. Please try again.",
+  [FAILED_REASON.BOT_DETECTION_BLOCK]:
+    "Expedia blocked the login page (bot detection). The server IP may be flagged — enable a residential proxy and retry.",
 };
 
 const FAILED_REASON_CODE_KEY = "failedReasonCode" as const;

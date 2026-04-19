@@ -77,30 +77,52 @@ export const BROWSER_CONFIG = {
 
 /**
  * Build a realistic set of request headers from the *actual* Chromium UA the
- * browser is running. This keeps UA, sec-ch-ua, and sec-ch-ua-full-version-list
- * all in sync so Akamai/Cloudflare can't flag a mismatch.
+ * browser is running.
+ *
+ * IMPORTANT: Expedia / Akamai flags Linux UAs extremely aggressively because
+ * very few real Expedia Partner Central users are on Linux desktop. So even
+ * when this code runs on an Ubuntu server, we rewrite the UA to claim macOS.
+ * The major Chrome version is still taken from the real bundled Chromium so
+ * UA <-> JS runtime behavior stays consistent.
+ *
+ * You can opt out by setting `SPOOF_PLATFORM=native` in the environment.
  */
 export function buildClientHintsFromUA(ua: string): {
   userAgent: string;
   headers: Record<string, string>;
 } {
-  // Strip the "HeadlessChrome" marker — it's a dead giveaway.
   const cleanUA = ua.replace(/HeadlessChrome/g, "Chrome");
-  const majorMatch = cleanUA.match(/Chrome\/(\d+)/);
-  const major = majorMatch ? majorMatch[1] : "140";
+  const majorMatch = cleanUA.match(/Chrome\/(\d+(?:\.\d+){0,3})/);
+  const fullVersion = majorMatch ? majorMatch[1] : "140.0.0.0";
+  const major = fullVersion.split(".")[0];
 
-  const isMac = /Macintosh|Mac OS X/.test(cleanUA);
-  const isWin = /Windows/.test(cleanUA);
-  const platform = isMac ? '"macOS"' : isWin ? '"Windows"' : '"Linux"';
+  const spoofPlatform = (process.env.SPOOF_PLATFORM || "macos").toLowerCase();
+
+  let userAgent: string;
+  let platformHeader: string;
+
+  if (spoofPlatform === "native") {
+    userAgent = cleanUA;
+    if (/Macintosh|Mac OS X/.test(cleanUA)) platformHeader = '"macOS"';
+    else if (/Windows/.test(cleanUA)) platformHeader = '"Windows"';
+    else platformHeader = '"Linux"';
+  } else if (spoofPlatform === "windows") {
+    userAgent = `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${fullVersion} Safari/537.36`;
+    platformHeader = '"Windows"';
+  } else {
+    // default: macOS
+    userAgent = `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${fullVersion} Safari/537.36`;
+    platformHeader = '"macOS"';
+  }
 
   const secChUa = `"Chromium";v="${major}", "Not;A=Brand";v="24", "Google Chrome";v="${major}"`;
 
   return {
-    userAgent: cleanUA,
+    userAgent,
     headers: {
       ...BROWSER_CONFIG.HEADERS,
       "sec-ch-ua": secChUa,
-      "sec-ch-ua-platform": platform,
+      "sec-ch-ua-platform": platformHeader,
     },
   };
 }
