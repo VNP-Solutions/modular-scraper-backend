@@ -1,7 +1,20 @@
 import dotenv from "dotenv";
 import puppeteer, { Browser, Page } from "puppeteer";
-import { BROWSER_CONFIG } from "../common/browser-constants.js";
+// @ts-ignore — puppeteer-extra ships its own types but they don't expose `.use` well under NodeNext
+import puppeteerExtra from "puppeteer-extra";
+// @ts-ignore — same as above
+import StealthPlugin from "puppeteer-extra-plugin-stealth";
+import {
+  BROWSER_CONFIG,
+  buildClientHintsFromUA,
+} from "../common/browser-constants.js";
+import { loadCookies, saveCookies } from "../common/cookie-jar.js";
 import { delay } from "../common/delay.js";
+import {
+  humanDelay,
+  humanMouseWander,
+  humanScroll,
+} from "../common/human-behavior.js";
 import {
   dualLogError,
   dualLogInfo,
@@ -10,6 +23,14 @@ import {
 import { timeoutManager } from "../common/timeout-manager.js";
 import { configs } from "../config/index.js";
 dotenv.config();
+
+// Activate stealth only once at module load.
+puppeteerExtra.use(StealthPlugin());
+
+const COOKIE_KEY = "expedia-partner-central";
+const HOME_URL = "https://www.expediapartnercentral.com/";
+const LOGIN_URL =
+  "https://www.expediapartnercentral.com/Account/Logon?signedOff=true";
 
 export async function browserSetupLocal(
   jobId?: string,
@@ -22,14 +43,17 @@ export async function browserSetupLocal(
 
   try {
     try {
-      browser = await puppeteer.launch({
+      browser = (await puppeteerExtra.launch({
         headless: configs.headless_browser,
         defaultViewport: null,
         args: BROWSER_CONFIG.LAUNCH_ARGS,
-      });
+        // Use the Chromium that ships with puppeteer so the UA we build
+        // matches the actual binary version.
+        executablePath: puppeteer.executablePath(),
+        ignoreDefaultArgs: ["--enable-automation"],
+      })) as unknown as Browser;
     } catch (error: any) {
       await dualLogError("Error launching browser:", error);
-      // Send email notification for browser launch error
       if (jobId) {
         try {
         } catch (emailError) {
@@ -42,59 +66,59 @@ export async function browserSetupLocal(
       throw error;
     }
 
-    // Get timeout configuration for this job
     const loadingTimeout = await timeoutManager.getLoadingTimeout(jobId);
     const selectorTimeout = await timeoutManager.getSelectorTimeout(jobId);
 
     const page: Page = await browser.newPage();
 
-    // Set user agent to match GraphQL API headers exactly
-    await page.setUserAgent(BROWSER_CONFIG.USER_AGENT);
+    // Sync UA / client-hints with the *actual* bundled Chromium version.
+    const rawUA = await browser.userAgent();
+    const { userAgent, headers } = buildClientHintsFromUA(rawUA);
+    await page.setUserAgent(userAgent);
+    await page.setExtraHTTPHeaders(headers);
+    await dualLogInfo("Spoofed UA in sync with bundled Chromium", {
+      userAgent,
+    });
 
-    // Set additional headers to match real browser behavior
-    await page.setExtraHTTPHeaders(BROWSER_CONFIG.HEADERS);
+    // Realistic viewport + locale so fingerprint checks line up.
+    await page.setViewport({
+      width: 1920,
+      height: 1080,
+      deviceScaleFactor: 1,
+      hasTouch: false,
+      isLandscape: true,
+      isMobile: false,
+    });
+    try {
+      await page.emulateTimezone("America/New_York");
+    } catch {
+      /* noop — timezone override can fail on some Chromium builds */
+    }
 
-    // Hide automation indicators
+    // Small extra hardening on top of stealth plugin. Stealth already covers
+    // navigator.webdriver, plugins, chrome.runtime, permissions, WebGL, etc.,
+    // but we add a couple of Expedia-specific nice-to-haves.
     await page.evaluateOnNewDocument(() => {
-      // Remove webdriver property
-      delete (navigator as any).webdriver;
-
-      // Override the plugins property to use a real value
-      Object.defineProperty(navigator, "plugins", {
-        get: () => [1, 2, 3, 4, 5],
+      // Realistic hardware profile
+      Object.defineProperty(navigator, "hardwareConcurrency", {
+        get: () => 8,
       });
-
-      // Override the languages property to use a real value
+      Object.defineProperty(navigator, "deviceMemory", {
+        get: () => 8,
+      });
+      // Consistent languages
       Object.defineProperty(navigator, "languages", {
         get: () => ["en-US", "en"],
       });
-
-      // Override chrome property
-      (window as any).chrome = {
-        runtime: {},
-      };
-
-      // Mock permissions
-      const originalQuery = window.navigator.permissions.query;
-      window.navigator.permissions.query = (parameters) => {
-        if (parameters.name === "notifications") {
-          return Promise.resolve({
-            state: Notification.permission,
-            name: "notifications",
-            onchange: null,
-            addEventListener: () => {},
-            removeEventListener: () => {},
-            dispatchEvent: () => false,
-          } as PermissionStatus);
-        }
-        return originalQuery(parameters);
-      };
     });
-    // Set default timeouts based on job configuration
+
     await page.setDefaultNavigationTimeout(loadingTimeout);
     await page.setDefaultTimeout(selectorTimeout);
 
-    // Navigate to partner central with retry logic
+    // Restore any previously valid Akamai cookies (_abck, bm_sz, ak_bmsc, …)
+    // so we don't start from a cold reputation.
+    await loadCookies(page, COOKIE_KEY);
+
     const platformName = "Expedia";
     await dualLogInfo(`Navigating to ${platformName} platform...`);
 
@@ -108,19 +132,51 @@ export async function browserSetupLocal(
           maxRetries,
         });
 
-        await page.goto(
-          "https://www.expediapartnercentral.com/Account/Logon?signedOff=true",
-          {
-            waitUntil: "domcontentloaded",
-            timeout: loadingTimeout,
-          }
-        );
+        // ---- Warm-up on the homepage ----
+        // Akamai Bot Manager expects a few mousemove / scroll events on a
+        // non-protected page before issuing a valid _abck cookie. Hitting
+        // /Account/Logon cold is the #1 reason you get "access denied".
+        await page.goto(HOME_URL, {
+          waitUntil: "domcontentloaded",
+          timeout: loadingTimeout,
+        });
+        await humanDelay(1500, 2500);
+        await humanMouseWander(page, 6);
+        await humanScroll(page, 3);
+        await humanDelay(800, 1600);
 
-        // Wait for page to stabilize
-        await delay(3000);
+        // ---- Now go to the real login page ----
+        await page.goto(LOGIN_URL, {
+          waitUntil: "domcontentloaded",
+          timeout: loadingTimeout,
+        });
 
-        // Check if page loaded successfully by looking for a common element
+        await delay(2500);
+
+        // Quick access-denied sniff so we fail fast instead of hanging.
+        const pageContent = await page.content();
+        const pageUrl = page.url();
+        const denied =
+          /Access Denied|You don't have permission|Reference #\d+/i.test(
+            pageContent
+          ) ||
+          pageUrl.includes("account.expediagroup.com") === false &&
+            /access denied/i.test(pageContent);
+
+        if (denied) {
+          await dualLogWarn(
+            "Akamai / bot-manager returned Access Denied on attempt " + attempt
+          );
+          throw new Error("Bot-manager Access Denied");
+        }
+
         await page.waitForSelector("body", { timeout: selectorTimeout });
+
+        // A little human activity on the login page too.
+        await humanMouseWander(page, 3);
+
+        // Persist the freshly minted Akamai cookies for the next run.
+        await saveCookies(page, COOKIE_KEY);
 
         navigationSuccess = true;
         await dualLogInfo("Navigation successful!", { attempt });
@@ -133,13 +189,13 @@ export async function browserSetupLocal(
 
         if (attempt < maxRetries) {
           await dualLogInfo("Retrying navigation...", { attempt });
-          await delay(2000); // Wait before retry
+          // Back-off grows with each attempt
+          await delay(2000 * attempt + Math.floor(Math.random() * 1500));
         } else {
           await dualLogError("All navigation attempts failed", navError, {
             maxRetries,
           });
 
-          // Send email notification for navigation failure
           if (jobId) {
             try {
             } catch (emailError) {
@@ -160,7 +216,6 @@ export async function browserSetupLocal(
         "Failed to navigate to the target page after all attempts"
       );
 
-      // Send email notification for navigation failure
       if (jobId) {
         try {
         } catch (emailError) {
@@ -179,7 +234,6 @@ export async function browserSetupLocal(
   } catch (error: any) {
     await dualLogError("Browser setup failed:", error);
 
-    // Send email notification for general browser setup error
     if (jobId) {
       try {
       } catch (emailError) {
@@ -190,11 +244,9 @@ export async function browserSetupLocal(
       }
     }
 
-    // Clean up browser if it was created
     if (browser) {
       try {
         await browser.close();
-        // await session.release();
       } catch (closeError) {
         await dualLogError("Error closing browser:", closeError);
       }
