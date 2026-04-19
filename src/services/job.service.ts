@@ -653,6 +653,31 @@ export class JobService {
   }
 
   /**
+   * Update card info on the job item matching job_id + reservation_id (booking id).
+   */
+  async updateJobItemCardInfoByReservation(
+    jobId: string,
+    reservationId: string,
+    cardInfo: CardInfo
+  ): Promise<IJobItem | null> {
+    try {
+      const jobObjectId = this.validateObjectId(jobId, "jobId");
+      return await JobItem.findOneAndUpdate(
+        { job_id: jobObjectId, reservation_id: reservationId },
+        {
+          has_card_info: true,
+          card_info: cardInfo,
+          updatedAt: new Date(),
+        },
+        { new: true }
+      );
+    } catch (error) {
+      console.error(`Error updating job item card info by reservation: ${error}`);
+      return null;
+    }
+  }
+
+  /**
    * Update job item with payment info
    */
   async updateJobItemPaymentInfo(

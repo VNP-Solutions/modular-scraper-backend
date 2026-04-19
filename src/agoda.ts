@@ -197,13 +197,15 @@ async function agoda(
 
     // Get booking data after successful login
     await dualLogInfo("Starting booking data retrieval");
+    // UPC runs inside getAgodaBookingData in parallel with CSV export + Need Help (separate tab).
     const bookingData = await getAgodaBookingData(
       browser,
       page,
       agodaId,
       startDate,
       endDate,
-      jobId
+      jobId,
+      agodaUsername
     );
 
     // Take screenshot after successful booking data retrieval

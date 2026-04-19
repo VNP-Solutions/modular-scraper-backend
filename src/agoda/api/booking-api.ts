@@ -19,6 +19,14 @@ export interface CsvRecord {
   [key: string]: any; // For other CSV fields
 }
 
+/** Optional hooks while mapping list → CSV (e.g. incremental DB save + UPC queue). */
+export interface MapApiResponseToCsvRecordsOptions {
+  onEachMappedRecord?: (
+    record: CsvRecord,
+    meta: { source: "main" | "retry" }
+  ) => Promise<void>;
+}
+
 /**
  * Extract bookings array from API response.
  * Tries multiple possible keys: pagedBookingList.items (new shape), bookings (browser), etc.
@@ -691,7 +699,8 @@ export async function mapApiResponseToCsvRecords(
   agodaId: string,
   startDate?: string, // DD-MM-YYYY format for Referer header
   endDate?: string, // DD-MM-YYYY format for Referer header
-  jobId?: string
+  jobId?: string,
+  options?: MapApiResponseToCsvRecordsOptions
 ): Promise<CsvRecord[]> {
   const bookings = extractBookingsArray(apiData);
   if (!apiData || !bookings || !Array.isArray(bookings)) {
@@ -902,6 +911,10 @@ export async function mapApiResponseToCsvRecords(
 
     csvRecords.push(csvRecord);
 
+    if (options?.onEachMappedRecord) {
+      await options.onEachMappedRecord(csvRecord, { source: "main" });
+    }
+
     // Log progress for large datasets
     if ((i + 1) % 10 === 0) {
       await dualLogInfo(
@@ -967,6 +980,12 @@ export async function mapApiResponseToCsvRecords(
               `✅ Successfully updated booking ${bid} with summary data on retry`,
               { jobId, bookingId: bid }
             );
+
+            if (options?.onEachMappedRecord && existingRecord) {
+              await options.onEachMappedRecord(existingRecord, {
+                source: "retry",
+              });
+            }
           }
         }
       } catch (error: any) {
