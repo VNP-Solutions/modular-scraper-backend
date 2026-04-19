@@ -6,6 +6,7 @@ import {
   isRecoverableUpcNavigationError,
   openBookingListPage,
   recoverUpcBookingListTab,
+  releaseUpcOtp,
   type UpcCollectSession,
 } from "./agoda/upc/upc-booking-flow.js";
 import { delay } from "./common/delay.js";
@@ -60,6 +61,11 @@ export async function runAgodaUpcPhaseStreaming(
   let processed = 0;
 
   let listPage: import("puppeteer").Page | null = null;
+  /**
+   * Declared out here so the `finally` block's OTP release safety net can
+   * observe `otpReleased` even if the try block throws before setting it.
+   */
+  const upcCollectSessionRef: UpcCollectSession = {};
 
   try {
     await dualLogInfo(
@@ -83,7 +89,7 @@ export async function runAgodaUpcPhaseStreaming(
       listPage.url().split("#")[0]?.trim() ||
       buildAgodaBookingListUrl(agodaId, listStartDate, listEndDate);
 
-    const upcCollectSession: UpcCollectSession = {};
+    const upcCollectSession: UpcCollectSession = upcCollectSessionRef;
 
     if (jobId) {
       await progressManager.updateJobProgress(
@@ -266,6 +272,16 @@ export async function runAgodaUpcPhaseStreaming(
       bookingIdsFailed: failed.length > 0 ? failed : [],
     };
   } finally {
+    /**
+     * Safety net: if we never hit the "after OTP verified" or "no OTP needed"
+     * release points (e.g. UPC phase crashed mid-booking while still owning
+     * the OTP slot), release here so the pool doesn't stay blocked for other
+     * jobs. `releaseUpcOtp` is a no-op if already released or if this job
+     * no longer owns the slot. Same role as the end-of-job release in
+     * `agoda-retrieval-proxy/booking-retriveal-data.ts`.
+     */
+    await releaseUpcOtp(jobId, upcCollectSessionRef, "UPC phase finished");
+
     if (listPage) {
       try {
         await listPage.close();

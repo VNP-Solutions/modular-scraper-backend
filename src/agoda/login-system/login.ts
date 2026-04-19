@@ -7,7 +7,6 @@ import {
   setFailedReasonCode,
 } from "../../common/failed-reason.js";
 import { dualLogError, dualLogInfo } from "../../common/log-helper.js";
-import { otpCompletionNotifier } from "../../common/otp-completion-notifier.js";
 import { progressManager } from "../../common/progress-manager.js";
 import { scrapingStateManager } from "../../common/scraping-state.js";
 import {
@@ -337,9 +336,17 @@ async function agodaLogin(
         try {
           await handleDirectLinkFlow(page, jobId);
 
-          // Notify worker that OTP work is completed so other jobs can proceed
+          /**
+           * Do NOT release the OTP here — the Get Payout flow may still need
+           * it for payout verification. Release happens in the UPC phase
+           * (`releaseUpcOtp`) after payout OTP is verified, or immediately if
+           * Get Payout shows the UPC widget without a verification panel. This
+           * matches the `agoda-retrieval-proxy` branch.
+           */
           if (jobId) {
-            otpCompletionNotifier.notifyOtpCompleted(jobId);
+            await dualLogInfo(
+              "OTP kept occupied — will release after Get Payout verification (or if no payout OTP is needed)"
+            );
           }
         } catch (directLinkError: any) {
           await dualLogError(
@@ -365,9 +372,17 @@ async function agodaLogin(
             jobId
           );
 
-          // Notify worker that OTP work is completed so other jobs can proceed
+          /**
+           * Do NOT release the OTP here — the Get Payout flow may still need
+           * it for payout verification. Release happens in the UPC phase
+           * (`releaseUpcOtp`) after payout OTP is verified, or immediately if
+           * Get Payout shows the UPC widget without a verification panel. This
+           * matches the `agoda-retrieval-proxy` branch.
+           */
           if (jobId) {
-            otpCompletionNotifier.notifyOtpCompleted(jobId);
+            await dualLogInfo(
+              "OTP kept occupied — will release after Get Payout verification (or if no payout OTP is needed)"
+            );
           }
         } catch (otpError: any) {
           await dualLogError("Error during OTP flow:", otpError);
@@ -424,9 +439,16 @@ async function agodaLogin(
         }
       }
 
-      // Notify that OTP work is completed (on error) so other jobs can proceed
+      /**
+       * Do NOT release OTP on login error — let the outer cleanup in
+       * `src/agoda.ts` handle it. Premature release here would free the slot
+       * before the payout flow gets a chance to use it on retry. Matches
+       * `agoda-retrieval-proxy`.
+       */
       if (jobId) {
-        otpCompletionNotifier.notifyOtpCompleted(jobId);
+        await dualLogInfo(
+          "OTP kept occupied after login error — will be released by outer cleanup or after Get Payout verification"
+        );
       }
 
       if (!hasFailedReasonCode(pageError)) {
@@ -453,9 +475,14 @@ async function agodaLogin(
       }
     }
 
-    // Notify that OTP work is completed (on error) so other jobs can proceed
+    /**
+     * Do NOT release OTP here — the outer Agoda error handler in `src/agoda.ts`
+     * already releases once as the final cleanup. Matches `agoda-retrieval-proxy`.
+     */
     if (jobId) {
-      otpCompletionNotifier.notifyOtpCompleted(jobId);
+      await dualLogInfo(
+        "OTP kept occupied after critical login error — will be released by outer cleanup"
+      );
     }
     // Standardized cleanup on login error
     try {
