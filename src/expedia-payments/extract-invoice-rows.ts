@@ -76,15 +76,39 @@ export async function extractInvoiceRows(
             return { amount, currency };
           };
 
-          // Helper function to parse date string (MM/DD/YYYY or DD/MM/YYYY)
+          // Helper function to parse date string.
+          // Expedia Partner Central returns dates in DD/MM/YYYY format
+          // (e.g. "27/07/2025"). `new Date("27/07/2025")` is "Invalid Date"
+          // in V8, so we must parse it explicitly.
           const parseDateString = (dateStr: string): string => {
             if (!dateStr) return "";
-            // Try to parse and return in ISO format
-            const date = new Date(dateStr);
-            if (!isNaN(date.getTime())) {
-              return date.toISOString();
+
+            const trimmed = dateStr.trim();
+
+            // Match DD/MM/YYYY or D/M/YYYY (with / or - separators)
+            const dmy = trimmed.match(
+              /^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/
+            );
+            if (dmy) {
+              const day = parseInt(dmy[1], 10);
+              const month = parseInt(dmy[2], 10);
+              const year = parseInt(dmy[3], 10);
+              // Guard against ambiguous dates where both parts are <= 12.
+              // Expedia is consistently DD/MM/YYYY, so trust that order.
+              if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+                const date = new Date(Date.UTC(year, month - 1, day));
+                if (!isNaN(date.getTime())) {
+                  return date.toISOString();
+                }
+              }
             }
-            return dateStr;
+
+            // Fallback: let the browser try (handles ISO / RFC2822 strings).
+            const fallback = new Date(trimmed);
+            if (!isNaN(fallback.getTime())) {
+              return fallback.toISOString();
+            }
+            return trimmed;
           };
 
           // Extract Reservation ID - try multiple selectors
@@ -109,8 +133,11 @@ export async function extractInvoiceRows(
             row.querySelector("td.guestName");
           const guest_name = guestNameTd?.textContent?.trim() || "";
 
-          // Extract Check-in Date - try multiple selectors
+          // Extract Check-in Date.
+          // Note: CSS attribute selectors are case-sensitive for values.
+          // Expedia's actual markup is data-title="Check-In" (capital I).
           let checkInTd =
+            row.querySelector('td[data-title="Check-In"]') ||
             row.querySelector('td[data-title="Check-in"]') ||
             row.querySelector('td[data-title="Check In"]') ||
             row.querySelector("td.checkInDate");
@@ -118,8 +145,9 @@ export async function extractInvoiceRows(
             checkInTd?.textContent?.trim() || ""
           );
 
-          // Extract Check-out Date - try multiple selectors
+          // Extract Check-out Date (same case-sensitivity caveat).
           let checkOutTd =
+            row.querySelector('td[data-title="Check-Out"]') ||
             row.querySelector('td[data-title="Check-out"]') ||
             row.querySelector('td[data-title="Check Out"]') ||
             row.querySelector("td.checkOutDate");
