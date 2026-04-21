@@ -540,6 +540,7 @@ async function makeGraphQLRequest(
             // Initialize card data and EVC data variables
             let cardData: CardInfo | null = null;
             let evcCardData: any = null;
+            let evcCardActivityDataV2: any = null;
 
             // If EVC card details exist, try to fetch the actual card data
             if (
@@ -694,6 +695,29 @@ async function makeGraphQLRequest(
                   cardError.message,
                 );
               }
+
+              // Fetch accurate card activity data from the V2 accounting endpoint.
+              // We only call this if EVC details exist for the reservation (same
+              // precondition as V1) — otherwise there is no card activity to fetch.
+              try {
+                console.log(
+                  `📒 Fetching EVC V2 card activity data for reservation ${
+                    index + 1
+                  }...`,
+                );
+                evcCardActivityDataV2 = await fetchEVCCardActivityDataV2(
+                  item.reservationItemId,
+                  checkIn,
+                  cookieHeader,
+                );
+              } catch (v2Err: any) {
+                console.error(
+                  `❌ Failed to fetch EVC V2 card activity for reservation ${
+                    index + 1
+                  }:`,
+                  v2Err.message,
+                );
+              }
             }
 
             // Save reservation data to database (only if we have valid database info)
@@ -704,6 +728,7 @@ async function makeGraphQLRequest(
                 item,
                 cardData,
                 evcCardData,
+                evcCardActivityDataV2,
               );
             }
           }
@@ -949,6 +974,7 @@ async function saveGraphQLReservationToDatabase(
   reservationItem: any,
   cardData: CardInfo | null,
   evcCardData: any | null,
+  evcCardActivityDataV2: any | null = null,
 ): Promise<void> {
   try {
     // Validate jobId before processing
@@ -1058,8 +1084,12 @@ async function saveGraphQLReservationToDatabase(
       ? `Business Model: ${businessModel}`
       : undefined;
 
-    // Build card activity payload from EVC response (if present)
-    const cardActivityData = buildCardActivityFromEvc(evcCardData);
+    // Build card activity payload. Prefer V2 accounting endpoint data because
+    // it returns the most accurate `cardActivity` block; fall back to the V1
+    // EVC response if V2 is unavailable.
+    const cardActivityData =
+      buildCardActivityFromEvc(evcCardActivityDataV2) ||
+      buildCardActivityFromEvc(evcCardData);
 
     const jobItemData: CreateJobItemData = {
       job_id: jobId,
@@ -1331,6 +1361,181 @@ async function fetchEVCCardData(
   }
 
   // This should never be reached, but just in case
+  return null;
+}
+
+/**
+ * Fetch EVC card activity data from the V2 accounting endpoint.
+ * This endpoint returns the most accurate `cardActivity` block (authorizations,
+ * settlements, etc.) for a reservation — more reliable than the V1 EVC endpoint.
+ *
+ * Returns the parsed JSON response or null if the API consistently fails.
+ */
+async function fetchEVCCardActivityDataV2(
+  bookingItemId: string,
+  checkInDate: string,
+  cookieHeader: string,
+): Promise<any | null> {
+  const maxRetries = 5;
+  let attempt = 0;
+
+  const minDelayMs = parseInt(process.env.EVC_API_MIN_DELAY_MS || "4000");
+  const maxDelayMs = parseInt(process.env.EVC_API_MAX_DELAY_MS || "8000");
+
+  const generateRequestId = (): string => {
+    return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+      const r = (Math.random() * 16) | 0;
+      const v = c === "x" ? r : (r & 0x3) | 0x8;
+      return v.toString(16);
+    });
+  };
+
+  const userAgent =
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36";
+  const referer = `https://apps.expediapartnercentral.com/lodging/accounting/evclookup.html?ReservationId=${bookingItemId}&CheckInDate=${checkInDate}`;
+
+  // Build the tracking payload the UI sends. The server appears to accept any
+  // well-formed base64-encoded JSON here; we mirror the shape seen in the
+  // browser request to look legitimate.
+  const buildTwPayload = (): string => {
+    const payload = {
+      configuredDependencies: [],
+      diagnostics: { timeToProducePayload: 0, errors: [] },
+      executionContext: {
+        reportingSegment: "",
+        requestURL: referer,
+        userAgent,
+        xForwardedFor: "",
+        webSessionId: "",
+        placement: "NONE",
+        placementPage: 1,
+      },
+      siteInfo: {},
+      status: "INSTANTIATED",
+      payloadSchemaVersion: 1,
+    };
+    return Buffer.from(JSON.stringify(payload)).toString("base64");
+  };
+
+  while (attempt < maxRetries) {
+    try {
+      if (attempt > 0) {
+        const retryDelay = Math.min(8000 * Math.pow(2, attempt - 1), 60000);
+        console.log(
+          `⏳ V2 retry delay: waiting ${retryDelay}ms before retry ${attempt}/${maxRetries}...`,
+        );
+        await delay(retryDelay);
+      } else {
+        const randomDelay =
+          Math.floor(Math.random() * (maxDelayMs - minDelayMs + 1)) +
+          minDelayMs;
+        console.log(
+          `⏳ Rate limiting protection: ${randomDelay}ms delay before EVC V2 API call...`,
+        );
+        await delay(randomDelay);
+      }
+
+      const url =
+        "https://apps.expediapartnercentral.com/lodging/accounting/getEVCCardDataV2.json?";
+
+      const requestBody = {
+        checkInDate,
+        bookingItemId: bookingItemId.toString(),
+        recaptchaToken: "",
+        twPayload: buildTwPayload(),
+      };
+
+      console.log(`💳 EVC V2 API URL:`, url);
+      console.log(`📋 EVC V2 Request Body:`, {
+        checkInDate: requestBody.checkInDate,
+        bookingItemId: requestBody.bookingItemId,
+        recaptchaToken: requestBody.recaptchaToken,
+        twPayload: "[base64 tracking payload]",
+      });
+
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          accept: "*/*",
+          "accept-language": "en-GB,en-US;q=0.9,en;q=0.8",
+          "content-type": "application/json",
+          dnt: "1",
+          origin: "https://apps.expediapartnercentral.com",
+          priority: "u=1, i",
+          referer,
+          "sec-ch-ua":
+            '"Chromium";v="146", "Not-A.Brand";v="24", "Google Chrome";v="146"',
+          "sec-ch-ua-mobile": "?0",
+          "sec-ch-ua-platform": '"macOS"',
+          "sec-fetch-dest": "empty",
+          "sec-fetch-mode": "cors",
+          "sec-fetch-site": "same-origin",
+          "user-agent": userAgent,
+          "origin-request-id": generateRequestId(),
+          cookie: cookieHeader,
+        },
+        body: JSON.stringify(requestBody),
+      });
+
+      if (response.status === 429) {
+        attempt++;
+        const retryAfter = response.headers.get("retry-after");
+        const waitTime = retryAfter
+          ? parseInt(retryAfter) * 1000
+          : Math.min(15000 * attempt, 120000);
+        console.log(
+          `⚠️ V2 rate limited (429). Waiting ${waitTime}ms before retry ${attempt}/${maxRetries}...`,
+        );
+        await delay(waitTime);
+        continue;
+      }
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(
+          `❌ EVC V2 API Error: ${response.status} ${response.statusText}`,
+        );
+        console.error(`❌ EVC V2 API Response:`, errorText);
+
+        if (attempt < maxRetries - 1) {
+          attempt++;
+          const errorDelay = Math.min(5000 * attempt, 30000);
+          console.log(
+            `🔄 Retrying EVC V2 API call (${attempt}/${maxRetries}) in ${errorDelay}ms...`,
+          );
+          await delay(errorDelay);
+          continue;
+        }
+
+        console.error(
+          `❌ All V2 retries exhausted. Returning null to caller.`,
+        );
+        return null;
+      }
+
+      const data = await response.json();
+      console.log(`✅ EVC V2 API Response received`);
+      return data;
+    } catch (error: any) {
+      attempt++;
+      console.error(
+        `❌ Error fetching EVC V2 card activity data (attempt ${attempt}):`,
+        error.message,
+      );
+
+      if (attempt >= maxRetries) {
+        console.error(
+          `❌ All V2 retry attempts exhausted. Returning null.`,
+        );
+        return null;
+      }
+
+      const networkDelay = Math.min(5000 * attempt, 20000);
+      console.log(`🔄 V2 network error retry in ${networkDelay}ms...`);
+      await delay(networkDelay);
+    }
+  }
+
   return null;
 }
 
