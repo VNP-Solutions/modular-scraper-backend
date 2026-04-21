@@ -280,7 +280,7 @@ export async function runAgodaUpcPhaseStreaming(
      * no longer owns the slot. Same role as the end-of-job release in
      * `agoda-retrieval-proxy/booking-retriveal-data.ts`.
      */
-    await releaseUpcOtp(jobId, upcCollectSessionRef, "UPC phase finished");
+    releaseUpcOtp(jobId, upcCollectSessionRef, "UPC phase finished");
 
     if (listPage) {
       try {

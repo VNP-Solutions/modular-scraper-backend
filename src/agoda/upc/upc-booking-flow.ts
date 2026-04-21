@@ -6,7 +6,6 @@ import {
 } from "../../common/failed-reason.js";
 import { dualLogError, dualLogInfo } from "../../common/log-helper.js";
 import { otpCompletionNotifier } from "../../common/otp-completion-notifier.js";
-import { otpStatusManager } from "../../common/otp-status-manager.js";
 import { progressManager } from "../../common/progress-manager.js";
 import { scrapingStateManager } from "../../common/scraping-state.js";
 import { takeSuccessScreenshot } from "../../common/screenshot-helper.js";
@@ -50,39 +49,36 @@ export interface UpcCollectSession {
  *   1) right after Get Payout confirms no payout OTP is required, and
  *   2) right after a payout OTP is verified successfully.
  *
- * Guarded by `session.otpReleased` so each UPC phase only releases once.
- * `otpStatusManager.releaseOtp` only succeeds when this job still owns the
- * slot — if another job has already taken it, this is a safe no-op.
+ * Follows the same pattern `src/agoda/login-system/login.ts` previously used
+ * after a successful login OTP: emit `otpCompletionNotifier.notifyOtpCompleted`
+ * ONLY. The scraping worker forwards this as a `job-progress` message with
+ * `otpCompleted: true`, and `OtpAwareWorkerPool.handleOtpCompleted` on the
+ * parent side performs the actual DB release via `otpManager.releaseOtp`.
+ *
+ * We intentionally do NOT call `otpStatusManager.releaseOtp` here — doing so
+ * from inside the worker causes a duplicate release attempt by the parent
+ * pool (visible in logs as "Failed to release OTP ... - not currently owner").
+ *
+ * Guarded by `session.otpReleased` so each UPC phase only notifies once.
  */
-export async function releaseUpcOtp(
+export function releaseUpcOtp(
   jobId: string | undefined,
   session: UpcCollectSession | undefined,
   reason: string
-): Promise<void> {
+): void {
   if (!jobId) return;
   if (session?.otpReleased) return;
   if (session) session.otpReleased = true;
   try {
-    const released = await otpStatusManager.releaseOtp(jobId);
-    if (released) {
-      await dualLogInfo(`UPC: ✅ OTP released — ${reason}`, { jobId });
-    } else {
-      await dualLogInfo(
-        `UPC: OTP release skipped (not owned by this job) — ${reason}`,
-        { jobId }
-      );
-    }
+    otpCompletionNotifier.notifyOtpCompleted(jobId);
+    // Log after emit so it appears just before the parent-side "OTP released" log.
+    void dualLogInfo(`UPC: ✅ OTP release requested — ${reason}`, { jobId });
   } catch (e: unknown) {
-    await dualLogError(
-      `UPC: error releasing OTP — ${reason}`,
+    void dualLogError(
+      `UPC: error notifying OTP release — ${reason}`,
       e instanceof Error ? e : undefined,
       { jobId }
     );
-  }
-  try {
-    otpCompletionNotifier.notifyOtpCompleted(jobId);
-  } catch {
-    /* non-fatal */
   }
 }
 
@@ -1523,7 +1519,7 @@ export async function collectUpcForBookingId(
      * while this job keeps scraping the remaining reservations. Same pattern
      * as `agoda-retrieval-proxy/retriveal-data.ts` (~line 1711).
      */
-    await releaseUpcOtp(jobId, session, "after payout OTP verified");
+    releaseUpcOtp(jobId, session, "after payout OTP verified");
     const reOk = await reSearchThenOpenGetPayout(
       page,
       bookingListUrl,
@@ -1552,7 +1548,7 @@ export async function collectUpcForBookingId(
      * need the OTP slot for the remaining reservations. Release so another
      * job can grab it. Same pattern as `retriveal-data.ts` (~line 853).
      */
-    await releaseUpcOtp(jobId, session, "no payout OTP needed");
+    releaseUpcOtp(jobId, session, "no payout OTP needed");
   }
 
   const previousCardDigits = session?.lastScrapedCardDigits;
