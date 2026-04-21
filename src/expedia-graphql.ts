@@ -914,6 +914,7 @@ function buildCardActivityFromEvc(
   const ca = evcCardData?.cardActivity;
   if (!ca) return null;
 
+  console.log(`🔍 Card Activity:`, ca);
   const totalSettlementAmount = parseMoneyAmount(ca.totalSettlementAmount);
 
   const authorizations: CardActivityAuthorization[] = Array.isArray(
