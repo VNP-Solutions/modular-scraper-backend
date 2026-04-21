@@ -1542,14 +1542,23 @@ export async function collectUpcForBookingId(
       await clickGetPayoutTab(page, jobId).catch(() => {});
       await delay(3000);
     }
-  } else {
-    /**
-     * UPC widget appeared without any verification panel — this job doesn't
-     * need the OTP slot for the remaining reservations. Release so another
-     * job can grab it. Same pattern as `retriveal-data.ts` (~line 853).
-     */
-    releaseUpcOtp(jobId, session, "no payout OTP needed");
   }
+  /**
+   * Important: we do NOT release the OTP here on the "no payout OTP needed"
+   * path. Observed production issue:
+   *   - Booking #1 showed the UPC widget directly (no OTP).
+   *   - We released the slot → another job grabbed it and started logging in,
+   *     which generated its own Agoda OTP email.
+   *   - Booking #2 (same property-job, still running) then required a payout
+   *     OTP. Our inbox-scan picked up the OTHER job's freshly-sent OTP email
+   *     and submitted it — Agoda accepts account-wide OTPs, so it worked, but
+   *     it stole the other job's OTP.
+   *
+   * Releasing only after a successful `fillPayoutOtpInFrame` avoids this race:
+   * once we've verified, Agoda trusts the session for the rest of the phase,
+   * so we can safely hand off. If NO booking ever needs an OTP, the slot is
+   * released by the end-of-phase safety net in `agoda-upc.ts`.
+   */
 
   const previousCardDigits = session?.lastScrapedCardDigits;
   let data = await scrapeUpcWidgetData(
