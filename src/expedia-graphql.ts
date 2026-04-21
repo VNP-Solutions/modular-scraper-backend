@@ -29,9 +29,17 @@ import { timeManager } from "./common/time-manager.js";
 import { getNextDateFromCompleted } from "./date-split/helper.js";
 import login from "./login/login.js";
 import { CardInfo, PaymentInfo } from "./models/job-item.model.js";
+import {
+  Authorization as CardActivityAuthorization,
+  MoneyAmount as CardActivityMoney,
+} from "./models/card-activity.model.js";
 import { JobStatus } from "./models/job.model.js";
 import handleOtpVerification from "./otp-verification/otp-verification.js";
-import { CreateJobItemData, jobService } from "./services/job.service.js";
+import {
+  CreateCardActivityData,
+  CreateJobItemData,
+  jobService,
+} from "./services/job.service.js";
 
 dotenv.config();
 
@@ -870,6 +878,68 @@ async function makeGraphQLRequest(
 }
 
 /**
+ * Parse a date-like value (ISO, "YYYY-MM-DD HH:mm:ss.SSS", etc.) to a Date,
+ * returning undefined when input is empty/invalid.
+ */
+function parseCardActivityDate(value: any): Date | undefined {
+  if (!value) return undefined;
+  const d = new Date(value);
+  return isNaN(d.getTime()) ? undefined : d;
+}
+
+function parseMoneyAmount(raw: any): CardActivityMoney | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const amount =
+    typeof raw.amount === "number"
+      ? raw.amount
+      : raw.amount !== undefined && raw.amount !== null
+      ? parseFloat(raw.amount)
+      : undefined;
+  const currency =
+    typeof raw.currency === "string" ? raw.currency : undefined;
+  if ((amount === undefined || isNaN(amount)) && !currency) return undefined;
+  return {
+    amount: amount !== undefined && !isNaN(amount) ? amount : undefined,
+    currency,
+  };
+}
+
+/**
+ * Normalize the `cardActivity` block from an EVC response into the shape
+ * expected by the CardActivity model.
+ */
+function buildCardActivityFromEvc(
+  evcCardData: any | null,
+): CreateCardActivityData | null {
+  const ca = evcCardData?.cardActivity;
+  if (!ca) return null;
+
+  const totalSettlementAmount = parseMoneyAmount(ca.totalSettlementAmount);
+
+  const authorizations: CardActivityAuthorization[] = Array.isArray(
+    ca.authorizations,
+  )
+    ? ca.authorizations.map((a: any) => ({
+        dateTime: parseCardActivityDate(a?.dateTime),
+        status: a?.status ?? undefined,
+        authCode: a?.authCode ?? null,
+        declineCode: a?.declineCode ?? null,
+        responseDescription:
+          a?.responseDescription ?? a?.responseDecription ?? null,
+        amount: parseMoneyAmount(a?.amount),
+      }))
+    : [];
+
+  const hasAny = !!totalSettlementAmount || authorizations.length > 0;
+  if (!hasAny) return null;
+
+  return {
+    totalSettlementAmount,
+    authorizations,
+  };
+}
+
+/**
  * Helper function to save GraphQL reservation data to database
  */
 async function saveGraphQLReservationToDatabase(
@@ -987,6 +1057,9 @@ async function saveGraphQLReservationToDatabase(
       ? `Business Model: ${businessModel}`
       : undefined;
 
+    // Build card activity payload from EVC response (if present)
+    const cardActivityData = buildCardActivityFromEvc(evcCardData);
+
     const jobItemData: CreateJobItemData = {
       job_id: jobId,
       property_id: propertyId,
@@ -1002,6 +1075,7 @@ async function saveGraphQLReservationToDatabase(
       card_info: cardData || undefined,
       has_payment_info: !!paymentData,
       payment_info: paymentData || undefined,
+      card_activity: cardActivityData || undefined,
       reservation_status: reservationStatus,
       additional_text: additionalText,
     };

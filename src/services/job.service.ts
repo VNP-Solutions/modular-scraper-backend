@@ -1,5 +1,11 @@
 import { Types } from "mongoose";
 import {
+  Authorization,
+  CardActivity,
+  ICardActivity,
+  MoneyAmount,
+} from "../models/card-activity.model.js";
+import {
   CardInfo,
   IJobItem,
   JobItem,
@@ -40,6 +46,11 @@ export interface CreateJobData {
   queue_name?: string;
 }
 
+export interface CreateCardActivityData {
+  totalSettlementAmount?: MoneyAmount;
+  authorizations?: Authorization[];
+}
+
 export interface CreateJobItemData {
   job_id: string;
   property_id: string;
@@ -55,6 +66,7 @@ export interface CreateJobItemData {
   card_info?: CardInfo;
   has_payment_info?: boolean;
   payment_info?: PaymentInfo;
+  card_activity?: CreateCardActivityData;
   reservation_status: string;
   additional_text?: string;
 }
@@ -514,18 +526,105 @@ export class JobService {
         "property_id",
       );
 
+      const { card_activity, ...jobItemFields } = itemData;
+
       const jobItem = new JobItem({
-        ...itemData,
+        ...jobItemFields,
         job_id: jobObjectId,
         property_id: propertyObjectId,
         has_card_info: itemData.has_card_info || false,
         has_payment_info: itemData.has_payment_info || false,
+        has_card_activity: false,
       });
 
-      return await jobItem.save();
+      const savedJobItem = await jobItem.save();
+
+      if (card_activity && this.hasAnyCardActivityData(card_activity)) {
+        try {
+          const cardActivityDoc = await CardActivity.create({
+            job_item_id: savedJobItem._id,
+            job_id: jobObjectId,
+            property_id: propertyObjectId,
+            reservation_id: itemData.reservation_id,
+            totalSettlementAmount: card_activity.totalSettlementAmount,
+            authorizations: card_activity.authorizations || [],
+          });
+
+          savedJobItem.has_card_activity = true;
+          savedJobItem.card_activity_id = cardActivityDoc._id;
+          await savedJobItem.save();
+        } catch (cardActivityError) {
+          console.error(
+            `Error creating card activity for job item ${savedJobItem._id}: ${cardActivityError}`,
+          );
+        }
+      }
+
+      return savedJobItem;
     } catch (error) {
       console.error(`Error creating job item: ${error}`);
       throw error;
+    }
+  }
+
+  /**
+   * Check whether the card activity payload has any meaningful data worth persisting.
+   */
+  private hasAnyCardActivityData(data: CreateCardActivityData): boolean {
+    if (!data) return false;
+    const hasTotal =
+      !!data.totalSettlementAmount &&
+      (data.totalSettlementAmount.amount !== undefined ||
+        !!data.totalSettlementAmount.currency);
+    const hasAuthorizations =
+      Array.isArray(data.authorizations) && data.authorizations.length > 0;
+    return hasTotal || hasAuthorizations;
+  }
+
+  /**
+   * Attach or update a card activity record for an existing job item.
+   */
+  async upsertJobItemCardActivity(
+    jobItemId: string,
+    data: CreateCardActivityData,
+  ): Promise<ICardActivity | null> {
+    try {
+      const jobItemObjectId = this.validateObjectId(jobItemId, "jobItemId");
+      const jobItem = await JobItem.findById(jobItemObjectId);
+      if (!jobItem) {
+        console.error(`Job item ${jobItemId} not found for card activity`);
+        return null;
+      }
+
+      const cardActivity = await CardActivity.findOneAndUpdate(
+        { job_item_id: jobItemObjectId },
+        {
+          $set: {
+            job_item_id: jobItemObjectId,
+            job_id: jobItem.job_id,
+            property_id: jobItem.property_id,
+            reservation_id: jobItem.reservation_id,
+            totalSettlementAmount: data.totalSettlementAmount,
+            authorizations: data.authorizations || [],
+          },
+        },
+        { new: true, upsert: true, setDefaultsOnInsert: true },
+      );
+
+      if (
+        !jobItem.has_card_activity ||
+        !jobItem.card_activity_id ||
+        jobItem.card_activity_id.toString() !== cardActivity._id.toString()
+      ) {
+        jobItem.has_card_activity = true;
+        jobItem.card_activity_id = cardActivity._id;
+        await jobItem.save();
+      }
+
+      return cardActivity;
+    } catch (error) {
+      console.error(`Error upserting card activity: ${error}`);
+      return null;
     }
   }
 

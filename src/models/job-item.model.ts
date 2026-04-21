@@ -33,6 +33,8 @@ export interface IJobItem extends Document {
   card_info?: CardInfo;
   has_payment_info: boolean;
   payment_info?: PaymentInfo;
+  has_card_activity: boolean;
+  card_activity_id?: Types.ObjectId;
   reservation_status: string;
   additional_text?: string;
   createdAt: Date;
@@ -151,6 +153,16 @@ const JobItemSchema = new Schema<IJobItem>(
       type: PaymentInfoSchema,
       required: false,
     },
+    has_card_activity: {
+      type: Boolean,
+      default: false,
+      required: false,
+    },
+    card_activity_id: {
+      type: Schema.Types.ObjectId,
+      ref: "CardActivity",
+      required: false,
+    },
     reservation_status: {
       type: String,
       required: true,
@@ -174,6 +186,7 @@ JobItemSchema.index({ job_id: 1, property_id: 1 });
 JobItemSchema.index({ guest_name: 1 });
 JobItemSchema.index({ check_in_date: 1 });
 JobItemSchema.index({ reservation_status: 1 });
+JobItemSchema.index({ card_activity_id: 1 });
 
 // Compound index for unique constraint
 JobItemSchema.index({ job_id: 1, reservation_id: 1 }, { unique: true });
