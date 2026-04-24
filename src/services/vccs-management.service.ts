@@ -17,6 +17,24 @@ function isGuestCreditCardTrustUnavailableHtml(html: string): boolean {
 
 const MAX_CONSECUTIVE_GUEST_CARD_TRUST_UNAVAILABLE = 10;
 
+/**
+ * Pull the `ses` value out of an authenticated `booking_cc_details.html` URL.
+ * Booking uses semicolons as query separators on this endpoint, so we normalise
+ * them to ampersands before parsing. Returns null if no usable session found.
+ */
+function extractSesFromAuthenticatedUrl(url: string): string | null {
+  try {
+    const normalised = new URL(url.replace(/;/g, "&"));
+    const fromSearch = normalised.searchParams.get("ses");
+    if (fromSearch) return fromSearch;
+    const m = url.match(/[;&?]ses=([^;&]+)/);
+    return m ? m[1] : null;
+  } catch {
+    const m = url.match(/[;&?]ses=([^;&]+)/);
+    return m ? m[1] : null;
+  }
+}
+
 export interface VccsUrlParams {
   hotel_id: string;
   ses: string;
@@ -311,13 +329,29 @@ export class VccsManagementService {
     reservationId: string,
     params: VccsUrlParams,
     scraperInstance?: any, // BookingScraper instance for captcha/2FA handling
-    authenticatedUrlPattern?: string, // Use authenticated URL pattern from first successful fetch
-    fetchOutcome?: { guestCardTrustUnavailable?: boolean }
+    authenticatedUrlPattern?: string, // Use authenticated URL pattern from previous successful fetch
+    fetchOutcome?: {
+      guestCardTrustUnavailable?: boolean;
+      /**
+       * Latest authenticated card-details URL seen after this call. Set whenever
+       * the browser actually landed on `booking_cc_details.html` (with or without
+       * card data). Callers should use this to reuse the freshest `ses` for the
+       * next reservation and avoid repeated login / 2FA / OTP challenges.
+       */
+      latestAuthenticatedUrl?: string;
+    }
   ): Promise<CardDetailsResponse | null> {
     try {
-      if (fetchOutcome) fetchOutcome.guestCardTrustUnavailable = false;
+      if (fetchOutcome) {
+        fetchOutcome.guestCardTrustUnavailable = false;
+        fetchOutcome.latestAuthenticatedUrl = undefined;
+      }
 
       let cardDetailsUrl: string;
+      let urlSource:
+        | "authenticatedUrlPattern"
+        | "paramsSes"
+        | "noSession" = "noSession";
 
       // If we have an authenticated URL pattern from a previous successful fetch, use it!
       // Second and subsequent requests use this URL, which contains the latest session
@@ -328,6 +362,7 @@ export class VccsManagementService {
           /bn=[^;]+/,
           `bn=${reservationId}`
         );
+        urlSource = "authenticatedUrlPattern";
         dualLogInfo(
           "Using latest session from previous successful fetch (authenticated URL pattern)",
           {
@@ -335,11 +370,24 @@ export class VccsManagementService {
             urlPattern: cardDetailsUrl,
           }
         );
-      } else {
-        // First time - do NOT use session. Booking.com will use cookies, redirect,
-        // and set session; we capture the final URL for subsequent requests.
+      } else if (params.ses) {
+        // First card-detail fetch in this run: we DO already have a valid session
+        // from the preceding VCCS listing API (params.ses). Using it directly here
+        // avoids the sign-in / 2FA redirect that happens when no `ses` is supplied.
         // Note: Booking.com uses semicolons (;) not ampersands (&) for this URL!
+        cardDetailsUrl = `${this.cardDetailsBaseUrl}?lang=${params.lang};bn=${reservationId};hotel_id=${params.hotel_id};has_bvc=1;ses=${params.ses}`;
+        urlSource = "paramsSes";
+        dualLogInfo(
+          "First reservation - reusing session from VCCS listing phase (params.ses)",
+          {
+            reservationId,
+            hasSession: true,
+          }
+        );
+      } else {
+        // No pattern and no params.ses — fall back to cookie-based redirect flow.
         cardDetailsUrl = `${this.cardDetailsBaseUrl}?lang=${params.lang};bn=${reservationId};hotel_id=${params.hotel_id};has_bvc=1`;
+        urlSource = "noSession";
         dualLogInfo(
           "First reservation - constructing URL without session (booking.com will redirect and set session)",
           {
@@ -351,7 +399,7 @@ export class VccsManagementService {
       dualLogInfo("Navigating to card details page", {
         url: cardDetailsUrl,
         reservationId,
-        ...(authenticatedUrlPattern ? { usingAuthenticatedPattern: true } : { firstRequestNoSession: true }),
+        urlSource,
       });
 
       // Navigate - Booking.com will automatically:
@@ -691,10 +739,23 @@ export class VccsManagementService {
       const html = await page.content();
 
       if (isGuestCreditCardTrustUnavailableHtml(html)) {
-        if (fetchOutcome) fetchOutcome.guestCardTrustUnavailable = true;
+        if (fetchOutcome) {
+          fetchOutcome.guestCardTrustUnavailable = true;
+          // Even though this reservation has no card data, the browser DID reach
+          // `booking_cc_details.html` with a fresh session. Surface that URL so
+          // the caller can reuse `ses` for the next reservation and skip another
+          // login/2FA/OTP round-trip.
+          const trustUrl = page.url();
+          if (
+            typeof trustUrl === "string" &&
+            trustUrl.includes("booking_cc_details")
+          ) {
+            fetchOutcome.latestAuthenticatedUrl = trustUrl;
+          }
+        }
         dualLogInfo(
           "Card details page shows guest card unavailable (trust / eligibility)",
-          { reservationId }
+          { reservationId, currentUrl: page.url() }
         );
         return null;
       }
@@ -733,6 +794,9 @@ export class VccsManagementService {
       if (cardDetails) {
         const currentUrl = page.url();
         (cardDetails as any).authenticatedUrl = currentUrl;
+        if (fetchOutcome) {
+          fetchOutcome.latestAuthenticatedUrl = currentUrl;
+        }
         dualLogInfo("Saved authenticated URL pattern for subsequent requests", {
           reservationId,
           authenticatedUrl: currentUrl,
@@ -972,7 +1036,7 @@ export class VccsManagementService {
     processed: number;
     errors: number;
     skippedResume: number;
-    /** Set when 10 consecutive trust-unavailable card pages triggered Trust needed for this job. */
+    /** Set when the trust-unavailable cap was hit and the job was failed as "Trust needed". */
     trustStreakAbortedThisJob?: boolean;
     results: Array<{
       reservationId: string;
@@ -994,12 +1058,22 @@ export class VccsManagementService {
     let errors = 0;
     let skippedResume = 0;
     let latestAuthenticatedUrl: string | undefined = undefined; // Store LATEST authenticated URL (updated after EVERY successful fetch)
-    /** Consecutive trust-unavailable card pages; resets on successful card or non-trust missing card. */
-    let consecutiveGuestCardTrustUnavailable = 0;
+    /**
+     * Cumulative count of trust-unavailable card pages seen BEFORE we got our
+     * first successful card. Never resets. Once `foundAnyCardThisRun` is true,
+     * this counter is frozen and the trust-needed rule stops applying — because
+     * the property clearly CAN serve cards, so the issue isn't trust.
+     */
+    let guestCardTrustUnavailableCount = 0;
     let trustStreakAbortedThisJob = false;
+    /**
+     * Flipped to true the moment we retrieve a card with a non-empty card number.
+     * After this, we no longer increment the trust counter or run the cap check.
+     */
+    let foundAnyCardThisRun = false;
     /** Successful getCardDetailsFromBrowser calls (non–resume-skip). */
     let cardDetailFetchAttempts = 0;
-    /** How many of those returned the guest trust-unavailable page. */
+    /** How many fetches returned the guest trust-unavailable page (cumulative). */
     let trustUnavailablePageCount = 0;
 
     const completedReservationIds = jobId
@@ -1015,6 +1089,28 @@ export class VccsManagementService {
     const skipTrustUnavailableStreak =
       Boolean(jobId) && jobItemCountAtStart > 0;
 
+    /**
+     * Trust-unavailable cap, dynamic per job run:
+     *   - Large batches (>= 10 fetchable rows) keep the original 10-strike trigger.
+     *   - Small batches use `min(10, rows-to-fetch)` so the `X/Y` counter
+     *     actually reflects the work in this job instead of a misleading `X/10`.
+     * `rowsToFetch` excludes reservations already completed (resume-skips)
+     * because those never open the card page.
+     *
+     * Counting semantics: the counter NEVER resets. Once we find our first
+     * card (`foundAnyCardThisRun`), the counter is frozen and the cap check
+     * is disabled for the rest of the run — because the property can serve
+     * cards, so the issue isn't trust.
+     */
+    const rowsToFetch = Math.max(
+      0,
+      vccsData.data.vccs.length - completedReservationIds.size
+    );
+    const effectiveTrustCap = Math.max(
+      1,
+      Math.min(MAX_CONSECUTIVE_GUEST_CARD_TRUST_UNAVAILABLE, rowsToFetch)
+    );
+
     dualLogInfo("Starting VCCS reservation processing", {
       totalVccs: vccsData.data.vccs.length,
       jobId,
@@ -1022,6 +1118,8 @@ export class VccsManagementService {
       resumeSkipCount: completedReservationIds.size,
       jobItemCountAtStart,
       skipTrustUnavailableStreak,
+      rowsToFetch,
+      effectiveTrustCap,
     });
 
     for (const vccs of vccsData.data.vccs) {
@@ -1046,7 +1144,10 @@ export class VccsManagementService {
       try {
         dualLogInfo(`Processing reservation ${vccs.hres_id}`);
 
-        const fetchOutcome: { guestCardTrustUnavailable?: boolean } = {};
+        const fetchOutcome: {
+          guestCardTrustUnavailable?: boolean;
+          latestAuthenticatedUrl?: string;
+        } = {};
 
         // Get card details for this reservation using browser navigation
         // Use LATEST authenticated URL from previous fetch (if available)
@@ -1064,19 +1165,37 @@ export class VccsManagementService {
         const hadCardDetails =
           !!cardDetails && !!String(cardDetails.cardNumber || "").trim();
 
-        if (!skipTrustUnavailableStreak) {
+        // Trust-needed tracking:
+        //   • Goal: "if we never get a card, it's a trust issue."
+        //   • Count only trust-unavailable pages, cumulatively, with NO reset.
+        //   • Stop counting entirely as soon as ONE card succeeds — the
+        //     property proves it can serve cards, so trust isn't the issue.
+        //   • Non-trust failures (captcha, page errors, etc.) don't touch the
+        //     counter; they aren't evidence of trust problems.
+        if (!skipTrustUnavailableStreak && !foundAnyCardThisRun) {
           if (hadCardDetails) {
-            consecutiveGuestCardTrustUnavailable = 0;
+            foundAnyCardThisRun = true;
+            dualLogInfo(
+              "First card retrieved successfully — trust-unavailable tracking disabled for the rest of this run",
+              {
+                reservationId: vccs.hres_id,
+                trustUnavailableCountSoFar: guestCardTrustUnavailableCount,
+                effectiveTrustCap,
+              }
+            );
           } else if (fetchOutcome.guestCardTrustUnavailable) {
-            consecutiveGuestCardTrustUnavailable++;
+            guestCardTrustUnavailableCount++;
             trustUnavailablePageCount++;
             dualLogInfo(
-              `Consecutive guest-card trust-unavailable: ${consecutiveGuestCardTrustUnavailable}/${MAX_CONSECUTIVE_GUEST_CARD_TRUST_UNAVAILABLE}`,
-              { reservationId: vccs.hres_id }
+              `Guest-card trust-unavailable: ${guestCardTrustUnavailableCount}/${effectiveTrustCap}`,
+              {
+                reservationId: vccs.hres_id,
+                effectiveTrustCap,
+                rowsToFetch,
+              }
             );
             if (
-              consecutiveGuestCardTrustUnavailable >=
-                MAX_CONSECUTIVE_GUEST_CARD_TRUST_UNAVAILABLE &&
+              guestCardTrustUnavailableCount >= effectiveTrustCap &&
               jobId
             ) {
               await jobService.updateJobStatusWithReason(
@@ -1085,9 +1204,14 @@ export class VccsManagementService {
                 "Trust needed"
               );
               dualLogError(
-                `Job failed after ${MAX_CONSECUTIVE_GUEST_CARD_TRUST_UNAVAILABLE} consecutive guest-card trust-unavailable pages`,
+                `Job failed: ${guestCardTrustUnavailableCount} trust-unavailable page(s) reached cap ${effectiveTrustCap} before any card was retrieved`,
                 new Error("Trust needed"),
-                { jobId, reservationId: vccs.hres_id }
+                {
+                  jobId,
+                  reservationId: vccs.hres_id,
+                  effectiveTrustCap,
+                  rowsToFetch,
+                }
               );
               trustStreakAbortedThisJob = true;
               errors++;
@@ -1099,18 +1223,49 @@ export class VccsManagementService {
               });
               break;
             }
-          } else {
-            consecutiveGuestCardTrustUnavailable = 0;
           }
+          // else: non-trust failure — counter unchanged (not evidence of trust).
+        } else if (hadCardDetails && !foundAnyCardThisRun) {
+          // Reached when skipTrustUnavailableStreak is true (resume) and we
+          // just got a card. Still flip the flag so subsequent logic is consistent.
+          foundAnyCardThisRun = true;
+        } else if (fetchOutcome.guestCardTrustUnavailable) {
+          // Post-first-card or skipTrustUnavailableStreak: still keep counters
+          // accurate for logging / end-of-run diagnostics, but don't trigger.
+          trustUnavailablePageCount++;
         }
 
-        // ALWAYS update the latest authenticated URL after EVERY successful fetch
-        // This is important because 2FA/captcha can happen at any time and change the session
-        if (cardDetails && (cardDetails as any).authenticatedUrl) {
-          latestAuthenticatedUrl = (cardDetails as any).authenticatedUrl;
+        // ALWAYS carry forward the latest authenticated URL + ses, even when
+        // this reservation returned no card (e.g. trust-unavailable). The
+        // browser still landed on `booking_cc_details.html` with a fresh
+        // session, so the NEXT reservation can reuse that `ses` and skip
+        // another login / 2FA / OTP round-trip.
+        const nextAuthenticatedUrl =
+          (cardDetails && (cardDetails as any).authenticatedUrl) ||
+          fetchOutcome.latestAuthenticatedUrl;
+        if (nextAuthenticatedUrl) {
+          latestAuthenticatedUrl = nextAuthenticatedUrl;
+          // Refresh params.ses from the authenticated URL so the fallback
+          // (when we have no pattern but do have params.ses) also uses the
+          // newest session.
+          const sesFromUrl = extractSesFromAuthenticatedUrl(
+            nextAuthenticatedUrl
+          );
+          if (sesFromUrl && sesFromUrl !== params.ses) {
+            dualLogInfo(
+              `Refreshing params.ses from latest authenticated card-details URL`,
+              {
+                reservationId: vccs.hres_id,
+                oldSes: params.ses,
+                newSes: sesFromUrl,
+              }
+            );
+            params.ses = sesFromUrl;
+          }
           dualLogInfo(`Updated latest authenticated URL for next reservation`, {
             reservationId: vccs.hres_id,
             latestAuthenticatedUrl,
+            fromTrustUnavailable: !cardDetails,
           });
         }
 
@@ -1183,15 +1338,17 @@ export class VccsManagementService {
       }
     }
 
-    // Every opened card page returned trust-unavailable, but fewer than 10 rows (e.g. 7 total) —
-    // still treat as Trust needed (cannot reach 10 consecutive when the list is shorter).
+    // Safety net: no card was ever retrieved AND every opened page returned
+    // trust-unavailable. With the dynamic cap above (`min(10, rowsToFetch)`)
+    // the inner loop normally fires first, but keep this as a defensive
+    // fallback for edge cases (e.g. counters out of alignment).
     if (
       jobId &&
       !skipTrustUnavailableStreak &&
       !trustStreakAbortedThisJob &&
+      !foundAnyCardThisRun &&
       cardDetailFetchAttempts > 0 &&
-      trustUnavailablePageCount === cardDetailFetchAttempts &&
-      trustUnavailablePageCount < MAX_CONSECUTIVE_GUEST_CARD_TRUST_UNAVAILABLE
+      trustUnavailablePageCount === cardDetailFetchAttempts
     ) {
       await jobService.updateJobStatusWithReason(
         jobId,
@@ -1199,9 +1356,13 @@ export class VccsManagementService {
         "Trust needed"
       );
       dualLogError(
-        `Job failed: all ${trustUnavailablePageCount} card fetch(es) returned guest-card trust-unavailable (fewer than ${MAX_CONSECUTIVE_GUEST_CARD_TRUST_UNAVAILABLE} reservations in this run).`,
+        `Job failed: all ${trustUnavailablePageCount}/${cardDetailFetchAttempts} card fetch(es) returned guest-card trust-unavailable and no card was retrieved (cap ${effectiveTrustCap}).`,
         new Error("Trust needed"),
-        { jobId }
+        {
+          jobId,
+          effectiveTrustCap,
+          rowsToFetch,
+        }
       );
       trustStreakAbortedThisJob = true;
       errors++;
@@ -1213,6 +1374,9 @@ export class VccsManagementService {
       skippedResume,
       total: vccsData.data.vccs.length,
       trustStreakAbortedThisJob,
+      foundAnyCardThisRun,
+      trustUnavailablePageCount,
+      effectiveTrustCap,
     });
 
     return {
