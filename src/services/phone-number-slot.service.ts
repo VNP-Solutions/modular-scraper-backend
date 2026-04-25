@@ -192,6 +192,34 @@ class PhoneNumberSlotService {
   }
 
   /**
+   * If this job holds an Occupied `phone_number_slots` row, return phone + port
+   * for `setJobContact` (same shape as scraping OTP / worker pool).
+   */
+  async getOccupiedContactForJob(
+    jobId: string
+  ): Promise<{ phone: string; port: string } | null> {
+    if (!mongoose.Types.ObjectId.isValid(jobId)) {
+      return null;
+    }
+    try {
+      const row = await PhoneNumberSlot.findOne({
+        job_id: new mongoose.Types.ObjectId(jobId),
+        status: PhoneNumberSlotStatus.Occupied,
+      }).lean();
+      if (!row) {
+        return null;
+      }
+      return {
+        phone: row.phone_number,
+        port: String(row.slot),
+      };
+    } catch (error) {
+      console.error("PhoneNumberSlot.getOccupiedContactForJob error:", error);
+      return null;
+    }
+  }
+
+  /**
    * Release the row held by this job (if any).
    */
   async releaseByJobId(jobId: string): Promise<boolean> {

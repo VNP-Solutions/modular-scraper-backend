@@ -7,7 +7,10 @@ import { Worker } from "worker_threads";
 import { JobStatus } from "../models/job.model.js";
 import { jobService } from "../services/job.service.js";
 import { otpStatusManager, OtpStatusManager } from "./otp-status-manager.js";
-import { getNextContactForJob } from "./job-phone-store.js";
+import {
+  getJobPhoneAndPort,
+  getNextContactForJob,
+} from "./job-phone-store.js";
 import {
   JobType,
   WorkerInfo,
@@ -739,6 +742,32 @@ export class OtpAwareWorkerPool extends EventEmitter {
 
   public getOtpStatus() {
     return this.otpManager.getCurrentStatus();
+  }
+
+  /**
+   * For trust verification on the main thread: recover the same phone/port the worker pool
+   * would use for this job (`selectedContact` on a queued job, or in-memory lock after worker start).
+   */
+  peekBookingOtpContactForJob(
+    jobId: string
+  ): { phone: string; port?: string } | undefined {
+    for (const queuedJob of this.jobQueue) {
+      if (queuedJob.jobData.jobId !== jobId) {
+        continue;
+      }
+      const sc = queuedJob.jobData.selectedContact as
+        | { phone?: string; port?: string }
+        | undefined;
+      if (sc?.phone) {
+        return { phone: sc.phone, port: sc.port };
+      }
+      return undefined;
+    }
+    const locked = getJobPhoneAndPort(jobId);
+    if (locked?.phone) {
+      return { phone: locked.phone, port: locked.port };
+    }
+    return undefined;
   }
 
   public hasAvailableWorkers(): boolean {

@@ -130,6 +130,18 @@ export class BookingScraper extends BaseScraper {
     this.browser = browser;
   }
 
+  /**
+   * Trust verification: use the same pending job id as scraping so OTP phone selection,
+   * email slot filtering, and per-job timeouts align with `handleBookingOtpVerification`.
+   * Call after {@link setPropertyIdForDb} and before {@link setupBrowser}.
+   */
+  public setJobIdForTrustRun(jobId: string): void {
+    this.jobId = jobId;
+    if (this.captchaService && jobId) {
+      this.captchaService.setJobId(jobId);
+    }
+  }
+
   public async hasValidCookies(): Promise<boolean> {
     if (!this.propertyIdForDb) {
       return false;
@@ -1499,7 +1511,11 @@ export class BookingScraper extends BaseScraper {
             action: "handle_captcha",
           }
         );
-        if (this.jobId && Types.ObjectId.isValid(this.jobId)) {
+        if (
+          this.jobId &&
+          Types.ObjectId.isValid(this.jobId) &&
+          this.context !== ScraperContext.TRUST_VERIFICATION
+        ) {
           await phoneNumberSlotService.releaseByJobId(this.jobId);
         }
         return false;

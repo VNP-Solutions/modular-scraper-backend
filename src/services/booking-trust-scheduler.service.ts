@@ -4,12 +4,21 @@ import {
 } from "../common/booking-error-types.js";
 import { BOOKING_SELECTORS } from "../common/booking-selectors.js";
 import { decryptPassword } from "../common/encription.js";
+import { setJobContact } from "../common/job-phone-store.js";
 import {
   dualLogError,
   dualLogInfo,
+  dualLogWarn,
   finalizeJobLogging,
   initializeJobLogging,
 } from "../common/log-helper.js";
+import { otpAwareWorkerPool } from "../common/otp-aware-worker-pool.js";
+import { Types } from "mongoose";
+import {
+  Job,
+  JobStatus,
+  OTAProvider,
+} from "../models/job.model.js";
 import { PropertyCredentials } from "../models/Property-credentials.js";
 import {
   BookingTrustedStatus,
@@ -18,6 +27,7 @@ import {
 } from "../models/property.model.js";
 import { BookingScraper, ScraperContext } from "../scrapers/booking-scraper.js";
 import { notificationService } from "./notification.service.js";
+import { phoneNumberSlotService } from "./phone-number-slot.service.js";
 
 interface TrustVerificationResult {
   propertyId: string;
@@ -51,54 +61,91 @@ export class BookingTrustSchedulerService {
   };
 
   /**
-   * Get properties that need trust verification based on the rules:
-   * a. Properties with last_login >= 23h and trusted_status = not_trusted
-   * b. OR Properties with last_login >= 6d and trusted_status = trusted
+   * Get properties that need trust verification.
+   *
+   * Current rules: only properties that have at least one **Booking** job in
+   * `Pending` only, plus valid `booking_id` and booking credentials
+   * (same populate match as before).
+   *
+   * Legacy rules (time-based refresh for all eligible properties) are kept in
+   * comments below — do not delete; re-apply by swapping the active
+   * `Property.find` filter if needed in the future.
    */
   async getPropertiesForTrustVerification(): Promise<IProperty[]> {
-    const now = new Date();
-    const twentyThreeHoursAgo = new Date(now.getTime() - 23 * 60 * 60 * 1000);
-    const sixDaysAgo = new Date(now.getTime() - 6 * 24 * 60 * 60 * 1000);
-
     try {
+      const propertyIdsWithPendingBookingJobs = await Job.distinct(
+        "property_id",
+        {
+          $or: [
+            { ota_provider: OTAProvider.Booking },
+            { OTA: OTAProvider.Booking },
+          ],
+          job_status: JobStatus.Pending,
+          property_id: { $exists: true, $ne: null },
+        }
+      );
+
+      if (propertyIdsWithPendingBookingJobs.length === 0) {
+        await dualLogInfo(
+          "No properties with pending Booking jobs — trust verification candidate list empty",
+          { distinctPropertiesWithPendingJobs: 0 }
+        );
+        return [];
+      }
+
+      /*
+       * --- LEGACY: previous Property.find filter (no job filter) ---
+       * Used with time windows twentyThreeHoursAgo / sixDaysAgo on
+       * booking_last_login and booking_trusted_status. Restore by replacing
+       * the active `Property.find` below with this block (and reintroduce
+       * `now`, `twentyThreeHoursAgo`, `sixDaysAgo` above).
+       *
+       * const now = new Date();
+       * const twentyThreeHoursAgo = new Date(now.getTime() - 23 * 60 * 60 * 1000);
+       * const sixDaysAgo = new Date(now.getTime() - 6 * 24 * 60 * 60 * 1000);
+       *
+       * await Property.find({
+       *   $and: [
+       *     { booking_id: { $exists: true, $nin: ["0", "", null] } },
+       *     {
+       *       $or: [
+       *         {
+       *           $and: [
+       *             {
+       *               $or: [
+       *                 { booking_trusted_status: BookingTrustedStatus.NotTrusted },
+       *                 { booking_trusted_status: { $exists: false } },
+       *               ],
+       *             },
+       *             {
+       *               $or: [
+       *                 { booking_last_login: { $lte: twentyThreeHoursAgo } },
+       *                 { booking_last_login: { $exists: false } },
+       *               ],
+       *             },
+       *           ],
+       *         },
+       *         {
+       *           $and: [
+       *             { booking_trusted_status: BookingTrustedStatus.Trusted },
+       *             {
+       *               $or: [
+       *                 { booking_last_login: { $lte: sixDaysAgo } },
+       *                 { booking_last_login: { $exists: false } },
+       *               ],
+       *             },
+       *           ],
+       *         },
+       *       ],
+       *     },
+       *   ],
+       * })
+       */
+
       const properties = await Property.find({
         $and: [
-          { booking_id: { $exists: true, $nin: ["0", "", null] } }, // Must have valid booking_id
-          {
-            $or: [
-              {
-                // Not trusted properties that haven't been checked in 23+ hours
-                $and: [
-                  {
-                    $or: [
-                      {
-                        booking_trusted_status: BookingTrustedStatus.NotTrusted,
-                      },
-                      { booking_trusted_status: { $exists: false } },
-                    ],
-                  },
-                  {
-                    $or: [
-                      { booking_last_login: { $lte: twentyThreeHoursAgo } },
-                      { booking_last_login: { $exists: false } }, // Never logged in
-                    ],
-                  },
-                ],
-              },
-              {
-                // Trusted properties that haven't been verified in 6+ days
-                $and: [
-                  { booking_trusted_status: BookingTrustedStatus.Trusted },
-                  {
-                    $or: [
-                      { booking_last_login: { $lte: sixDaysAgo } },
-                      { booking_last_login: { $exists: false } }, // Never logged in
-                    ],
-                  },
-                ],
-              },
-            ],
-          },
+          { _id: { $in: propertyIdsWithPendingBookingJobs } },
+          { booking_id: { $exists: true, $nin: ["0", "", null] } },
         ],
       })
         .populate({
@@ -111,9 +158,11 @@ export class BookingTrustSchedulerService {
         .lean();
 
       await dualLogInfo(
-        `Found ${properties.length} properties for trust verification`,
+        `Found ${properties.length} properties for trust verification (distinct properties with pending Booking jobs: ${propertyIdsWithPendingBookingJobs.length})`,
         {
           totalProperties: properties.length,
+          distinctPropertiesWithPendingJobs:
+            propertyIdsWithPendingBookingJobs.length,
           notTrustedCount: properties.filter(
             (p) => p.booking_trusted_status === BookingTrustedStatus.NotTrusted
           ).length,
@@ -131,6 +180,69 @@ export class BookingTrustSchedulerService {
       );
       return [];
     }
+  }
+
+  /**
+   * One pending Booking job for this property (same filter as trust candidate list).
+   * Used so OTP phone/slot matches scraping (`handleBookingOtpVerification` + job lock).
+   */
+  private async findOnePendingBookingJobIdForProperty(
+    propertyId: string
+  ): Promise<string | null> {
+    try {
+      if (!Types.ObjectId.isValid(propertyId)) {
+        return null;
+      }
+      const doc = await Job.findOne({
+        property_id: new Types.ObjectId(propertyId),
+        $or: [
+          { ota_provider: OTAProvider.Booking },
+          { OTA: OTAProvider.Booking },
+        ],
+        job_status: JobStatus.Pending,
+      })
+        .sort({ updatedAt: -1 })
+        .select("_id")
+        .lean();
+      return doc?._id ? String(doc._id) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Populate `job-phone-store` for this jobId like the worker pool does, so Booking OTP
+   * selects the same masked number and email polling uses the same slot.
+   */
+  private async hydrateBookingOtpContactForPendingJob(
+    jobId: string
+  ): Promise<void> {
+    const fromSlot =
+      await phoneNumberSlotService.getOccupiedContactForJob(jobId);
+    if (fromSlot) {
+      setJobContact(jobId, fromSlot);
+      await dualLogInfo(
+        "Trust verification: OTP contact from phone_number_slots (Occupied)",
+        { jobId }
+      );
+      return;
+    }
+    const fromPool = otpAwareWorkerPool.peekBookingOtpContactForJob(jobId);
+    if (fromPool?.phone) {
+      setJobContact(jobId, {
+        phone: fromPool.phone,
+        port: fromPool.port,
+      });
+      await dualLogInfo(
+        "Trust verification: OTP contact from worker queue / in-memory job lock",
+        { jobId }
+      );
+      return;
+    }
+    await dualLogWarn(
+      "Trust verification: no phone lock or queue contact for this pending job — Booking OTP may fall back to OUR_CONTACT",
+      { jobId }
+    );
   }
 
   /**
@@ -155,16 +267,24 @@ export class BookingTrustSchedulerService {
     );
 
     try {
-      // Initialize logging for this verification
-      initializeJobLogging(`${propertyId}`);
+      const leaseJobId =
+        await this.findOnePendingBookingJobIdForProperty(propertyId);
+      const logJobKey = leaseJobId ?? propertyId;
+      initializeJobLogging(logJobKey);
 
       // Create booking scraper instance
       const bookingScraper = new BookingScraper(
         ScraperContext.TRUST_VERIFICATION
       );
       bookingScraper.setPropertyIdForDb(propertyId);
+      if (leaseJobId) {
+        bookingScraper.setJobIdForTrustRun(leaseJobId);
+        await this.hydrateBookingOtpContactForPendingJob(leaseJobId);
+      }
 
-      const { browser, page } = await bookingScraper.setupBrowser();
+      const { browser, page } = await bookingScraper.setupBrowser(
+        leaseJobId ?? undefined
+      );
       bookingScraper.setBrowserData(page, browser);
 
       // Attempt booking login
