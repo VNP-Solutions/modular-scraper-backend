@@ -69,8 +69,8 @@ function rowFromItem(
         ? Number(plain.booking_amount)
         : "";
 
-  /** "Charge Before" column = checkout / end date only (e.g. Feb 17, 2027). */
-  const endDateForChargeBefore = plain.check_out_date;
+  /** VCC "Charge Before" = payment deadline from Booking (`payment_info.charge_before`), not checkout. */
+  const chargeBeforeRaw = pay.charge_before;
 
   return {
     "Hotel ID": hotelId,
@@ -83,7 +83,7 @@ function rowFromItem(
     "Exp Date": String(card.expiry_date ?? ""),
     CVV: String(card.cvv ?? ""),
     "Card Holder Name": String(card.card_holder_name ?? ""),
-    "Charge Before": formatSheetDate(endDateForChargeBefore),
+    "Charge Before": formatSheetDate(chargeBeforeRaw),
   };
 }
 
