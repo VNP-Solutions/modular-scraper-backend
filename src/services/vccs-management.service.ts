@@ -348,10 +348,7 @@ export class VccsManagementService {
       }
 
       let cardDetailsUrl: string;
-      let urlSource:
-        | "authenticatedUrlPattern"
-        | "paramsSes"
-        | "noSession" = "noSession";
+      let urlSource: "authenticatedUrlPattern" | "noSession" = "noSession";
 
       // If we have an authenticated URL pattern from a previous successful fetch, use it!
       // Second and subsequent requests use this URL, which contains the latest session
@@ -370,26 +367,16 @@ export class VccsManagementService {
             urlPattern: cardDetailsUrl,
           }
         );
-      } else if (params.ses) {
-        // First card-detail fetch in this run: we DO already have a valid session
-        // from the preceding VCCS listing API (params.ses). Using it directly here
-        // avoids the sign-in / 2FA redirect that happens when no `ses` is supplied.
-        // Note: Booking.com uses semicolons (;) not ampersands (&) for this URL!
-        cardDetailsUrl = `${this.cardDetailsBaseUrl}?lang=${params.lang};bn=${reservationId};hotel_id=${params.hotel_id};has_bvc=1;ses=${params.ses}`;
-        urlSource = "paramsSes";
-        dualLogInfo(
-          "First reservation - reusing session from VCCS listing phase (params.ses)",
-          {
-            reservationId,
-            hasSession: true,
-          }
-        );
       } else {
-        // No pattern and no params.ses — fall back to cookie-based redirect flow.
+        // First request — do NOT include ses. Booking.com will use the browser
+        // cookies, redirect through its auth flow (possibly captcha / 2FA), and
+        // set a fresh session. We capture the final authenticated URL for the
+        // next reservation.
+        // Note: Booking.com uses semicolons (;) not ampersands (&) for this URL!
         cardDetailsUrl = `${this.cardDetailsBaseUrl}?lang=${params.lang};bn=${reservationId};hotel_id=${params.hotel_id};has_bvc=1`;
         urlSource = "noSession";
         dualLogInfo(
-          "First reservation - constructing URL without session (booking.com will redirect and set session)",
+          "First reservation - constructing URL without session (booking.com will redirect and may show captcha/2FA)",
           {
             reservationId,
           }
@@ -741,17 +728,10 @@ export class VccsManagementService {
       if (isGuestCreditCardTrustUnavailableHtml(html)) {
         if (fetchOutcome) {
           fetchOutcome.guestCardTrustUnavailable = true;
-          // Even though this reservation has no card data, the browser DID reach
-          // `booking_cc_details.html` with a fresh session. Surface that URL so
-          // the caller can reuse `ses` for the next reservation and skip another
-          // login/2FA/OTP round-trip.
-          const trustUrl = page.url();
-          if (
-            typeof trustUrl === "string" &&
-            trustUrl.includes("booking_cc_details")
-          ) {
-            fetchOutcome.latestAuthenticatedUrl = trustUrl;
-          }
+          // Do NOT carry forward the URL from trust-unavailable pages.
+          // Reusing a trust-unavailable URL (which contains tlc=1) would
+          // bypass the captcha/2FA that Booking.com serves on fresh requests
+          // and is necessary to unlock card access.
         }
         dualLogInfo(
           "Card details page shows guest card unavailable (trust / eligibility)",
@@ -1235,21 +1215,14 @@ export class VccsManagementService {
           trustUnavailablePageCount++;
         }
 
-        // ALWAYS carry forward the latest authenticated URL + ses, even when
-        // this reservation returned no card (e.g. trust-unavailable). The
-        // browser still landed on `booking_cc_details.html` with a fresh
-        // session, so the NEXT reservation can reuse that `ses` and skip
-        // another login / 2FA / OTP round-trip.
-        const nextAuthenticatedUrl =
-          (cardDetails && (cardDetails as any).authenticatedUrl) ||
-          fetchOutcome.latestAuthenticatedUrl;
-        if (nextAuthenticatedUrl) {
-          latestAuthenticatedUrl = nextAuthenticatedUrl;
-          // Refresh params.ses from the authenticated URL so the fallback
-          // (when we have no pattern but do have params.ses) also uses the
-          // newest session.
+        // Only carry forward the authenticated URL when a real card was
+        // successfully fetched. Reusing a URL from a trust-unavailable page
+        // (which contains tlc=1) would bypass the captcha that Booking.com
+        // serves on fresh requests and is needed to unlock card access.
+        if (cardDetails && (cardDetails as any).authenticatedUrl) {
+          latestAuthenticatedUrl = (cardDetails as any).authenticatedUrl as string;
           const sesFromUrl = extractSesFromAuthenticatedUrl(
-            nextAuthenticatedUrl
+            latestAuthenticatedUrl
           );
           if (sesFromUrl && sesFromUrl !== params.ses) {
             dualLogInfo(
@@ -1265,7 +1238,6 @@ export class VccsManagementService {
           dualLogInfo(`Updated latest authenticated URL for next reservation`, {
             reservationId: vccs.hres_id,
             latestAuthenticatedUrl,
-            fromTrustUnavailable: !cardDetails,
           });
         }
 
