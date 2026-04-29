@@ -164,8 +164,8 @@ class ScrapingWorker {
   }
 
   /**
-   * After Completed: export job_items to charge-report XLSX and upload under
-   * root/Expedia/DD-MM-YYYY on Google Drive when configured.
+   * After Completed: export job_items to Expedia master XLSX (`automated-export.md` §1.1)
+   * and upload under root/Expedia/DD-MM-YYYY on Google Drive when configured.
    * Failures are logged only; they do not fail the job.
    */
   private async maybeUploadJobItemsToGoogleDrive(
@@ -182,7 +182,9 @@ class ScrapingWorker {
         });
         return;
       }
-      const items = await jobService.getJobItems(jobId);
+      const items = await jobService.getJobItemsWithCardActivitiesForExport(
+        jobId
+      );
       if (items.length === 0) {
         await dualLogInfo(
           `Google Drive: skip job items upload (no items) for ${jobId}`,

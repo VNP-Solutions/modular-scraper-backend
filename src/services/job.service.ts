@@ -919,6 +919,52 @@ export class JobService {
       };
     }
   }
+
+  /**
+   * Job items with `CardActivity.authorizations` for Expedia master XLSX (automated-export.md §1.1).
+   */
+  async getJobItemsWithCardActivitiesForExport(jobId: string): Promise<
+    Array<{ item: IJobItem; authorizations: Authorization[] }>
+  > {
+    try {
+      const objectId = this.validateObjectId(jobId, "jobId");
+      const items = await JobItem.find({ job_id: objectId })
+        .sort({ createdAt: -1 })
+        .exec();
+      const activityIds = items
+        .map((i) => i.card_activity_id)
+        .filter((id): id is Types.ObjectId => Boolean(id));
+      if (activityIds.length === 0) {
+        return items.map((item) => ({ item, authorizations: [] }));
+      }
+      const activities = await CardActivity.find({ _id: { $in: activityIds } })
+        .lean()
+        .exec();
+      const byId = new Map(
+        activities.map((a) => {
+          const doc = a as {
+            _id: Types.ObjectId;
+            authorizations?: Authorization[];
+          };
+          return [String(doc._id), doc] as const;
+        }),
+      );
+      return items.map((item) => {
+        const cid = item.card_activity_id?.toString();
+        const doc = cid ? byId.get(cid) : undefined;
+        const auths = Array.isArray(doc?.authorizations)
+          ? doc!.authorizations!
+          : [];
+        return { item, authorizations: auths };
+      });
+    } catch (error) {
+      console.error(
+        `Error getJobItemsWithCardActivitiesForExport for ${jobId}:`,
+        error,
+      );
+      return [];
+    }
+  }
 }
 
 // Export singleton instance
