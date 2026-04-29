@@ -126,13 +126,6 @@ function resolveBatchName(jobPlain: Record<string, unknown>): string {
   return "";
 }
 
-/** §2 cols 18–20: Excel text-formula `="…"` so Sheets/Excel treat as text. */
-function excelTextFormula(inner: string): string {
-  if (!inner) return "";
-  const escaped = inner.replace(/"/g, '""');
-  return `="${escaped}"`;
-}
-
 function cardNumberGroupedForExport(raw: string): string {
   const digits = raw.replace(/\D/g, "");
   if (!digits) return "";
@@ -166,14 +159,14 @@ function rowFromItem(
 
   const cardNumRaw = String(card.card_number ?? "").trim();
   const cardNumberCell = cardNumRaw
-    ? excelTextFormula(cardNumberGroupedForExport(cardNumRaw))
+    ? cardNumberGroupedForExport(cardNumRaw)
     : "";
 
-  const expRaw = String(card.expiry_date ?? "").trim();
-  const expiryCell = expRaw ? excelTextFormula(expRaw) : "";
+  /** Plain text in cell; column z `@` below forces text (no CSV-style `="…"` needed for .xlsx). */
+  const expiryCell = String(card.expiry_date ?? "").trim();
 
   const cvvRaw = String(card.cvv ?? "").trim();
-  const cvvCell = cvvRaw ? excelTextFormula(cvvRaw) : "";
+  const cvvCell = cvvRaw;
 
   return {
     OTA: "Booking",
@@ -205,7 +198,7 @@ function rowFromItem(
   };
 }
 
-/** Excel / Google Sheets: force text cells for formula-style card fields. */
+/** Excel / Google Sheets: text format so card/CVV/expiry stay literal (no scientific notation). */
 const EXCEL_TEXT_FORMAT = "@";
 
 function formatColumnAsText(sheet: WorkSheet, colIndex: number): void {
