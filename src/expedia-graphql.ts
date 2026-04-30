@@ -1,7 +1,10 @@
 import dotenv from "dotenv";
 import { browserSetupLocal } from "./browser-setup/browser-local.js";
 import { browserSetupProduction } from "./browser-setup/browser-prod.js";
-import { BROWSER_CONFIG } from "./common/browser-constants.js";
+import {
+  BROWSER_CONFIG,
+  buildClientHintsFromUA,
+} from "./common/browser-constants.js";
 import { delay } from "./common/delay.js";
 import { emailNotifier } from "./common/email-notifier.js";
 import { decryptPassword } from "./common/encription.js";
@@ -42,6 +45,12 @@ import {
 } from "./services/job.service.js";
 
 dotenv.config();
+
+// Compute consistent client-hint headers from the static fallback UA.
+// These are used for all direct fetch() API calls that don't go through the browser.
+const { userAgent: GRAPHQL_UA, headers: _graphqlClientHints } =
+  buildClientHintsFromUA(BROWSER_CONFIG.USER_AGENT);
+const GRAPHQL_SEC_CH_UA = _graphqlClientHints["sec-ch-ua"] as string;
 
 /**
  * Make GraphQL API request to Expedia Partner Central
@@ -417,8 +426,8 @@ async function makeGraphQLRequest(
           method: "POST",
           headers: {
             ...BROWSER_CONFIG.GRAPHQL_HEADERS,
-            "client-name": "pc-reservations-web",
-            "user-agent": BROWSER_CONFIG.USER_AGENT,
+            "sec-ch-ua": GRAPHQL_SEC_CH_UA,
+            "user-agent": GRAPHQL_UA,
             cookie: cookieHeader,
           },
           body: JSON.stringify(graphqlQuery),
@@ -1205,23 +1214,12 @@ async function fetchEVCCardData(
       const response = await fetch(url, {
         method: "POST",
         headers: {
-          accept: "*/*",
-          "accept-language": "en-GB,en-US;q=0.9,en;q=0.8",
-          "content-type": "application/json",
-          dnt: "1",
-          origin: "https://apps.expediapartnercentral.com",
-          priority: "u=1, i",
-          referer: `https://apps.expediapartnercentral.com/lodging/bookings?htid=${propertyId}&bookingItemId=${bookingItemId}`,
-          "sec-ch-ua":
-            '"Not)A;Brand";v="8", "Chromium";v="138", "Google Chrome";v="138"',
-          "sec-ch-ua-mobile": "?0",
-          "sec-ch-ua-platform": '"macOS"',
-          "sec-fetch-dest": "empty",
-          "sec-fetch-mode": "cors",
+          ...BROWSER_CONFIG.GRAPHQL_HEADERS,
+          "sec-ch-ua": GRAPHQL_SEC_CH_UA,
           "sec-fetch-site": "same-origin",
-          "user-agent":
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
-          "origin-request-id": generateRequestId(), // Dynamic request ID
+          "user-agent": GRAPHQL_UA,
+          referer: `https://apps.expediapartnercentral.com/lodging/bookings?htid=${propertyId}&bookingItemId=${bookingItemId}`,
+          "origin-request-id": generateRequestId(),
           cookie: cookieHeader,
         },
         body: JSON.stringify(requestBody),
@@ -1390,8 +1388,7 @@ async function fetchEVCCardActivityDataV2(
     });
   };
 
-  const userAgent =
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36";
+  const userAgent = GRAPHQL_UA;
   const referer = `https://apps.expediapartnercentral.com/lodging/accounting/evclookup.html?ReservationId=${bookingItemId}&CheckInDate=${checkInDate}`;
 
   // Build the tracking payload the UI sends. The server appears to accept any
@@ -1456,21 +1453,11 @@ async function fetchEVCCardActivityDataV2(
       const response = await fetch(url, {
         method: "POST",
         headers: {
-          accept: "*/*",
-          "accept-language": "en-GB,en-US;q=0.9,en;q=0.8",
-          "content-type": "application/json",
-          dnt: "1",
-          origin: "https://apps.expediapartnercentral.com",
-          priority: "u=1, i",
-          referer,
-          "sec-ch-ua":
-            '"Chromium";v="146", "Not-A.Brand";v="24", "Google Chrome";v="146"',
-          "sec-ch-ua-mobile": "?0",
-          "sec-ch-ua-platform": '"macOS"',
-          "sec-fetch-dest": "empty",
-          "sec-fetch-mode": "cors",
+          ...BROWSER_CONFIG.GRAPHQL_HEADERS,
+          "sec-ch-ua": GRAPHQL_SEC_CH_UA,
           "sec-fetch-site": "same-origin",
-          "user-agent": userAgent,
+          "user-agent": GRAPHQL_UA,
+          referer,
           "origin-request-id": generateRequestId(),
           cookie: cookieHeader,
         },

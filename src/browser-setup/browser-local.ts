@@ -1,7 +1,20 @@
 import dotenv from "dotenv";
 import puppeteer, { Browser, Page } from "puppeteer";
-import { BROWSER_CONFIG } from "../common/browser-constants.js";
+// @ts-ignore — puppeteer-extra ships its own types but they don't expose `.use` well under NodeNext
+import puppeteerExtra from "puppeteer-extra";
+// @ts-ignore — same as above
+import StealthPlugin from "puppeteer-extra-plugin-stealth";
+import {
+  BROWSER_CONFIG,
+  buildClientHintsFromUA,
+} from "../common/browser-constants.js";
+import { loadCookies, saveCookies } from "../common/cookie-jar.js";
 import { delay } from "../common/delay.js";
+import {
+  humanDelay,
+  humanMouseWander,
+  humanScroll,
+} from "../common/human-behavior.js";
 import {
   dualLogError,
   dualLogInfo,
@@ -13,6 +26,14 @@ import {
 import { timeoutManager } from "../common/timeout-manager.js";
 import { configs } from "../config/index.js";
 dotenv.config();
+
+// Activate stealth only once at module load.
+puppeteerExtra.use(StealthPlugin());
+
+const EXPEDIA_COOKIE_KEY = "expedia-partner-central";
+const EXPEDIA_HOME_URL = "https://www.expediapartnercentral.com/";
+const EXPEDIA_LOGIN_URL =
+  "https://www.expediapartnercentral.com/Account/Logon?signedOff=true";
 
 /**
  * BRIGHT_DATA_ENABLED: explicit toggle (recommended).
@@ -30,6 +51,19 @@ function brightDataMode():
   if (["true", "1", "yes"].includes(v)) return "on";
   if (["false", "0", "no"].includes(v)) return "off";
   return "auto";
+}
+
+const DENIAL_PATTERNS = [
+  /Access Denied/i,
+  /You don'?t have permission/i,
+  /Reference\s*#\d/i,
+  /Pardon Our Interruption/i,
+  /request (?:was|has been) blocked/i,
+];
+
+function isDeniedPage(url: string, html: string): boolean {
+  if (url.startsWith("chrome-error://")) return true;
+  return DENIAL_PATTERNS.some((re) => re.test(html));
 }
 
 export async function browserSetupLocal(
@@ -115,11 +149,13 @@ export async function browserSetupLocal(
     }
 
     try {
-      browser = await puppeteer.launch({
+      browser = (await puppeteerExtra.launch({
         headless: configs.headless_browser as any,
         defaultViewport: null,
         args: launchArgs,
-      });
+        executablePath: puppeteer.executablePath(),
+        ignoreDefaultArgs: ["--enable-automation"],
+      })) as unknown as Browser;
     } catch (error: any) {
       await dualLogError("Error launching browser:", error);
       if (jobId) {
@@ -180,20 +216,65 @@ export async function browserSetupLocal(
         `Set viewport size: ${windowSize.width}x${windowSize.height}`,
         { jobId, windowSize }
       );
+    } else {
+      await page.setViewport({
+        width: 1920,
+        height: 1080,
+        deviceScaleFactor: 1,
+        hasTouch: false,
+        isLandscape: true,
+        isMobile: false,
+      });
     }
+
+    // Sync UA / client-hints with the *actual* bundled Chromium version.
+    const rawUA = await browser.userAgent();
+    const { userAgent, headers } = buildClientHintsFromUA(rawUA);
+    await page.setUserAgent(userAgent);
+
+    const finalHeaders = { ...headers };
+    if (acceptLanguage) {
+      finalHeaders["Accept-Language"] = acceptLanguage;
+      await dualLogInfo(`Set Accept-Language: ${acceptLanguage}`, {
+        jobId,
+        acceptLanguage,
+      });
+    }
+    await page.setExtraHTTPHeaders(finalHeaders);
+    await dualLogInfo("Spoofed UA in sync with bundled Chromium", { userAgent });
+
+    try {
+      await page.emulateTimezone(timezone || "America/New_York");
+    } catch {
+      /* noop — timezone override can fail on some Chromium builds */
+    }
+
+    // Fingerprint hardening on top of stealth plugin.
+    await page.evaluateOnNewDocument(() => {
+      Object.defineProperty(navigator, "hardwareConcurrency", {
+        get: () => 8,
+      });
+      Object.defineProperty(navigator, "deviceMemory", {
+        get: () => 8,
+      });
+      Object.defineProperty(navigator, "languages", {
+        get: () => ["en-US", "en"],
+      });
+      (window as any).chrome = (window as any).chrome || { runtime: {} };
+    });
+
+    await page.setDefaultNavigationTimeout(loadingTimeout);
+    await page.setDefaultTimeout(selectorTimeout);
 
     if (bdUseProxy && bdHasCredentials) {
       try {
         await dualLogInfo(
-          "[Bright Data] Verifying egress IP via ipify (through proxy) — compare this IP with your Bright Data session if needed.",
+          "[Bright Data] Verifying egress IP via ipify (through proxy).",
           { jobId, sessionId: brightDataSessionId }
         );
         const ipResponse = await page.goto(
           "https://api.ipify.org?format=json",
-          {
-            waitUntil: "networkidle0",
-            timeout: 10000,
-          }
+          { waitUntil: "networkidle0", timeout: 10000 }
         );
         if (ipResponse && ipResponse.ok()) {
           const ipData = (await ipResponse.json()) as { ip?: string };
@@ -205,133 +286,39 @@ export async function browserSetupLocal(
                 { waitUntil: "networkidle0", timeout: 10000 }
               );
               if (geoResponse && geoResponse.ok()) {
-                const geoData = (await geoResponse.json()) as Record<
-                  string,
-                  string
-                >;
-                const country =
-                  geoData.country_name || geoData.country || "Unknown";
+                const geoData = (await geoResponse.json()) as Record<string, string>;
+                const country = geoData.country_name || geoData.country || "Unknown";
                 const city = geoData.city || "Unknown";
                 const region = geoData.region || "Unknown";
                 await dualLogInfo(
-                  `[Bright Data] VERIFIED — public egress IP: ${ipAddress} | ${country} | ${city}, ${region} (this is the IP sites see for this browser).`,
-                  {
-                    jobId,
-                    sessionId: brightDataSessionId,
-                    ipAddress,
-                    country,
-                    brightDataEgressVerified: true,
-                  }
+                  `[Bright Data] VERIFIED — public egress IP: ${ipAddress} | ${country} | ${city}, ${region}`,
+                  { jobId, sessionId: brightDataSessionId, ipAddress, country, brightDataEgressVerified: true }
                 );
               } else {
                 await dualLogInfo(
-                  `[Bright Data] VERIFIED — public egress IP: ${ipAddress} (geo lookup failed; proxy still likely OK).`,
-                  {
-                    jobId,
-                    sessionId: brightDataSessionId,
-                    ipAddress,
-                    brightDataEgressVerified: true,
-                  }
+                  `[Bright Data] VERIFIED — public egress IP: ${ipAddress} (geo lookup failed).`,
+                  { jobId, sessionId: brightDataSessionId, ipAddress }
                 );
               }
             } catch {
               await dualLogInfo(
-                `[Bright Data] VERIFIED — public egress IP: ${ipAddress} (geo lookup failed; proxy still likely OK).`,
-                {
-                  jobId,
-                  sessionId: brightDataSessionId,
-                  ipAddress,
-                  brightDataEgressVerified: true,
-                }
+                `[Bright Data] VERIFIED — public egress IP: ${ipAddress} (geo lookup failed).`,
+                { jobId, sessionId: brightDataSessionId, ipAddress }
               );
             }
           } else {
-            await dualLogWarn(
-              "[Bright Data] IP check returned no address — compare logs with Bright Data dashboard if unsure.",
-              { jobId }
-            );
+            await dualLogWarn("[Bright Data] IP check returned no address.", { jobId });
           }
         } else {
-          await dualLogWarn(
-            "[Bright Data] IP check HTTP failed — cannot confirm egress IP from ipify.",
-            { jobId }
-          );
+          await dualLogWarn("[Bright Data] IP check HTTP failed.", { jobId });
         }
       } catch (ipError: any) {
         await dualLogWarn(
-          "[Bright Data] IP verification failed (non-critical). Proxy may still work; check error and Bright Data dashboard.",
-          {
-            jobId,
-            error: ipError.message,
-            hadProxyConfigured: bdUseProxy && bdHasCredentials,
-          }
+          "[Bright Data] IP verification failed (non-critical). Proxy may still work.",
+          { jobId, error: ipError.message }
         );
       }
     }
-
-    if (timezone) {
-      try {
-        const cdp = await page.target().createCDPSession();
-        await cdp.send("Emulation.setTimezoneOverride", {
-          timezoneId: timezone,
-        });
-        await dualLogInfo(`Set timezone: ${timezone}`, { jobId, timezone });
-      } catch (timezoneError: any) {
-        await dualLogWarn("Failed to set timezone (non-critical)", {
-          jobId,
-          error: timezoneError.message,
-        });
-      }
-    }
-
-    await page.setUserAgent(BROWSER_CONFIG.USER_AGENT);
-
-    const headers = { ...BROWSER_CONFIG.HEADERS };
-    if (acceptLanguage) {
-      headers["Accept-Language"] = acceptLanguage;
-      await dualLogInfo(`Set Accept-Language: ${acceptLanguage}`, {
-        jobId,
-        acceptLanguage,
-      });
-    }
-    await page.setExtraHTTPHeaders(headers);
-
-    const languageList = acceptLanguage
-      ? acceptLanguage.split(",").map((l) => l.trim().split(";")[0])
-      : ["en-US", "en"];
-
-    await page.evaluateOnNewDocument(
-      (config: { languages: string[] }) => {
-        delete (navigator as any).webdriver;
-        Object.defineProperty(navigator, "plugins", {
-          get: () => [1, 2, 3, 4, 5],
-        });
-        Object.defineProperty(navigator, "languages", {
-          get: () => config.languages,
-        });
-        (window as any).chrome = {
-          runtime: {},
-        };
-        const originalQuery = window.navigator.permissions.query;
-        window.navigator.permissions.query = (parameters) => {
-          if (parameters.name === "notifications") {
-            return Promise.resolve({
-              state: Notification.permission,
-              name: "notifications",
-              onchange: null,
-              addEventListener: () => {},
-              removeEventListener: () => {},
-              dispatchEvent: () => false,
-            } as PermissionStatus);
-          }
-          return originalQuery(parameters);
-        };
-      },
-      { languages: languageList }
-    );
-
-    await page.setDefaultNavigationTimeout(loadingTimeout);
-    await page.setDefaultTimeout(selectorTimeout);
 
     const platformName = platform === "agoda" ? "Agoda" : "Expedia";
     await dualLogInfo(`Navigating to ${platformName} platform...`);
@@ -339,106 +326,135 @@ export async function browserSetupLocal(
     const maxRetries = 3;
     let navigationSuccess = false;
 
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      try {
-        await dualLogInfo(`Navigation attempt ${attempt}/${maxRetries}`, {
-          attempt,
-          maxRetries,
-        });
+    if (platform === "expedia" || !platform) {
+      // ── Expedia path: warm-up + cookie persistence + bot-denial check ──
+      await loadCookies(page, EXPEDIA_COOKIE_KEY);
 
-        if (platform === "expedia") {
-          await page.goto(
-            "https://www.expediapartnercentral.com/Account/Logon?signedOff=true",
-            {
-              waitUntil: "domcontentloaded",
-              timeout: loadingTimeout,
-            }
-          );
-        } else if (platform === "agoda") {
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          await dualLogInfo(`Navigation attempt ${attempt}/${maxRetries}`, {
+            attempt,
+            maxRetries,
+          });
+
+          // Warm-up on the homepage so Akamai can collect behavioral events
+          // before we touch the protected login endpoint.
+          await page.goto(EXPEDIA_HOME_URL, {
+            waitUntil: "domcontentloaded",
+            timeout: loadingTimeout,
+          });
+          await humanDelay(1500, 2500);
+          await humanMouseWander(page, 6);
+          await humanScroll(page, 3);
+          await humanDelay(800, 1600);
+
+          await page.goto(EXPEDIA_LOGIN_URL, {
+            waitUntil: "domcontentloaded",
+            timeout: loadingTimeout,
+          });
+
+          await delay(2500);
+
+          const pageUrl = page.url();
+          let pageContent = "";
+          try {
+            pageContent = await page.content();
+          } catch {
+            /* chrome-error pages sometimes can't return HTML */
+          }
+
+          if (isDeniedPage(pageUrl, pageContent)) {
+            await dualLogWarn(
+              "Akamai / bot-manager returned Access Denied on attempt " + attempt,
+              { pageUrl }
+            );
+            throw new Error("Bot-manager Access Denied");
+          }
+
+          await page.waitForSelector("body", { timeout: selectorTimeout });
+          await humanMouseWander(page, 3);
+          await saveCookies(page, EXPEDIA_COOKIE_KEY);
+
+          navigationSuccess = true;
+          await dualLogInfo("Navigation successful!", { attempt });
+          break;
+        } catch (navError: any) {
+          const msg = String(navError?.message ?? navError);
+          if (msg.includes("ERR_INVALID_AUTH_CREDENTIALS") && bdUseProxy) {
+            await dualLogWarn(
+              "Navigation failed with ERR_INVALID_AUTH_CREDENTIALS: verify BRIGHT_DATA_USERNAME / BRIGHT_DATA_PASSWORD.",
+              { jobId, platform, attempt, error: msg }
+            );
+          }
+          await dualLogWarn(`Navigation attempt ${attempt} failed:`, {
+            attempt,
+            error: navError.message,
+          });
+
+          if (attempt < maxRetries) {
+            await dualLogInfo("Retrying navigation...", { attempt });
+            await delay(2000 * attempt + Math.floor(Math.random() * 1500));
+          } else {
+            await dualLogError("All navigation attempts failed", navError, { maxRetries });
+            throw navError;
+          }
+        }
+      }
+    } else {
+      // ── Agoda path: direct navigation (unchanged) ──
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          await dualLogInfo(`Navigation attempt ${attempt}/${maxRetries}`, {
+            attempt,
+            maxRetries,
+          });
+
           await page.goto("https://ycs.agoda.com", {
             waitUntil: "domcontentloaded",
             timeout: loadingTimeout,
           });
           await page.waitForNavigation({ waitUntil: "networkidle0" });
-        } else {
-          await page.goto(
-            "https://www.expediapartnercentral.com/Account/Logon?signedOff=true",
-            {
-              waitUntil: "domcontentloaded",
-              timeout: loadingTimeout,
-            }
-          );
-        }
 
-        await delay(3000);
-        await page.waitForSelector("body", { timeout: selectorTimeout });
+          await delay(3000);
+          await page.waitForSelector("body", { timeout: selectorTimeout });
 
-        navigationSuccess = true;
-        await dualLogInfo("Navigation successful!", { attempt });
-        break;
-      } catch (navError: any) {
-        const msg = String(navError?.message ?? navError);
-        if (msg.includes("ERR_INVALID_AUTH_CREDENTIALS") && bdUseProxy) {
-          await dualLogWarn(
-            "Navigation failed with ERR_INVALID_AUTH_CREDENTIALS: the HTTP proxy rejected authentication (this is not the Expedia account password). Verify BRIGHT_DATA_USERNAME / BRIGHT_DATA_PASSWORD and the Bright Data username pattern for your zone. To bypass the proxy, set BRIGHT_DATA_ENABLED=false or unset BRIGHT_DATA_PROXY_HOST.",
-            { jobId, platform, attempt, error: msg }
-          );
-        }
-        await dualLogWarn(`Navigation attempt ${attempt} failed:`, {
-          attempt,
-          error: navError.message,
-        });
-
-        if (attempt < maxRetries) {
-          await dualLogInfo("Retrying navigation...", { attempt });
-          await delay(2000);
-        } else {
-          await dualLogError("All navigation attempts failed", navError, {
-            maxRetries,
+          navigationSuccess = true;
+          await dualLogInfo("Navigation successful!", { attempt });
+          break;
+        } catch (navError: any) {
+          await dualLogWarn(`Navigation attempt ${attempt} failed:`, {
+            attempt,
+            error: navError.message,
           });
-          if (jobId) {
-            try {
-            } catch (emailError) {
-              await dualLogError(
-                "Failed to send navigation error notification:",
-                emailError
-              );
+
+          if (attempt < maxRetries) {
+            await dualLogInfo("Retrying navigation...", { attempt });
+            await delay(2000);
+          } else {
+            await dualLogError("All navigation attempts failed", navError, { maxRetries });
+            if (jobId) {
+              try {
+              } catch (emailError) {
+                await dualLogError(
+                  "Failed to send navigation error notification:",
+                  emailError
+                );
+              }
             }
+            throw navError;
           }
-          throw navError;
         }
       }
     }
 
     if (!navigationSuccess) {
-      const error = new Error(
-        "Failed to navigate to the target page after all attempts"
-      );
-      if (jobId) {
-        try {
-        } catch (emailError) {
-          await dualLogError(
-            "Failed to send final navigation error notification:",
-            emailError
-          );
-        }
-      }
-      throw error;
+      throw new Error("Failed to navigate to the target page after all attempts");
     }
 
     await dualLogInfo("Browser setup completed successfully");
     return { browser, page };
   } catch (error: any) {
     await dualLogError("Browser setup failed:", error);
-    if (jobId) {
-      try {
-      } catch (emailError) {
-        await dualLogError(
-          "Failed to send browser setup error notification:",
-          emailError
-        );
-      }
-    }
     if (browser) {
       try {
         await browser.close();
