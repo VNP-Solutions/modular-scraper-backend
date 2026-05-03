@@ -140,122 +140,39 @@ export class BookingTrustSchedulerService {
    *   }
    * }
    *
-   * --- (B) Trust-needed jobs only (Failed + "Trust needed"; no 23h/6d OR) ---
+   * --- (B) Trust-needed only (Failed + "Trust needed") — same as live method below ---
    *
-   * async getPropertiesForTrustVerification(): Promise<IProperty[]> {
-   *   try {
-   *     const propertyIds = await Job.distinct("property_id", {
-   *       job_status: JobStatus.Failed,
-   *       failed_reason: TRUST_NEEDED_FAILED_REASON,
-   *       property_id: { $exists: true, $ne: null },
-   *     });
-   *     if (propertyIds.length === 0) {
-   *       await dualLogInfo(
-   *         "No properties with Failed jobs (Trust needed) for trust verification",
-   *         { eligiblePropertyCount: 0 }
-   *       );
-   *       return [];
-   *     }
-   *     const properties = await Property.find({
-   *       _id: { $in: propertyIds },
-   *       booking_id: { $exists: true, $nin: ["0", "", null] },
-   *     })
-   *       .populate({
-   *         path: "credentials",
-   *         match: {
-   *           bookingUsername: { $exists: true, $ne: null },
-   *           bookingPassword: { $exists: true, $ne: null },
-   *         },
-   *       })
-   *       .lean();
-   *     await dualLogInfo(
-   *       `Found ${properties.length} properties for trust verification (Failed + Trust needed)`,
-   *       {
-   *         totalProperties: properties.length,
-   *         distinctPropertyIdsFromJobs: propertyIds.length,
-   *         notTrustedCount: properties.filter(
-   *           (p) => p.booking_trusted_status === BookingTrustedStatus.NotTrusted
-   *         ).length,
-   *         trustedCount: properties.filter(
-   *           (p) => p.booking_trusted_status === BookingTrustedStatus.Trusted
-   *         ).length,
-   *       }
-   *     );
-   *     return properties;
-   *   } catch (error) {
-   *     await dualLogError(
-   *       "Error getting properties for trust verification",
-   *       error
-   *     );
-   *     return [];
-   *   }
-   * }
+   * --- (C) Removed: combined Failed+"Trust needed" OR 23h not-trusted OR 6d trusted ---
+   * Used Job.distinct for trust-needed property ids, plus timeBasedEligibility in $or
+   * with Property.find $and: [ valid booking_id, { $or: [ { _id: $in ids }, timeRules ] } ].
+   * (Full query lived in getPropertiesForTrustVerification before reverting to (B)-only.)
    *
    * -------------------------------------------------------------------------
    */
 
   /**
-   * Properties eligible for trust verification (any of):
-   * - At least one job with status Failed and failed_reason {@link TRUST_NEEDED_FAILED_REASON}.
-   * - Not-trusted (or missing status) and last_login at least 23h ago (or never).
-   * - Trusted and last_login at least 6 days ago (or never).
+   * Properties eligible for trust verification: at least one job with status Failed
+   * and failed_reason exactly {@link TRUST_NEEDED_FAILED_REASON} ("Trust needed").
    */
   async getPropertiesForTrustVerification(): Promise<IProperty[]> {
-    const now = new Date();
-    const twentyThreeHoursAgo = new Date(now.getTime() - 23 * 60 * 60 * 1000);
-    const sixDaysAgo = new Date(now.getTime() - 6 * 24 * 60 * 60 * 1000);
-
     try {
-      const trustNeededPropertyIds = await Job.distinct("property_id", {
+      const propertyIds = await Job.distinct("property_id", {
         job_status: JobStatus.Failed,
         failed_reason: TRUST_NEEDED_FAILED_REASON,
         property_id: { $exists: true, $ne: null },
       });
 
-      const timeBasedEligibility = {
-        $or: [
-          {
-            $and: [
-              {
-                $or: [
-                  {
-                    booking_trusted_status: BookingTrustedStatus.NotTrusted,
-                  },
-                  { booking_trusted_status: { $exists: false } },
-                ],
-              },
-              {
-                $or: [
-                  { booking_last_login: { $lte: twentyThreeHoursAgo } },
-                  { booking_last_login: { $exists: false } },
-                ],
-              },
-            ],
-          },
-          {
-            $and: [
-              { booking_trusted_status: BookingTrustedStatus.Trusted },
-              {
-                $or: [
-                  { booking_last_login: { $lte: sixDaysAgo } },
-                  { booking_last_login: { $exists: false } },
-                ],
-              },
-            ],
-          },
-        ],
-      };
-
-      const eligibilityOr: object[] = [timeBasedEligibility];
-      if (trustNeededPropertyIds.length > 0) {
-        eligibilityOr.unshift({ _id: { $in: trustNeededPropertyIds } });
+      if (propertyIds.length === 0) {
+        await dualLogInfo(
+          "No properties with Failed jobs (Trust needed) for trust verification",
+          { eligiblePropertyCount: 0 }
+        );
+        return [];
       }
 
       const properties = await Property.find({
-        $and: [
-          { booking_id: { $exists: true, $nin: ["0", "", null] } },
-          { $or: eligibilityOr },
-        ],
+        _id: { $in: propertyIds },
+        booking_id: { $exists: true, $nin: ["0", "", null] },
       })
         .populate({
           path: "credentials",
@@ -267,10 +184,10 @@ export class BookingTrustSchedulerService {
         .lean();
 
       await dualLogInfo(
-        `Found ${properties.length} properties for trust verification`,
+        `Found ${properties.length} properties for trust verification (Failed + Trust needed)`,
         {
           totalProperties: properties.length,
-          trustNeededJobPropertyCount: trustNeededPropertyIds.length,
+          distinctPropertyIdsFromJobs: propertyIds.length,
           notTrustedCount: properties.filter(
             (p) => p.booking_trusted_status === BookingTrustedStatus.NotTrusted
           ).length,
