@@ -5037,10 +5037,13 @@ export class BookingScraper extends BaseScraper {
 
   private async sendCaptchaEmail(): Promise<void> {
     try {
-      // Get email recipients from environment variable
-      const recipients = process.env.CAPTCHA_RECIPIENTS
+      const captchaRecipientsFromEnv = process.env.CAPTCHA_RECIPIENTS
         ? process.env.CAPTCHA_RECIPIENTS.split(",").map((email) => email.trim())
-        : [process.env.EMAIL_USER || "ITSUPPORT@vnpsolutions.com"];
+        : [];
+      const captchaRecipientsForMerge =
+        captchaRecipientsFromEnv.length > 0
+          ? captchaRecipientsFromEnv
+          : [process.env.EMAIL_USER || "ITSUPPORT@vnpsolutions.com"];
 
       const errorMessage =
         "CAPTCHA detected during Booking.com login - Manual intervention required";
@@ -5054,23 +5057,20 @@ export class BookingScraper extends BaseScraper {
         stage: "Login - CAPTCHA Challenge",
       };
 
-      if (this.context === ScraperContext.TRUST_VERIFICATION) {
-        await emailNotifier.sendErrorEmail(recipients, {
-          jobId: "Trust Verification",
-          jobName: "",
-          errorMessage,
-          errorDetails,
-          timestamp: new Date(),
-        });
-      } else {
-        await emailNotifier.notifyJobError(
-          this.jobId || "Unknown job",
-          errorMessage,
-          errorDetails,
-          undefined,
-          recipients
-        );
-      }
+      // Same path for all contexts (including trust): notifyJobError loads the job
+      // and merges job.watcher_emails with captchaRecipients and EMAIL_USER.
+      const jobIdForEmail =
+        this.jobId && Types.ObjectId.isValid(this.jobId)
+          ? this.jobId
+          : "Unknown job";
+
+      await emailNotifier.notifyJobError(
+        jobIdForEmail,
+        errorMessage,
+        errorDetails,
+        undefined,
+        captchaRecipientsForMerge
+      );
     } catch (error) {
       await this.logError("Failed to send CAPTCHA notification email:", error);
     }
