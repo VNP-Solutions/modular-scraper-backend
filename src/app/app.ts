@@ -14,13 +14,13 @@ import { specs, swaggerUi } from "../config/swagger.js";
 import { getAccess, getOauth2Callback } from "../get-access/access.js";
 import { JobStatus } from "../models/job.model.js";
 import { ScheduledJob } from "../models/scheduled-job.model.js";
-// import {
-//   CronConfig,
-//   ScheduleType,
-//   TimeUnit,
-//   bookingTrustCron,
-// } from "../services/booking-trust-cron.service.js";
-// import { bookingTrustScheduler } from "../services/booking-trust-scheduler.service.js";
+import {
+  CronConfig,
+  ScheduleType,
+  TimeUnit,
+  bookingTrustCron,
+} from "../services/booking-trust-cron.service.js";
+import { bookingTrustScheduler } from "../services/booking-trust-scheduler.service.js";
 import { propertyCredentialsService } from "../services/job-credentials.service.js";
 import { propertyCredentialsService as propertyPasswordUpdateService } from "../services/property-credentials.service.js";
 import { jobService } from "../services/job.service.js";
@@ -2229,8 +2229,7 @@ app.get("/api/otp/status", (req: express.Request, res: express.Response) => {
   }
 });
 
-// Booking Trust Scheduler Endpoints - COMMENTED OUT (Not needed currently)
-/*
+// Booking Trust Scheduler Endpoints
 // API to run booking trust scheduler manually
 app.post("/api/booking/trust-scheduler/run", (async (
   req: express.Request,
@@ -2526,7 +2525,6 @@ app.post("/api/booking/trust-scheduler/cron/trigger", (async (
     });
   }
 }) as any);
-*/
 
 // * Global error handle middleware
 app.use((err: any, req: any, res: any, next: any) => {

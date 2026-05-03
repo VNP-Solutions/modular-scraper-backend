@@ -130,6 +130,17 @@ export class BookingScraper extends BaseScraper {
     this.browser = browser;
   }
 
+  /**
+   * Bind a real Mongo job id for OTP phone lock / `phone_number_slots`, and captcha screenshots.
+   * Used when the scraper is not started via {@link executeScraping} (e.g. trust verification on the main thread).
+   */
+  public setScraperJobId(jobId: string | undefined): void {
+    this.jobId = jobId;
+    if (jobId) {
+      this.captchaService.setJobId(jobId);
+    }
+  }
+
   public async hasValidCookies(): Promise<boolean> {
     if (!this.propertyIdForDb) {
       return false;

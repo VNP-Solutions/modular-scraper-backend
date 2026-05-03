@@ -6,8 +6,8 @@ import app from "./app/app.js";
 import { loadAndSetCredentials } from "./common/load-token.js";
 import { setCurrentWorkerId } from "./common/log-helper.js";
 import { otpAwareWorkerPool } from "./common/otp-aware-worker-pool.js";
-// import { bookingTrustCron } from "./services/booking-trust-cron.service.js";
 import { jobQueueUrlService } from "./services/job-queue-url.service.js";
+import { bookingTrustCron } from "./services/booking-trust-cron.service.js";
 dotenv.config();
 
 // Set main thread ID for system tasks (schedulers, cron, API calls)
@@ -67,9 +67,8 @@ const gracefulShutdown = async (signal: string): Promise<void> => {
   console.log(`Received ${signal}. Starting graceful shutdown...`);
 
   try {
-    // Stop booking trust cron scheduler
-    // console.log("Stopping booking trust scheduler...");
-    // bookingTrustCron.stop();
+    console.log("Stopping booking trust scheduler...");
+    bookingTrustCron.stop();
 
     // Shutdown worker pool first
     console.log("Shutting down worker pool...");
@@ -96,9 +95,8 @@ app.listen(port, async () => {
   try {
     await connectDB();
 
-    // Start booking trust scheduler after database connection
-    // console.log("Starting booking trust verification scheduler...");
-    // bookingTrustCron.start();
+    console.log("Starting booking trust verification scheduler...");
+    bookingTrustCron.start();
 
     // Initialize job queue URLs after database connection
     await initializeJobQueueUrls();
@@ -115,7 +113,7 @@ app.listen(port, async () => {
         otpAwareWorkerPool.getStatus().totalWorkers
       } workers`
     );
-    // console.log("Booking trust verification scheduler started");
+    console.log("Booking trust verification scheduler started");
   } catch (err) {
     console.log("Server cannot be connected because of the error:");
     console.log(err);

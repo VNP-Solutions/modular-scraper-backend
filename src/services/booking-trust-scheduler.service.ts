@@ -5,11 +5,20 @@ import {
 import { BOOKING_SELECTORS } from "../common/booking-selectors.js";
 import { decryptPassword } from "../common/encription.js";
 import {
+  clearJobPhone,
+  getNextContactForJob,
+  setJobContact,
+} from "../common/job-phone-store.js";
+import {
   dualLogError,
   dualLogInfo,
+  dualLogWarn,
   finalizeJobLogging,
   initializeJobLogging,
 } from "../common/log-helper.js";
+import { otpStatusManager } from "../common/otp-status-manager.js";
+import { Job, JobStatus } from "../models/job.model.js";
+import { Types } from "mongoose";
 import { PropertyCredentials } from "../models/Property-credentials.js";
 import {
   BookingTrustedStatus,
@@ -18,6 +27,9 @@ import {
 } from "../models/property.model.js";
 import { BookingScraper, ScraperContext } from "../scrapers/booking-scraper.js";
 import { notificationService } from "./notification.service.js";
+
+/** Must match `failed_reason` written when a job fails for trust (see booking-scraper / vccs-management). */
+const TRUST_NEEDED_FAILED_REASON = "Trust needed";
 
 interface TrustVerificationResult {
   propertyId: string;
@@ -50,10 +62,143 @@ export class BookingTrustSchedulerService {
     totalRuntime: 0,
   };
 
+  /*
+   * -------------------------------------------------------------------------
+   * ARCHIVE — past eligibility logic (reference only; not executed)
+   * -------------------------------------------------------------------------
+   *
+   * --- (A) Original time-based only (no job / Failed / Trust needed) ---
+   *
+   * async getPropertiesForTrustVerification(): Promise<IProperty[]> {
+   *   const now = new Date();
+   *   const twentyThreeHoursAgo = new Date(now.getTime() - 23 * 60 * 60 * 1000);
+   *   const sixDaysAgo = new Date(now.getTime() - 6 * 24 * 60 * 60 * 1000);
+   *   try {
+   *     const properties = await Property.find({
+   *       $and: [
+   *         { booking_id: { $exists: true, $nin: ["0", "", null] } },
+   *         {
+   *           $or: [
+   *             {
+   *               $and: [
+   *                 {
+   *                   $or: [
+   *                     { booking_trusted_status: BookingTrustedStatus.NotTrusted },
+   *                     { booking_trusted_status: { $exists: false } },
+   *                   ],
+   *                 },
+   *                 {
+   *                   $or: [
+   *                     { booking_last_login: { $lte: twentyThreeHoursAgo } },
+   *                     { booking_last_login: { $exists: false } },
+   *                   ],
+   *                 },
+   *               ],
+   *             },
+   *             {
+   *               $and: [
+   *                 { booking_trusted_status: BookingTrustedStatus.Trusted },
+   *                 {
+   *                   $or: [
+   *                     { booking_last_login: { $lte: sixDaysAgo } },
+   *                     { booking_last_login: { $exists: false } },
+   *                   ],
+   *                 },
+   *               ],
+   *             },
+   *           ],
+   *         },
+   *       ],
+   *     })
+   *       .populate({
+   *         path: "credentials",
+   *         match: {
+   *           bookingUsername: { $exists: true, $ne: null },
+   *           bookingPassword: { $exists: true, $ne: null },
+   *         },
+   *       })
+   *       .lean();
+   *     await dualLogInfo(
+   *       `Found ${properties.length} properties for trust verification`,
+   *       {
+   *         totalProperties: properties.length,
+   *         notTrustedCount: properties.filter(
+   *           (p) => p.booking_trusted_status === BookingTrustedStatus.NotTrusted
+   *         ).length,
+   *         trustedCount: properties.filter(
+   *           (p) => p.booking_trusted_status === BookingTrustedStatus.Trusted
+   *         ).length,
+   *       }
+   *     );
+   *     return properties;
+   *   } catch (error) {
+   *     await dualLogError(
+   *       "Error getting properties for trust verification",
+   *       error
+   *     );
+   *     return [];
+   *   }
+   * }
+   *
+   * --- (B) Trust-needed jobs only (Failed + "Trust needed"; no 23h/6d OR) ---
+   *
+   * async getPropertiesForTrustVerification(): Promise<IProperty[]> {
+   *   try {
+   *     const propertyIds = await Job.distinct("property_id", {
+   *       job_status: JobStatus.Failed,
+   *       failed_reason: TRUST_NEEDED_FAILED_REASON,
+   *       property_id: { $exists: true, $ne: null },
+   *     });
+   *     if (propertyIds.length === 0) {
+   *       await dualLogInfo(
+   *         "No properties with Failed jobs (Trust needed) for trust verification",
+   *         { eligiblePropertyCount: 0 }
+   *       );
+   *       return [];
+   *     }
+   *     const properties = await Property.find({
+   *       _id: { $in: propertyIds },
+   *       booking_id: { $exists: true, $nin: ["0", "", null] },
+   *     })
+   *       .populate({
+   *         path: "credentials",
+   *         match: {
+   *           bookingUsername: { $exists: true, $ne: null },
+   *           bookingPassword: { $exists: true, $ne: null },
+   *         },
+   *       })
+   *       .lean();
+   *     await dualLogInfo(
+   *       `Found ${properties.length} properties for trust verification (Failed + Trust needed)`,
+   *       {
+   *         totalProperties: properties.length,
+   *         distinctPropertyIdsFromJobs: propertyIds.length,
+   *         notTrustedCount: properties.filter(
+   *           (p) => p.booking_trusted_status === BookingTrustedStatus.NotTrusted
+   *         ).length,
+   *         trustedCount: properties.filter(
+   *           (p) => p.booking_trusted_status === BookingTrustedStatus.Trusted
+   *         ).length,
+   *       }
+   *     );
+   *     return properties;
+   *   } catch (error) {
+   *     await dualLogError(
+   *       "Error getting properties for trust verification",
+   *       error
+   *     );
+   *     return [];
+   *   }
+   * }
+   *
+   * -------------------------------------------------------------------------
+   */
+
   /**
-   * Get properties that need trust verification based on the rules:
-   * a. Properties with last_login >= 23h and trusted_status = not_trusted
-   * b. OR Properties with last_login >= 6d and trusted_status = trusted
+   * Properties eligible for trust verification (any of):
+   * - At least one job with status Failed and failed_reason {@link TRUST_NEEDED_FAILED_REASON}.
+   * - Not-trusted (or missing status) and last_login at least 23h ago (or never).
+   * - Trusted and last_login at least 6 days ago (or never).
    */
   async getPropertiesForTrustVerification(): Promise<IProperty[]> {
     const now = new Date();
@@ -61,44 +206,55 @@ export class BookingTrustSchedulerService {
     const sixDaysAgo = new Date(now.getTime() - 6 * 24 * 60 * 60 * 1000);
 
     try {
-      const properties = await Property.find({
-        $and: [
-          { booking_id: { $exists: true, $nin: ["0", "", null] } }, // Must have valid booking_id
+      const trustNeededPropertyIds = await Job.distinct("property_id", {
+        job_status: JobStatus.Failed,
+        failed_reason: TRUST_NEEDED_FAILED_REASON,
+        property_id: { $exists: true, $ne: null },
+      });
+
+      const timeBasedEligibility = {
+        $or: [
           {
-            $or: [
+            $and: [
               {
-                // Not trusted properties that haven't been checked in 23+ hours
-                $and: [
+                $or: [
                   {
-                    $or: [
-                      {
-                        booking_trusted_status: BookingTrustedStatus.NotTrusted,
-                      },
-                      { booking_trusted_status: { $exists: false } },
-                    ],
+                    booking_trusted_status: BookingTrustedStatus.NotTrusted,
                   },
-                  {
-                    $or: [
-                      { booking_last_login: { $lte: twentyThreeHoursAgo } },
-                      { booking_last_login: { $exists: false } }, // Never logged in
-                    ],
-                  },
+                  { booking_trusted_status: { $exists: false } },
                 ],
               },
               {
-                // Trusted properties that haven't been verified in 6+ days
-                $and: [
-                  { booking_trusted_status: BookingTrustedStatus.Trusted },
-                  {
-                    $or: [
-                      { booking_last_login: { $lte: sixDaysAgo } },
-                      { booking_last_login: { $exists: false } }, // Never logged in
-                    ],
-                  },
+                $or: [
+                  { booking_last_login: { $lte: twentyThreeHoursAgo } },
+                  { booking_last_login: { $exists: false } },
                 ],
               },
             ],
           },
+          {
+            $and: [
+              { booking_trusted_status: BookingTrustedStatus.Trusted },
+              {
+                $or: [
+                  { booking_last_login: { $lte: sixDaysAgo } },
+                  { booking_last_login: { $exists: false } },
+                ],
+              },
+            ],
+          },
+        ],
+      };
+
+      const eligibilityOr: object[] = [timeBasedEligibility];
+      if (trustNeededPropertyIds.length > 0) {
+        eligibilityOr.unshift({ _id: { $in: trustNeededPropertyIds } });
+      }
+
+      const properties = await Property.find({
+        $and: [
+          { booking_id: { $exists: true, $nin: ["0", "", null] } },
+          { $or: eligibilityOr },
         ],
       })
         .populate({
@@ -114,6 +270,7 @@ export class BookingTrustSchedulerService {
         `Found ${properties.length} properties for trust verification`,
         {
           totalProperties: properties.length,
+          trustNeededJobPropertyCount: trustNeededPropertyIds.length,
           notTrustedCount: properties.filter(
             (p) => p.booking_trusted_status === BookingTrustedStatus.NotTrusted
           ).length,
@@ -144,6 +301,9 @@ export class BookingTrustSchedulerService {
     const previousStatus =
       property.booking_trusted_status || BookingTrustedStatus.NotTrusted;
 
+    let leaseJobId: string | undefined;
+    let otpSlotReserved = false;
+
     await dualLogInfo(
       `Starting trust verification for property ${propertyId}`,
       {
@@ -154,7 +314,85 @@ export class BookingTrustSchedulerService {
       }
     );
 
+    const baseFailure = (
+      message: string
+    ): TrustVerificationResult => ({
+      propertyId,
+      bookingId,
+      previousStatus,
+      newStatus: previousStatus,
+      success: false,
+      error: message,
+    });
+
     try {
+      const trustNeededJob = await Job.findOne({
+        property_id: property._id,
+        job_status: JobStatus.Failed,
+        failed_reason: TRUST_NEEDED_FAILED_REASON,
+      })
+        .sort({ updatedAt: -1 })
+        .select("_id")
+        .lean();
+
+      leaseJobId =
+        trustNeededJob?._id != null
+          ? String(trustNeededJob._id)
+          : new Types.ObjectId().toString();
+
+      const selectedContact = getNextContactForJob();
+      setJobContact(leaseJobId, selectedContact);
+
+      const slotFree = await otpStatusManager.isBookingSlotAvailable(
+        selectedContact
+      );
+      if (!slotFree) {
+        const lane = await otpStatusManager.getBookingPhoneLaneDiagnostics(
+          selectedContact
+        );
+        await dualLogWarn(
+          "Trust verification skipped — OTP phone lane not available (same gate as Booking jobs)",
+          {
+            propertyId,
+            leaseJobId,
+            phone_number: lane.phone_number,
+            laneState: lane.state,
+          }
+        );
+        clearJobPhone(leaseJobId);
+        leaseJobId = undefined;
+        return baseFailure(
+          `OTP phone lane not available (${lane.state}) for this contact; another job may hold the number or import may be missing a slot row.`
+        );
+      }
+
+      const reserved = await otpStatusManager.reserveBookingPhoneSlot(
+        leaseJobId,
+        selectedContact
+      );
+      if (!reserved) {
+        await dualLogWarn(
+          "Trust verification skipped — phone_number_slots reservation failed",
+          { propertyId, leaseJobId }
+        );
+        clearJobPhone(leaseJobId);
+        leaseJobId = undefined;
+        return baseFailure(
+          "Could not reserve OTP phone slot (race or no Released row for this number)."
+        );
+      }
+      otpSlotReserved = true;
+
+      const lockedLastThree = String(selectedContact.phone ?? "")
+        .replace(/\D/g, "")
+        .slice(-3);
+      await dualLogInfo(
+        `Trust verification OTP lease: jobId ${leaseJobId}, contact ...${lockedLastThree}` +
+          (selectedContact.port != null && String(selectedContact.port).trim() !== ""
+            ? `, slot ${selectedContact.port}`
+            : "")
+      );
+
       // Initialize logging for this verification
       initializeJobLogging(`${propertyId}`);
 
@@ -163,8 +401,9 @@ export class BookingTrustSchedulerService {
         ScraperContext.TRUST_VERIFICATION
       );
       bookingScraper.setPropertyIdForDb(propertyId);
+      bookingScraper.setScraperJobId(leaseJobId);
 
-      const { browser, page } = await bookingScraper.setupBrowser();
+      const { browser, page } = await bookingScraper.setupBrowser(leaseJobId);
       bookingScraper.setBrowserData(page, browser);
 
       // Attempt booking login
@@ -379,6 +618,13 @@ export class BookingTrustSchedulerService {
         success: false,
         error: error instanceof Error ? error.message : String(error),
       };
+    } finally {
+      if (otpSlotReserved && leaseJobId) {
+        await otpStatusManager.releaseOtp(leaseJobId);
+      }
+      if (leaseJobId) {
+        clearJobPhone(leaseJobId);
+      }
     }
   }
 

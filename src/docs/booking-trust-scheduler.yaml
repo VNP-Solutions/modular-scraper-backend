@@ -204,7 +204,10 @@
     tags:
       - Booking Trust Scheduler
     summary: Get eligible properties for verification
-    description: Get a list of properties that are eligible for trust verification
+    description: >-
+      Properties matching any of: (1) a Failed job with failed_reason "Trust needed";
+      (2) not-trusted and last login at least 23h ago (or never); (3) trusted and
+      last login at least 6 days ago (or never). Valid booking_id required.
     responses:
       '200':
         description: Eligible properties retrieved successfully
