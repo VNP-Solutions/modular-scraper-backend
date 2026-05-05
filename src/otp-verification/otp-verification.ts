@@ -1,38 +1,19 @@
 import dotenv from "dotenv";
-import { google } from "googleapis";
+import { Types } from "mongoose";
 import { Browser, Page } from "puppeteer";
 import {
   inferOtpFailedReasonCode,
   setFailedReasonCode,
 } from "../common/failed-reason.js";
 import { delay } from "../common/delay.js";
-import { loadAndSetCredentials } from "../common/load-token.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
 import { takeScreenshot } from "../common/screenshot-helper.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import { timeoutManager } from "../common/timeout-manager.js";
-import { oauth2Client } from "../config/google-config.js";
+import { OTAProvider } from "../models/job.model.js";
+import { OtpCode } from "../models/otp-code.model.js";
 
 dotenv.config();
-
-/**
- * Partner Central OTP notification subject (e.g. SMS → email / IFTTT). Full example:
- * Login attempt from ASHBURN, US to Partner Central Your verification code is 584207. Don't share this code; we will never ask for it.
- */
-const PARTNER_CENTRAL_OTP_SUBJECT_LOGIN_PREFIX = "Login attempt from ASHBURN";
-const PARTNER_CENTRAL_OTP_SUBJECT_CODE_PHRASE =
-  "Partner Central Your verification code is";
-
-/** Gmail list: both fragments appear in the subject line. */
-const PARTNER_CENTRAL_OTP_GMAIL_QUERY = `subject:"${PARTNER_CENTRAL_OTP_SUBJECT_LOGIN_PREFIX}" subject:"${PARTNER_CENTRAL_OTP_SUBJECT_CODE_PHRASE}"`;
-
-function subjectMatchesPartnerCentralOtpTemplate(subject: string): boolean {
-  const s = subject.trim();
-  return (
-    s.includes(PARTNER_CENTRAL_OTP_SUBJECT_LOGIN_PREFIX) &&
-    s.includes(PARTNER_CENTRAL_OTP_SUBJECT_CODE_PHRASE)
-  );
-}
 
 /**
  * Partner Central MFA / passcode step lives here (e.g. after login).
@@ -40,16 +21,7 @@ function subjectMatchesPartnerCentralOtpTemplate(subject: string): boolean {
  */
 const PARTNER_CENTRAL_MFA_INITIATE_PATH = "/account/mfa/initiate";
 
-const OTP_EMAIL_MAX_AGE_MS =
-  Number(process.env.OTP_EMAIL_WINDOW_MS) || 5 * 60 * 1000;
-
-/** Max submit attempts when Partner Central rejects the passcode (visible validation error). */
-const OTP_VERIFY_MAX_ATTEMPTS = 4;
-
-/** One minute before first Gmail read (same as legacy `delay(60000)` on email flow). */
-const OTP_WAIT_BEFORE_FIRST_CODE_MS = 60 * 1000;
-
-/** Brief pause between VERIFY clicks when cycling codes from the same batch (no Gmail refetch). */
+/** Brief pause between VERIFY clicks when cycling codes within the watch window. */
 const OTP_WAIT_BETWEEN_SUBMIT_MS =
   Number(process.env.OTP_WAIT_BETWEEN_SUBMIT_MS) ||
   Number(process.env.OTP_WAIT_BETWEEN_RETRY_MS) ||
@@ -58,172 +30,83 @@ const OTP_WAIT_BETWEEN_SUBMIT_MS =
 const OTP_POST_SUBMIT_CHECK_MS =
   Number(process.env.OTP_POST_SUBMIT_CHECK_MS) || 5 * 1000;
 
-// Function to load and set credentials from S3
-async function loadCredentials() {
-  try {
-    const tokenPath = process.env.TOKEN_PATH || "token.json";
-    const success = await loadAndSetCredentials(tokenPath);
+/**
+ * Hard cap on how long we wait for an OTP code to land in `otp_codes`
+ * (provider=Expedia, job_id=current job). After this, the job fails.
+ *
+ * Default: 10 minutes — generous enough for slow inbox / SMS relay, but short
+ * enough that a stuck job doesn't tie up a worker indefinitely.
+ */
+const OTP_DB_WAIT_MAX_MS =
+  Number(process.env.OTP_DB_WAIT_MAX_MS) || 10 * 60 * 1000;
 
-    if (!success) {
-      throw new Error(
-        "Failed to load Gmail credentials from S3 or local file. Please run the authentication setup first."
-      );
-    }
+/** How often we re-query `otp_codes` while waiting. */
+const OTP_DB_POLL_INTERVAL_MS =
+  Number(process.env.OTP_DB_POLL_INTERVAL_MS) || 5 * 1000;
 
-    await dualLogInfo("Gmail credentials loaded successfully from S3");
-    return true;
-  } catch (error) {
-    await dualLogError("Error loading credentials:", error);
-    return false;
-  }
-}
-
-/** Minimal shape for recursive MIME walk (Gmail API message payload parts). */
-interface GmailMessagePart {
-  mimeType?: string | null;
-  body?: { data?: string | null } | null;
-  parts?: GmailMessagePart[] | null;
-}
-
-function extractPlainBodyFromPayload(
-  payload: GmailMessagePart | undefined
-): string {
-  if (!payload) {
-    return "";
-  }
-  if (payload.mimeType === "text/plain" && payload.body?.data) {
-    return Buffer.from(payload.body.data, "base64").toString();
-  }
-  if (payload.body?.data && !payload.parts?.length) {
-    return Buffer.from(payload.body.data, "base64").toString();
-  }
-  if (payload.parts) {
-    for (const part of payload.parts) {
-      const found = extractPlainBodyFromPayload(part);
-      if (found) {
-        return found;
-      }
-    }
-  }
-  return "";
-}
-
-/** Prefer explicit phrase; code often appears in subject as well as body. */
-function extractPartnerCentralOtpCode(
-  subject: string,
-  emailBody: string
-): string | null {
-  const combined = `${subject}\n${emailBody}`;
-  const primary = combined.match(/Your verification code is (\d{6})/i);
-  if (primary?.[1]) {
-    return primary[1];
-  }
-  const fallbackBody = emailBody.match(/\b\d{6}\b/);
-  return fallbackBody ? fallbackBody[0] : null;
+/** One unused OTP code as returned by the DB poller. We carry `_id` along
+ * so the retry loop can flip exactly that doc to `used: true`. */
+interface PendingOtpCode {
+  _id: Types.ObjectId;
+  otp_code: string;
 }
 
 /**
- * Single Gmail pass: all Partner Central OTP messages in the time window, then
- * distinct 6-digit codes ordered newest-first (by message internalDate).
+ * Single-pass query for fresh, unused Expedia OTP codes for this job.
+ *
+ * - `used: false` filters out codes we (or any prior attempt) already tried.
+ * - `createdAt >= fromDate` filters out stale codes from a previous OTP
+ *   attempt on the same job that would already be expired by Partner Central.
+ *
+ * On a transient DB error this returns `[]` and logs — the caller is in a
+ * polling loop and will simply retry on the next tick.
  */
-async function fetchPartnerCentralOtpCodesFromGmail(): Promise<string[]> {
+async function queryUnusedExpediaOtpCodes(
+  jobId: string,
+  fromDate: Date
+): Promise<PendingOtpCode[]> {
   try {
-    const credentialsLoaded = await loadCredentials();
-    if (!credentialsLoaded) {
-      throw new Error(
-        "Failed to load Gmail credentials. Please complete authentication setup first."
-      );
-    }
+    const docs = await OtpCode.find({
+      provider: OTAProvider.Expedia,
+      job_id: jobId,
+      used: false,
+      createdAt: { $gte: fromDate },
+    })
+      .sort({ createdAt: -1 })
+      .select({ _id: 1, otp_code: 1 })
+      .lean();
 
-    const gmail = google.gmail({ version: "v1", auth: oauth2Client });
-    const cutoffMs = Date.now() - OTP_EMAIL_MAX_AGE_MS;
-
-    const res = await gmail.users.messages.list({
-      userId: "me",
-      maxResults: 40,
-      q: PARTNER_CENTRAL_OTP_GMAIL_QUERY,
-    });
-
-    if (!res.data.messages?.length) {
-      await dualLogInfo(
-        "No verification emails found with Partner Central verification code."
-      );
-      return [];
-    }
-
-    await dualLogInfo(
-      `OTP batch fetch (one Gmail scan): up to ${res.data.messages.length} id(s), window ${OTP_EMAIL_MAX_AGE_MS / 60000} min`
+    return docs.map((d) => ({ _id: d._id, otp_code: d.otp_code }));
+  } catch (queryError) {
+    await dualLogError(
+      `otp_codes query failed (will retry on next poll):`,
+      queryError
     );
-
-    type Entry = { internalMs: number; code: string };
-    const entries: Entry[] = [];
-
-    for (const msg of res.data.messages) {
-      if (!msg.id) {
-        continue;
-      }
-
-      const email = await gmail.users.messages.get({
-        userId: "me",
-        id: msg.id,
-        format: "full",
-      });
-
-      if (email.data.internalDate == null) {
-        continue;
-      }
-      const internalMs = Number(email.data.internalDate);
-      if (!Number.isFinite(internalMs)) {
-        continue;
-      }
-      if (internalMs < cutoffMs) {
-        await dualLogInfo(
-          `Reached messages older than OTP window; stopping scan (id ${msg.id})`
-        );
-        break;
-      }
-
-      const headers = email.data.payload?.headers || [];
-      const subjectHeader = headers.find(
-        (header) => header.name?.toLowerCase() === "subject"
-      );
-      const subject = subjectHeader?.value || "";
-      if (!subjectMatchesPartnerCentralOtpTemplate(subject)) {
-        continue;
-      }
-
-      let emailBody = extractPlainBodyFromPayload(email.data.payload);
-      if (!emailBody) {
-        emailBody = email.data.snippet || "";
-      }
-
-      const code = extractPartnerCentralOtpCode(subject, emailBody);
-      if (!code) {
-        continue;
-      }
-
-      entries.push({ internalMs, code });
-    }
-
-    entries.sort((a, b) => b.internalMs - a.internalMs);
-
-    const seen = new Set<string>();
-    const ordered: string[] = [];
-    for (const e of entries) {
-      if (seen.has(e.code)) {
-        continue;
-      }
-      seen.add(e.code);
-      ordered.push(e.code);
-    }
-
-    await dualLogInfo(
-      `OTP batch fetch done: ${entries.length} message(s) with a code, ${ordered.length} distinct code(s) newest-first`
-    );
-    return ordered;
-  } catch (error: any) {
-    await dualLogError("Error fetching emails:", error.message);
     return [];
+  }
+}
+
+/**
+ * Flip an OTP code's `used` flag to `true` after Partner Central accepted it.
+ *
+ * Called **only on successful verification**. Rejected codes are intentionally
+ * left `used: false` — the row stays in the DB as historical evidence, and
+ * the in-memory `triedIds` set already prevents the scraper from re-submitting
+ * them within the current watch window.
+ *
+ * Best effort: a failed update is logged but never aborts the OTP flow.
+ */
+async function markOtpCodeUsed(otpCodeId: Types.ObjectId): Promise<void> {
+  try {
+    await OtpCode.updateOne(
+      { _id: otpCodeId, used: false },
+      { $set: { used: true } }
+    );
+  } catch (markError) {
+    await dualLogError(
+      `Failed to mark otp_codes._id=${otpCodeId} as used (will continue):`,
+      markError
+    );
   }
 }
 
@@ -336,112 +219,202 @@ async function passcodeInputShowsFailure(page: Page): Promise<boolean> {
 }
 
 /**
- * Wait for email, then one Gmail batch fetch for all in-window codes (newest first).
- * Submits up to OTP_VERIFY_MAX_ATTEMPTS times using that list only — no refetch between attempts.
- * After VERIFY with no inline error, waits until the URL leaves the MFA initiate page (see checkpoint).
+ * Watch `otp_codes` (provider=Expedia, job_id=current job) for the entire
+ * `waitTimeoutMs` window (default 10 minutes). The loop:
+ *
+ *   1. Polls every `OTP_DB_POLL_INTERVAL_MS` for unused codes (`used:false`).
+ *   2. As soon as new code(s) appear, submits each on Partner Central
+ *      (newest-first). On acceptance, flips that exact doc to `used:true`
+ *      and returns. Rejected codes stay `used:false` in the DB; an in-memory
+ *      `triedIds` set prevents re-submitting them within this watch window.
+ *   3. If a code is rejected, **keeps polling** for codes inserted later in
+ *      the window — so a re-issued / fresher code that arrives mid-loop
+ *      still gets a chance.
+ *   4. When the deadline is reached without success, throws a descriptive
+ *      error so the worker fails the job.
+ *
+ * `jobId` is required because otp_codes is keyed on it.
  */
-async function enterPasscodeFromEmailWithRetries(
+async function enterPasscodeWithRetries(
   page: Page,
   jobId: string | undefined,
   entityType: "job" | "retrieval",
   options: {
     otpCheckpointUrl: string;
     postVerifyUrlWaitMs: number;
-    initialDelayMs?: number;
+    /**
+     * How long to keep watching `otp_codes` before giving up. Defaults to
+     * `OTP_DB_WAIT_MAX_MS` (10 min). Drives the entire poll+submit loop.
+     */
+    waitTimeoutMs?: number;
   }
 ): Promise<void> {
-  const { otpCheckpointUrl, postVerifyUrlWaitMs, initialDelayMs } = {
-    initialDelayMs: OTP_WAIT_BEFORE_FIRST_CODE_MS,
+  if (!jobId) {
+    throw new Error(
+      "Cannot fetch OTP from otp_codes: jobId is required (codes are looked up by provider + job_id)"
+    );
+  }
+
+  const { otpCheckpointUrl, postVerifyUrlWaitMs, waitTimeoutMs } = {
+    waitTimeoutMs: OTP_DB_WAIT_MAX_MS,
     ...options,
   };
 
-  await dualLogInfo("Waiting for verification email...");
-  await delay(initialDelayMs);
+  const start = Date.now();
+  const fromDate = new Date(start);
+  const triedIds = new Set<string>();
+  // Log "still waiting" only every Nth empty poll to keep logs quiet.
+  const QUIET_LOG_EVERY_N_POLLS = 6;
 
-  const codeQueue = await fetchPartnerCentralOtpCodesFromGmail();
-  if (!codeQueue.length) {
-    throw new Error("Failed to get verification code from email");
+  let pollCount = 0;
+  let submitCount = 0;
+
+  await dualLogInfo(
+    `Watching otp_codes for Expedia OTP (job=${jobId}, used=false) for up to ${
+      waitTimeoutMs / 60000
+    } min, polling every ${OTP_DB_POLL_INTERVAL_MS / 1000}s...`
+  );
+
+  while (Date.now() - start < waitTimeoutMs) {
+    pollCount++;
+
+    const allCandidates = await queryUnusedExpediaOtpCodes(jobId, fromDate);
+    const candidates = allCandidates.filter(
+      (c) => !triedIds.has(c._id.toString())
+    );
+
+    if (candidates.length === 0) {
+      const elapsedSec = Math.round((Date.now() - start) / 1000);
+      const remainingSec = Math.max(
+        0,
+        Math.round((waitTimeoutMs - (Date.now() - start)) / 1000)
+      );
+      if (pollCount % QUIET_LOG_EVERY_N_POLLS === 0) {
+        await dualLogInfo(
+          `Still watching otp_codes (poll #${pollCount}, ${elapsedSec}s elapsed, ${remainingSec}s remaining, ${submitCount} submit(s) so far)...`
+        );
+      }
+      await delay(OTP_DB_POLL_INTERVAL_MS);
+      continue;
+    }
+
+    await dualLogInfo(
+      `Poll #${pollCount}: found ${candidates.length} new unused code(s); submitting newest-first.`
+    );
+
+    for (const candidate of candidates) {
+      // Re-check the deadline before each submit — if the window is up,
+      // bail out cleanly instead of starting another VERIFY click.
+      if (Date.now() - start >= waitTimeoutMs) {
+        break;
+      }
+
+      const { _id: pendingId, otp_code: code } = candidate;
+      triedIds.add(pendingId.toString());
+      submitCount++;
+
+      const elapsedSec = Math.round((Date.now() - start) / 1000);
+      await dualLogInfo(
+        `OTP submit #${submitCount} (${elapsedSec}s into ${
+          waitTimeoutMs / 60000
+        }-min window): trying code ${code}`
+      );
+
+      await clearPasscodeInput(page);
+      await page.type('input[name="passcode-input"]', code, { delay: 100 });
+      await delay(1000);
+
+      const verifyButtonHandle = await page.$(
+        'button[data-testid="passcode-submit-button"]'
+      );
+      if (!verifyButtonHandle) {
+        throw new Error("Verify button not found");
+      }
+
+      const isDisabled = await page.evaluate(
+        (button) => button.disabled,
+        verifyButtonHandle
+      );
+      if (isDisabled) {
+        throw new Error("Verify button is disabled");
+      }
+
+      await verifyButtonHandle.click();
+      await dualLogInfo("Clicked VERIFY DEVICE / passcode submit.");
+
+      await delay(OTP_POST_SUBMIT_CHECK_MS);
+      const failed = await passcodeInputShowsFailure(page);
+
+      if (!failed) {
+        // Partner Central accepted this exact code — flip ONLY this doc to
+        // `used: true`. Other (rejected) codes stay `used: false`; the
+        // in-memory `triedIds` set above prevents re-submitting them in
+        // this same watch window.
+        await markOtpCodeUsed(pendingId);
+
+        await waitUntilUrlLeavesMfaOtpPage(
+          page,
+          otpCheckpointUrl,
+          postVerifyUrlWaitMs
+        );
+        await takeScreenshot(
+          page,
+          jobId,
+          "otp_submitted",
+          "step",
+          "expedia",
+          entityType
+        );
+        await dualLogInfo(
+          `OTP accepted on submit #${submitCount} after ${elapsedSec}s; otp_codes._id=${pendingId} marked used=true.`
+        );
+        return;
+      }
+
+      // Rejected: leave `used: false` in the DB so the row remains as
+      // historical evidence; only the in-memory triedIds set blocks a retry.
+      const remainingSec = Math.max(
+        0,
+        Math.round((waitTimeoutMs - (Date.now() - start)) / 1000)
+      );
+      await dualLogInfo(
+        `Partner Central rejected code (otp_codes._id=${pendingId} kept used=false); will keep watching otp_codes for newer codes (${remainingSec}s remaining in window).`
+      );
+
+      // Brief breather before next click — applies whether the next code is
+      // already in `candidates` or arrives on a later poll.
+      await delay(OTP_WAIT_BETWEEN_SUBMIT_MS);
+    }
   }
 
-  const rejectedCodes = new Set<string>();
-
-  for (let attempt = 1; attempt <= OTP_VERIFY_MAX_ATTEMPTS; attempt++) {
-    const code = codeQueue.find((c) => !rejectedCodes.has(c));
-    if (!code) {
-      throw new Error(
-        "No untried verification codes left from the Gmail batch for this OTP page."
-      );
-    }
-
-    await dualLogInfo(
-      `OTP submit attempt ${attempt}/${OTP_VERIFY_MAX_ATTEMPTS} (code from batch, no Gmail refetch)`
+  // Window elapsed. Distinguish "no codes ever appeared" from
+  // "tried codes but all rejected" so the failed_reason is actionable.
+  if (submitCount === 0) {
+    throw new Error(
+      `Failed to get verification code from otp_codes within ${
+        waitTimeoutMs / 60000
+      } minute(s) (provider=Expedia, job=${jobId}, polls=${pollCount}).`
     );
-    await dualLogInfo("Trying verification code:", code);
-
-    await clearPasscodeInput(page);
-    await page.type('input[name="passcode-input"]', code, { delay: 100 });
-    await delay(1000);
-
-    const verifyButtonHandle = await page.$(
-      'button[data-testid="passcode-submit-button"]'
-    );
-    if (!verifyButtonHandle) {
-      throw new Error("Verify button not found");
-    }
-
-    const isDisabled = await page.evaluate(
-      (button) => button.disabled,
-      verifyButtonHandle
-    );
-    if (isDisabled) {
-      throw new Error("Verify button is disabled");
-    }
-
-    await verifyButtonHandle.click();
-    await dualLogInfo("Clicked VERIFY DEVICE / passcode submit.");
-
-    await delay(OTP_POST_SUBMIT_CHECK_MS);
-    const failed = await passcodeInputShowsFailure(page);
-    if (!failed) {
-      await waitUntilUrlLeavesMfaOtpPage(
-        page,
-        otpCheckpointUrl,
-        postVerifyUrlWaitMs
-      );
-      await takeScreenshot(
-        page,
-        jobId ?? "",
-        "otp_submitted",
-        "step",
-        "expedia",
-        entityType
-      );
-      return;
-    }
-
-    rejectedCodes.add(code);
-    await dualLogInfo(
-      "Partner Central reported passcode error; will try next code from the same batch if any."
-    );
-
-    if (attempt >= OTP_VERIFY_MAX_ATTEMPTS) {
-      throw new Error(
-        "OTP verification failed: code rejected or expired after maximum attempts."
-      );
-    }
-
-    await dualLogInfo(
-      `Waiting ${OTP_WAIT_BETWEEN_SUBMIT_MS / 1000}s before next submit (same Gmail batch)...`
-    );
-    await delay(OTP_WAIT_BETWEEN_SUBMIT_MS);
   }
+  throw new Error(
+    `OTP verification failed: tried ${submitCount} code(s) within ${
+      waitTimeoutMs / 60000
+    } minute(s); all rejected by Partner Central (provider=Expedia, job=${jobId}, polls=${pollCount}).`
+  );
 }
 
 async function handleOtpVerification(
   browser: Browser,
   page: Page,
   jobId?: string,
-  entityType: "job" | "retrieval" = "job"
+  entityType: "job" | "retrieval" = "job",
+  /**
+   * Phone number to match against Partner Central's "We sent a passcode to ***-***-XXX"
+   * box. Comes from `Property.phone_number` (assigned via `PhoneNumberSlot`).
+   *
+   * Falls back to `OUR_CONTACT` env var (legacy single-number deployment).
+   */
+  phoneNumber?: string
 ): Promise<void> {
   try {
     // Check if scraping is paused before starting OTP verification
@@ -484,7 +457,23 @@ async function handleOtpVerification(
       `OTP page checkpoint URL (expect to leave this after successful VERIFY): ${otpCheckpointUrl}`
     );
 
-    const ourContact = process.env.OUR_CONTACT || "01828704004";
+    // Prefer the phone number assigned to the property via PhoneNumberSlot,
+    // then env fallback (legacy single-number deployment), then a hard-coded
+    // last-resort default so we never throw at this comparison step.
+    const ourContact =
+      (phoneNumber && phoneNumber.trim()) ||
+      process.env.OUR_CONTACT ||
+      "01828704004";
+
+    if (phoneNumber && phoneNumber.trim()) {
+      await dualLogInfo(
+        `Using property-assigned phone number for OTP verification.`
+      );
+    } else {
+      await dualLogInfo(
+        "No property-assigned phone number; falling back to env OUR_CONTACT."
+      );
+    }
 
     // Extract the phone number from the verification message
     const currentContact = await page.evaluate(() => {
@@ -509,11 +498,11 @@ async function handleOtpVerification(
 
     if (currentLastThree === ourLastThree) {
       await dualLogInfo(
-        "Phone numbers match! Using email verification flow..."
+        "Phone numbers match! Using DB-backed OTP verification flow..."
       );
 
       try {
-        await enterPasscodeFromEmailWithRetries(page, jobId, entityType, {
+        await enterPasscodeWithRetries(page, jobId, entityType, {
           otpCheckpointUrl,
           postVerifyUrlWaitMs: loadingTimeout,
         });
@@ -754,16 +743,15 @@ async function handleOtpVerification(
             });
 
             await dualLogInfo(
-              "SMS verification page loaded, trying to get verification code from email..."
+              "SMS verification page loaded, polling otp_codes for the code..."
             );
             const smsOtpCheckpointUrl = page.url();
             await dualLogInfo(
               `OTP checkpoint URL (SMS path): ${smsOtpCheckpointUrl}`
             );
-            await enterPasscodeFromEmailWithRetries(page, jobId, entityType, {
+            await enterPasscodeWithRetries(page, jobId, entityType, {
               otpCheckpointUrl: smsOtpCheckpointUrl,
               postVerifyUrlWaitMs: loadingTimeout,
-              initialDelayMs: 30 * 1000,
             });
           } else {
             throw new Error(
@@ -832,17 +820,16 @@ async function handleOtpVerification(
           });
 
           await dualLogInfo(
-            "SMS verification page loaded, trying to get verification code from email..."
+            "SMS verification page loaded, polling otp_codes for the code..."
           );
 
           const smsOtpCheckpointUrl = page.url();
           await dualLogInfo(
             `OTP checkpoint URL (SMS path): ${smsOtpCheckpointUrl}`
           );
-          await enterPasscodeFromEmailWithRetries(page, jobId, entityType, {
+          await enterPasscodeWithRetries(page, jobId, entityType, {
             otpCheckpointUrl: smsOtpCheckpointUrl,
             postVerifyUrlWaitMs: loadingTimeout,
-            initialDelayMs: 30 * 1000,
           });
         } else {
           throw new Error(

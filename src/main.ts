@@ -42,7 +42,12 @@ async function main(
   jobId?: string,
   user_email?: string,
   user_password?: string,
-  expediaBrightData?: ExpediaBrightDataOptions
+  expediaBrightData?: ExpediaBrightDataOptions,
+  /**
+   * Phone number assigned to the property (from PhoneNumberSlot) for OTP
+   * verification. When undefined, OTP falls back to the `OUR_CONTACT` env var.
+   */
+  phoneNumber?: string
 ): Promise<void> {
   let jobLogger = null;
   let browser = null;
@@ -100,7 +105,8 @@ async function main(
         jobId,
         user_email,
         user_password,
-        expediaBrightData
+        expediaBrightData,
+        phoneNumber
       );
 
       // End time session on successful completion
@@ -290,7 +296,9 @@ async function runScrapingWithRestart(
   jobId?: string,
   user_email?: string,
   user_password?: string,
-  expediaBrightData?: ExpediaBrightDataOptions
+  expediaBrightData?: ExpediaBrightDataOptions,
+  /** Property's assigned phone number for OTP; see `main`. */
+  phoneNumber?: string
 ): Promise<void> {
   const environment = process.env.ENVIRONMENT || "browserless";
   let currentStartDate = startDate;
@@ -429,7 +437,13 @@ async function runScrapingWithRestart(
             return;
           }
 
-          await handleOtpVerification(browser, page, jobId);
+          await handleOtpVerification(
+            browser,
+            page,
+            jobId,
+            "job",
+            phoneNumber
+          );
           await dualLogInfo("OTP verification completed successfully!");
 
           // Screenshot: OTP verification complete

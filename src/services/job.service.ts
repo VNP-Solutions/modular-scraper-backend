@@ -18,6 +18,7 @@ import {
   OTAProvider,
   PostingType,
 } from "../models/job.model.js";
+import { PhoneNumberSlot } from "../models/phone-number-slot.model.js";
 import {
   IPropertyCredentials,
   PropertyCredentials,
@@ -109,6 +110,12 @@ export class JobService {
     expediaId: string;
     user_email?: string;
     user_password?: string;
+    /**
+     * Phone number assigned to this property (from `Property.phone_number`,
+     * sourced from a `PhoneNumberSlot`). Used for Expedia OTP verification so
+     * each property uses its own number instead of a shared env fallback.
+     */
+    phone_number?: string;
     credentials?: Partial<IPropertyCredentials>;
     property?: IProperty & { credentials?: Partial<IPropertyCredentials> };
   } | null> {
@@ -153,6 +160,35 @@ export class JobService {
         ? (creds.toObject() as Partial<IPropertyCredentials>)
         : undefined;
 
+      // Resolve OTP phone number for this property.
+      //
+      // The schema keeps two copies on `properties`:
+      //   - `phone_number` / `slot`     (denormalized mirror, fast path)
+      //   - `phone_number_slot_id`      (FK ref to `phone_number_slots`)
+      //
+      // The slot doc is the source of truth; the mirror may be stale or unset
+      // depending on the assignment service. So: prefer the mirror if present,
+      // otherwise dereference the FK into `phone_number_slots`.
+      let resolvedPhoneNumber: string | undefined = property.phone_number;
+      if (!resolvedPhoneNumber && property.phone_number_slot_id) {
+        try {
+          const slotDoc = await PhoneNumberSlot.findById(
+            property.phone_number_slot_id,
+          );
+          if (slotDoc?.phone_number) {
+            resolvedPhoneNumber = slotDoc.phone_number;
+            console.log(
+              `📱 Resolved phone_number from PhoneNumberSlot ${slotDoc._id} for property ${property._id}`,
+            );
+          }
+        } catch (slotError) {
+          console.warn(
+            `Failed to load PhoneNumberSlot ${property.phone_number_slot_id} for property ${property._id}:`,
+            slotError,
+          );
+        }
+      }
+
       console.log(
         `✅ Found expedia_id: ${property.expedia_id} for job: ${jobId}`,
       );
@@ -161,6 +197,7 @@ export class JobService {
         // Map legacy fields from credentials for backward compatibility
         user_email: creds?.expediaUsername,
         user_password: creds?.expediaPassword,
+        phone_number: resolvedPhoneNumber,
         credentials: creds
           ? {
               _id: creds._id,

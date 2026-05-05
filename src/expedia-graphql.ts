@@ -1534,6 +1534,12 @@ async function graphqlScraping(
   expediaUsername?: string,
   expediaPassword?: string,
   expediaBrightData?: ExpediaBrightDataOptions,
+  /**
+   * Phone number assigned to this property (via PhoneNumberSlot) — used by
+   * handleOtpVerification to match the Partner Central OTP target. When
+   * undefined, OTP falls back to the `OUR_CONTACT` env variable.
+   */
+  phoneNumber?: string,
 ): Promise<void> {
   let jobLogger = null;
   let browser = null;
@@ -1592,6 +1598,7 @@ async function graphqlScraping(
         expediaUsername,
         expediaPassword,
         expediaBrightData,
+        phoneNumber,
       );
 
       // End time session on successful completion
@@ -1780,6 +1787,8 @@ async function runScrapingWithRestart(
   expediaUsername?: string,
   expediaPassword?: string,
   expediaBrightData?: ExpediaBrightDataOptions,
+  /** Phone number for OTP verification; see graphqlScraping. */
+  phoneNumber?: string,
 ): Promise<void> {
   const environment = process.env.ENVIRONMENT || "production";
   let currentStartDate = startDate;
@@ -1903,7 +1912,13 @@ async function runScrapingWithRestart(
             return;
           }
 
-          await handleOtpVerification(globalBrowser, globalPage, jobId);
+          await handleOtpVerification(
+            globalBrowser,
+            globalPage,
+            jobId,
+            "job",
+            phoneNumber,
+          );
           await dualLogInfo("OTP verification completed successfully!");
 
           // Notify worker that OTP work is completed so other jobs can proceed

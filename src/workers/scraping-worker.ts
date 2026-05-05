@@ -310,6 +310,10 @@ class ScrapingWorker {
     let finalExpediaId = expediaId;
     let finalUserEmail = user_email;
     let finalUserPassword = user_password;
+    // Always look up the property's assigned phone number (PhoneNumberSlot) since
+    // it's never carried on `WorkerJobData`. Optional — handleOtpVerification falls
+    // back to env if undefined.
+    let finalPhoneNumber: string | undefined;
 
     if (!finalExpediaId || !finalUserEmail || !finalUserPassword) {
       console.log(`Getting job data for job ${jobId}...`);
@@ -330,6 +334,20 @@ class ScrapingWorker {
       finalExpediaId = jobData.expediaId;
       finalUserEmail = jobData.user_email;
       finalUserPassword = jobData.user_password;
+      finalPhoneNumber = jobData.phone_number;
+    } else {
+      // Credentials were passed in via the worker message; still need to fetch
+      // the property's phone number for OTP. Best-effort — never fail the job
+      // just because the lookup failed.
+      try {
+        const jobLookup = await jobService.getExpediaIdFromJob(jobId);
+        finalPhoneNumber = jobLookup?.phone_number;
+      } catch (lookupError) {
+        console.warn(
+          `Worker: failed to look up phone_number for job ${jobId}; OTP will fall back to env`,
+          lookupError
+        );
+      }
     }
 
     console.log(`Worker: Using expedia_id: ${finalExpediaId} for scraping`);
@@ -365,7 +383,8 @@ class ScrapingWorker {
         jobId,
         finalUserEmail,
         finalUserPassword,
-        expediaBrightData
+        expediaBrightData,
+        finalPhoneNumber
       );
 
       // 7. Get final job statistics
@@ -478,7 +497,12 @@ class ScrapingWorker {
       );
     }
 
-    const { expediaId, user_email, user_password } = jobDetails;
+    const {
+      expediaId,
+      user_email,
+      user_password,
+      phone_number: phoneNumber,
+    } = jobDetails;
 
     console.log(
       `Worker: Rerunning failed/partial job ${jobId} with expedia_id: ${expediaId}`
@@ -516,7 +540,8 @@ class ScrapingWorker {
         jobId,
         user_email,
         user_password,
-        expediaBrightData
+        expediaBrightData,
+        phoneNumber
       );
 
       // 9. Get final job statistics
@@ -681,6 +706,9 @@ class ScrapingWorker {
     let finalExpediaId = expediaId;
     let finalUserEmail = user_email;
     let finalUserPassword = user_password;
+    // Phone number assigned to the property via PhoneNumberSlot — used by
+    // handleOtpVerification to match the "Send to ***-***-XXX" target.
+    let finalPhoneNumber: string | undefined;
 
     if (!finalExpediaId || !finalUserEmail || !finalUserPassword) {
       console.log(`Getting job data for GraphQL job ${jobId}...`);
@@ -701,6 +729,19 @@ class ScrapingWorker {
       finalExpediaId = jobData.expediaId;
       finalUserEmail = jobData.user_email;
       finalUserPassword = jobData.user_password;
+      finalPhoneNumber = jobData.phone_number;
+    } else {
+      // Worker message already had credentials; still need the property's
+      // phone number for OTP. Best-effort lookup.
+      try {
+        const jobLookup = await jobService.getExpediaIdFromJob(jobId);
+        finalPhoneNumber = jobLookup?.phone_number;
+      } catch (lookupError) {
+        console.warn(
+          `Worker: failed to look up phone_number for GraphQL job ${jobId}; OTP will fall back to env`,
+          lookupError
+        );
+      }
     }
 
     console.log(
@@ -741,7 +782,8 @@ class ScrapingWorker {
         jobId,
         finalUserEmail,
         finalUserPassword,
-        expediaBrightData
+        expediaBrightData,
+        finalPhoneNumber
       );
 
       // 7. Get final job statistics

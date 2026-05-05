@@ -22,6 +22,16 @@ export interface IProperty extends Document {
   updatedAt: Date;
   user_email?: string;
   user_password?: string;
+  /**
+   * The phone number assigned to this property for OTP / MFA verification
+   * (e.g. Expedia Partner Central "Send me a text"). Sourced from the assigned
+   * `PhoneNumberSlot`; mirrored here for fast access without an extra lookup.
+   */
+  phone_number?: string;
+  /** Slot index (1-based) of the assigned PhoneNumberSlot. Mirrored from the slot doc. */
+  slot?: number;
+  /** Reference to the PhoneNumberSlot currently assigned to this property. */
+  phone_number_slot_id?: Types.ObjectId;
 }
 
 // Mongoose Schema for Property
@@ -100,6 +110,19 @@ const PropertySchema = new Schema<IProperty>(
       type: String,
       required: false,
     },
+    phone_number: {
+      type: String,
+      required: false,
+    },
+    slot: {
+      type: Number,
+      required: false,
+    },
+    phone_number_slot_id: {
+      type: Schema.Types.ObjectId,
+      ref: "PhoneNumberSlot",
+      required: false,
+    },
   },
   {
     timestamps: true,
@@ -111,5 +134,6 @@ const PropertySchema = new Schema<IProperty>(
 PropertySchema.index({ created_by: 1 });
 PropertySchema.index({ status: 1 });
 PropertySchema.index({ property_name: 1 });
+PropertySchema.index({ phone_number_slot_id: 1 });
 
 export const Property = mongoose.model<IProperty>("Property", PropertySchema);
