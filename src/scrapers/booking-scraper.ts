@@ -462,24 +462,10 @@ export class BookingScraper extends BaseScraper {
 
     await this.logInfo("✅ Login successful");
 
-    // Extract session parameters from URL
+    // First-pass extraction: works for single-property landings where ses/lang
+    // are already in the URL. For multi-property selector pages this comes back
+    // empty and we rely on the post-search URL below.
     await this.extractSessionParams();
-
-    const cookies = await this.page.cookies();
-
-    // Save cookies to storage if we have a property ID
-    if (this.propertyIdForDb) {
-      const success = await cookieStorageService.saveCookies(
-        this.propertyIdForDb,
-        PlatformsType.BOOKING,
-        cookies
-      );
-      if (!success) {
-        await this.logWarn("Failed to save cookies to storage");
-      }
-    }
-
-    await this.takeScreenshot();
 
     // Map MongoDB ObjectId (property _id) to actual Booking hotel id if needed
     let effectivePropertyId = propertyId;
@@ -504,7 +490,8 @@ export class BookingScraper extends BaseScraper {
       }
     }
 
-    // Skip property search if we have session parameters (will use direct navigation)
+    // Multi-property accounts need to pick a property before the top nav renders.
+    // Skip when we already have ses/lang (single-property direct landing).
     if (this.sessionParams) {
       await this.logInfo(
         "Session parameters available - skipping property search (will use direct navigation)"
@@ -512,6 +499,171 @@ export class BookingScraper extends BaseScraper {
     } else {
       await this.handlePropertySearch(effectivePropertyId);
     }
+
+    // At this point we're on a property's extranet page (either we landed there
+    // directly OR we just selected one), so the top nav is rendered. Mimic real
+    // user browsing (Home → Reservations + scrolls) to reduce the bot signature
+    // of jumping straight from sign-in to a deep admin page. Non-fatal: any
+    // failure is logged and swallowed so the main login flow continues.
+    await this.performHumanBrowsingAfterLogin();
+
+    // Re-extract ses/lang from the canonical Home/Reservations URL — more
+    // reliable than the post-login URL, and required for multi-property where
+    // the first extraction above was empty.
+    await this.extractSessionParams();
+
+    // Save cookies AFTER browsing + search so cached-cookie runs start from the
+    // post-search state (skipping both login AND property search next time).
+    const cookies = await this.page.cookies();
+    if (this.propertyIdForDb) {
+      const success = await cookieStorageService.saveCookies(
+        this.propertyIdForDb,
+        PlatformsType.BOOKING,
+        cookies
+      );
+      if (!success) {
+        await this.logWarn("Failed to save cookies to storage");
+      }
+    }
+
+    await this.takeScreenshot();
+  }
+
+  /**
+   * Click Home, then Reservations (with scrolling pauses in between) so the first
+   * post-login action is not always a deep-link to an admin page. Selectors follow
+   * the existing `li[data-nav-tag="..."] .ext-navigation-top-item__link` convention
+   * used in `BOOKING_SELECTORS.navigation`. Skipped silently if the top nav is not
+   * rendered yet (e.g. multi-property selector page where a property has not been
+   * picked).
+   */
+  private async performHumanBrowsingAfterLogin(): Promise<void> {
+    if (!this.page) return;
+
+    const homeSelector =
+      'li[data-nav-tag="home"] a.ext-navigation-top-item__link';
+    const reservationsSelector =
+      'li[data-nav-tag="reservations"] a.ext-navigation-top-item__link';
+
+    try {
+      const homeNav = await this.page.$(homeSelector);
+      if (!homeNav) {
+        await this.logInfo(
+          "Top nav not present yet — skipping human-like browsing"
+        );
+        return;
+      }
+
+      await this.logInfo(
+        "Performing human-like browsing (Home → Reservations)"
+      );
+
+      await this.clickNavAndWait(homeSelector, "home.html");
+      await this.scrollHumanLike();
+
+      const reservationsNav = await this.page.$(reservationsSelector);
+      if (reservationsNav) {
+        await this.clickNavAndWait(
+          reservationsSelector,
+          "search_reservations.html"
+        );
+        await this.scrollHumanLike();
+      } else {
+        await this.logInfo(
+          "Reservations link not found after Home — skipping that hop"
+        );
+      }
+
+      await this.logInfo("Human-like browsing complete");
+    } catch (err) {
+      await this.logWarn("Human-like browsing step failed (non-fatal)", err);
+    }
+  }
+
+  /**
+   * Click a top-nav link and wait for the destination to fully load. Tolerates
+   * the case where the click does not trigger a full navigation (e.g. SPA route).
+   *
+   * Booking can throw a fresh captcha, 2FA prompt, account-lock, or password-reset
+   * interstitial mid-session after any click — even when already logged in. After
+   * the navigation settles we drain those via {@link resolveBookingAuthInterstitials},
+   * the same helper {@link login} uses. If Booking bounces us back to /sign-in
+   * (session expired), we throw so the caller's try/catch can abort the human-like
+   * browsing cleanly; the downstream `checkIfLoginNeeded` → `login(..., true)`
+   * pattern in `vccs-management.service.ts` will pick up a fresh login from there.
+   */
+  private async clickNavAndWait(
+    selector: string,
+    expectedUrlSubstring: string
+  ): Promise<void> {
+    if (!this.page) return;
+
+    const navPromise = this.page
+      .waitForNavigation({ waitUntil: "networkidle2", timeout: 30000 })
+      .catch(() => undefined);
+
+    await this.page.click(selector);
+    await navPromise;
+    await delay(1500);
+
+    // Drain any captcha / 2FA / account-lock / password-reset interstitial that
+    // Booking may have served on this navigation. Smaller maxRounds than the
+    // post-login drain because the page should already be authenticated.
+    const resolved = await this.resolveBookingAuthInterstitials({
+      loginEmail: this.credentials?.email,
+      maxRounds: 4,
+    });
+    if (!resolved) {
+      await this.logWarn(
+        `Auth interstitial not fully resolved after nav click to ${expectedUrlSubstring}; continuing best-effort`
+      );
+    }
+
+    const currentUrl = this.page.url();
+
+    // Bounced back to sign-in (session expired). Don't recurse into login() from
+    // here — let the outer flow handle re-authentication via its existing path.
+    if (currentUrl.toLowerCase().includes("/sign-in")) {
+      throw new Error(
+        `Bounced to sign-in after nav click to ${expectedUrlSubstring} (current: ${currentUrl})`
+      );
+    }
+
+    if (currentUrl.includes(expectedUrlSubstring)) {
+      await this.logInfo(`Navigated to ${expectedUrlSubstring}`);
+    } else {
+      await this.logInfo(
+        `Nav did not land on ${expectedUrlSubstring} (current: ${currentUrl}) — continuing`
+      );
+    }
+  }
+
+  /**
+   * Scroll the page down in small randomized steps, pause as if reading, then
+   * scroll back to the top. Distances and pauses vary per call to avoid a
+   * uniform scroll signature.
+   */
+  private async scrollHumanLike(): Promise<void> {
+    if (!this.page) return;
+
+    const downSteps = 3 + Math.floor(Math.random() * 3); // 3–5 steps
+    for (let i = 0; i < downSteps; i++) {
+      const px = 200 + Math.floor(Math.random() * 200); // 200–400 px
+      await this.page.evaluate((y) => window.scrollBy(0, y), px);
+      await delay(400 + Math.floor(Math.random() * 600));
+    }
+
+    await delay(1000 + Math.floor(Math.random() * 1500));
+
+    const upSteps = 3 + Math.floor(Math.random() * 2); // 3–4 steps
+    for (let i = 0; i < upSteps; i++) {
+      const px = 200 + Math.floor(Math.random() * 250); // 200–450 px
+      await this.page.evaluate((y) => window.scrollBy(0, -y), px);
+      await delay(300 + Math.floor(Math.random() * 400));
+    }
+
+    await this.page.evaluate(() => window.scrollTo(0, 0));
+    await delay(500);
   }
 
   /**
