@@ -728,10 +728,21 @@ export class VccsManagementService {
       if (isGuestCreditCardTrustUnavailableHtml(html)) {
         if (fetchOutcome) {
           fetchOutcome.guestCardTrustUnavailable = true;
-          // Do NOT carry forward the URL from trust-unavailable pages.
-          // Reusing a trust-unavailable URL (which contains tlc=1) would
-          // bypass the captcha/2FA that Booking.com serves on fresh requests
-          // and is necessary to unlock card access.
+
+          // The trust-unavailable page URL still contains a valid `ses` token.
+          // Strip `tlc=1` (the trust flag) and carry the cleaned URL forward so
+          // the NEXT reservation uses the latest session instead of falling back
+          // to the sessionless path (which bounces to /sign-in).
+          const trustUnavailableUrl = page.url();
+          const cleanedUrl = trustUnavailableUrl
+            .replace(/;tlc=[^;]*/g, "")
+            .replace(/&tlc=[^&]*/g, "")
+            .replace(/[?]tlc=[^;&]*/g, "?");
+          fetchOutcome.latestAuthenticatedUrl = cleanedUrl;
+          dualLogInfo(
+            "Trust-unavailable page: extracted ses from URL for next reservation",
+            { reservationId, cleanedUrl }
+          );
         }
         dualLogInfo(
           "Card details page shows guest card unavailable (trust / eligibility)",
@@ -1215,15 +1226,19 @@ export class VccsManagementService {
           trustUnavailablePageCount++;
         }
 
-        // Only carry forward the authenticated URL when a real card was
-        // successfully fetched. Reusing a URL from a trust-unavailable page
-        // (which contains tlc=1) would bypass the captcha that Booking.com
-        // serves on fresh requests and is needed to unlock card access.
-        if (cardDetails && (cardDetails as any).authenticatedUrl) {
-          latestAuthenticatedUrl = (cardDetails as any).authenticatedUrl as string;
-          const sesFromUrl = extractSesFromAuthenticatedUrl(
-            latestAuthenticatedUrl
-          );
+        // Carry forward the latest authenticated URL for the next reservation.
+        // Successful fetches provide it via cardDetails.authenticatedUrl.
+        // Trust-unavailable fetches provide it via fetchOutcome.latestAuthenticatedUrl
+        // (tlc=1 already stripped by getCardDetailsFromBrowser so the next request
+        // gets a clean session URL instead of falling back to the sessionless path
+        // which bounces to /sign-in).
+        const nextAuthUrl =
+          (cardDetails && (cardDetails as any).authenticatedUrl) ||
+          fetchOutcome.latestAuthenticatedUrl;
+
+        if (nextAuthUrl) {
+          latestAuthenticatedUrl = nextAuthUrl;
+          const sesFromUrl = extractSesFromAuthenticatedUrl(nextAuthUrl);
           if (sesFromUrl && sesFromUrl !== params.ses) {
             dualLogInfo(
               `Refreshing params.ses from latest authenticated card-details URL`,
@@ -1231,6 +1246,7 @@ export class VccsManagementService {
                 reservationId: vccs.hres_id,
                 oldSes: params.ses,
                 newSes: sesFromUrl,
+                source: cardDetails ? "successfulCard" : "trustUnavailable",
               }
             );
             params.ses = sesFromUrl;
@@ -1238,6 +1254,7 @@ export class VccsManagementService {
           dualLogInfo(`Updated latest authenticated URL for next reservation`, {
             reservationId: vccs.hres_id,
             latestAuthenticatedUrl,
+            source: cardDetails ? "successfulCard" : "trustUnavailable",
           });
         }
 

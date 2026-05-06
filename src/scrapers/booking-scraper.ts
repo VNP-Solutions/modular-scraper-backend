@@ -490,11 +490,15 @@ export class BookingScraper extends BaseScraper {
       }
     }
 
-    // Multi-property accounts need to pick a property before the top nav renders.
-    // Skip when we already have ses/lang (single-property direct landing).
-    if (this.sessionParams) {
+    // We need to be on the SPECIFIC property's extranet page so the top nav and
+    // its menu sections (Home, Reservations, Finance/VCCS, etc.) actually render.
+    // Note: ses/lang alone are NOT enough — the multi-property `/groups/home/`
+    // page also has them in the URL but does not render the property nav.
+    if (this.isOnSpecificPropertyPage(effectivePropertyId)) {
       await this.logInfo(
-        "Session parameters available - skipping property search (will use direct navigation)"
+        `Already on property page${
+          effectivePropertyId ? ` for hotel_id=${effectivePropertyId}` : ""
+        } - skipping property search`
       );
     } else {
       await this.handlePropertySearch(effectivePropertyId);
@@ -664,6 +668,23 @@ export class BookingScraper extends BaseScraper {
 
     await this.page.evaluate(() => window.scrollTo(0, 0));
     await delay(500);
+  }
+
+  /**
+   * Decide whether the current URL is the specific property's extranet page.
+   * Used to decide if `handlePropertySearch` is necessary: ses/lang alone are NOT
+   * enough — `/hoteladmin/groups/home/...?ses=…&lang=xu` (multi-property landing)
+   * also has them but doesn't render the property-scoped top nav. We require
+   * `hotel_id=<propertyId>` in the URL.
+   */
+  private isOnSpecificPropertyPage(propertyId?: string): boolean {
+    if (!this.page) return false;
+    const url = this.page.url();
+    if (!url.includes("hotel_id=")) return false;
+    if (propertyId) {
+      return url.includes(`hotel_id=${propertyId}`);
+    }
+    return true;
   }
 
   /**
@@ -1053,36 +1074,11 @@ export class BookingScraper extends BaseScraper {
       if (this.isAlreadyLoggedIn() && !skipAlreadyLogged) {
         await this.logInfo("✅ Already logged in");
 
-        // Extract session parameters from current URL
-        await this.extractSessionParams();
-
-        // Map MongoDB ObjectId (property _id) to actual Booking hotel id if needed
-        let effectivePropertyId = propertyId;
-        if (
-          effectivePropertyId &&
-          Types.ObjectId.isValid(effectivePropertyId)
-        ) {
-          try {
-            const propertyRecord = await Property.findById(
-              effectivePropertyId
-            ).lean();
-            if (propertyRecord && propertyRecord.booking_id) {
-              this.setPropertyIdForDb(effectivePropertyId);
-              effectivePropertyId = propertyRecord.booking_id.toString();
-            }
-          } catch (err) {
-            await this.logError("Failed to map MongoDB id to booking id", err);
-          }
-        }
-
-        // Skip property search if we have session parameters (will use direct navigation)
-        if (this.sessionParams) {
-          await this.logInfo(
-            "Session parameters available - skipping property search (will use direct navigation)"
-          );
-        } else {
-          await this.handlePropertySearch(effectivePropertyId);
-        }
+        // Reuse the same post-login flow as a fresh login so the cookie-load
+        // path also gets: property-search-if-needed → human-like browsing →
+        // ses/lang refresh → cookie re-save (captures any Booking-side session
+        // refresh) → screenshot. Avoids drift between the two code paths.
+        await this.handleSuccessfulLogin(propertyId);
         return;
       }
 
