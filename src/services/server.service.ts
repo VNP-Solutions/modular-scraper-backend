@@ -7,15 +7,15 @@ export class ServerService {
   private serverUrl: string | null = null;
 
   constructor() {
-    this.serverUrl = process.env.MAIN_BACKEND_URL || null;
+    this.serverUrl = process.env.OWN_URL || null;
   }
 
   /**
-   * Find server by URL matching MAIN_BACKEND_URL
+   * Find server by URL matching OWN_URL
    */
   private async findServerByUrl(): Promise<any | null> {
     if (!this.serverUrl) {
-      console.log("MAIN_BACKEND_URL not configured, skipping server tracking");
+      console.log("OWN_URL not configured, skipping server tracking");
       return null;
     }
 
