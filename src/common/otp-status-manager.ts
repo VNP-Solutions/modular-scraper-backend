@@ -194,6 +194,7 @@ export class OtpStatusManager extends EventEmitter {
 
       if (result) {
         // Successfully released
+        const platform = result.platform || this.getOtpPlatform();
         this.currentStatus = {
           status: OtpStatusValue.Released,
           platform: null,
@@ -203,6 +204,12 @@ export class OtpStatusManager extends EventEmitter {
 
         console.log(`\x1b[32mOTP released by job ${jobId}\x1b[0m`);
         this.emit("otpReleased", jobId);
+
+        // Call Lambda trigger API
+        this.triggerLambdaAPI(platform).catch((err) =>
+          console.error("Lambda API call failed (non-blocking):", err)
+        );
+
         return true;
       } else {
         console.log(
@@ -213,6 +220,35 @@ export class OtpStatusManager extends EventEmitter {
     } catch (error) {
       console.error(`Error releasing OTP for job ${jobId}:`, error);
       return false;
+    }
+  }
+
+  /**
+   * Trigger Lambda API when OTP is released
+   */
+  private async triggerLambdaAPI(platform: string): Promise<void> {
+    const mainBackendUrl = process.env.MAIN_BACKEND_URL;
+    if (!mainBackendUrl) {
+      console.log("MAIN_BACKEND_URL not configured, skipping Lambda trigger");
+      return;
+    }
+
+    try {
+      const response = await fetch(`${mainBackendUrl}/jobs/trigger-lambda`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ platform }),
+      });
+
+      if (response.ok) {
+        console.log(`Lambda triggered successfully for platform: ${platform}`);
+      } else {
+        console.error(`Lambda trigger failed: ${response.status}`);
+      }
+    } catch (error) {
+      console.error("Error calling Lambda API:", error);
     }
   }
 
@@ -237,6 +273,7 @@ export class OtpStatusManager extends EventEmitter {
       );
 
       if (result) {
+        const platform = result.platform || this.getOtpPlatform();
         this.currentStatus = {
           status: OtpStatusValue.Released,
           platform: this.getOtpPlatform(),
@@ -246,6 +283,12 @@ export class OtpStatusManager extends EventEmitter {
 
         console.log("OTP force released");
         this.emit("otpReleased", null);
+
+        // Call Lambda trigger API
+        this.triggerLambdaAPI(platform).catch((err) =>
+          console.error("Lambda API call failed (non-blocking):", err)
+        );
+
         return true;
       }
       return false;
