@@ -38,25 +38,56 @@ export function extractFolderIdFromDriveUrl(input: string): string | null {
   return null;
 }
 
-/**
- * Root folder: `GOOGLE_DRIVE_ROOT_FOLDER_LINK` / `GOOGLE_DRIVE_FOLDER_LINK`, or `GOOGLE_DRIVE_JOB_ITEMS_FOLDER_ID`.
- */
-export function resolveGoogleDriveRootFolderId(): string | null {
-  const link =
-    process.env.GOOGLE_DRIVE_ROOT_FOLDER_LINK?.trim() ||
-    process.env.GOOGLE_DRIVE_FOLDER_LINK?.trim();
+/** Immediate runs: `GOOGLE_DRIVE_HISTORICAL_FOLDER_LINK` or `GOOGLE_DRIVE_HISTORICAL_FOLDER_ID`. */
+export function resolveGoogleDriveHistoricalFolderId(): string | null {
+  const link = process.env.GOOGLE_DRIVE_HISTORICAL_FOLDER_LINK?.trim();
   if (link) {
     const id = extractFolderIdFromDriveUrl(link);
     if (id) return id;
   }
-  return process.env.GOOGLE_DRIVE_JOB_ITEMS_FOLDER_ID?.trim() || null;
+  return process.env.GOOGLE_DRIVE_HISTORICAL_FOLDER_ID?.trim() || null;
 }
 
+/** Scheduled runs: `GOOGLE_DRIVE_SCHEDULED_FOLDER_LINK` or `GOOGLE_DRIVE_SCHEDULED_FOLDER_ID`. */
+export function resolveGoogleDriveScheduledFolderId(): string | null {
+  const link = process.env.GOOGLE_DRIVE_SCHEDULED_FOLDER_LINK?.trim();
+  if (link) {
+    const id = extractFolderIdFromDriveUrl(link);
+    if (id) return id;
+  }
+  return process.env.GOOGLE_DRIVE_SCHEDULED_FOLDER_ID?.trim() || null;
+}
+
+/**
+ * Drive parent for job-items XLSX from `execution_type` (case-insensitive).
+ * - `Immediate` → `GOOGLE_DRIVE_HISTORICAL_FOLDER_LINK` / `_ID` only (no fallback).
+ * - `scheduled` → `GOOGLE_DRIVE_SCHEDULED_FOLDER_LINK` / `_ID` only (no fallback).
+ * - Any other value → no upload (`null`).
+ */
+export function resolveJobItemsDriveRootFolderIdForExecutionType(
+  executionType: string | null | undefined
+): string | null {
+  const et = (executionType ?? "").trim().toLowerCase();
+  if (et === "immediate") {
+    return resolveGoogleDriveHistoricalFolderId();
+  }
+  if (et === "scheduled") {
+    return resolveGoogleDriveScheduledFolderId();
+  }
+  return null;
+}
+
+/** Requires credentials and both historical + scheduled roots (no legacy single-root). */
 export function isGoogleDriveJobItemsUploadConfigured(): boolean {
   if (process.env.GOOGLE_DRIVE_JOB_ITEMS_UPLOAD_ENABLED === "false") {
     return false;
   }
-  if (!resolveGoogleDriveRootFolderId()) return false;
+  if (
+    !resolveGoogleDriveHistoricalFolderId() ||
+    !resolveGoogleDriveScheduledFolderId()
+  ) {
+    return false;
+  }
   const creds = readCredentials();
   const path = process.env.GOOGLE_DRIVE_CREDENTIALS_PATH?.trim();
   if (!creds && !path) return false;
@@ -258,19 +289,24 @@ async function upsertXlsxInFolder(
 }
 
 /**
- * Ensures root/Expedia/DD-MM-YYYY and uploads the .xlsx file there.
+ * Ensures `{root}/Expedia/DD-MM-YYYY` and uploads the .xlsx file there.
+ * Root is chosen only from `opts.executionType` via
+ * `resolveJobItemsDriveRootFolderIdForExecutionType` (`Immediate` vs `scheduled`; no fallback).
  * File name: `{portfolio}-{property}-{DD-MM-YYYY}.xlsx` (see `buildJobItemsXlsxFileName`).
  * If that file already exists in the date folder, its content is replaced (same Drive file id / link).
  */
 export async function uploadJobItemsXlsxToGoogleDrive(
   xlsxBuffer: Buffer,
-  meta: { portfolioName: string; propertyName: string }
+  meta: { portfolioName: string; propertyName: string },
+  opts?: { executionType?: string | null }
 ): Promise<string | null> {
   if (!isGoogleDriveJobItemsUploadConfigured()) {
     return null;
   }
 
-  const rootId = resolveGoogleDriveRootFolderId();
+  const rootId = resolveJobItemsDriveRootFolderIdForExecutionType(
+    opts?.executionType
+  );
   if (!rootId) return null;
 
   const auth = await getAuthorizedClient();

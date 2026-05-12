@@ -194,16 +194,26 @@ class ScrapingWorker {
       }
       const property = await jobService.getPropertyForJob(jobId);
       const buffer = jobItemsToChargeReportXlsxBuffer(items, job, property);
-      const url = await uploadJobItemsXlsxToGoogleDrive(buffer, {
-        portfolioName: job.portfolio_name ?? "",
-        propertyName: job.property_name ?? "",
-      });
+      const url = await uploadJobItemsXlsxToGoogleDrive(
+        buffer,
+        {
+          portfolioName: job.portfolio_name ?? "",
+          propertyName: job.property_name ?? "",
+        },
+        { executionType: job.execution_type }
+      );
       if (url) {
         await jobService.updateJobItemsFileLink(jobId, url);
         await dualLogInfo(`Google Drive: job items XLSX uploaded`, {
           jobId,
           url,
+          executionType: job.execution_type,
         });
+      } else {
+        await dualLogInfo(
+          `Google Drive: job items XLSX upload skipped (no Drive root for this execution_type or upload disabled)`,
+          { jobId, executionType: job.execution_type }
+        );
       }
     } catch (err) {
       await dualLogError(
