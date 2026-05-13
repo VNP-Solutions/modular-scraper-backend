@@ -32,6 +32,7 @@ import {
   jobService,
 } from "../services/job.service.js";
 import { resolveExpediaBrightData } from "../common/job-isolation.js";
+import { serverService } from "../services/server.service.js";
 
 // Load environment variables
 dotenv.config();
@@ -348,6 +349,9 @@ class ScrapingWorker {
     console.log(`Worker: Starting job ${jobId}...`);
     await jobService.startJob(jobId);
 
+    // Increment server job count
+    await serverService.incrementJobCount();
+
     // 4. Initialize job logging
     initializeJobLogging(jobId);
     await dualLogInfo(`Worker: Starting property scraping job ${jobId}`, {
@@ -408,6 +412,9 @@ class ScrapingWorker {
       // 11. Finalize logging
       await finalizeJobLogging("success");
 
+      // Decrement server job count after successful completion
+      await serverService.decrementJobCount();
+
       // Get log file information if available
       const logger = (global as any).getCurrentJobLogger?.();
       const logInfo = logger
@@ -448,6 +455,9 @@ class ScrapingWorker {
 
       // Finalize logging with failed status
       await finalizeJobLogging("failed");
+
+      // Decrement server job count after failure
+      await serverService.decrementJobCount();
 
       throw scrapingError;
     }
@@ -502,6 +512,9 @@ class ScrapingWorker {
 
     console.log(`Worker: Starting job ${jobId}...`);
     await jobService.startJob(jobId);
+
+    // Increment server job count
+    await serverService.incrementJobCount();
 
     // 6. Initialize job logging
     initializeJobLogging(jobId);
@@ -559,6 +572,9 @@ class ScrapingWorker {
       // 13. Finalize logging
       await finalizeJobLogging("success");
 
+      // Decrement server job count after successful completion
+      await serverService.decrementJobCount();
+
       // Get log file information
       const logger = (global as any).getCurrentJobLogger?.();
       const logInfo = logger
@@ -597,6 +613,9 @@ class ScrapingWorker {
 
       // Finalize logging with failed status
       await finalizeJobLogging("failed");
+
+      // Decrement server job count after failure
+      await serverService.decrementJobCount();
 
       throw error;
     }
@@ -721,6 +740,9 @@ class ScrapingWorker {
     console.log(`Worker: Starting GraphQL job ${jobId}...`);
     await jobService.startJob(jobId);
 
+    // Increment server job count
+    await serverService.incrementJobCount();
+
     // 4. Initialize job logging
     initializeJobLogging(jobId);
     await dualLogInfo(
@@ -784,6 +806,9 @@ class ScrapingWorker {
       // 11. Finalize logging
       await finalizeJobLogging("success");
 
+      // Decrement server job count after successful completion
+      await serverService.decrementJobCount();
+
       // Get log file information if available
       const logger = (global as any).getCurrentJobLogger?.();
       const logInfo = logger
@@ -824,6 +849,9 @@ class ScrapingWorker {
 
       // Finalize logging with failed status
       await finalizeJobLogging("failed");
+
+      // Decrement server job count after failure
+      await serverService.decrementJobCount();
 
       throw scrapingError;
     }

@@ -560,42 +560,26 @@ app.post("/api/scraping/resume", (async (
       JSON.stringify(workerJobData, null, 2)
     );
 
-    // Execute job in worker thread
-    try {
-      console.log(`Submitting resumed job ${jobId} to worker pool...`);
+    // Execute job in worker thread asynchronously
+    console.log(`Submitting resumed job ${jobId} to worker pool...`);
 
-      const result = await otpAwareWorkerPool.executeJob(workerJobData);
-
-      if (result.success) {
-        return res.status(200).json(result.data);
-      } else {
-        return res.status(500).json({
-          status: 500,
-          message: "Job resume execution failed",
-          error: result.error,
-          jobId: result.jobId,
-        });
-      }
-    } catch (workerError) {
-      console.error(`Worker error for resumed job ${jobId}:`, workerError);
-
-      // Ensure job is marked as failed
+    // Fire and forget - execute job asynchronously
+    otpAwareWorkerPool.executeJob(workerJobData).catch(async (error) => {
+      console.error(`Error executing resumed job ${jobId}:`, error);
       try {
-        await progressManager.handleJobError(jobId, workerError);
+        await progressManager.handleJobError(jobId, error);
       } catch (cleanupError) {
         console.error("Error during cleanup:", cleanupError);
       }
+    });
 
-      return res.status(500).json({
-        status: 500,
-        message: "Worker execution failed for resumed job",
-        error:
-          workerError instanceof Error
-            ? workerError.message
-            : String(workerError),
-        jobId,
-      });
-    }
+    // Return success immediately after submission
+    return res.status(200).json({
+      status: 200,
+      message: "Job resumed and submitted successfully",
+      jobId,
+      ota_provider: normalizedOtaProvider,
+    });
   } catch (err: any) {
     console.error("Error resuming job:", err);
 
@@ -1097,42 +1081,27 @@ app.post("/api/expedia/rerun-failed-job", (async (
       JSON.stringify(workerJobData, null, 2)
     );
 
-    // Execute job in worker thread
-    try {
-      console.log(`Submitting rerun job ${jobId} to worker pool...`);
+    // Execute job in worker thread asynchronously
+    console.log(`Submitting rerun job ${jobId} to worker pool...`);
 
-      const result = await otpAwareWorkerPool.executeJob(workerJobData);
-
-      if (result.success) {
-        return res.status(200).json(result.data);
-      } else {
-        return res.status(500).json({
-          status: 500,
-          message: "Job rerun execution failed",
-          error: result.error,
-          jobId: result.jobId,
-        });
-      }
-    } catch (workerError) {
-      console.error(`Worker error for rerun job ${jobId}:`, workerError);
-
-      // Ensure job is marked as failed
+    // Fire and forget - execute job asynchronously
+    otpAwareWorkerPool.executeJob(workerJobData).catch(async (error) => {
+      console.error(`Error executing rerun job ${jobId}:`, error);
       try {
-        await progressManager.handleJobError(jobId, workerError);
+        await progressManager.handleJobError(jobId, error);
       } catch (cleanupError) {
         console.error("Error during cleanup:", cleanupError);
       }
+    });
 
-      return res.status(500).json({
-        status: 500,
-        message: "Worker execution failed for job rerun",
-        error:
-          workerError instanceof Error
-            ? workerError.message
-            : String(workerError),
-        jobId,
-      });
-    }
+    // Return success immediately after submission
+    return res.status(200).json({
+      status: 200,
+      message: "Job rerun submitted successfully",
+      jobId,
+      originalStatus,
+      ota_provider: normalizedOtaProvider,
+    });
   } catch (err: any) {
     console.error("Error in /api/expedia/rerun-failed-job:", err);
 
@@ -1326,42 +1295,26 @@ app.post("/api/expedia/property-run-job", (async (
       ...brightDataFieldsForExpediaJob(jobId),
     };
 
-    // 4. Execute job in worker thread
-    try {
-      console.log(`Submitting job ${jobId} to worker pool...`);
+    // 4. Execute job in worker thread asynchronously
+    console.log(`Submitting job ${jobId} to worker pool...`);
 
-      const result = await otpAwareWorkerPool.executeJob(workerJobData);
-
-      if (result.success) {
-        return res.status(200).json(result.data);
-      } else {
-        return res.status(500).json({
-          status: 500,
-          message: "Job execution failed",
-          error: result.error,
-          jobId: result.jobId,
-        });
-      }
-    } catch (workerError) {
-      console.error(`Worker error for job ${jobId}:`, workerError);
-
-      // Ensure job is marked as failed
+    // Fire and forget - execute job asynchronously
+    otpAwareWorkerPool.executeJob(workerJobData).catch(async (error) => {
+      console.error(`Error executing job ${jobId}:`, error);
       try {
-        await progressManager.handleJobError(jobId, workerError);
+        await progressManager.handleJobError(jobId, error);
       } catch (cleanupError) {
         console.error("Error during cleanup:", cleanupError);
       }
+    });
 
-      return res.status(500).json({
-        status: 500,
-        message: "Worker execution failed",
-        error:
-          workerError instanceof Error
-            ? workerError.message
-            : String(workerError),
-        jobId,
-      });
-    }
+    // Return success immediately after submission
+    return res.status(200).json({
+      status: 200,
+      message: "Job submitted successfully",
+      jobId,
+      expediaId,
+    });
   } catch (err: any) {
     console.error("Error in /api/expedia/property-run-job:", err);
 
@@ -1499,35 +1452,21 @@ app.post("/api/expedia/reservation-run-job", (async (
       reservations,
     };
 
-    // Execute job in worker thread
-    try {
-      console.log(`Submitting reservation job ${jobId} to worker pool...`);
+    // 4. Execute job in worker thread asynchronously
+    console.log(`Submitting reservation job ${jobId} to worker pool...`);
 
-      const result = await otpAwareWorkerPool.executeJob(workerJobData);
+    // Fire and forget - execute job asynchronously
+    otpAwareWorkerPool.executeJob(workerJobData).catch((error) => {
+      console.error(`Error executing reservation job ${jobId}:`, error);
+    });
 
-      if (result.success) {
-        return res.status(200).json(result.data);
-      } else {
-        return res.status(500).json({
-          status: 500,
-          message: "Reservation job execution failed",
-          error: result.error,
-          jobId: result.jobId,
-        });
-      }
-    } catch (workerError) {
-      console.error(`Worker error for reservation job ${jobId}:`, workerError);
-
-      return res.status(500).json({
-        status: 500,
-        message: "Worker execution failed for reservation job",
-        error:
-          workerError instanceof Error
-            ? workerError.message
-            : String(workerError),
-        jobId,
-      });
-    }
+    // Return success immediately after submission
+    return res.status(200).json({
+      status: 200,
+      message: "Reservation job submitted successfully",
+      jobId,
+      reservationCount: reservations.length,
+    });
   } catch (err: any) {
     console.error("Error in /api/expedia/reservation-run-job:", err);
 
@@ -2277,42 +2216,26 @@ app.post("/api/expedia/graphql-run-job", (async (
       ...brightDataFieldsForExpediaJob(jobId),
     };
 
-    // 4. Execute job in worker thread
-    try {
-      console.log(`Submitting GraphQL job ${jobId} to worker pool...`);
+    // 4. Execute job in worker thread asynchronously
+    console.log(`Submitting GraphQL job ${jobId} to worker pool...`);
 
-      const result = await otpAwareWorkerPool.executeJob(workerJobData);
-
-      if (result.success) {
-        return res.status(200).json(result.data);
-      } else {
-        return res.status(500).json({
-          status: 500,
-          message: "GraphQL job execution failed",
-          error: result.error,
-          jobId: result.jobId,
-        });
-      }
-    } catch (workerError) {
-      console.error(`Worker error for GraphQL job ${jobId}:`, workerError);
-
-      // Ensure job is marked as failed
+    // Fire and forget - execute job asynchronously
+    otpAwareWorkerPool.executeJob(workerJobData).catch(async (error) => {
+      console.error(`Error executing GraphQL job ${jobId}:`, error);
       try {
-        await progressManager.handleJobError(jobId, workerError);
+        await progressManager.handleJobError(jobId, error);
       } catch (cleanupError) {
         console.error("Error during cleanup:", cleanupError);
       }
+    });
 
-      return res.status(500).json({
-        status: 500,
-        message: "GraphQL worker execution failed",
-        error:
-          workerError instanceof Error
-            ? workerError.message
-            : String(workerError),
-        jobId,
-      });
-    }
+    // Return success immediately after submission
+    return res.status(200).json({
+      status: 200,
+      message: "GraphQL job submitted successfully",
+      jobId,
+      expediaId,
+    });
   } catch (err: any) {
     console.error("Error in /api/expedia/graphql-run-job:", err);
 
@@ -3038,42 +2961,26 @@ app.post("/api/agoda/rerun-failed-job", (async (
       originalStatus,
     };
 
-    // Execute job in worker thread
-    try {
-      console.log(`Submitting Agoda rerun job ${jobId} to worker pool...`);
+    // Execute job in worker thread asynchronously
+    console.log(`Submitting Agoda rerun job ${jobId} to worker pool...`);
 
-      const result = await otpAwareWorkerPool.executeJob(workerJobData);
-
-      if (result.success) {
-        return res.status(200).json(result.data);
-      } else {
-        return res.status(500).json({
-          status: 500,
-          message: "Agoda job rerun execution failed",
-          error: result.error,
-          jobId: result.jobId,
-        });
-      }
-    } catch (workerError) {
-      console.error(`Agoda rerun worker error for job ${jobId}:`, workerError);
-
-      // Ensure job is marked as failed
+    // Fire and forget - execute job asynchronously
+    otpAwareWorkerPool.executeJob(workerJobData).catch(async (error) => {
+      console.error(`Error executing Agoda rerun job ${jobId}:`, error);
       try {
-        await progressManager.handleJobError(jobId, workerError);
+        await progressManager.handleJobError(jobId, error);
       } catch (cleanupError) {
         console.error("Error during cleanup:", cleanupError);
       }
+    });
 
-      return res.status(500).json({
-        status: 500,
-        message: "Agoda rerun worker execution failed",
-        error:
-          workerError instanceof Error
-            ? workerError.message
-            : String(workerError),
-        jobId,
-      });
-    }
+    // Return success immediately after submission
+    return res.status(200).json({
+      status: 200,
+      message: "Agoda job rerun submitted successfully",
+      jobId,
+      originalStatus,
+    });
   } catch (err: any) {
     console.error("Error in /api/agoda/rerun-failed-job:", err);
 
