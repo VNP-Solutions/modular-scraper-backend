@@ -150,3 +150,6 @@ Thumbs.db
 tmp/
 temp/
 screenshots/
+
+# Cookie storage
+.cookies/
