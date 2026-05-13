@@ -77,6 +77,8 @@ export interface IJob extends Document {
     timestamp: string;
     type: "step" | "error";
   }[];
+  is_quick_job?: boolean;
+  otp_needed?: boolean;
 }
 
 // Mongoose Schema (read-only, updates only)
@@ -245,6 +247,16 @@ const JobSchema = new Schema<IJob>(
       ],
       required: false,
       default: [],
+    },
+    is_quick_job: {
+      type: Boolean,
+      required: false,
+      default: false,
+    },
+    otp_needed: {
+      type: Boolean,
+      required: false,
+      default: false,
     },
   },
   {

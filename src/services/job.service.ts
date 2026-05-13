@@ -45,6 +45,8 @@ export interface CreateJobData {
   max_retries?: number;
   retry_delay_ms?: number;
   queue_name?: string;
+  /** When true, job is treated as expedited / quick-run (default false). */
+  is_quick_job?: boolean;
 }
 
 export interface CreateCardActivityData {

@@ -10,7 +10,7 @@ import { dualLogError, dualLogInfo } from "../common/log-helper.js";
 import { takeScreenshot } from "../common/screenshot-helper.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import { timeoutManager } from "../common/timeout-manager.js";
-import { OTAProvider } from "../models/job.model.js";
+import { Job, OTAProvider } from "../models/job.model.js";
 import { OtpCode } from "../models/otp-code.model.js";
 
 dotenv.config();
@@ -106,6 +106,21 @@ async function markOtpCodeUsed(otpCodeId: Types.ObjectId): Promise<void> {
     await dualLogError(
       `Failed to mark otp_codes._id=${otpCodeId} as used (will continue):`,
       markError
+    );
+  }
+}
+
+/** Best-effort: set `jobs.otp_needed` for consumers watching this job. */
+async function setJobOtpNeededFlag(
+  jobId: string,
+  otpNeeded: boolean
+): Promise<void> {
+  try {
+    await Job.updateOne({ _id: jobId }, { $set: { otp_needed: otpNeeded } });
+  } catch (err) {
+    await dualLogError(
+      `Failed to set job otp_needed=${otpNeeded} for job ${jobId}:`,
+      err
     );
   }
 }
@@ -275,6 +290,8 @@ async function enterPasscodeWithRetries(
     } min, polling every ${OTP_DB_POLL_INTERVAL_MS / 1000}s...`
   );
 
+  await setJobOtpNeededFlag(jobId, true);
+
   while (Date.now() - start < waitTimeoutMs) {
     pollCount++;
 
@@ -328,6 +345,7 @@ async function enterPasscodeWithRetries(
         'button[data-testid="passcode-submit-button"]'
       );
       if (!verifyButtonHandle) {
+        await setJobOtpNeededFlag(jobId, false);
         throw new Error("Verify button not found");
       }
 
@@ -336,6 +354,7 @@ async function enterPasscodeWithRetries(
         verifyButtonHandle
       );
       if (isDisabled) {
+        await setJobOtpNeededFlag(jobId, false);
         throw new Error("Verify button is disabled");
       }
 
@@ -368,6 +387,7 @@ async function enterPasscodeWithRetries(
         await dualLogInfo(
           `OTP accepted on submit #${submitCount} after ${elapsedSec}s; otp_codes._id=${pendingId} marked used=true.`
         );
+        await setJobOtpNeededFlag(jobId, false);
         return;
       }
 
@@ -390,12 +410,14 @@ async function enterPasscodeWithRetries(
   // Window elapsed. Distinguish "no codes ever appeared" from
   // "tried codes but all rejected" so the failed_reason is actionable.
   if (submitCount === 0) {
+    await setJobOtpNeededFlag(jobId, false);
     throw new Error(
       `Failed to get verification code from otp_codes within ${
         waitTimeoutMs / 60000
       } minute(s) (provider=Expedia, job=${jobId}, polls=${pollCount}).`
     );
   }
+  await setJobOtpNeededFlag(jobId, false);
   throw new Error(
     `OTP verification failed: tried ${submitCount} code(s) within ${
       waitTimeoutMs / 60000
