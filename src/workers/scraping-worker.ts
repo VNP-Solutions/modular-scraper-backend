@@ -6,10 +6,9 @@ import { WorkerJobData, WorkerMessage } from "../common/worker-types.js";
 
 // Import the main functions
 import {
-  isGoogleDriveJobItemsUploadConfigured,
-  uploadJobItemsXlsxToGoogleDrive,
-} from "../common/google-drive-job-items.js";
-import { jobItemsToChargeReportXlsxBuffer } from "../common/job-items-charge-report-xlsx.js";
+  isAuditSmsConfigured,
+  sendAuditReadySms,
+} from "../common/audit-ready-sms.js";
 import {
   dualLogError,
   dualLogInfo,
@@ -164,53 +163,44 @@ class ScrapingWorker {
   }
 
   /**
-   * After Completed: export job_items to Expedia master XLSX (`automated-export.md` §1.1)
-   * and upload under root/Expedia/DD-MM-YYYY on Google Drive when configured.
-   * Failures are logged only; they do not fail the job.
+   * After Completed: send audit-ready SMS to `job.phone_number_for_report` when
+   * Ejoin gateway or Twilio is configured (+ DEMO_WEBSITE_URL). Link in body:
+   * `{DEMO_WEBSITE_URL}/{jobId}`. Failures are logged only; they do not fail the job.
    */
-  private async maybeUploadJobItemsToGoogleDrive(
+  private async maybeSendAuditReadySms(
     jobId: string,
     finalStatus: JobStatus | string
   ): Promise<void> {
     if (!this.isCompletedStatus(finalStatus)) return;
-    if (!isGoogleDriveJobItemsUploadConfigured()) return;
+    if (!isAuditSmsConfigured()) {
+      await dualLogInfo(
+        `Audit SMS: skip (neither Ejoin nor Twilio + DEMO_WEBSITE_URL configured) for ${jobId}`,
+        { jobId }
+      );
+      return;
+    }
     try {
       const job = await jobService.getJobById(jobId);
       if (!job) {
-        await dualLogInfo(`Google Drive: skip upload, job not found ${jobId}`, {
+        await dualLogInfo(`Audit SMS: skip, job not found ${jobId}`, {
           jobId,
         });
         return;
       }
-      const items = await jobService.getJobItemsWithCardActivitiesForExport(
-        jobId
-      );
-      if (items.length === 0) {
+      const phone = job.phone_number_for_report?.trim();
+      if (!phone) {
         await dualLogInfo(
-          `Google Drive: skip job items upload (no items) for ${jobId}`,
+          `Audit SMS: skip (no phone_number_for_report on job) for ${jobId}`,
           { jobId }
         );
         return;
       }
-      const property = await jobService.getPropertyForJob(jobId);
-      const buffer = jobItemsToChargeReportXlsxBuffer(items, job, property);
-      const url = await uploadJobItemsXlsxToGoogleDrive(buffer, {
-        portfolioName: job.portfolio_name ?? "",
-        propertyName: job.property_name ?? "",
-      });
-      if (url) {
-        await jobService.updateJobItemsFileLink(jobId, url);
-        await dualLogInfo(`Google Drive: job items XLSX uploaded`, {
-          jobId,
-          url,
-        });
-      }
+      await sendAuditReadySms(phone, jobId);
+      await dualLogInfo(`Audit SMS: audit-ready message sent`, { jobId });
     } catch (err) {
-      await dualLogError(
-        `Google Drive: job items upload failed for ${jobId}`,
-        err,
-        { jobId }
-      );
+      await dualLogError(`Audit SMS: audit-ready send failed for ${jobId}`, err, {
+        jobId,
+      });
     }
   }
 
@@ -409,7 +399,7 @@ class ScrapingWorker {
         failedReason
       );
 
-      await this.maybeUploadJobItemsToGoogleDrive(jobId, finalStatus);
+      await this.maybeSendAuditReadySms(jobId, finalStatus);
 
       // 10. Stop scraping state manager
       scrapingStateManager.stopScraping();
@@ -566,7 +556,7 @@ class ScrapingWorker {
         failedReason
       );
 
-      await this.maybeUploadJobItemsToGoogleDrive(jobId, finalStatus);
+      await this.maybeSendAuditReadySms(jobId, finalStatus);
 
       // 12. Stop scraping state manager
       scrapingStateManager.stopScraping();
@@ -808,7 +798,7 @@ class ScrapingWorker {
         failedReason
       );
 
-      await this.maybeUploadJobItemsToGoogleDrive(jobId, finalStatus);
+      await this.maybeSendAuditReadySms(jobId, finalStatus);
 
       // 10. Stop scraping state manager
       scrapingStateManager.stopScraping();

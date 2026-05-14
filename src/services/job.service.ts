@@ -47,6 +47,8 @@ export interface CreateJobData {
   queue_name?: string;
   /** When true, job is treated as expedited / quick-run (default false). */
   is_quick_job?: boolean;
+  /** Recipient for Twilio "audit ready" SMS after Completed (E.164 recommended). */
+  phone_number_for_report?: string;
 }
 
 export interface CreateCardActivityData {

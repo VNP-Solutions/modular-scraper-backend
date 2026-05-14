@@ -79,6 +79,8 @@ export interface IJob extends Document {
   }[];
   is_quick_job?: boolean;
   otp_needed?: boolean;
+  /** E.164 or Twilio-accepted number for post-completion SMS (audit ready). */
+  phone_number_for_report?: string;
 }
 
 // Mongoose Schema (read-only, updates only)
@@ -257,6 +259,10 @@ const JobSchema = new Schema<IJob>(
       type: Boolean,
       required: false,
       default: false,
+    },
+    phone_number_for_report: {
+      type: String,
+      required: false,
     },
   },
   {
