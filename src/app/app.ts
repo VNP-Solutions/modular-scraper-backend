@@ -2152,90 +2152,88 @@ app.post("/api/expedia/graphql-run-job", (async (
       });
     }
 
-    // Check if worker threads are available
-    if (
-      !otpAwareWorkerPool.hasAvailableWorkers() &&
-      otpAwareWorkerPool.isQueueFull()
-    ) {
-      return res.status(200).json({
-        status: 200,
-        message: "All server busy, try again",
-        workerStatus: otpAwareWorkerPool.getStatus(),
-      });
-    }
-
-    // 1. Validate job exists and can be run
-    const validation = await jobService.validateJob(jobId);
-
-    if (!validation.exists) {
-      return res.status(404).json({
-        status: 404,
-        message: `Job with ID ${jobId} not found`,
-      });
-    }
-
-    if (!validation.canRun) {
-      return res.status(409).json({
-        status: 409,
-        message: `Job ${jobId} is not in a runnable state. Current status: ${validation.job?.job_status}`,
-        currentState: validation.job,
-      });
-    }
-
-    // 2. Get expedia_id from job's property
-    console.log(`Getting expedia_id for job ${jobId}...`);
-    const jobData = await jobService.getExpediaIdFromJob(jobId);
-
-    if (!jobData || !jobData.expediaId) {
-      return res.status(400).json({
-        status: 400,
-        message: `Cannot retrieve valid expedia_id for job ${jobId}. Property may not have expedia_id assigned or expedia_id is "0".`,
-      });
-    }
-
-    if (!jobData.user_email || !jobData.user_password) {
-      return res.status(400).json({
-        status: 400,
-        message: `Cannot retrieve valid user_email or user_password for job ${jobId}. Property may not have user_email or user_password assigned.`,
-      });
-    }
-
-    const { expediaId, user_email, user_password } = jobData;
-
-    console.log(`Using expedia_id: ${expediaId} for GraphQL scraping`);
-
-    // 3. Prepare worker job data
-    const workerJobData: WorkerJobData = {
-      jobType: "graphql-run",
-      jobId,
-      startDate,
-      endDate,
-      expediaId,
-      user_email,
-      user_password,
-      ...brightDataFieldsForExpediaJob(jobId),
-    };
-
-    // 4. Execute job in worker thread asynchronously
-    console.log(`Submitting GraphQL job ${jobId} to worker pool...`);
-
-    // Fire and forget - execute job asynchronously
-    otpAwareWorkerPool.executeJob(workerJobData).catch(async (error) => {
-      console.error(`Error executing GraphQL job ${jobId}:`, error);
-      try {
-        await progressManager.handleJobError(jobId, error);
-      } catch (cleanupError) {
-        console.error("Error during cleanup:", cleanupError);
-      }
-    });
-
-    // Return success immediately after submission
-    return res.status(200).json({
+    // Return 200 immediately — all validation and execution happens in background
+    res.status(200).json({
       status: 200,
-      message: "GraphQL job submitted successfully",
+      message: "GraphQL job received successfully",
       jobId,
-      expediaId,
     });
+
+    // Process job asynchronously in background
+    (async () => {
+      try {
+        // Check if worker threads are available
+        if (
+          !otpAwareWorkerPool.hasAvailableWorkers() &&
+          otpAwareWorkerPool.isQueueFull()
+        ) {
+          console.warn(`GraphQL job ${jobId} rejected: all workers busy and queue full`);
+          await jobService.updateJobStatus(jobId, JobStatus.Failed, "All server busy, try again");
+          return;
+        }
+
+        // 1. Validate job exists and can be run
+        const validation = await jobService.validateJob(jobId);
+
+        if (!validation.exists) {
+          console.error(`GraphQL job ${jobId} not found`);
+          return;
+        }
+
+        if (!validation.canRun) {
+          console.warn(`GraphQL job ${jobId} is not in a runnable state. Current status: ${validation.job?.job_status}`);
+          return;
+        }
+
+        // 2. Get expedia_id from job's property
+        console.log(`Getting expedia_id for job ${jobId}...`);
+        const jobData = await jobService.getExpediaIdFromJob(jobId);
+
+        if (!jobData || !jobData.expediaId) {
+          const reason = `Cannot retrieve valid expedia_id for job ${jobId}. Property may not have expedia_id assigned or expedia_id is "0".`;
+          console.error(reason);
+          await jobService.updateJobStatus(jobId, JobStatus.Failed, reason);
+          return;
+        }
+
+        if (!jobData.user_email || !jobData.user_password) {
+          const reason = `Cannot retrieve valid credentials for job ${jobId}. Property may not have user_email or user_password assigned.`;
+          console.error(reason);
+          await jobService.updateJobStatus(jobId, JobStatus.Failed, reason);
+          return;
+        }
+
+        const { expediaId, user_email, user_password } = jobData;
+
+        console.log(`Using expedia_id: ${expediaId} for GraphQL scraping`);
+
+        // 3. Prepare worker job data
+        const workerJobData: WorkerJobData = {
+          jobType: "graphql-run",
+          jobId,
+          startDate,
+          endDate,
+          expediaId,
+          user_email,
+          user_password,
+          ...brightDataFieldsForExpediaJob(jobId),
+        };
+
+        // 4. Execute job in worker thread asynchronously
+        console.log(`Submitting GraphQL job ${jobId} to worker pool...`);
+
+        await otpAwareWorkerPool.executeJob(workerJobData);
+      } catch (error) {
+        console.error(`Error processing GraphQL job ${jobId}:`, error);
+        try {
+          await progressManager.handleJobError(jobId, error);
+        } catch (cleanupError) {
+          console.error("Error during cleanup:", cleanupError);
+        }
+      }
+    })();
+
+    return;
   } catch (err: any) {
     console.error("Error in /api/expedia/graphql-run-job:", err);
 
