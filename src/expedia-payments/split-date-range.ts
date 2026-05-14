@@ -2,6 +2,7 @@ import { Browser, Page } from "puppeteer";
 import { delay } from "../common/delay.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
+import { takeScreenshot } from "../common/screenshot-helper.js";
 
 /**
  * Convert date from MM/DD/YYYY to DD/MM/YYYY format
@@ -268,6 +269,20 @@ export async function splitDateRange(
             `Chunk ${chunkCount}: Validation error "date range must occur within the last year" — skipping chunk`
           );
 
+          if (jobId) {
+            const validationStep = `date_range_chunk_${chunkCount}_${chunkStartStr.replace(
+              /\//g,
+              "-"
+            )}_to_${chunkEndStr.replace(/\//g, "-")}_validation_error`;
+            await takeScreenshot(
+              page,
+              jobId,
+              validationStep,
+              "step",
+              "expedia"
+            ).catch(() => undefined);
+          }
+
           currentStart = addDays(chunkEnd, 1);
           if (currentStart > endDateObj) {
             await dualLogInfo(
@@ -340,6 +355,22 @@ export async function splitDateRange(
           `Chunk ${chunkCount}: In-memory total so far: ${allReservationIds.length} reservation ID(s)`
         );
 
+        // Per-chunk results screenshot. Naming: date_range_chunk_<n>_<from>_to_<to>
+        // (slashes in dates → dashes so they're filename-safe).
+        if (jobId) {
+          const chunkScreenshotStep = `date_range_chunk_${chunkCount}_${chunkStartStr.replace(
+            /\//g,
+            "-"
+          )}_to_${chunkEndStr.replace(/\//g, "-")}`;
+          await takeScreenshot(
+            page,
+            jobId,
+            chunkScreenshotStep,
+            "step",
+            "expedia"
+          ).catch(() => undefined);
+        }
+
         // Navigate back to search form for the next chunk
         if (currentStart < endDateObj) {
           await dualLogInfo(
@@ -401,6 +432,19 @@ export async function splitDateRange(
           `Chunk ${chunkCount}: Error processing chunk:`,
           chunkErr
         );
+        if (jobId) {
+          const chunkErrorStep = `date_range_chunk_${chunkCount}_${chunkStartStr.replace(
+            /\//g,
+            "-"
+          )}_to_${chunkEndStr.replace(/\//g, "-")}_error`;
+          await takeScreenshot(
+            page,
+            jobId,
+            chunkErrorStep,
+            "error",
+            "expedia"
+          ).catch(() => undefined);
+        }
         throw chunkErr;
       }
 
