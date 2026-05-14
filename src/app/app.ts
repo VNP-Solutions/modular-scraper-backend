@@ -2139,25 +2139,20 @@ app.post("/api/expedia/graphql-run-job", (async (
   try {
     const { startDate, endDate, jobId } = req.body;
 
-    if (!startDate || !endDate) {
-      return res.status(400).json({
-        status: 400,
-        message: "startDate and endDate are required in request body",
-      });
-    }
-    if (!jobId) {
-      return res.status(400).json({
-        status: 400,
-        message: "jobId is required in request body",
-      });
-    }
-
-    // Return 200 immediately — all validation and execution happens in background
     res.status(200).json({
       status: 200,
       message: "GraphQL job received successfully",
       jobId,
     });
+
+    if (!startDate || !endDate) {
+      console.error(`[graphql-run-job] startDate and endDate are required in request body`);
+      return;
+    }
+    if (!jobId) {
+      console.error(`[graphql-run-job] jobId is required in request body`);
+      return;
+    }
 
     // Process job asynchronously in background
     (async () => {
@@ -2245,12 +2240,6 @@ app.post("/api/expedia/graphql-run-job", (async (
     } catch (cleanupError) {
       console.error("Error during cleanup:", cleanupError);
     }
-
-    res.status(500).json({
-      status: 500,
-      message: "Error processing GraphQL property search",
-      error: err.message,
-    });
   }
 }) as any);
 
