@@ -26,6 +26,8 @@ export interface AgodaUpcPhaseResult {
 
 export { ReservationIdQueue };
 
+const RELEASE_OTP_AFTER_N_RESERVATIONS = 5;
+
 /**
  * Consumes reservation IDs from a queue (fed while API mapping runs, or pre-filled for batch).
  * Opens one booking-list tab and processes IDs sequentially.
@@ -237,6 +239,30 @@ export async function runAgodaUpcPhaseStreaming(
       }
       } finally {
         gate?.notifyReservationComplete(bookingId);
+
+        /**
+         * Limited safety net: if the OTP slot is still held after
+         * `RELEASE_OTP_AFTER_N_RESERVATIONS` reservations, release it now so
+         * other queued jobs can use it while this job keeps scraping the
+         * remaining bookings. Covers two cases the normal release path
+         * (`releaseUpcOtp` after payout OTP verified) does NOT handle:
+         *   1) No booking on this property ever requires payout OTP.
+         *   2) Every OTP attempt failed (so verification never succeeded).
+         * Without this, the slot would only be freed by the end-of-phase
+         * safety net below, which can take a long time on big properties.
+         * `releaseUpcOtp` is guarded by `session.otpReleased`, so this is a
+         * no-op once already released.
+         */
+        if (
+          !upcCollectSessionRef.otpReleased &&
+          processed >= RELEASE_OTP_AFTER_N_RESERVATIONS
+        ) {
+          releaseUpcOtp(
+            jobId,
+            upcCollectSessionRef,
+            `${processed} reservations processed without normal release (threshold ${RELEASE_OTP_AFTER_N_RESERVATIONS}) — limited safety net`
+          );
+        }
       }
     }
 

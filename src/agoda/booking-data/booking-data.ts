@@ -446,6 +446,70 @@ function convertDateFormat(dateString: string): string {
   return `${day}-${month}-${year}`;
 }
 
+/**
+ * Parses an input date string (YYYY-MM-DD or MM/DD/YYYY) into a Date object.
+ */
+function parseInputDate(dateString: string): Date {
+  if (dateString.includes("/")) {
+    const [m, d, y] = dateString.split("/");
+    return new Date(
+      parseInt(y, 10),
+      parseInt(m, 10) - 1,
+      parseInt(d, 10)
+    );
+  } else if (dateString.includes("-")) {
+    const [y, m, d] = dateString.split("-");
+    return new Date(
+      parseInt(y, 10),
+      parseInt(m, 10) - 1,
+      parseInt(d, 10)
+    );
+  }
+  throw new Error(`Unsupported date format: ${dateString}`);
+}
+
+/**
+ * Formats a Date object back to YYYY-MM-DD (the canonical internal format).
+ */
+function formatDateToYYYYMMDD(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+/**
+ * Caps the booking-data date range. Agoda's reporting page can't reliably load
+ * very large windows, so if the requested range exceeds MAX_RANGE_DAYS we shift
+ * the start date to (endDate - CAPPED_RANGE_DAYS) and keep the original end date.
+ */
+const MAX_RANGE_DAYS = 360;
+const CAPPED_RANGE_DAYS = 350;
+
+function capDateRangeIfNeeded(
+  startDate: string,
+  endDate: string
+): { startDate: string; endDate: string; wasCapped: boolean; diffDays: number } {
+  const start = parseInputDate(startDate);
+  const end = parseInputDate(endDate);
+  const diffDays = Math.floor(
+    (end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)
+  );
+
+  if (diffDays > MAX_RANGE_DAYS) {
+    const newStart = new Date(end);
+    newStart.setDate(newStart.getDate() - CAPPED_RANGE_DAYS);
+    return {
+      startDate: formatDateToYYYYMMDD(newStart),
+      endDate: formatDateToYYYYMMDD(end),
+      wasCapped: true,
+      diffDays,
+    };
+  }
+
+  return { startDate, endDate, wasCapped: false, diffDays };
+}
+
 export async function getAgodaBookingData(
   browser: Browser,
   page: Page,
@@ -482,9 +546,27 @@ export async function getAgodaBookingData(
       );
     }
 
+    // If the requested window is bigger than 1 year (365 days), cap it so we
+    // only fetch the last 250 days ending at the requested end date.
+    const {
+      startDate: effectiveStartDate,
+      endDate: effectiveEndDate,
+      wasCapped,
+      diffDays,
+    } = capDateRangeIfNeeded(startDate, endDate);
+
+    if (wasCapped) {
+      await dualLogInfo(
+        `Requested date range is ${diffDays} days (> ${MAX_RANGE_DAYS}). ` +
+          `Capping start date to the last ${CAPPED_RANGE_DAYS} days. ` +
+          `Original: ${startDate} -> ${endDate}, ` +
+          `Adjusted: ${effectiveStartDate} -> ${effectiveEndDate}`
+      );
+    }
+
     // Convert dates to DD-MM-YYYY format required by Agoda API
-    const formattedStartDate = convertDateFormat(startDate);
-    const formattedEndDate = convertDateFormat(endDate);
+    const formattedStartDate = convertDateFormat(effectiveStartDate);
+    const formattedEndDate = convertDateFormat(effectiveEndDate);
 
     console.log(
       "\x1b[34m%s\x1b[0m",
@@ -828,8 +910,8 @@ export async function getAgodaBookingData(
           jobId,
           agodaId,
           agodaUsername,
-          listStartDate: startDate,
-          listEndDate: endDate,
+          listStartDate: effectiveStartDate,
+          listEndDate: effectiveEndDate,
           queue: upcReservationQueue,
           gate: upcReservationGate,
         });
@@ -1097,8 +1179,8 @@ export async function getAgodaBookingData(
                   agodaId,
                   bookingIds: upcReservationIds,
                   agodaUsername,
-                  listStartDate: startDate,
-                  listEndDate: endDate,
+                  listStartDate: effectiveStartDate,
+                  listEndDate: effectiveEndDate,
                 });
                 await dualLogInfo("Agoda UPC phase summary (parallel path)", {
                   jobId,
