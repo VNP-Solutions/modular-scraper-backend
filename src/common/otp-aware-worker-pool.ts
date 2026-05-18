@@ -230,9 +230,19 @@ export class OtpAwareWorkerPool extends EventEmitter {
     }
   }
 
-  private handleJobComplete(workerId: string, message: WorkerMessage): void {
+  private async handleJobComplete(
+    workerId: string,
+    message: WorkerMessage
+  ): Promise<void> {
     const activeWorker = this.workers.get(workerId);
     if (!activeWorker) return;
+
+    const jobId = message.jobId;
+
+    // Release OTP if still occupied by this job (safety net in case otpCompleted was never sent)
+    if (jobId) {
+      await this.otpManager.releaseOtp(jobId);
+    }
 
     // Mark worker as available
     activeWorker.info.isAvailable = true;
@@ -553,6 +563,13 @@ export class OtpAwareWorkerPool extends EventEmitter {
         error
       );
       reject(error);
+
+      // Release OTP if this job had reserved it
+      if (this.jobRequiresOtp(jobData)) {
+        this.otpManager.releaseOtp(jobData.jobId).catch((err) =>
+          console.error(`Failed to release OTP after postMessage error for job ${jobData.jobId}:`, err)
+        );
+      }
 
       // Reset worker state
       activeWorker.info.isAvailable = true;
