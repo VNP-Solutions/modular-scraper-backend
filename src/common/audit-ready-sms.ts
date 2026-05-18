@@ -5,7 +5,7 @@ const SMS_INTRO = "Your Audit is ready please take a look";
 /** Builds the link placed *inside* the SMS — uses DEMO_WEBSITE_URL (your app), not the device. */
 export function buildAuditReportJobUrl(jobId: string): string {
   const base = (process.env.DEMO_WEBSITE_URL || "").trim().replace(/\/+$/, "");
-  return `${base}/${jobId}`;
+  return `${base}/audits/${jobId}`;
 }
 
 function twilioFromNumber(): string {
@@ -37,7 +37,7 @@ export function isTwilioAuditSmsConfigured(): boolean {
  *   product website. Used only to call `/submit_sms_tasks` on the device.
  * - EJOIN_SMS_USERNAME / EJOIN_SMS_PASSWORD — **device** web/API login (same as dashboard).
  * - DEMO_WEBSITE_URL — **your project / audit site** shown *inside* the SMS text as
- *   `{DEMO_WEBSITE_URL}/{jobId}` for the user to open in a browser. Never the device URL.
+ *   `{DEMO_WEBSITE_URL}/audits/{jobId}` for the user to open in a browser. Never the device URL.
  * - EJOIN_SMS_FROM_PORT (optional) — modem port index 1–64. If unset, the gateway
  *   auto-picks an available port/SIM per Ejoin docs ("Automatically selected by device").
  */

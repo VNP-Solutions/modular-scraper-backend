@@ -165,7 +165,7 @@ class ScrapingWorker {
   /**
    * After Completed: send audit-ready SMS to `job.phone_number_for_report` when
    * Ejoin gateway or Twilio is configured (+ DEMO_WEBSITE_URL). Link in body:
-   * `{DEMO_WEBSITE_URL}/{jobId}`. Failures are logged only; they do not fail the job.
+   * `{DEMO_WEBSITE_URL}/audits/{jobId}`. Failures are logged only; they do not fail the job.
    */
   private async maybeSendAuditReadySms(
     jobId: string,
