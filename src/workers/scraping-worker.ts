@@ -165,6 +165,37 @@ class ScrapingWorker {
   }
 
   /**
+   * After Completed: take a majority vote on `over_160` across the job's
+   * items and upsert the corresponding entry inside the job-level `tags`
+   * array. Expedia-only (service-side gated). Failures are logged only.
+   */
+  private async maybeApplyOver160FlagOnCompletion(
+    jobId: string,
+    finalStatus: JobStatus | string
+  ): Promise<void> {
+    if (!this.isCompletedStatus(finalStatus)) return;
+    try {
+      const result = await jobService.applyOver160FlagFromJobItems(jobId);
+      if (result.skipped) {
+        await dualLogInfo(
+          `over_160 tag: skipped (${result.reason ?? "unknown"})`,
+          { jobId }
+        );
+        return;
+      }
+      await dualLogInfo(
+        `over_160 tag: upserted { field: "over_160", value: ${result.over_160} } ` +
+          `(true=${result.trueCount}, false=${result.falseCount})`,
+        { jobId }
+      );
+    } catch (err) {
+      await dualLogError(`over_160 tag: apply failed for ${jobId}`, err, {
+        jobId,
+      });
+    }
+  }
+
+  /**
    * After Completed: export job_items to Expedia master XLSX (`automated-export.md` §1.1)
    * and upload under root/Expedia/DD-MM-YYYY on Google Drive when configured.
    * Failures are logged only; they do not fail the job.
@@ -404,6 +435,7 @@ class ScrapingWorker {
         failedReason
       );
 
+      await this.maybeApplyOver160FlagOnCompletion(jobId, finalStatus);
       await this.maybeUploadJobItemsToGoogleDrive(jobId, finalStatus);
 
       // 10. Stop scraping state manager
@@ -564,6 +596,7 @@ class ScrapingWorker {
         failedReason
       );
 
+      await this.maybeApplyOver160FlagOnCompletion(jobId, finalStatus);
       await this.maybeUploadJobItemsToGoogleDrive(jobId, finalStatus);
 
       // 12. Stop scraping state manager
@@ -798,6 +831,7 @@ class ScrapingWorker {
         failedReason
       );
 
+      await this.maybeApplyOver160FlagOnCompletion(jobId, finalStatus);
       await this.maybeUploadJobItemsToGoogleDrive(jobId, finalStatus);
 
       // 10. Stop scraping state manager

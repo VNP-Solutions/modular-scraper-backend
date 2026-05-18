@@ -37,6 +37,15 @@ export interface IJobItem extends Document {
   card_activity_id?: Types.ObjectId;
   reservation_status: string;
   additional_text?: string;
+  /**
+   * Derived chargeback fields populated at insert time (Expedia rows only).
+   * Booking / Agoda rows always store `null` for all three. The NestJS
+   * backend's GET endpoints will lazily recompute these on first read if
+   * `derived_calculated_at` is missing or stale.
+   */
+  over_160: boolean | null;
+  days_since_checkout: number | null;
+  derived_calculated_at: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -170,6 +179,21 @@ const JobItemSchema = new Schema<IJobItem>(
     additional_text: {
       type: String,
       required: false,
+    },
+    over_160: {
+      type: Boolean,
+      required: false,
+      default: null,
+    },
+    days_since_checkout: {
+      type: Number,
+      required: false,
+      default: null,
+    },
+    derived_calculated_at: {
+      type: Date,
+      required: false,
+      default: null,
     },
   },
   {

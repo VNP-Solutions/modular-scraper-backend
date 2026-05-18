@@ -29,6 +29,24 @@ export enum InvitationStatus {
   Cancelled = "Cancelled",
 }
 
+/**
+ * Allowed `field` names for entries in `Job.tags`. Typed as an enum so the
+ * set of supported tag fields is tightly controlled at the DB + TypeScript
+ * layers. Add new tag fields here as one new line.
+ */
+export enum JobTagField {
+  over_160 = "over_160",
+}
+
+/**
+ * Single entry in `Job.tags`. Each entry pairs a `field` name with its
+ * boolean `value`.
+ */
+export interface JobTag {
+  field: JobTagField;
+  value: boolean;
+}
+
 // Interface for the Job document (simplified for updates only)
 export interface IJob extends Document {
   _id: Types.ObjectId;
@@ -60,6 +78,19 @@ export interface IJob extends Document {
   job_items_file_link?: string;
   live_url?: string;
   watcher_emails?: string[];
+  /**
+   * Structured tag array set once when the job transitions to Completed
+   * (Expedia only for now). Each entry is `{ field, value }`:
+   *   - present `{ field: "over_160", value: true }`  → majority of items had `over_160 = true`
+   *   - present `{ field: "over_160", value: false }` → majority had `over_160 = false`
+   *                                                     (incl. ties / zero non-null items)
+   *   - entry **absent**                              → not yet computed
+   *                                                     (non-Expedia, or job hasn't completed)
+   *
+   * Designed to be extensible — add more `JobTagField` values to track
+   * additional summary flags without schema churn.
+   */
+  tags: JobTag[];
   case_open?: boolean;
   queue_name?: string;
   worker_assigned?: string;
@@ -78,6 +109,23 @@ export interface IJob extends Document {
     type: "step" | "error";
   }[];
 }
+
+// Embedded schema for entries in `Job.tags`. `_id: false` keeps the docs
+// lean — these are value rows, not standalone subdocs.
+const JobTagSchema = new Schema<JobTag>(
+  {
+    field: {
+      type: String,
+      enum: Object.values(JobTagField),
+      required: true,
+    },
+    value: {
+      type: Boolean,
+      required: true,
+    },
+  },
+  { _id: false },
+);
 
 // Mongoose Schema (read-only, updates only)
 const JobSchema = new Schema<IJob>(
@@ -203,6 +251,11 @@ const JobSchema = new Schema<IJob>(
     watcher_emails: {
       type: [String],
       required: false,
+      default: [],
+    },
+    tags: {
+      type: [JobTagSchema],
+      required: true,
       default: [],
     },
     queue_name: {

@@ -5,6 +5,7 @@ import {
   ICardActivity,
   MoneyAmount,
 } from "../models/card-activity.model.js";
+import { computeDerivedJobItemFields } from "../common/job-item-derived.util.js";
 import {
   CardInfo,
   IJobItem,
@@ -15,6 +16,7 @@ import {
   IJob,
   Job,
   JobStatus,
+  JobTagField,
   OTAProvider,
   PostingType,
 } from "../models/job.model.js";
@@ -435,6 +437,109 @@ export class JobService {
   }
 
   /**
+   * Upsert the `over_160` entry inside the job's structured `tags` array
+   * based on a majority vote across the job's items. Intended to run once
+   * on Completed transition (called from the worker right before the Drive
+   * upload).
+   *
+   * Result shape on the Job document:
+   *   - `tags: [{ field: "over_160", value: true }]`  → majority true
+   *   - `tags: [{ field: "over_160", value: false }]` → majority false
+   *                                                     (incl. ties / zero
+   *                                                     non-null items)
+   *   - `tags: []` (entry absent)                     → not yet computed
+   *                                                     (non-Expedia, or
+   *                                                     job hasn't completed)
+   *
+   * Rules:
+   *   - Only Expedia jobs get an entry. Booking/Agoda store all-null
+   *     `over_160` on their items by design, so we skip them — the job's
+   *     `tags` array stays empty.
+   *   - Items with `over_160 === null` (unparseable check_out_date) are
+   *     excluded from the vote.
+   *   - Idempotent and re-run safe: a single aggregation-pipeline update
+   *     removes any existing `over_160` entry and appends the fresh one,
+   *     preserving any other unrelated tag entries.
+   *
+   * Returns a small summary for logging; never throws — failures are
+   * swallowed since the tag is a hint, not load-bearing.
+   */
+  async applyOver160FlagFromJobItems(jobId: string): Promise<{
+    skipped: boolean;
+    reason?: string;
+    trueCount?: number;
+    falseCount?: number;
+    over_160?: boolean;
+  }> {
+    try {
+      const objectId = this.validateObjectId(jobId, "jobId");
+
+      const job = await Job.findById(objectId)
+        .select("ota_provider")
+        .lean();
+      if (!job) {
+        return { skipped: true, reason: "job-not-found" };
+      }
+      if (
+        String(job.ota_provider).trim().toLowerCase() !==
+        OTAProvider.Expedia.toLowerCase()
+      ) {
+        return { skipped: true, reason: "non-expedia" };
+      }
+
+      const counts = await JobItem.aggregate<{
+        _id: boolean;
+        count: number;
+      }>([
+        { $match: { job_id: objectId, over_160: { $in: [true, false] } } },
+        { $group: { _id: "$over_160", count: { $sum: 1 } } },
+      ]);
+
+      let trueCount = 0;
+      let falseCount = 0;
+      for (const c of counts) {
+        if (c._id === true) trueCount = c.count;
+        else if (c._id === false) falseCount = c.count;
+      }
+
+      const flag = trueCount > falseCount;
+
+      // Aggregation pipeline update — atomic upsert of the over_160 entry:
+      // 1. filter out any existing `{ field: "over_160" }` row
+      // 2. concat the fresh `{ field: "over_160", value: flag }` entry
+      // Preserves any other tag entries (future fields) on the same job.
+      await Job.updateOne({ _id: objectId }, [
+        {
+          $set: {
+            tags: {
+              $concatArrays: [
+                {
+                  $filter: {
+                    input: { $ifNull: ["$tags", []] },
+                    as: "t",
+                    cond: { $ne: ["$$t.field", JobTagField.over_160] },
+                  },
+                },
+                [{ field: JobTagField.over_160, value: flag }],
+              ],
+            },
+          },
+        },
+      ]);
+
+      return {
+        skipped: false,
+        trueCount,
+        falseCount,
+        over_160: flag,
+      };
+    } catch (error) {
+      console.error(`Error applying over_160 tag for job ${jobId}: ${error}`);
+      return { skipped: true, reason: "error" };
+    }
+  }
+
+  /**
    * Update job live URL
    */
   async updateJobLiveUrl(jobId: string, liveUrl: string): Promise<IJob | null> {
@@ -528,6 +633,18 @@ export class JobService {
 
       const { card_activity, ...jobItemFields } = itemData;
 
+      // Read parent job's ota_provider so we can populate the derived
+      // chargeback fields at insert time (Expedia only; Booking/Agoda → nulls).
+      // If the parent job lookup fails for any reason, we still insert with
+      // null derived fields — the NestJS backend will lazily compute on read.
+      const parentJob = await Job.findById(jobObjectId)
+        .select("ota_provider")
+        .lean();
+      const derived = computeDerivedJobItemFields(
+        parentJob?.ota_provider,
+        itemData.check_out_date,
+      );
+
       const jobItem = new JobItem({
         ...jobItemFields,
         job_id: jobObjectId,
@@ -535,6 +652,9 @@ export class JobService {
         has_card_info: itemData.has_card_info || false,
         has_payment_info: itemData.has_payment_info || false,
         has_card_activity: false,
+        over_160: derived.over_160,
+        days_since_checkout: derived.days_since_checkout,
+        derived_calculated_at: derived.derived_calculated_at,
       });
 
       const savedJobItem = await jobItem.save();
@@ -635,11 +755,31 @@ export class JobService {
     itemsData: CreateJobItemData[],
   ): Promise<IJobItem[]> {
     try {
+      // Resolve every unique parent job's ota_provider in a single round-trip
+      // so we can populate derived chargeback fields without N extra finds.
+      const uniqueJobIds = Array.from(
+        new Set(itemsData.map((i) => i.job_id)),
+      ).map((id) => this.validateObjectId(id, "job_id"));
+      const parentJobs = uniqueJobIds.length
+        ? await Job.find({ _id: { $in: uniqueJobIds } })
+            .select("_id ota_provider")
+            .lean()
+        : [];
+      const otaByJobId = new Map<string, OTAProvider>();
+      for (const j of parentJobs) {
+        otaByJobId.set(j._id.toString(), j.ota_provider);
+      }
+
       const jobItems = itemsData.map((itemData) => {
         const jobObjectId = this.validateObjectId(itemData.job_id, "job_id");
         const propertyObjectId = this.validateObjectId(
           itemData.property_id,
           "property_id",
+        );
+
+        const derived = computeDerivedJobItemFields(
+          otaByJobId.get(jobObjectId.toString()),
+          itemData.check_out_date,
         );
 
         return new JobItem({
@@ -648,6 +788,9 @@ export class JobService {
           property_id: propertyObjectId,
           has_card_info: itemData.has_card_info || false,
           has_payment_info: itemData.has_payment_info || false,
+          over_160: derived.over_160,
+          days_since_checkout: derived.days_since_checkout,
+          derived_calculated_at: derived.derived_calculated_at,
         });
       });
 
