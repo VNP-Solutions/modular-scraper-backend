@@ -23,9 +23,20 @@ export async function browserSetupProduction(jobId?: string): Promise<{
     const selectorTimeout = await timeoutManager.getSelectorTimeout(jobId);
 
     const launchArgs = {
-      headless: true,
-      stealth: false,
-      args: ["--window-size=1920,1080"],
+      headless: false,
+      stealth: true,
+      args: [
+        "--window-size=1920,1080",
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-blink-features=AutomationControlled",
+        "--disable-dev-shm-usage",
+        "--disable-background-timer-throttling",
+        "--disable-backgrounding-occluded-windows",
+        "--disable-renderer-backgrounding",
+        "--no-first-run",
+        "--no-default-browser-check",
+      ],
     };
 
     // Create query parameters

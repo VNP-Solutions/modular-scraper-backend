@@ -21,7 +21,7 @@ export async function browserSetupLocal(
   try {
     try {
       browser = await puppeteer.launch({
-        headless: true,
+        headless: false,
         defaultViewport: null,
         args: [
           "--start-maximized",
@@ -57,7 +57,7 @@ export async function browserSetupLocal(
 
     // Set user agent to avoid detection
     await page.setUserAgent(
-      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
     );
     // Set default timeouts based on job configuration
     await page.setDefaultNavigationTimeout(loadingTimeout);

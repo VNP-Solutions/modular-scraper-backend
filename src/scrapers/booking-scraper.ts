@@ -198,8 +198,10 @@ export class BookingScraper extends BaseScraper {
       const page = await browser.newPage();
       await this.logInfo("Connected to Browserless session successfully");
 
+      // Apply anti-detection before any navigation so evaluateOnNewDocument fires
+      await this.applyAntiDetection(page);
+
       // Set viewport and timeouts
-      // await page.setViewport({ width: 2560, height: 1440 });
       await page.setViewport({
         width: 1905,
         height: 945,
@@ -269,7 +271,7 @@ export class BookingScraper extends BaseScraper {
 
       // Launch local browser with comprehensive anti-detection
       const browser = await puppeteer.launch({
-        headless: true, // Set to false so you can see the browser
+        headless: false, // Set to false so you can see the browser
         defaultViewport: null,
         args: [
           "--start-maximized",
@@ -418,6 +420,105 @@ export class BookingScraper extends BaseScraper {
     } catch (error) {
       await this.logError("Local browser setup failed", error);
       throw error;
+    }
+  }
+
+  /**
+   * Apply comprehensive anti-bot-detection to any Puppeteer page/tab.
+   * Must be called on EVERY page object before it navigates — including new tabs
+   * opened via targetcreated — because evaluateOnNewDocument, userAgent, and
+   * headers are per-page and do NOT inherit from the parent page.
+   */
+  private async applyAntiDetection(page: Page): Promise<void> {
+    try {
+      await page.setUserAgent(
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+      );
+
+      await page.setExtraHTTPHeaders({
+        "Accept-Language": "en-GB,en-US;q=0.9,en;q=0.8",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Cache-Control": "max-age=0",
+        "sec-ch-ua":
+          '"Chromium";v="140", "Not=A?Brand";v="24", "Google Chrome";v="140"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"macOS"',
+        DNT: "1",
+        "Upgrade-Insecure-Requests": "1",
+      });
+
+      await page.evaluateOnNewDocument(() => {
+        // Hide the webdriver flag — the single most-checked bot signal
+        Object.defineProperty(navigator, "webdriver", {
+          get: () => undefined,
+        });
+
+        // Expose a realistic chrome.runtime so sites don't see a headless shell
+        (window as any).chrome = {
+          app: { isInstalled: false, InstallState: {}, RunningState: {} },
+          runtime: {
+            onMessage: { addListener: () => {}, removeListener: () => {} },
+            connect: () => {},
+            sendMessage: () => {},
+          },
+        };
+
+        // Realistic plugin list (headless Chrome has 0 plugins by default)
+        Object.defineProperty(navigator, "plugins", {
+          get: () => {
+            const arr = [1, 2, 3, 4, 5] as unknown as PluginArray;
+            return arr;
+          },
+        });
+
+        // Languages
+        Object.defineProperty(navigator, "languages", {
+          get: () => ["en-US", "en", "en-GB"],
+        });
+
+        // Permissions: don't reveal the "denied" state Puppeteer normally returns
+        const origQuery = window.navigator.permissions.query;
+        window.navigator.permissions.query = (parameters: any) => {
+          if (parameters.name === "notifications") {
+            return Promise.resolve({
+              state: Notification.permission,
+              name: "notifications",
+              onchange: null,
+              addEventListener: () => {},
+              removeEventListener: () => {},
+              dispatchEvent: () => false,
+            } as PermissionStatus);
+          }
+          return origQuery.call(window.navigator.permissions, parameters);
+        };
+
+        // Screen dimensions — match the viewport we set
+        Object.defineProperty(screen, "availWidth", { get: () => 1905 });
+        Object.defineProperty(screen, "availHeight", { get: () => 945 });
+        Object.defineProperty(screen, "width", { get: () => 1905 });
+        Object.defineProperty(screen, "height", { get: () => 945 });
+
+        // Hardware concurrency — 0 is a headless giveaway
+        Object.defineProperty(navigator, "hardwareConcurrency", {
+          get: () => 8,
+        });
+
+        // deviceMemory — headless exposes 0 or undefined
+        Object.defineProperty(navigator, "deviceMemory", { get: () => 8 });
+
+        // Connection info — headless often has no connection object
+        Object.defineProperty(navigator, "connection", {
+          get: () => ({
+            rtt: 50,
+            downlink: 10,
+            effectiveType: "4g",
+            saveData: false,
+          }),
+        });
+      });
+    } catch (err) {
+      // Non-fatal — log but don't break the caller
+      console.error("[applyAntiDetection] failed:", err);
     }
   }
 
@@ -1416,6 +1517,7 @@ export class BookingScraper extends BaseScraper {
             clearTimeout(timeout);
             if (target.type() === "page") {
               const newPage = await target.page();
+              await this.applyAntiDetection(newPage!);
               await newPage!.bringToFront();
               resolve(newPage!);
             }
@@ -3201,8 +3303,8 @@ export class BookingScraper extends BaseScraper {
         this.browser!.once("targetcreated", async (target) => {
           if (target.type() === "page") {
             const newPage = await target.page();
+            await this.applyAntiDetection(newPage!);
             await newPage!.bringToFront();
-
             resolve(newPage!);
           }
         });
@@ -3641,6 +3743,7 @@ export class BookingScraper extends BaseScraper {
       this.browser!.once("targetcreated", async (target) => {
         if (target.type() === "page") {
           const newPage = await target.page();
+          await this.applyAntiDetection(newPage!);
           await newPage!.bringToFront();
           resolve(newPage!);
         }
@@ -3674,6 +3777,16 @@ export class BookingScraper extends BaseScraper {
       const twoFASuccess = await this.handle2FA({ page: newPage });
       if (!twoFASuccess) return false;
 
+      // Wait for the CC details page content to fully render before reading it
+      try {
+        await newPage.waitForSelector("table tr", { timeout: 30000 });
+      } catch {
+        await this.logError(
+          "CC details page did not render card table in time — page may be empty or an error page"
+        );
+        await this.takeScreenshot();
+      }
+
       const bodyText =
         (await this.page.evaluate(() => document.body?.innerText || "")) ||
         "";
@@ -3693,10 +3806,7 @@ export class BookingScraper extends BaseScraper {
       });
       if (!trustStreakOk) {
         try {
-          await SelectorUtils.findAndClick(
-            this.page,
-            BOOKING_SELECTORS.reservations.closeCardDetails
-          );
+          await newPage.close();
         } catch {
           /* tab may already be closing */
         }
@@ -3704,10 +3814,7 @@ export class BookingScraper extends BaseScraper {
         return false;
       }
 
-      await SelectorUtils.findAndClick(
-        this.page,
-        BOOKING_SELECTORS.reservations.closeCardDetails
-      );
+      await newPage.close();
       this.page = previousPage;
 
       const saveResult = await this.saveReservationToDatabase(
@@ -4772,7 +4879,7 @@ export class BookingScraper extends BaseScraper {
       const sessionConfig = {
         ttl: 86400000, // 24h
         stealth: true,
-        headless: true,
+        headless: false,
         args: [
           "--no-sandbox",
           "--disable-dev-shm-usage",
@@ -5671,18 +5778,29 @@ export class BookingScraper extends BaseScraper {
           amountToChargeOrRefund: "",
         };
 
+        // Normalise label → field key. Keys are lowercased + stripped of
+        // trailing punctuation so minor Booking.com wording changes don't break extraction.
         const labelMap: Record<string, keyof typeof result> = {
-          "Card number:": "cardNumber",
-          "Expiration Date:": "expiry",
-          "CVC Code:": "cvv",
-          "Card holder's name:": "cardholder",
+          "card number": "cardNumber",
+          "expiration date": "expiry",
+          "expiry date": "expiry",
+          "expiry": "expiry",
+          "cvc code": "cvv",
+          "cvv": "cvv",
+          "cvc": "cvv",
+          "card holder's name": "cardholder",
+          "cardholder name": "cardholder",
+          "cardholder": "cardholder",
+          "name on card": "cardholder",
         };
 
         const rows = document.querySelectorAll("table tr");
         rows.forEach((row) => {
           const cells = row.querySelectorAll("td");
           if (cells.length === 2) {
-            const label = cells[0].textContent?.trim() || "";
+            const raw = cells[0].textContent?.trim() || "";
+            // Normalise: lowercase and strip trailing colon/whitespace
+            const label = raw.toLowerCase().replace(/:?\s*$/, "");
             const value = cells[1].textContent?.trim() || "";
             const key = labelMap[label];
             if (key) {
@@ -5950,6 +6068,7 @@ export class BookingScraper extends BaseScraper {
         this.browser!.once("targetcreated", async (target) => {
           if (target.type() === "page") {
             const newPage = await target.page();
+            await this.applyAntiDetection(newPage!);
             await newPage!.bringToFront();
             resolve(newPage!);
           }
@@ -6009,6 +6128,16 @@ export class BookingScraper extends BaseScraper {
         return { success: false, cardInfoStored: false };
       }
 
+      // Wait for the CC details page content to fully render before reading it
+      try {
+        await newPage.waitForSelector("table tr", { timeout: 30000 });
+      } catch {
+        await this.logError(
+          "CC details page did not render card table in time — page may be empty or an error page"
+        );
+        await this.takeScreenshot();
+      }
+
       const bodyText =
         (await newPage.evaluate(() => document.body?.innerText || "")) || "";
       const trustUnavailableGuestCardPage =
@@ -6027,21 +6156,15 @@ export class BookingScraper extends BaseScraper {
       });
       if (!trustStreakOk) {
         try {
-          await SelectorUtils.findAndClick(
-            this.page,
-            BOOKING_SELECTORS.reservations.closeCardDetails
-          );
+          await newPage.close();
         } catch {
           /* ignore */
         }
         return { success: false, cardInfoStored: false };
       }
 
-      // Close page
-      await SelectorUtils.findAndClick(
-        this.page,
-        BOOKING_SELECTORS.reservations.closeCardDetails
-      );
+      // Close the CC details tab
+      await newPage.close();
 
       let cardInfoStored = false;
       if (jobId && propertyId) {
