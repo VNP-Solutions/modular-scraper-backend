@@ -79,6 +79,7 @@ export interface IJob extends Document {
   }[];
   is_quick_job?: boolean;
   otp_needed?: boolean;
+  otp_fulfilled?: boolean;
   /** E.164 or Twilio-accepted number for post-completion SMS (audit ready). */
   phone_number_for_report?: string;
 }
@@ -256,6 +257,11 @@ const JobSchema = new Schema<IJob>(
       default: false,
     },
     otp_needed: {
+      type: Boolean,
+      required: false,
+      default: false,
+    },
+    otp_fulfilled: {
       type: Boolean,
       required: false,
       default: false,

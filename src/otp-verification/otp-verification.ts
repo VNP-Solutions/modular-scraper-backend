@@ -125,6 +125,18 @@ async function setJobOtpNeededFlag(
   }
 }
 
+/** Best-effort: set `jobs.otp_fulfilled=true` once Partner Central accepts the OTP. */
+async function setJobOtpFulfilledFlag(jobId: string): Promise<void> {
+  try {
+    await Job.updateOne({ _id: jobId }, { $set: { otp_fulfilled: true } });
+  } catch (err) {
+    await dualLogError(
+      `Failed to set job otp_fulfilled=true for job ${jobId}:`,
+      err
+    );
+  }
+}
+
 async function clearPasscodeInput(page: Page): Promise<void> {
   await page.focus('input[name="passcode-input"]').catch(() => undefined);
   await page.evaluate(() => {
@@ -387,6 +399,7 @@ async function enterPasscodeWithRetries(
         await dualLogInfo(
           `OTP accepted on submit #${submitCount} after ${elapsedSec}s; otp_codes._id=${pendingId} marked used=true.`
         );
+        await setJobOtpFulfilledFlag(jobId);
         await setJobOtpNeededFlag(jobId, false);
         return;
       }
