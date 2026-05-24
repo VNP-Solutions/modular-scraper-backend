@@ -3,6 +3,7 @@ import cors from "cors";
 import express from "express";
 import createError from "../common/error.js";
 import { otpAwareWorkerPool } from "../common/otp-aware-worker-pool.js";
+import { otpStatusManager } from "../common/otp-status-manager.js";
 import { progressManager } from "../common/progress-manager.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import { brightDataFieldsForExpediaJob } from "../common/job-isolation.js";
@@ -2164,6 +2165,7 @@ app.post("/api/expedia/graphql-run-job", (async (
         ) {
           console.warn(`GraphQL job ${jobId} rejected: all workers busy and queue full`);
           await jobService.updateJobStatus(jobId, JobStatus.Failed, "All server busy, try again");
+          await otpStatusManager.triggerLambdaAPI();
           return;
         }
 
@@ -2172,11 +2174,13 @@ app.post("/api/expedia/graphql-run-job", (async (
 
         if (!validation.exists) {
           console.error(`GraphQL job ${jobId} not found`);
+          await otpStatusManager.triggerLambdaAPI();
           return;
         }
 
         if (!validation.canRun) {
           console.warn(`GraphQL job ${jobId} is not in a runnable state. Current status: ${validation.job?.job_status}`);
+          await otpStatusManager.triggerLambdaAPI();
           return;
         }
 
@@ -2188,6 +2192,7 @@ app.post("/api/expedia/graphql-run-job", (async (
           const reason = `Cannot retrieve valid expedia_id for job ${jobId}. Property may not have expedia_id assigned or expedia_id is "0".`;
           console.error(reason);
           await jobService.updateJobStatus(jobId, JobStatus.Failed, reason);
+          await otpStatusManager.triggerLambdaAPI();
           return;
         }
 
@@ -2195,6 +2200,7 @@ app.post("/api/expedia/graphql-run-job", (async (
           const reason = `Cannot retrieve valid credentials for job ${jobId}. Property may not have user_email or user_password assigned.`;
           console.error(reason);
           await jobService.updateJobStatus(jobId, JobStatus.Failed, reason);
+          await otpStatusManager.triggerLambdaAPI();
           return;
         }
 
@@ -2225,6 +2231,7 @@ app.post("/api/expedia/graphql-run-job", (async (
         } catch (cleanupError) {
           console.error("Error during cleanup:", cleanupError);
         }
+        await otpStatusManager.triggerLambdaAPI();
       }
     })();
 

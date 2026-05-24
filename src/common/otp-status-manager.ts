@@ -224,9 +224,10 @@ export class OtpStatusManager extends EventEmitter {
   }
 
   /**
-   * Trigger Lambda API when OTP is released
+   * Trigger Lambda API
    */
-  private async triggerLambdaAPI(platform: string): Promise<void> {
+  public async triggerLambdaAPI(platform?: string): Promise<void> {
+    const resolvedPlatform = platform || this.getOtpPlatform();
     const mainBackendUrl = process.env.MAIN_BACKEND_URL;
     if (!mainBackendUrl) {
       console.log("MAIN_BACKEND_URL not configured, skipping Lambda trigger");
@@ -239,11 +240,11 @@ export class OtpStatusManager extends EventEmitter {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ platform }),
+        body: JSON.stringify({ platform: resolvedPlatform }),
       });
 
       if (response.ok) {
-        console.log(`Lambda triggered successfully for platform: ${platform}`);
+        console.log(`Lambda triggered successfully for platform: ${resolvedPlatform}`);
       } else {
         console.error(`Lambda trigger failed: ${response.status}`);
       }
