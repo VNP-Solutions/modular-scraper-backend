@@ -1161,10 +1161,9 @@ async function fetchEVCCardData(
   const maxRetries = 8;
   let attempt = 0;
 
-  // Base delay between requests (configurable) - prevent rate limiting
-  // Use random delay between 4-8 seconds to simulate human-like behavior
-  const minDelayMs = parseInt(process.env.EVC_API_MIN_DELAY_MS || "4000"); // 4 seconds minimum
-  const maxDelayMs = parseInt(process.env.EVC_API_MAX_DELAY_MS || "8000"); // 8 seconds maximum
+  // Random delay before first request (default 1-5 seconds)
+  const minDelayMs = parseInt(process.env.EVC_V1_MIN_DELAY_MS || "1000");
+  const maxDelayMs = parseInt(process.env.EVC_V1_MAX_DELAY_MS || "5000");
 
   while (attempt < maxRetries) {
     try {
@@ -1377,8 +1376,9 @@ async function fetchEVCCardActivityDataV2(
   const maxRetries = 5;
   let attempt = 0;
 
-  const minDelayMs = parseInt(process.env.EVC_API_MIN_DELAY_MS || "4000");
-  const maxDelayMs = parseInt(process.env.EVC_API_MAX_DELAY_MS || "8000");
+  // Random delay before first request (default 1-2 seconds)
+  const minDelayMs = parseInt(process.env.EVC_V2_MIN_DELAY_MS || "1000");
+  const maxDelayMs = parseInt(process.env.EVC_V2_MAX_DELAY_MS || "2000");
 
   const generateRequestId = (): string => {
     return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
@@ -2152,10 +2152,12 @@ async function runScrapingWithRestart(
         );
       }
 
-      // Add random delay between 1-10 seconds before processing next date (to avoid detection)
+      // Add random delay (default 1-5 seconds) before processing next date
       if (i < datesToProcess.length - 1) {
-        // Don't delay after the last date
-        const randomDelay = Math.floor(Math.random() * 10) + 1;
+        const betweenDateMaxSec = parseInt(
+          process.env.GRAPHQL_BETWEEN_DATE_DELAY_MAX_SEC || "5",
+        );
+        const randomDelay = Math.floor(Math.random() * betweenDateMaxSec) + 1;
         console.log(
           `⏱️ Waiting ${randomDelay} seconds before processing next date...`,
         );
