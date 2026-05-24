@@ -46,6 +46,38 @@ async function delay(ms: number): Promise<void> {
 }
 
 /**
+ * Click a chat suggestion button by its data-element-value label.
+ */
+async function clickSuggestionButton(
+  page: Page,
+  label: string,
+  jobId?: string,
+  timeoutMs = 10000,
+): Promise<boolean> {
+  const selectors = [
+    `button[data-element-value="${label}"]`,
+    `button[data-testid="suggestion-text-button"][data-element-value="${label}"]`,
+    `button[data-testid="suggestion-text-button"]:has-text("${label}")`,
+  ];
+
+  for (const selector of selectors) {
+    try {
+      await page.waitForSelector(selector, { visible: true, timeout: timeoutMs });
+      await page.click(selector);
+      await dualLogInfo(
+        `✅ Clicked '${label}' suggestion with selector: ${selector}`,
+        { jobId },
+      );
+      return true;
+    } catch {
+      continue;
+    }
+  }
+
+  return false;
+}
+
+/**
  * Find CSV file using standardized naming (jobId only)
  */
 async function findCsvFileInImport(jobId?: string): Promise<string | null> {
@@ -504,44 +536,66 @@ export async function automateNeedHelpProcess(
       );
     }
 
-    // step 4: Click "submit request" button (Restored)
-    await delay(10000); // Increased delay
-    await dualLogInfo("Looking for 'submit request' button...", { jobId });
-    const submitRequestSelectors = [
-      'button[data-element-value="Submit request"]',
-      'button[data-testid="suggestion-text-button"][data-element-value="Submit request"]',
-      'button:has-text("Submit request")',
-    ];
+    // step 4: Click "Submit request" button
+    // Primary path: button appears directly after chat messages.
+    // Fallback path (some properties): "Send an email" → then "Submit request".
+    await delay(10000);
+    await dualLogInfo("Looking for 'Submit request' button...", { jobId });
 
-    for (const selector of submitRequestSelectors) {
-      try {
-        await page.waitForSelector(selector, { visible: true, timeout: 10000 });
-        await page.click(selector);
-        await dualLogInfo(
-          `✅ Clicked 'submit request' button with selector: ${selector}`,
-          { jobId },
-        );
-        stepResults.submitRequestButtonClicked = true;
+    let submitRequestClicked = await clickSuggestionButton(
+      page,
+      "Submit request",
+      jobId,
+      10000,
+    );
 
-        // Update progress - Submit request button clicked
+    if (!submitRequestClicked) {
+      await dualLogInfo(
+        "'Submit request' not found directly — trying 'Send an email' first...",
+        { jobId },
+      );
+
+      const sendEmailClicked = await clickSuggestionButton(
+        page,
+        "Send an email",
+        jobId,
+        10000,
+      );
+
+      if (sendEmailClicked) {
         if (jobId) {
-          await progressManager.updateJobProgress(
-            jobId,
-            undefined,
-            97,
-            "agoda_submit_request_clicked",
-            undefined,
-          );
-          await takeSuccessScreenshot(
-            page,
-            jobId,
-            "submit_request_button_clicked",
-          );
+          await takeSuccessScreenshot(page, jobId, "send_an_email_clicked");
         }
-        break;
-      } catch (error) {
-        continue;
+        await delay(5000);
+        submitRequestClicked = await clickSuggestionButton(
+          page,
+          "Submit request",
+          jobId,
+          15000,
+        );
       }
+    }
+
+    stepResults.submitRequestButtonClicked = submitRequestClicked;
+
+    if (submitRequestClicked && jobId) {
+      await progressManager.updateJobProgress(
+        jobId,
+        undefined,
+        97,
+        "agoda_submit_request_clicked",
+        undefined,
+      );
+      await takeSuccessScreenshot(
+        page,
+        jobId,
+        "submit_request_button_clicked",
+      );
+    } else if (!submitRequestClicked) {
+      await dualLogError(
+        "Failed to click 'Submit request' button (direct and Send an email fallback)",
+        { jobId },
+      );
     }
 
     // Step 5: Wait for form to load and select "Other" from issue type dropdown
