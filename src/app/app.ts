@@ -24,6 +24,7 @@ import { bookingTrustScheduler } from "../services/booking-trust-scheduler.servi
 import { propertyCredentialsService } from "../services/job-credentials.service.js";
 import { propertyCredentialsService as propertyPasswordUpdateService } from "../services/property-credentials.service.js";
 import { jobService } from "../services/job.service.js";
+import cookieStorageRoutes from "../routes/shared/cookie-storage.routes.js";
 
 // Ensure main thread ID is set for API routes and system tasks
 if (isMainThread) {
@@ -1907,6 +1908,8 @@ app.post("/api/booking/trust-scheduler/cron/trigger", (async (
     });
   }
 }) as any);
+
+app.use("/api/properties", cookieStorageRoutes);
 
 // * Global error handle middleware
 app.use((err: any, req: any, res: any, next: any) => {

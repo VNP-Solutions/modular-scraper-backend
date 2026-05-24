@@ -180,6 +180,10 @@ const options: swaggerJsdoc.Options = {
         name: "Job Monitoring",
         description: "Endpoints for monitoring job progress and results",
       },
+      {
+        name: "Cookie Storage",
+        description: "Endpoints for managing encrypted property cookies",
+      },
     ],
     paths: loadYamlDocs(),
   },
