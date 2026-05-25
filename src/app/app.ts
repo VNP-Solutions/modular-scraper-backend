@@ -1318,36 +1318,7 @@ app.post("/api/expedia/property-run-job", (async (
 
     console.log(`Using expedia_id: ${expediaId} for scraping`);
 
-    // 3. Best-effort "Audit started" SMS (mirrors the post-completion SMS in
-    //    scraping-worker.ts → maybeSendAuditReadySms). Skipped silently when:
-    //      - SMS providers / DEMO_WEBSITE_URL aren't configured, or
-    //      - the job has no phone_number_for_report on it.
-    //    Failures are logged but never block the scraping job.
-    try {
-      if (isAuditSmsConfigured()) {
-        const jobDoc = await jobService.getJobById(jobId);
-        const reportPhone = jobDoc?.phone_number_for_report?.trim();
-        if (reportPhone) {
-          await sendAuditStartedSms(reportPhone, jobId);
-          console.log(`Audit SMS: audit-started message sent for ${jobId}`);
-        } else {
-          console.log(
-            `Audit SMS: skip (no phone_number_for_report on job) for ${jobId}`
-          );
-        }
-      } else {
-        console.log(
-          `Audit SMS: skip (neither Ejoin nor Twilio + DEMO_WEBSITE_URL configured) for ${jobId}`
-        );
-      }
-    } catch (smsError) {
-      console.error(
-        `Audit SMS: audit-started send failed for ${jobId}`,
-        smsError
-      );
-    }
-
-    // 4. Prepare worker job data
+    // 3. Prepare worker job data
     const workerJobData: WorkerJobData = {
       jobType: "property-run",
       jobId,
@@ -1359,7 +1330,7 @@ app.post("/api/expedia/property-run-job", (async (
       ...brightDataFieldsForExpediaJob(jobId),
     };
 
-    // 5. Execute job in worker thread
+    // 4. Execute job in worker thread
     try {
       console.log(`Submitting job ${jobId} to worker pool...`);
 
@@ -2298,7 +2269,37 @@ app.post("/api/expedia/graphql-run-job", (async (
 
     console.log(`Using expedia_id: ${expediaId} for GraphQL scraping`);
 
-    // 3. Prepare worker job data
+    // 3. Best-effort "Audit started" SMS (counterpart to the post-completion
+    //    SMS in scraping-worker.ts → maybeSendAuditReadySms). Skipped silently
+    //    when:
+    //      - SMS providers / DEMO_WEBSITE_URL aren't configured, or
+    //      - the job has no phone_number_for_report on it.
+    //    Failures are logged but never block the scraping job.
+    try {
+      if (isAuditSmsConfigured()) {
+        const jobDoc = await jobService.getJobById(jobId);
+        const reportPhone = jobDoc?.phone_number_for_report?.trim();
+        if (reportPhone) {
+          await sendAuditStartedSms(reportPhone, jobId);
+          console.log(`Audit SMS: audit-started message sent for ${jobId}`);
+        } else {
+          console.log(
+            `Audit SMS: skip (no phone_number_for_report on job) for ${jobId}`
+          );
+        }
+      } else {
+        console.log(
+          `Audit SMS: skip (neither Ejoin nor Twilio + DEMO_WEBSITE_URL configured) for ${jobId}`
+        );
+      }
+    } catch (smsError) {
+      console.error(
+        `Audit SMS: audit-started send failed for ${jobId}`,
+        smsError
+      );
+    }
+
+    // 4. Prepare worker job data
     const workerJobData: WorkerJobData = {
       jobType: "graphql-run",
       jobId,
@@ -2310,7 +2311,7 @@ app.post("/api/expedia/graphql-run-job", (async (
       ...brightDataFieldsForExpediaJob(jobId),
     };
 
-    // 4. Execute job in worker thread
+    // 5. Execute job in worker thread
     try {
       console.log(`Submitting GraphQL job ${jobId} to worker pool...`);
 
