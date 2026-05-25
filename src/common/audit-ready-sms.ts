@@ -1,6 +1,14 @@
 import twilio from "twilio";
 
-const SMS_INTRO = "Your Audit is ready please take a look";
+/**
+ * Body intros for outbound audit SMS.
+ *
+ * - READY    — sent when a job finishes with status `Completed` (existing flow).
+ * - STARTED  — sent when the property-run-job API accepts a request (so the
+ *   recipient knows scraping has begun and can keep an eye on the link).
+ */
+const SMS_INTRO_READY = "Your Audit is ready please take a look";
+const SMS_INTRO_STARTED = "Your Audit has started";
 
 /** Builds the link placed *inside* the SMS — uses DEMO_WEBSITE_URL (your app), not the device. */
 export function buildAuditReportJobUrl(jobId: string): string {
@@ -76,9 +84,10 @@ function ejoinTaskId(): number {
   return Date.now() % 2_147_000_000;
 }
 
-async function sendAuditReadySmsViaTwilio(
+async function sendAuditSmsViaTwilio(
   toPhone: string,
-  jobId: string
+  jobId: string,
+  intro: string
 ): Promise<void> {
   const sid = process.env.TWILIO_ACCOUNT_SID?.trim();
   const token = process.env.TWILIO_AUTH_TOKEN?.trim();
@@ -92,7 +101,7 @@ async function sendAuditReadySmsViaTwilio(
     throw new Error("Twilio: DEMO_WEBSITE_URL is not set");
   }
   const link = buildAuditReportJobUrl(jobId);
-  const body = `${SMS_INTRO}\n${link}`;
+  const body = `${intro}\n${link}`;
   const client = twilio(sid, token);
   await client.messages.create({
     from,
@@ -107,9 +116,10 @@ interface EjoinSubmitResponseItem {
   reason?: string;
 }
 
-async function sendAuditReadySmsViaEjoin(
+async function sendAuditSmsViaEjoin(
   toPhone: string,
-  jobId: string
+  jobId: string,
+  intro: string
 ): Promise<void> {
   const base = ejoinGatewayBase();
   const username = process.env.EJOIN_SMS_USERNAME?.trim();
@@ -120,7 +130,7 @@ async function sendAuditReadySmsViaEjoin(
     );
   }
   const link = buildAuditReportJobUrl(jobId);
-  const smsBody = `${SMS_INTRO}\n${link}`;
+  const smsBody = `${intro}\n${link}`;
 
   const url = new URL(`${base}/submit_sms_tasks`);
   url.searchParams.set("username", username);
@@ -193,35 +203,56 @@ async function sendAuditReadySmsViaEjoin(
 }
 
 /**
- * Sends audit-ready SMS. Provider order:
+ * Send an audit SMS with the given `intro` line. Provider order:
  * - AUDIT_SMS_PROVIDER=ejoin → Ejoin only
  * - AUDIT_SMS_PROVIDER=twilio → Twilio only
  * - unset / auto → Ejoin if configured, else Twilio if configured
+ *
+ * Used by both the "started" SMS (sent when the property-run-job API accepts
+ * a request) and the "ready" SMS (sent when the worker finishes a Completed
+ * job). Both messages share the same link `{DEMO_WEBSITE_URL}/audits/{jobId}`.
  */
-export async function sendAuditReadySms(
+async function sendAuditSms(
   toPhone: string,
-  jobId: string
+  jobId: string,
+  intro: string
 ): Promise<void> {
   const mode = (process.env.AUDIT_SMS_PROVIDER || "auto")
     .trim()
     .toLowerCase();
 
   if (mode === "twilio") {
-    return sendAuditReadySmsViaTwilio(toPhone, jobId);
+    return sendAuditSmsViaTwilio(toPhone, jobId, intro);
   }
   if (mode === "ejoin") {
-    return sendAuditReadySmsViaEjoin(toPhone, jobId);
+    return sendAuditSmsViaEjoin(toPhone, jobId, intro);
   }
 
   // auto
   if (isEjoinAuditSmsConfigured()) {
-    return sendAuditReadySmsViaEjoin(toPhone, jobId);
+    return sendAuditSmsViaEjoin(toPhone, jobId, intro);
   }
   if (isTwilioAuditSmsConfigured()) {
-    return sendAuditReadySmsViaTwilio(toPhone, jobId);
+    return sendAuditSmsViaTwilio(toPhone, jobId, intro);
   }
 
   throw new Error(
     "No SMS provider configured: set Ejoin (EJOIN_SMS_*) or Twilio (TWILIO_*) + DEMO_WEBSITE_URL"
   );
+}
+
+/** Sent by the worker once a job's `finalStatus` resolves to Completed. */
+export async function sendAuditReadySms(
+  toPhone: string,
+  jobId: string
+): Promise<void> {
+  return sendAuditSms(toPhone, jobId, SMS_INTRO_READY);
+}
+
+/** Sent by `/api/expedia/property-run-job` as soon as the job is accepted. */
+export async function sendAuditStartedSms(
+  toPhone: string,
+  jobId: string
+): Promise<void> {
+  return sendAuditSms(toPhone, jobId, SMS_INTRO_STARTED);
 }
