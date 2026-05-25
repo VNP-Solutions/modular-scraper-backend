@@ -10,10 +10,26 @@ import twilio from "twilio";
 const SMS_INTRO_READY = "Your Audit is ready please take a look";
 const SMS_INTRO_STARTED = "Your Audit has started";
 
-/** Builds the link placed *inside* the SMS — uses DEMO_WEBSITE_URL (your app), not the device. */
-export function buildAuditReportJobUrl(jobId: string): string {
-  const base = (process.env.DEMO_WEBSITE_URL || "").trim().replace(/\/+$/, "");
-  return `${base}/audits/${jobId}`;
+/** Returns DEMO_WEBSITE_URL with any trailing slashes trimmed (empty string if unset). */
+function demoSiteBase(): string {
+  return (process.env.DEMO_WEBSITE_URL || "").trim().replace(/\/+$/, "");
+}
+
+/**
+ * Link placed inside the **"Audit ready"** SMS — points at the final report.
+ * Pattern: `{DEMO_WEBSITE_URL}/audits/{jobId}`.
+ */
+export function buildAuditReadyUrl(jobId: string): string {
+  return `${demoSiteBase()}/audits/${jobId}`;
+}
+
+/**
+ * Link placed inside the **"Audit started"** SMS — points at the live progress
+ * page so the recipient can watch the scrape happen.
+ * Pattern: `{DEMO_WEBSITE_URL}/progress/{jobId}`.
+ */
+export function buildAuditProgressUrl(jobId: string): string {
+  return `${demoSiteBase()}/progress/${jobId}`;
 }
 
 function twilioFromNumber(): string {
@@ -44,8 +60,10 @@ export function isTwilioAuditSmsConfigured(): boolean {
  *   that tunnels to that device (e.g. https://xxxx.ngrok-free.dev). No path; not your
  *   product website. Used only to call `/submit_sms_tasks` on the device.
  * - EJOIN_SMS_USERNAME / EJOIN_SMS_PASSWORD — **device** web/API login (same as dashboard).
- * - DEMO_WEBSITE_URL — **your project / audit site** shown *inside* the SMS text as
- *   `{DEMO_WEBSITE_URL}/audits/{jobId}` for the user to open in a browser. Never the device URL.
+ * - DEMO_WEBSITE_URL — **your project / audit site** shown *inside* the SMS text.
+ *   The "started" SMS links to `{DEMO_WEBSITE_URL}/progress/{jobId}` (live progress
+ *   page) and the "ready" SMS links to `{DEMO_WEBSITE_URL}/audits/{jobId}` (final
+ *   report). Never the device URL.
  * - EJOIN_SMS_FROM_PORT (optional) — modem port index 1–64. If unset, the gateway
  *   auto-picks an available port/SIM per Ejoin docs ("Automatically selected by device").
  */
@@ -86,8 +104,8 @@ function ejoinTaskId(): number {
 
 async function sendAuditSmsViaTwilio(
   toPhone: string,
-  jobId: string,
-  intro: string
+  intro: string,
+  link: string
 ): Promise<void> {
   const sid = process.env.TWILIO_ACCOUNT_SID?.trim();
   const token = process.env.TWILIO_AUTH_TOKEN?.trim();
@@ -100,7 +118,6 @@ async function sendAuditSmsViaTwilio(
   if (!process.env.DEMO_WEBSITE_URL?.trim()) {
     throw new Error("Twilio: DEMO_WEBSITE_URL is not set");
   }
-  const link = buildAuditReportJobUrl(jobId);
   const body = `${intro}\n${link}`;
   const client = twilio(sid, token);
   await client.messages.create({
@@ -118,8 +135,8 @@ interface EjoinSubmitResponseItem {
 
 async function sendAuditSmsViaEjoin(
   toPhone: string,
-  jobId: string,
-  intro: string
+  intro: string,
+  link: string
 ): Promise<void> {
   const base = ejoinGatewayBase();
   const username = process.env.EJOIN_SMS_USERNAME?.trim();
@@ -129,7 +146,6 @@ async function sendAuditSmsViaEjoin(
       "Ejoin: set EJOIN_SMS_GATEWAY_URL, EJOIN_SMS_USERNAME, EJOIN_SMS_PASSWORD"
     );
   }
-  const link = buildAuditReportJobUrl(jobId);
   const smsBody = `${intro}\n${link}`;
 
   const url = new URL(`${base}/submit_sms_tasks`);
@@ -203,37 +219,38 @@ async function sendAuditSmsViaEjoin(
 }
 
 /**
- * Send an audit SMS with the given `intro` line. Provider order:
+ * Send an audit SMS with the given `intro` line and pre-built `link`. Provider
+ * order:
  * - AUDIT_SMS_PROVIDER=ejoin → Ejoin only
  * - AUDIT_SMS_PROVIDER=twilio → Twilio only
  * - unset / auto → Ejoin if configured, else Twilio if configured
  *
- * Used by both the "started" SMS (sent when the property-run-job API accepts
- * a request) and the "ready" SMS (sent when the worker finishes a Completed
- * job). Both messages share the same link `{DEMO_WEBSITE_URL}/audits/{jobId}`.
+ * Both public entry points (`sendAuditReadySms`, `sendAuditStartedSms`) build
+ * their own URL via `buildAuditReadyUrl` / `buildAuditProgressUrl` so each
+ * message lands on the correct page (`/audits/{jobId}` vs `/progress/{jobId}`).
  */
 async function sendAuditSms(
   toPhone: string,
-  jobId: string,
-  intro: string
+  intro: string,
+  link: string
 ): Promise<void> {
   const mode = (process.env.AUDIT_SMS_PROVIDER || "auto")
     .trim()
     .toLowerCase();
 
   if (mode === "twilio") {
-    return sendAuditSmsViaTwilio(toPhone, jobId, intro);
+    return sendAuditSmsViaTwilio(toPhone, intro, link);
   }
   if (mode === "ejoin") {
-    return sendAuditSmsViaEjoin(toPhone, jobId, intro);
+    return sendAuditSmsViaEjoin(toPhone, intro, link);
   }
 
   // auto
   if (isEjoinAuditSmsConfigured()) {
-    return sendAuditSmsViaEjoin(toPhone, jobId, intro);
+    return sendAuditSmsViaEjoin(toPhone, intro, link);
   }
   if (isTwilioAuditSmsConfigured()) {
-    return sendAuditSmsViaTwilio(toPhone, jobId, intro);
+    return sendAuditSmsViaTwilio(toPhone, intro, link);
   }
 
   throw new Error(
@@ -241,18 +258,28 @@ async function sendAuditSms(
   );
 }
 
-/** Sent by the worker once a job's `finalStatus` resolves to Completed. */
+/**
+ * Sent by the worker once a job's `finalStatus` resolves to Completed.
+ * Links to `{DEMO_WEBSITE_URL}/audits/{jobId}`.
+ */
 export async function sendAuditReadySms(
   toPhone: string,
   jobId: string
 ): Promise<void> {
-  return sendAuditSms(toPhone, jobId, SMS_INTRO_READY);
+  return sendAuditSms(toPhone, SMS_INTRO_READY, buildAuditReadyUrl(jobId));
 }
 
-/** Sent by `/api/expedia/property-run-job` as soon as the job is accepted. */
+/**
+ * Sent by `/api/expedia/graphql-run-job` as soon as the job is accepted.
+ * Links to `{DEMO_WEBSITE_URL}/progress/{jobId}` (live progress page).
+ */
 export async function sendAuditStartedSms(
   toPhone: string,
   jobId: string
 ): Promise<void> {
-  return sendAuditSms(toPhone, jobId, SMS_INTRO_STARTED);
+  return sendAuditSms(
+    toPhone,
+    SMS_INTRO_STARTED,
+    buildAuditProgressUrl(jobId)
+  );
 }
