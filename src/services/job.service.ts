@@ -22,9 +22,11 @@ import {
   PostingType,
   resolveJobOtaProvider,
 } from "../models/job.model.js";
+import { OtpCode } from "../models/otp-code.model.js";
 import { PropertyCredentials } from "../models/Property-credentials.js";
 import { IProperty, Property } from "../models/property.model.js";
 import { notificationService } from "./notification.service.js";
+import { setJobOtpFulfilledFlag } from "../otp-verification/otp-db-poller.js";
 
 export interface CreateJobData {
   name?: string;
@@ -68,6 +70,28 @@ export interface CreateJobItemData {
 }
 
 export class JobService {
+  /**
+   * When a job completes, mark `otp_fulfilled=true` if OTP was verified
+   * (a used code exists in `otp_codes` for this job).
+   */
+  private async maybeMarkOtpFulfilledOnComplete(
+    jobId: Types.ObjectId,
+    status: JobStatus
+  ): Promise<void> {
+    if (status !== JobStatus.Completed) {
+      return;
+    }
+
+    const hasUsedOtp = await OtpCode.exists({
+      job_id: jobId,
+      used: true,
+    });
+
+    if (hasUsedOtp) {
+      await setJobOtpFulfilledFlag(jobId.toString());
+    }
+  }
+
   private currentJobId: string | null = null;
   private currentRetryCheck: {
     canRetry: boolean;
@@ -408,7 +432,11 @@ export class JobService {
         updateData.failed_reason = null;
       }
 
-      return await Job.findByIdAndUpdate(objectId, updateData, { new: true });
+      const updated = await Job.findByIdAndUpdate(objectId, updateData, {
+        new: true,
+      });
+      await this.maybeMarkOtpFulfilledOnComplete(objectId, status);
+      return updated;
     } catch (error) {
       console.error(`Error updating job status: ${error}`);
       return null;
@@ -475,7 +503,11 @@ export class JobService {
       if (failedReason !== undefined) {
         updateData.failed_reason = failedReason ?? null;
       }
-      return await Job.findByIdAndUpdate(objectId, updateData, { new: true });
+      const updated = await Job.findByIdAndUpdate(objectId, updateData, {
+        new: true,
+      });
+      await this.maybeMarkOtpFulfilledOnComplete(objectId, status);
+      return updated;
     } catch (error) {
       console.error(`Error updating job status with reason: ${error}`);
       return null;

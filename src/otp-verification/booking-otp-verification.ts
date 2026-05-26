@@ -14,13 +14,17 @@ import {
   getOurContactFromEnv,
   setBookingOtpUseNoSlotEmailForJob,
 } from "../common/job-phone-store.js";
-import { getBookingVerificationCodes } from "./email-verification-utils.js";
+import { OTAProvider } from "../models/job.model.js";
 import {
   getTimeoutConfig,
   initializeStateManager,
   submitOtpForm,
   waitForNavigation,
 } from "./otp-common-utils.js";
+import {
+  OtpSubmitResult,
+  watchOtpCodesFromDb,
+} from "./otp-db-poller.js";
 
 dotenv.config();
 
@@ -253,6 +257,125 @@ async function ensureBookingOtpInputSelector(
   return found;
 }
 
+async function clearBookingOtpInput(
+  page: Page,
+  otpInputSelector: string,
+  otpPerSelectorMs: number
+): Promise<string> {
+  const selector = await ensureBookingOtpInputSelector(
+    page,
+    otpInputSelector,
+    otpPerSelectorMs
+  );
+
+  try {
+    await page.click(selector, { clickCount: 3 });
+    await delay(200);
+    await page.keyboard.press("Backspace");
+    await delay(200);
+
+    await page.evaluate((sel) => {
+      const input = document.querySelector(sel) as HTMLInputElement;
+      if (input) {
+        input.value = "";
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+    }, selector);
+  } catch (clearError) {
+    await dualLogInfo(`Warning: Error during field clearing: ${clearError}`);
+  }
+
+  return selector;
+}
+
+async function trySubmitBookingOtpCode(
+  page: Page,
+  code: string,
+  otpInputSelector: string,
+  otpPerSelectorMs: number
+): Promise<{
+  result: OtpSubmitResult;
+  otpInputSelector: string;
+  navDetected: boolean;
+}> {
+  let currentSelector = await ensureBookingOtpInputSelector(
+    page,
+    otpInputSelector,
+    otpPerSelectorMs
+  );
+
+  try {
+    await page.type(currentSelector, code, { delay: 100 });
+  } catch (e) {
+    if (isStalePageContextError(e)) {
+      await dualLogInfo(
+        "Detached frame while typing OTP; re-resolving input and retrying once..."
+      );
+      currentSelector = await ensureBookingOtpInputSelector(
+        page,
+        null,
+        otpPerSelectorMs
+      );
+      await page.type(currentSelector, code, { delay: 100 });
+    } else {
+      throw e;
+    }
+  }
+  await delay(1000);
+
+  await submitOtpForm(page);
+
+  let navDetected = false;
+  const navPromise = page
+    .waitForNavigation({ timeout: 2500, waitUntil: "domcontentloaded" })
+    .then(() => {
+      navDetected = true;
+      return true;
+    })
+    .catch(() => null);
+  await Promise.race([navPromise, delay(2000)]);
+
+  let hasError = false;
+  try {
+    hasError = await page.evaluate(() => {
+      const bodyText = document.body.innerText;
+      return bodyText.includes("Enter a valid verification code");
+    });
+  } catch (e) {
+    if (isStalePageContextError(e)) {
+      await dualLogInfo(
+        "Navigation occurred after submit; assuming OTP succeeded"
+      );
+      return {
+        result: "accepted",
+        otpInputSelector: currentSelector,
+        navDetected: true,
+      };
+    }
+    throw e;
+  }
+
+  if (hasError) {
+    currentSelector = await clearBookingOtpInput(
+      page,
+      currentSelector,
+      otpPerSelectorMs
+    );
+    return {
+      result: "rejected",
+      otpInputSelector: currentSelector,
+      navDetected,
+    };
+  }
+
+  return {
+    result: "accepted",
+    otpInputSelector: currentSelector,
+    navDetected,
+  };
+}
+
 async function handleBookingOtpVerification(
   page: Page,
   jobId?: string,
@@ -468,25 +591,64 @@ async function handleBookingOtpVerification(
       throw error;
     }
 
-    // Wait for SMS to arrive and get verification codes from email
-    await dualLogInfo("Waiting 1 minute for verification email...");
-    await delay(60000); // Wait 1 minute for email to arrive
+    if (!jobId) {
+      const error = new Error(
+        "Cannot fetch OTP from otp_codes: jobId is required (codes are looked up by provider + job_id)"
+      );
+      setFailedReasonCode(error, FAILED_REASON.BOOKING_OTP_FAILED);
+      throw error;
+    }
 
-    // Get last 5 verification codes
-    const codes = await getBookingVerificationCodes(jobId);
-    if (!codes || codes.length === 0) {
-      const error = new Error("Failed to get verification codes from email");
-      setFailedReasonCode(error, FAILED_REASON.BOOKING_OTP_CODE_NOT_FOUND);
+    const otpPerSelectorMs = Math.min(8000, Math.max(4000, selectorTimeout / 4));
+    await dualLogInfo(
+      "OTP input ready, polling otp_codes for Booking codes..."
+    );
+    otpInputSelector = await ensureBookingOtpInputSelector(
+      page,
+      otpInputSelector,
+      otpPerSelectorMs
+    );
 
-      // Send public notification for OTP verification failure
+    let currentOtpInputSelector: string = otpInputSelector;
+    let navDetected = false;
+
+    try {
+      await watchOtpCodesFromDb(
+        jobId,
+        OTAProvider.Booking,
+        async (code, _submitIndex, _otpCodeId) => {
+          const outcome = await trySubmitBookingOtpCode(
+            page,
+            code,
+            currentOtpInputSelector,
+            otpPerSelectorMs
+          );
+          currentOtpInputSelector = outcome.otpInputSelector;
+          if (outcome.navDetected) {
+            navDetected = true;
+          }
+          return outcome.result;
+        }
+      );
+    } catch (dbError) {
+      const msg = dbError instanceof Error ? dbError.message : String(dbError);
+      const error =
+        dbError instanceof Error ? dbError : new Error(msg);
+
+      if (msg.includes("Failed to get verification code from otp_codes")) {
+        setFailedReasonCode(error, FAILED_REASON.BOOKING_OTP_CODE_NOT_FOUND);
+      } else {
+        setFailedReasonCode(error, FAILED_REASON.BOOKING_OTP_FAILED);
+      }
+
       try {
         await notificationService.sendPublicNotification({
           title: "Booking.com OTP Verification Failed",
-          message: `Booking.com OTP verification failed. Failed to get verification codes from email. Manual intervention may be required`,
+          message: `Booking.com OTP verification failed. ${msg}. Manual intervention may be required`,
           metadata: {
             jobId,
             propertyId,
-            error: error.message,
+            error: msg,
             failedAt: new Date().toISOString(),
           },
         });
@@ -496,186 +658,6 @@ async function handleBookingOtpVerification(
         );
       }
 
-      throw error;
-    }
-    await dualLogInfo(`Got ${codes.length} verification codes`);
-
-    // Long wait above: main frame may reload; always re-attach to the live OTP field.
-    const otpPerSelectorMs = Math.min(8000, Math.max(4000, selectorTimeout / 4));
-    await dualLogInfo(
-      "Re-resolving OTP input after email wait (page may have reloaded)..."
-    );
-    otpInputSelector = await ensureBookingOtpInputSelector(
-      page,
-      otpInputSelector,
-      otpPerSelectorMs
-    );
-
-    // Try up to 3 codes (1st, 2nd, 3rd)
-    const maxAttempts = Math.min(3, codes.length);
-    let otpSuccess = false;
-    let navDetected = false;
-
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      const code = codes[attempt];
-      await dualLogInfo(
-        `Attempt ${attempt + 1}/${maxAttempts}: Trying OTP ${code}`
-      );
-
-      otpInputSelector = await ensureBookingOtpInputSelector(
-        page,
-        otpInputSelector,
-        otpPerSelectorMs
-      );
-
-      try {
-        await page.type(otpInputSelector, code, { delay: 100 });
-      } catch (e) {
-        if (isStalePageContextError(e)) {
-          await dualLogInfo(
-            "Detached frame while typing OTP; re-resolving input and retrying once..."
-          );
-          otpInputSelector = await ensureBookingOtpInputSelector(
-            page,
-            null,
-            otpPerSelectorMs
-          );
-          await page.type(otpInputSelector, code, { delay: 100 });
-        } else {
-          throw e;
-        }
-      }
-      await delay(1000);
-
-      // Click submit button
-      await submitOtpForm(page);
-
-      // Wait for navigation or a short period so page can update after submit
-      const navPromise = page
-        .waitForNavigation({ timeout: 2500, waitUntil: "domcontentloaded" })
-        .then(() => {
-          navDetected = true;
-          return true;
-        })
-        .catch(() => null);
-      await Promise.race([navPromise, delay(2000)]);
-
-      // Check if OTP was correct by looking for error message; guard against navigation destroying execution context
-      let hasError = false;
-      try {
-        hasError = await page.evaluate(() => {
-          const bodyText = document.body.innerText;
-          return bodyText.includes("Enter a valid verification code");
-        });
-      } catch (e) {
-        if (isStalePageContextError(e)) {
-          await dualLogInfo(
-            "Navigation occurred after submit; assuming OTP succeeded"
-          );
-          otpSuccess = true;
-          navDetected = true;
-          break;
-        }
-
-        throw e;
-      }
-
-      if (hasError) {
-        await dualLogInfo(`Attempt ${attempt + 1} failed: Invalid OTP code`);
-
-        // If this was the 3rd attempt, fail the job
-        if (attempt === 2) {
-          const error = new Error(
-            "OTP verification failed after 3 attempts. All codes were invalid."
-          );
-          setFailedReasonCode(error, FAILED_REASON.BOOKING_OTP_FAILED);
-
-          // Send public notification
-          try {
-            await notificationService.sendPublicNotification({
-              title: "Booking.com OTP Verification Failed",
-              message: `Booking.com OTP verification failed after 3 attempts. All OTP codes were invalid. Manual intervention required.`,
-              metadata: {
-                jobId,
-                propertyId,
-                attemptsCount: 3,
-                codesTriedCount: 3,
-                error: error.message,
-                failedAt: new Date().toISOString(),
-              },
-            });
-          } catch (notificationError) {
-            await dualLogError(
-              `Failed to send OTP failure notification: ${notificationError}`
-            );
-          }
-
-          throw error;
-        }
-
-        // Clear input field after error detected, before trying next code
-        await dualLogInfo("Clearing input field for next attempt...");
-
-        // More robust clearing approach - try multiple methods
-        try {
-          otpInputSelector = await ensureBookingOtpInputSelector(
-            page,
-            otpInputSelector,
-            otpPerSelectorMs
-          );
-          // Method 1: Triple-click to select all, then delete
-          await page.click(otpInputSelector, { clickCount: 3 });
-          await delay(200);
-          await page.keyboard.press("Backspace");
-          await delay(200);
-
-          // Method 2: Use evaluate to clear the value directly
-          await page.evaluate((selector) => {
-            const input = document.querySelector(selector) as HTMLInputElement;
-            if (input) {
-              input.value = "";
-              input.dispatchEvent(new Event("input", { bubbles: true }));
-              input.dispatchEvent(new Event("change", { bubbles: true }));
-            }
-          }, otpInputSelector);
-          await delay(200);
-
-          // Verify the field is actually empty
-          const isEmpty = await page.evaluate((selector) => {
-            const input = document.querySelector(selector) as HTMLInputElement;
-            return input ? input.value === "" : false;
-          }, otpInputSelector);
-
-          if (isEmpty) {
-            await dualLogInfo("✅ Input field cleared successfully");
-          } else {
-            await dualLogInfo(
-              "⚠️ Input field may not be fully cleared, but continuing..."
-            );
-          }
-        } catch (clearError) {
-          await dualLogInfo(
-            `Warning: Error during field clearing: ${clearError}`
-          );
-          // Continue anyway - sometimes the field clears even if we get an error
-        }
-
-        // Continue to next attempt
-        continue;
-      } else {
-        // Success! No error message found
-        await dualLogInfo(`Attempt ${attempt + 1} successful!`);
-        otpSuccess = true;
-        break;
-      }
-    }
-
-    if (!otpSuccess) {
-      const error = new Error("OTP verification failed unexpectedly");
-      setFailedReasonCode(
-        error,
-        inferBookingOtpFailedReasonCode(error.message)
-      );
       throw error;
     }
 

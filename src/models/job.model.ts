@@ -78,6 +78,10 @@ export interface IJob extends Document {
    * filter (matches log "Total reservations collected").
    */
   booking_vccs_filtered_reservation_count?: number;
+  /** True while the scraper is waiting for an OTP code in `otp_codes`. */
+  otp_needed?: boolean;
+  /** True once the job reaches Completed after a successful OTP verification. */
+  otp_fulfilled?: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -277,6 +281,16 @@ const JobSchema = new Schema<IJobWithLegacyOtaBson>(
     booking_vccs_filtered_reservation_count: {
       type: Number,
       required: false,
+    },
+    otp_needed: {
+      type: Boolean,
+      required: false,
+      default: false,
+    },
+    otp_fulfilled: {
+      type: Boolean,
+      required: false,
+      default: false,
     },
   },
   {
