@@ -2,6 +2,10 @@ import bodyParser from "body-parser";
 import cors from "cors";
 import express from "express";
 import { isMainThread } from "worker_threads";
+import {
+  isAuditSmsConfigured,
+  sendAuditStartedSms,
+} from "../common/audit-ready-sms.js";
 import { emailNotifier } from "../common/email-notifier.js";
 import createError from "../common/error.js";
 import { setCurrentWorkerId } from "../common/log-helper.js";
@@ -1025,6 +1029,33 @@ app.post("/api/booking/bulk-property-run-job-grouped", (async (
           status: "submitted",
         });
       }
+    }
+
+    // Best-effort "Audit started" SMS for each submitted job (does not block worker submit).
+    if (isAuditSmsConfigured()) {
+      for (const { jobId } of validJobsData) {
+        try {
+          const jobDoc = await jobService.getJobById(jobId);
+          const reportPhone = jobDoc?.phone_number_for_report?.trim();
+          if (reportPhone) {
+            await sendAuditStartedSms(reportPhone, jobId);
+            console.log(`Audit SMS: audit-started message sent for ${jobId}`);
+          } else {
+            console.log(
+              `Audit SMS: skip (no phone_number_for_report on job) for ${jobId}`
+            );
+          }
+        } catch (smsError) {
+          console.error(
+            `Audit SMS: audit-started send failed for ${jobId}`,
+            smsError
+          );
+        }
+      }
+    } else {
+      console.log(
+        "Audit SMS: skip (neither Ejoin nor Twilio + DEMO_WEBSITE_URL configured)"
+      );
     }
 
     let nextGroupIndex = 0;

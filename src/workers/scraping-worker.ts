@@ -10,6 +10,10 @@ import {
 
 // Import the main functions
 import {
+  isAuditSmsConfigured,
+  sendAuditReadySms,
+} from "../common/audit-ready-sms.js";
+import {
   BookingErrorType,
   getBookingErrorDescription,
   shouldRetryBookingError,
@@ -161,6 +165,51 @@ class ScrapingWorker {
         err,
         { jobId }
       );
+    }
+  }
+
+  /**
+   * After Completed: send audit-ready SMS to `job.phone_number_for_report`.
+   * Failures are logged only; they do not fail the job.
+   */
+  private async maybeSendAuditReadySms(
+    jobId: string,
+    finalStatus: JobStatus | string
+  ): Promise<void> {
+    const isCompleted =
+      finalStatus === JobStatus.Completed || finalStatus === "Completed";
+    if (!isCompleted) return;
+
+    if (!isAuditSmsConfigured()) {
+      await dualLogInfo(
+        `Audit SMS: skip (neither Ejoin nor Twilio + DEMO_WEBSITE_URL configured) for ${jobId}`,
+        { jobId }
+      );
+      return;
+    }
+
+    try {
+      const job = await jobService.getJobById(jobId);
+      if (!job) {
+        await dualLogInfo(`Audit SMS: skip, job not found ${jobId}`, {
+          jobId,
+        });
+        return;
+      }
+      const phone = job.phone_number_for_report?.trim();
+      if (!phone) {
+        await dualLogInfo(
+          `Audit SMS: skip (no phone_number_for_report on job) for ${jobId}`,
+          { jobId }
+        );
+        return;
+      }
+      await sendAuditReadySms(phone, jobId);
+      await dualLogInfo(`Audit SMS: audit-ready message sent`, { jobId });
+    } catch (err) {
+      await dualLogError(`Audit SMS: audit-ready send failed for ${jobId}`, err, {
+        jobId,
+      });
     }
   }
 
@@ -840,6 +889,8 @@ class ScrapingWorker {
         await jobService.updateJobStatus(jobId, finalStatus);
       }
 
+      await this.maybeSendAuditReadySms(jobId, finalStatus);
+
       // Booking-only: Drive XLSX (after status is persisted), whether scrape used single or multi platform inside mainMultiPlatform
       await this.maybeUploadBookingJobItemsToDrive(jobId);
 
@@ -1018,6 +1069,13 @@ class ScrapingWorker {
         propertyIdForDb: bookingGroup[0].propertyId,
         workerAssignmentTag: this.workerPoolAssignmentTag(jobData),
       });
+
+      for (const step of bookingGroup) {
+        const job = await jobService.getJobById(step.jobId);
+        if (job?.job_status) {
+          await this.maybeSendAuditReadySms(step.jobId, job.job_status);
+        }
+      }
 
       return {
         status: 200,

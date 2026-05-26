@@ -82,6 +82,8 @@ export interface IJob extends Document {
   otp_needed?: boolean;
   /** True once the job reaches Completed after a successful OTP verification. */
   otp_fulfilled?: boolean;
+  /** E.164 or provider-accepted number for audit start/ready SMS notifications. */
+  phone_number_for_report?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -291,6 +293,10 @@ const JobSchema = new Schema<IJobWithLegacyOtaBson>(
       type: Boolean,
       required: false,
       default: false,
+    },
+    phone_number_for_report: {
+      type: String,
+      required: false,
     },
   },
   {

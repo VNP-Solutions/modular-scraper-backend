@@ -1,0 +1,216 @@
+import twilio from "twilio";
+
+const SMS_INTRO_READY = "Your Audit is ready please take a look";
+const SMS_INTRO_STARTED = "Your Audit has started";
+
+function demoSiteBase(): string {
+  return (process.env.DEMO_WEBSITE_URL || "").trim().replace(/\/+$/, "");
+}
+
+export function buildAuditReadyUrl(jobId: string): string {
+  return `${demoSiteBase()}/audits/${jobId}`;
+}
+
+export function buildAuditProgressUrl(jobId: string): string {
+  return `${demoSiteBase()}/progress/${jobId}`;
+}
+
+function twilioFromNumber(): string {
+  return (
+    process.env.TWILIO_FROM_NUMBER?.trim() ||
+    process.env.TWILIO_PHONE_NUMBER?.trim() ||
+    ""
+  );
+}
+
+export function isTwilioAuditSmsConfigured(): boolean {
+  const from = twilioFromNumber();
+  return !!(
+    process.env.TWILIO_ACCOUNT_SID?.trim() &&
+    process.env.TWILIO_AUTH_TOKEN?.trim() &&
+    from &&
+    process.env.DEMO_WEBSITE_URL?.trim()
+  );
+}
+
+export function isEjoinAuditSmsConfigured(): boolean {
+  return !!(
+    process.env.EJOIN_SMS_GATEWAY_URL?.trim() &&
+    process.env.EJOIN_SMS_USERNAME?.trim() &&
+    process.env.EJOIN_SMS_PASSWORD?.trim() &&
+    process.env.DEMO_WEBSITE_URL?.trim()
+  );
+}
+
+export function isAuditSmsConfigured(): boolean {
+  return isEjoinAuditSmsConfigured() || isTwilioAuditSmsConfigured();
+}
+
+function ejoinGatewayBase(): string {
+  return (process.env.EJOIN_SMS_GATEWAY_URL || "").trim().replace(/\/+$/, "");
+}
+
+function ejoinFromPort(): number | undefined {
+  const raw = process.env.EJOIN_SMS_FROM_PORT?.trim();
+  if (!raw) return undefined;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < 1 || n > 64) {
+    throw new Error(
+      `Ejoin: EJOIN_SMS_FROM_PORT must be an integer 1–64, got "${raw}"`
+    );
+  }
+  return n;
+}
+
+function ejoinTaskId(): number {
+  return Date.now() % 2_147_000_000;
+}
+
+async function sendAuditSmsViaTwilio(
+  toPhone: string,
+  intro: string,
+  link: string
+): Promise<void> {
+  const sid = process.env.TWILIO_ACCOUNT_SID?.trim();
+  const token = process.env.TWILIO_AUTH_TOKEN?.trim();
+  const from = twilioFromNumber();
+  if (!sid || !token || !from) {
+    throw new Error(
+      "Twilio: missing TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, or TWILIO_FROM_NUMBER / TWILIO_PHONE_NUMBER"
+    );
+  }
+  if (!process.env.DEMO_WEBSITE_URL?.trim()) {
+    throw new Error("Twilio: DEMO_WEBSITE_URL is not set");
+  }
+  const body = `${intro}\n${link}`;
+  const client = twilio(sid, token);
+  await client.messages.create({
+    from,
+    to: toPhone.trim(),
+    body,
+  });
+}
+
+interface EjoinSubmitResponseItem {
+  id?: number;
+  code?: number;
+  reason?: string;
+}
+
+async function sendAuditSmsViaEjoin(
+  toPhone: string,
+  intro: string,
+  link: string
+): Promise<void> {
+  const base = ejoinGatewayBase();
+  const username = process.env.EJOIN_SMS_USERNAME?.trim();
+  const password = process.env.EJOIN_SMS_PASSWORD?.trim();
+  if (!base || !username || !password) {
+    throw new Error(
+      "Ejoin: set EJOIN_SMS_GATEWAY_URL, EJOIN_SMS_USERNAME, EJOIN_SMS_PASSWORD"
+    );
+  }
+  const smsBody = `${intro}\n${link}`;
+
+  const url = new URL(`${base}/submit_sms_tasks`);
+  url.searchParams.set("username", username);
+  url.searchParams.set("password", password);
+
+  const fromPort = ejoinFromPort();
+  const task: Record<string, unknown> = {
+    id: ejoinTaskId(),
+    recipients: [toPhone.trim()],
+    sms: smsBody,
+    charset: "UTF-8",
+    coding: 0,
+    timeout: 30,
+    to_all: false,
+  };
+  if (fromPort !== undefined) {
+    task.from = fromPort;
+  }
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (/ngrok/i.test(base)) {
+    headers["Ngrok-Skip-Browser-Warning"] = "true";
+  }
+
+  const res = await fetch(url.toString(), {
+    method: "POST",
+    headers,
+    body: JSON.stringify([task]),
+  });
+
+  const text = await res.text();
+  let parsed: EjoinSubmitResponseItem[] | null = null;
+  try {
+    parsed = JSON.parse(text) as EjoinSubmitResponseItem[];
+  } catch {
+    // non-JSON body
+  }
+
+  if (!res.ok) {
+    throw new Error(`Ejoin HTTP ${res.status}: ${text.slice(0, 500)}`);
+  }
+
+  if (!Array.isArray(parsed) || parsed.length === 0) {
+    throw new Error(
+      `Ejoin: empty or non-JSON response (${text.slice(0, 200)})`
+    );
+  }
+
+  const first = parsed[0];
+  if (first.code !== undefined && first.code !== 0) {
+    throw new Error(
+      `Ejoin submit_sms_tasks code=${first.code} reason=${first.reason ?? "?"}`
+    );
+  }
+}
+
+async function sendAuditSms(
+  toPhone: string,
+  intro: string,
+  link: string
+): Promise<void> {
+  const mode = (process.env.AUDIT_SMS_PROVIDER || "auto")
+    .trim()
+    .toLowerCase();
+
+  if (mode === "twilio") {
+    return sendAuditSmsViaTwilio(toPhone, intro, link);
+  }
+  if (mode === "ejoin") {
+    return sendAuditSmsViaEjoin(toPhone, intro, link);
+  }
+
+  if (isEjoinAuditSmsConfigured()) {
+    return sendAuditSmsViaEjoin(toPhone, intro, link);
+  }
+  if (isTwilioAuditSmsConfigured()) {
+    return sendAuditSmsViaTwilio(toPhone, intro, link);
+  }
+
+  throw new Error(
+    "No SMS provider configured: set Ejoin (EJOIN_SMS_*) or Twilio (TWILIO_*) + DEMO_WEBSITE_URL"
+  );
+}
+
+export async function sendAuditReadySms(
+  toPhone: string,
+  jobId: string
+): Promise<void> {
+  return sendAuditSms(toPhone, SMS_INTRO_READY, buildAuditReadyUrl(jobId));
+}
+
+export async function sendAuditStartedSms(
+  toPhone: string,
+  jobId: string
+): Promise<void> {
+  return sendAuditSms(
+    toPhone,
+    SMS_INTRO_STARTED,
+    buildAuditProgressUrl(jobId)
+  );
+}

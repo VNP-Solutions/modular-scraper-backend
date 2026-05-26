@@ -35,8 +35,8 @@
     "node-cron": "^3.0.3",
     "node-fetch": "^3.3.2",
     "nodemailer": "^6.9.8",
-    "openai": "^4.104.0",
     "open": "^10.1.2",
+    "openai": "^4.104.0",
     "puppeteer": "^24.15.0",
     "puppeteer-core": "^24.10.2",
     "socket.io": "^4.8.1",
@@ -44,6 +44,7 @@
     "swagger-jsdoc": "^6.2.8",
     "swagger-ui-express": "^5.0.1",
     "tsx": "^4.20.3",
+    "twilio": "^6.0.2",
     "xlsx": "^0.18.5",
     "yamljs": "^0.3.0"
   },
