@@ -69,10 +69,6 @@ import {
   TwoFactorAuthOptions,
 } from "./base-scraper.js";
 
-export enum ScraperContext {
-  JOB = "job",
-  TRUST_VERIFICATION = "trust-verification",
-}
 function jobStatusToLogFinalize(
   status: JobStatus
 ): "success" | "failed" | "partial" {
@@ -85,19 +81,16 @@ export class BookingScraper extends BaseScraper {
   private browserlessToken: string;
   private sessionUrl?: string;
   protected currentPropertyName?: string;
-  private context?: ScraperContext;
   private captchaService: CaptchaService;
   private sessionParams?: { ses: string; lang: string }; // Store session and language parameters
   /** During shared group login, copy screenshot_urls to other property jobs in the group. */
   private bookingGroupScreenshotMirrorJobIds: string[] | null = null;
 
-  constructor(context?: ScraperContext) {
+  constructor() {
     super("booking", "https://admin.booking.com");
     this.browserlessToken =
       process.env.BROWSERLESS_TOKEN ||
       "2SXlnLjeZpwR2tV6ab1698bfe680a3959c2c681f06939ee3b";
-
-    this.context = context;
 
     // Initialize captcha service with configuration
     this.captchaService = new CaptchaService({
@@ -121,7 +114,7 @@ export class BookingScraper extends BaseScraper {
 
   /**
    * Bind a real Mongo job id for OTP phone lock / `phone_number_slots`, and captcha screenshots.
-   * Used when the scraper is not started via {@link executeScraping} (e.g. trust verification on the main thread).
+   * Used when the scraper is not started via {@link executeScraping}.
    */
   public setScraperJobId(jobId: string | undefined): void {
     this.jobId = jobId;
@@ -4442,7 +4435,7 @@ export class BookingScraper extends BaseScraper {
   async cleanup(): Promise<void> {
     try {
       // Clean up screenshots for this job
-      const jobId = this.jobId || `trust_verify-${this.propertyIdForDb}`;
+      const jobId = this.jobId || `booking-${this.propertyIdForDb}`;
       if (jobId) {
         await this.logInfo(`🗑️ Cleaning up screenshots for job: ${jobId}`);
         await this.captchaService.cleanupJobScreenshots(
@@ -4471,7 +4464,7 @@ export class BookingScraper extends BaseScraper {
     }
   }
 
-  // Public method to access the page for trust verification
+  // Public method to access the page
   public async getPage(): Promise<Page | null> {
     return this.page;
   }
@@ -5467,20 +5460,12 @@ export class BookingScraper extends BaseScraper {
   }
 
   /**
-   * Check if scraping should be stopped based on context
-   * TRUST_VERIFICATION context should not be stopped by general scraping state
+   * Check if scraping should be stopped based on scraping state manager.
    */
   private async checkScrapingShouldStop(
     action?: string,
     additionalData?: any
   ): Promise<boolean> {
-    // If this is a trust verification context, don't stop the scraping
-    if (this.context === ScraperContext.TRUST_VERIFICATION) {
-      await dualLogInfo("Trust verification context detected");
-      return false;
-    }
-
-    // For regular job context, check the scraping state
     await scrapingStateManager.waitWhilePaused();
     if (!scrapingStateManager.isRunning()) {
       await dualLogError(
