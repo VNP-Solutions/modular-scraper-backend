@@ -3104,7 +3104,9 @@ export class BookingScraper extends BaseScraper {
     }
   }
 
-  async getReservationRows(): Promise<string[]> {
+  async getReservationRows(): Promise<
+    Array<{ id: string; amount?: string; chargeBefore?: string }>
+  > {
     if (!this.page) throw new Error("Page not initialized");
 
     try {
@@ -3124,19 +3126,36 @@ export class BookingScraper extends BaseScraper {
         const rows = document.querySelectorAll(selectors.reservationRow);
         const ids: any[] = [];
 
+        const extractResIdFromHref = (href: string | null): string | null => {
+          if (!href) return null;
+          const match = href.match(/(?:res_id|hres_id)=(\d+)/i);
+          return match ? match[1] : null;
+        };
+
         rows.forEach((row) => {
           const rowData: any = {};
+          let resId: string | null = null;
+
           const idElement = row.querySelector(selectors.reservationId);
           if (idElement) {
-            const href = idElement.getAttribute("href");
-            if (href) {
-              // Extract reservation ID from href
-              const match = href.match(/res_id=(\d+)/);
-              if (match) {
-                rowData.id = match[1];
-              }
+            resId = extractResIdFromHref(idElement.getAttribute("href"));
+          }
+          if (!resId) {
+            const fallbackLink = row.querySelector(
+              'a[href*="res_id="], a[href*="hres_id="]'
+            );
+            if (fallbackLink) {
+              resId = extractResIdFromHref(
+                fallbackLink.getAttribute("href")
+              );
             }
           }
+          if (!resId) {
+            return;
+          }
+
+          rowData.id = resId;
+
           const amountElement = row.querySelector(selectors.reservationAmount);
           if (amountElement) {
             const amount = amountElement.textContent?.trim();
@@ -3191,6 +3210,13 @@ export class BookingScraper extends BaseScraper {
   ): Promise<{ success: boolean }> {
     if (!this.page) throw new Error("Page not initialized");
     const listPage = this.page;
+
+    if (!reservation?.id) {
+      await this.logError(
+        "Cannot open reservation detail: missing reservation id (hres_id)"
+      );
+      return { success: false };
+    }
 
     try {
       // Check if scraping should continue before clicking reservation detail
@@ -3476,6 +3502,14 @@ export class BookingScraper extends BaseScraper {
     let errorCount = 0;
 
     for (const reservation of reservationIds) {
+      if (!reservation?.id) {
+        errorCount++;
+        await this.logInfo(
+          "Skipping reservation row with no res_id (DOM extraction failed)"
+        );
+        continue;
+      }
+
       // Check if scraping should continue before processing each reservation
       const shouldStop = await this.checkScrapingShouldStop(
         "process_reservations",
@@ -3511,6 +3545,30 @@ export class BookingScraper extends BaseScraper {
     }
 
     return { processed: processedCount, errors: errorCount };
+  }
+
+  /**
+   * Phase 2 after API collection: process only the filtered VCCS list (not every table row).
+   */
+  private async processVccsReservationsFromList(
+    vccsList: VccsApiResponse["data"]["vccs"],
+    jobId?: string,
+    propertyId?: string
+  ): Promise<{ processed: number; errors: number }> {
+    const reservations = vccsList.map((vccs) => ({
+      id: String(vccs.hres_id),
+      amount:
+        vccs.current_amount?.formatted ||
+        vccs.current_amount?.amount ||
+        "",
+      chargeBefore: vccs.expiry_date ?? "",
+    }));
+
+    await this.logInfo(
+      `Processing ${reservations.length} reservation(s) from API filter (hres_id list)`
+    );
+
+    return this.processReservations(reservations, jobId, propertyId);
   }
 
   private isTimeoutReached(
@@ -4360,25 +4418,20 @@ export class BookingScraper extends BaseScraper {
         );
       }
 
-      // ── Phase 2: Process reservation details (payment info only, no cards) ──
+      // Save filtered API rows directly (no reservation-detail tabs / Phase 2 browser flow).
       await this.logInfo(
-        `Phase 2: Processing reservation details for ${allVccs.length} reservations...`
+        `Saving ${allVccs.length} filtered VCCS reservation(s) to database from API...`
       );
 
-      const processingResult = await this.traverseAllReservations({
-        jobId: params.jobId,
-        propertyId: params.propertyIdForDb,
-      });
-
-      await this.logInfo(
-        `Phase 2 complete. Processed: ${processingResult.processed}, Errors: ${processingResult.errors}`
+      const processingResult = await this.saveVccsListFromApi(
+        allVccs,
+        params.jobId,
+        params.propertyIdForDb
       );
 
-      await this.logInfo("VCCS processing results:");
       await this.logInfo(
-        `Successfully processed: ${processingResult.processed} reservations`
+        `VCCS API save complete. Saved: ${processingResult.saved}, Errors: ${processingResult.errors}`
       );
-      await this.logInfo(`Errors encountered: ${processingResult.errors}`);
 
       // Step 4: Take final screenshot
       await this.takeScreenshot();
@@ -4394,9 +4447,9 @@ export class BookingScraper extends BaseScraper {
           viewAllButton: viewAllSuccess,
         },
         vccsProcessing: {
-          processed: processingResult.processed,
+          processed: processingResult.saved,
           errors: processingResult.errors,
-          method: "browser",
+          method: "api",
         },
       };
 
@@ -5312,6 +5365,121 @@ export class BookingScraper extends BaseScraper {
     } catch (error) {
       await this.logError("Failed to extract basic reservation data", error);
       return null;
+    }
+  }
+
+  /**
+   * Persist job items from filtered VCCS API rows (after charge-before / end_date filter).
+   * No browser reservation-detail or card pages.
+   */
+  async saveVccsListFromApi(
+    vccsList: VccsApiResponse["data"]["vccs"],
+    jobId?: string,
+    propertyIdForDb?: string
+  ): Promise<{ saved: number; errors: number }> {
+    if (!jobId || !propertyIdForDb) {
+      throw new Error("jobId and propertyIdForDb are required to save VCCS API data");
+    }
+
+    const previousPropertyId = this.propertyIdForDb;
+    this.propertyIdForDb = propertyIdForDb;
+
+    let saved = 0;
+    let errors = 0;
+
+    try {
+      for (const vccs of vccsList) {
+        await this.throwIfScrapingShouldStop("save_vccs_from_api", {
+          reservationId: vccs.hres_id,
+          jobId,
+        });
+
+        const result = await this.saveVccsItemFromApi(jobId, vccs);
+        if (result) {
+          saved++;
+        } else {
+          errors++;
+        }
+      }
+    } finally {
+      this.propertyIdForDb = previousPropertyId;
+    }
+
+    return { saved, errors };
+  }
+
+  private async saveVccsItemFromApi(
+    jobId: string,
+    vccs: VccsApiResponse["data"]["vccs"][number]
+  ): Promise<boolean> {
+    try {
+      const parseAmount = (amountStr: string): number => {
+        if (!amountStr) return 0;
+        const cleaned = amountStr.replace(/[^\d.-]/g, "");
+        const amount = parseFloat(cleaned);
+        return isNaN(amount) ? 0 : Math.abs(amount);
+      };
+
+      const amountStr =
+        vccs.current_amount?.formatted ||
+        vccs.current_amount?.amount ||
+        "";
+      const amount = parseAmount(amountStr);
+
+      const chargeBefore = vccs.expiry_date ?? "";
+      const parseChargeBeforeDate = (): Date => {
+        if (!chargeBefore) return new Date();
+        const parsed = new Date(chargeBefore);
+        return isNaN(parsed.getTime()) ? new Date() : parsed;
+      };
+      const chargeBeforeDate = parseChargeBeforeDate();
+
+      const reservationId = String(vccs.hres_id);
+      const jobItemData = {
+        job_id: jobId,
+        property_id: this.propertyIdForDb!,
+        guest_name: vccs.booking_legal_entity_name?.trim() || "Unknown Guest",
+        reservation_id: reservationId,
+        confirmation_number: reservationId,
+        check_in_date: chargeBeforeDate,
+        check_out_date: chargeBeforeDate,
+        room_type: "VCCS",
+        booking_amount: amount,
+        booked_date: new Date(),
+        has_card_info: false,
+        has_payment_info: amount > 0,
+        payment_info: {
+          total_guest_payment: amount,
+          total_payout: amount,
+          amount_to_charge_or_refund: amount,
+          amount_to_charge_or_refund_currency:
+            vccs.current_amount?.currency || "",
+          cancellation_fee: 0,
+          charge_before: chargeBefore,
+        },
+        reservation_status: "VCCS Active",
+      };
+
+      const existing = await jobService.findJobItemByReservationId(
+        jobId,
+        reservationId
+      );
+
+      if (existing) {
+        await jobService.updateJobItem(existing._id.toString(), jobItemData);
+        await this.logInfo(`Updated reservation ${reservationId} from VCCS API`);
+      } else {
+        await jobService.createJobItem(jobItemData);
+        await this.logInfo(`Saved reservation ${reservationId} from VCCS API`);
+      }
+
+      return true;
+    } catch (error) {
+      await this.logError(
+        `Failed to save VCCS API row for hres_id ${vccs.hres_id}:`,
+        error
+      );
+      return false;
     }
   }
 
