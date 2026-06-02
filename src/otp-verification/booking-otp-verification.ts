@@ -25,6 +25,7 @@ import {
   OtpSubmitResult,
   watchOtpCodesFromDb,
 } from "./otp-db-poller.js";
+import { phoneNumberSlotService } from "../services/phone-number-slot.service.js";
 
 dotenv.config();
 
@@ -630,6 +631,20 @@ async function handleBookingOtpVerification(
           return outcome.result;
         }
       );
+
+      // OTP accepted — release the phone slot immediately so the number is
+      // available for other jobs as soon as possible. The subsequent release
+      // in scrapeData() and the pool's job-complete/error handlers are
+      // idempotent, so releasing here is safe.
+      if (jobId) {
+        const releaseOtp = (global as any).releaseOtpFromWorker;
+        if (releaseOtp) {
+          releaseOtp(jobId);
+        } else {
+          await phoneNumberSlotService.releaseByJobId(jobId).catch(() => {});
+        }
+        await dualLogInfo("Phone slot released after OTP acceptance");
+      }
     } catch (dbError) {
       const msg = dbError instanceof Error ? dbError.message : String(dbError);
       const error =
