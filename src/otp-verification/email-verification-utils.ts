@@ -563,6 +563,11 @@ export async function getPasswordResetUrl(): Promise<string | null> {
       );
     }
 
+    // Record time before waiting — used to filter out old emails from previous runs.
+    // We subtract a 3-minute buffer to account for any clock skew or delay between
+    // the button click and this function being called.
+    const functionStartSec = Math.floor((Date.now() - 3 * 60 * 1000) / 1000);
+
     // Wait 22-25 seconds for email to arrive (following OTP pattern)
     const waitTime = 22000 + Math.random() * 3000; // 22-25 seconds
     await dualLogInfo(
@@ -574,12 +579,13 @@ export async function getPasswordResetUrl(): Promise<string | null> {
 
     const gmail = google.gmail({ version: "v1", auth: oauth2Client });
 
-    // Fetch latest 5 emails matching the subject
+    // Fetch latest 5 emails matching the subject, received after this job triggered
+    // the reset. The `after:` filter prevents picking up stale emails from previous runs.
     await dualLogInfo("Fetching latest 5 password reset emails...");
     const res = await gmail.users.messages.list({
       userId: "me",
       maxResults: 5,
-      q: 'subject:"Booking.com - Reset your Booking.com password"',
+      q: `subject:"Booking.com - Reset your Booking.com password" after:${functionStartSec}`,
     });
 
     if (!res.data.messages || res.data.messages.length === 0) {
