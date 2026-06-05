@@ -2152,7 +2152,7 @@ export class BookingScraper extends BaseScraper {
 
       // Step 4: Get password reset URL from email
       await this.logInfo("Fetching password reset email...");
-      const resetUrl = await getPasswordResetUrl(); // Waits 22-25s, then fetches latest 5 emails
+      const resetUrl = await getPasswordResetUrl(); // Waits 60s, then fetches reset emails from last 3 min
 
       if (!resetUrl) {
         await this.logError("Could not get password reset URL from email");
@@ -2764,7 +2764,7 @@ export class BookingScraper extends BaseScraper {
 
       // Step 6: Get password reset URL from email
       await this.logInfo("Fetching password reset email...");
-      const resetUrl = await getPasswordResetUrl(); // Waits 22-25s, then fetches latest 5 emails
+      const resetUrl = await getPasswordResetUrl(); // Waits 60s, then fetches reset emails from last 3 min
 
       if (!resetUrl) {
         await this.logError("Could not get password reset URL from email");

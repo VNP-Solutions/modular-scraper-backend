@@ -563,29 +563,29 @@ export async function getPasswordResetUrl(): Promise<string | null> {
       );
     }
 
-    // Record time before waiting — used to filter out old emails from previous runs.
-    // We subtract a 3-minute buffer to account for any clock skew or delay between
-    // the button click and this function being called.
-    const functionStartSec = Math.floor((Date.now() - 3 * 60 * 1000) / 1000);
-
-    // Wait 22-25 seconds for email to arrive (following OTP pattern)
-    const waitTime = 22000 + Math.random() * 3000; // 22-25 seconds
+    // Wait 1 minute so the reset email has time to arrive before we query Gmail.
+    const waitTimeMs =
+      Number(process.env.PASSWORD_RESET_EMAIL_WAIT_MS) || 60 * 1000;
     await dualLogInfo(
-      `Waiting ${Math.round(
-        waitTime / 1000
-      )}s for password reset email to arrive...`
+      `Waiting ${Math.round(waitTimeMs / 1000)}s for password reset email to arrive...`
     );
-    await new Promise((resolve) => setTimeout(resolve, waitTime));
+    await new Promise((resolve) => setTimeout(resolve, waitTimeMs));
 
     const gmail = google.gmail({ version: "v1", auth: oauth2Client });
 
-    // Fetch latest 5 emails matching the subject, received after this job triggered
-    // the reset. The `after:` filter prevents picking up stale emails from previous runs.
-    await dualLogInfo("Fetching latest 5 password reset emails...");
+    // Only consider emails from the last 3 minutes — fresh enough for this run,
+    // but old enough to exclude stale reset links from previous jobs.
+    const lookbackMs =
+      Number(process.env.PASSWORD_RESET_EMAIL_LOOKBACK_MS) || 3 * 60 * 1000;
+    const afterSec = Math.floor((Date.now() - lookbackMs) / 1000);
+
+    await dualLogInfo(
+      `Fetching password reset emails from the last ${Math.round(lookbackMs / 60000)} min (after:${afterSec})...`
+    );
     const res = await gmail.users.messages.list({
       userId: "me",
       maxResults: 5,
-      q: `subject:"Booking.com - Reset your Booking.com password" after:${functionStartSec}`,
+      q: `subject:"Booking.com - Reset your Booking.com password" after:${afterSec}`,
     });
 
     if (!res.data.messages || res.data.messages.length === 0) {
