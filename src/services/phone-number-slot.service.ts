@@ -96,15 +96,40 @@ class PhoneNumberSlotService {
    * At least one `phone_number_slots` row for this phone exists and is Released,
    * and no row for this phone is Occupied.
    * Lock is per phone number only (port/slot does not define a separate lane).
+   *
+   * Auto-heals orphaned slots: {status: Occupied, job_id: null} is an impossible
+   * state from normal code paths (direct DB edits, crashes, etc.) — treat as Released.
    */
   async isPhoneLaneAvailable(phone_number: string): Promise<boolean> {
     const docs = await findLaneDocsByPhone(phone_number);
     if (docs.length === 0) {
       return false;
     }
-    if (
-      docs.some((d) => d.status === PhoneNumberSlotStatus.Occupied)
-    ) {
+
+    // Heal any orphaned slots (Occupied but no job_id — can never be released normally)
+    const orphaned = docs.filter(
+      (d) => d.status === PhoneNumberSlotStatus.Occupied && !d.job_id
+    );
+    if (orphaned.length > 0) {
+      await PhoneNumberSlot.updateMany(
+        {
+          _id: { $in: orphaned.map((d) => d._id) },
+          status: PhoneNumberSlotStatus.Occupied,
+          job_id: null,
+        },
+        { status: PhoneNumberSlotStatus.Released }
+      ).catch((err) =>
+        console.warn("PhoneNumberSlot: orphan heal failed:", err)
+      );
+      console.warn(
+        `PhoneNumberSlot: healed ${orphaned.length} orphaned slot(s) for phone ${phone_number}`
+      );
+      // Re-fetch after healing
+      const healed = await findLaneDocsByPhone(phone_number);
+      return healed.some((d) => d.status === PhoneNumberSlotStatus.Released);
+    }
+
+    if (docs.some((d) => d.status === PhoneNumberSlotStatus.Occupied)) {
       return false;
     }
     return docs.some((d) => d.status === PhoneNumberSlotStatus.Released);
