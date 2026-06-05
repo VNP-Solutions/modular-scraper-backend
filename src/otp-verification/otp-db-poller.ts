@@ -189,6 +189,7 @@ export async function watchOtpCodesFromDb(
         await dualLogInfo(
           `OTP accepted on submit #${submitCount} after ${elapsedSec}s; otp_codes._id=${pendingId} marked used=true.`
         );
+        await setJobOtpFulfilledFlag(jobId);
         await setJobOtpNeededFlag(jobId, false);
         return;
       }
