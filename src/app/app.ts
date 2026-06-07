@@ -1215,29 +1215,29 @@ app.post("/api/booking/stop-job", (async (
     //    (already finished or still queued — queued jobs are also removed here).
     const workerStopped = await otpAwareWorkerPool.stopJob(jobId);
 
-    // 4. Delete the job and all its scraped items from the database.
-    const { deleted, itemsDeleted } = await jobService.deleteJob(jobId);
+    // 4. Update job status to Stopped in the database.
+    const updatedJob = await jobService.updateJobStatus(jobId, JobStatus.Stopped);
 
-    if (!deleted) {
+    if (!updatedJob) {
       return res.status(500).json({
         status: 500,
-        message: `Worker stopped but failed to delete job ${jobId} from database`,
+        message: `Worker stopped but failed to update job ${jobId} status`,
         jobId,
         workerStopped,
       });
     }
 
     console.log(
-      `Booking job ${jobId} stopped, phone slot released, and deleted (wasRunning=${wasRunning}, workerStopped=${workerStopped}, itemsDeleted=${itemsDeleted})`
+      `Booking job ${jobId} stopped and marked as Stopped (wasRunning=${wasRunning}, workerStopped=${workerStopped})`
     );
 
     res.status(200).json({
       status: 200,
-      message: "Booking scraping job stopped and deleted successfully",
+      message: "Booking scraping job stopped successfully",
       jobId,
+      finalStatus: JobStatus.Stopped,
       wasRunning,
       workerStopped,
-      itemsDeleted,
     });
   } catch (err: any) {
     console.error("Error in /api/booking/stop-job:", err);
