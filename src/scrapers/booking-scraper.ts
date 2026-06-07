@@ -15,7 +15,6 @@ import {
   BOOKING_LOGIN_SUCCESS_URLS,
   BOOKING_SELECTORS,
   CAPTCHA_PATTERNS,
-  PASSWORD_RECOVERY_SELECTORS,
   TWO_FA_PATTERNS,
   TWO_FA_TEXT_PATTERNS,
 } from "../common/booking-selectors.js";
@@ -1932,12 +1931,13 @@ export class BookingScraper extends BaseScraper {
       }
 
       if (loginEmail) {
-        const passwordFlowDone = await this.handlePasswordMismatch(loginEmail);
-        if (this.isAlreadyLoggedInOnPage(currentPage)) {
-          return true;
-        }
-        if (passwordFlowDone) {
-          continue;
+        const passwordMismatchDetected =
+          await this.handlePasswordMismatch(loginEmail);
+        if (passwordMismatchDetected) {
+          await this.logError(
+            "Password does not match — failing job immediately"
+          );
+          return false;
         }
       }
 
@@ -2399,8 +2399,8 @@ export class BookingScraper extends BaseScraper {
   }
 
   /**
-   * Handle password mismatch error by resetting password
-   * Returns true if password was reset, false if no error detected
+   * Detects a password mismatch error on the sign-in page.
+   * Returns true if a password error is detected (job should fail), false otherwise.
    */
   async handlePasswordMismatch(username: string): Promise<boolean> {
     if (!this.page) return false;
@@ -2408,56 +2408,35 @@ export class BookingScraper extends BaseScraper {
     try {
       await this.logInfo("Checking for password mismatch error...");
 
-      // Wait a bit for error message to appear
       await this.delay(2000);
 
-      // Check page content for password mismatch patterns - MUST be SPECIFIC!
-      const passwordErrorPageContent = await this.page.content();
+      const pageContent = await this.page.content();
       const currentUrl = this.page.url();
 
-      // Check for specific error messages - be VERY specific!
       const hasUsernamePasswordMismatch =
-        /username and password.*don't match/i.test(passwordErrorPageContent) ||
-        /username and password entered don't match/i.test(
-          passwordErrorPageContent
-        );
-      const hasIncorrectPassword = /password.*incorrect/i.test(
-        passwordErrorPageContent
-      );
-      const hasInvalidCredentials = /invalid.*credentials/i.test(
-        passwordErrorPageContent
-      );
+        /username and password.*don't match/i.test(pageContent) ||
+        /username and password entered don't match/i.test(pageContent);
+      const hasIncorrectPassword = /password.*incorrect/i.test(pageContent);
+      const hasInvalidCredentials = /invalid.*credentials/i.test(pageContent);
       const hasAccountLockWarning =
-        /after \d+ attempts.*account will be locked/i.test(
-          passwordErrorPageContent
-        );
+        /after \d+ attempts.*account will be locked/i.test(pageContent);
+      const hasErrorBlock = /<span class="error-block">/i.test(pageContent);
 
-      // Check for error-block class (Booking.com uses this for actual errors)
-      const hasErrorBlock = /<span class="error-block">/i.test(
-        passwordErrorPageContent
-      );
-
-      // Check if on sign-in page
       const isOnSignInPage =
         currentUrl.includes("sign-in") || currentUrl.includes("login");
 
-      // Check if forgot password button exists
       const hasForgotPasswordButton = /Forgot your password\?/.test(
-        passwordErrorPageContent
+        pageContent
       );
 
-      // Exclude ONLY informational messages (not actual errors)
-      // "password was recently updated" is informational, BUT if it appears with error-block, it might be part of error context
       const isJustInformational =
-        /password was recently updated/i.test(passwordErrorPageContent) &&
+        /password was recently updated/i.test(pageContent) &&
         !hasUsernamePasswordMismatch &&
         !hasIncorrectPassword &&
         !hasInvalidCredentials &&
         !hasAccountLockWarning &&
         !hasErrorBlock;
 
-      // MUST have actual error message AND be on sign-in page AND have forgot password button
-      // AND NOT just be an informational message
       const hasPasswordError =
         (hasUsernamePasswordMismatch ||
           hasIncorrectPassword ||
@@ -2473,539 +2452,26 @@ export class BookingScraper extends BaseScraper {
       );
 
       if (!hasPasswordError) {
-        await this.logInfo(
-          "No password mismatch error detected, continuing..."
-        );
+        await this.logInfo("No password mismatch error detected, continuing...");
         return false;
       }
 
-      await this.logInfo(
-        "Password mismatch error detected, starting password reset flow..."
+      await this.logError(
+        `Password mismatch detected for user "${username}" — job failed due to incorrect credentials`
       );
       await this.takeScreenshot();
 
-      // Check for CAPTCHA/2FA before looking for forgot password button
-      await this.logInfo(
-        "Checking for CAPTCHA/2FA before forgot password button..."
-      );
-      await this.handleCaptcha({ sessionUrl: this.sessionUrl });
-      await this.delay(1000);
-
-      // Step 1: Find and click "Forgot your password?" button
-      await this.logInfo("Looking for 'Forgot your password?' button...");
-      await this.delay(1000);
-
-      // Try multiple approaches to click the button
-      let forgotPasswordClicked = false;
-
-      // Approach 1: Try with selectors using SelectorUtils (most reliable)
-      for (const selector of PASSWORD_RECOVERY_SELECTORS.forgotPasswordButton) {
-        try {
-          await this.logInfo(`Trying selector: ${selector}`);
-          const element = await this.page.$(selector);
-
-          if (element) {
-            await this.logInfo(`Found button with selector: ${selector}`);
-
-            // Scroll into view
-            await this.page.evaluate((el) => {
-              el.scrollIntoView({ behavior: "smooth", block: "center" });
-            }, element);
-            await this.delay(500);
-
-            await this.logInfo(`Clicking 'Forgot your password?' button...`);
-            await element.click();
-            forgotPasswordClicked = true;
-            await this.logInfo(
-              "Successfully clicked 'Forgot your password?' button"
-            );
-            break;
-          }
-        } catch (error) {
-          await this.logInfo(`Selector ${selector} failed, trying next...`);
-          continue;
-        }
-      }
-
-      // Approach 2: Fallback - search by text content
-      if (!forgotPasswordClicked) {
-        await this.logInfo("Trying text-based search as fallback...");
-
-        // Check for CAPTCHA/2FA again before text search
-        await this.handleCaptcha({ sessionUrl: this.sessionUrl });
-        await this.delay(500);
-
-        forgotPasswordClicked = await this.page.evaluate(() => {
-          const buttons = Array.from(document.querySelectorAll("button"));
-          for (const button of buttons) {
-            const buttonText = button.textContent?.trim() || "";
-            if (buttonText.includes("Forgot your password")) {
-              (button as HTMLElement).scrollIntoView({
-                behavior: "smooth",
-                block: "center",
-              });
-              setTimeout(() => {
-                (button as HTMLElement).click();
-              }, 500);
-              return true;
-            }
-          }
-          return false;
-        });
-
-        if (forgotPasswordClicked) {
-          await this.delay(1000);
-          await this.logInfo("Clicked via text search");
-        }
-      }
-
-      if (!forgotPasswordClicked) {
-        // Maybe CAPTCHA/2FA appeared instead of forgot password button
-        await this.logInfo(
-          "Forgot password button not found, checking for CAPTCHA/2FA..."
-        );
-        await this.handleCaptcha({ sessionUrl: this.sessionUrl });
-
-        // Check if we're on 2FA page
-        const currentUrl = this.page.url();
-        const pageContent = await this.page.content();
-        const is2FAPage =
-          TWO_FA_PATTERNS.some((pattern) => currentUrl.includes(pattern)) ||
-          TWO_FA_TEXT_PATTERNS.some((pattern) => pageContent.includes(pattern));
-
-        if (is2FAPage) {
-          await this.logInfo(
-            "2FA page detected instead of forgot password button, handling 2FA..."
-          );
-          await this.handle2FA();
-          // After 2FA, continue with normal flow
-          return false; // Return false to indicate password wasn't mismatched, just 2FA
-        }
-
-        await this.logError(
-          "Could not find or click 'Forgot your password?' button"
-        );
-        await this.takeScreenshot();
-        return false;
-      }
-
-      await this.delay(2000);
-      await this.takeScreenshot();
-
-      // Step 2: Check for captcha and handle it if present
-      await this.logInfo(
-        "Checking for captcha after clicking forgot password button..."
-      );
-      await this.handleCaptcha({
-        sessionUrl: this.sessionUrl,
-      });
-
-      await this.delay(3000);
-
-      // Step 3: Wait for username recovery form
-      await this.logInfo("Waiting for username recovery form...");
-      const formFound = await SelectorUtils.waitForSelector(
-        this.page,
-        PASSWORD_RECOVERY_SELECTORS.usernameRecoveryForm,
-        30000
-      );
-
-      if (!formFound) {
-        await this.logError("Username recovery form not found");
-        await this.takeScreenshot();
-        return false;
-      }
-
-      await this.logInfo(
-        "Username recovery form loaded (username is pre-filled)"
-      );
-      await this.takeScreenshot();
-
-      // Username is already pre-filled in the input field, no need to enter it
-      await this.delay(2000);
-      await this.takeScreenshot();
-
-      // Check for CAPTCHA/2FA before looking for send reset link button
-      await this.logInfo(
-        "Checking for CAPTCHA/2FA before send reset link button..."
-      );
-      await this.handleCaptcha({ sessionUrl: this.sessionUrl });
-      await this.delay(1000);
-
-      // Step 3: Click "Send reset link" button
-      await this.logInfo("Looking for 'Send reset link' button...");
-      await this.delay(1000);
-
-      let sendResetClicked = false;
-
-      // Approach 1: Try with selectors first
-      for (const selector of PASSWORD_RECOVERY_SELECTORS.sendResetLinkButton) {
-        try {
-          await this.logInfo(`Trying selector: ${selector}`);
-          const element = await this.page.$(selector);
-
-          if (element) {
-            await this.logInfo(
-              `Found 'Send reset link' button with selector: ${selector}`
-            );
-
-            // Scroll into view
-            await this.page.evaluate((el) => {
-              el.scrollIntoView({ behavior: "smooth", block: "center" });
-            }, element);
-            await this.delay(500);
-
-            await this.logInfo(`Clicking 'Send reset link' button...`);
-            await element.click();
-            sendResetClicked = true;
-            await this.logInfo("Successfully clicked 'Send reset link' button");
-            break;
-          }
-        } catch (error) {
-          await this.logInfo(`Selector ${selector} failed, trying next...`);
-          continue;
-        }
-      }
-
-      // Approach 2: Fallback - search by text content
-      if (!sendResetClicked) {
-        await this.logInfo("Trying text-based search for 'Send reset link'...");
-
-        // Check for CAPTCHA/2FA again before text search
-        await this.handleCaptcha({ sessionUrl: this.sessionUrl });
-        await this.delay(500);
-
-        sendResetClicked = await this.page.evaluate(() => {
-          const buttons = Array.from(
-            document.querySelectorAll('button[type="submit"], button')
-          );
-          for (const button of buttons) {
-            const buttonText = button.textContent?.trim() || "";
-            if (
-              buttonText.includes("Send reset link") ||
-              buttonText.includes("send reset link")
-            ) {
-              (button as HTMLElement).scrollIntoView({
-                behavior: "smooth",
-                block: "center",
-              });
-              setTimeout(() => {
-                (button as HTMLElement).click();
-              }, 500);
-              return true;
-            }
-          }
-          return false;
-        });
-
-        if (sendResetClicked) {
-          await this.delay(1000);
-          await this.logInfo("Clicked via text search");
-        }
-      }
-
-      if (!sendResetClicked) {
-        // Maybe CAPTCHA/2FA appeared instead of send reset link button
-        await this.logInfo(
-          "Send reset link button not found, checking for CAPTCHA/2FA..."
-        );
-        await this.handleCaptcha({ sessionUrl: this.sessionUrl });
-
-        // Check if we're on 2FA page
-        const currentUrl = this.page.url();
-        const pageContent = await this.page.content();
-        const is2FAPage =
-          TWO_FA_PATTERNS.some((pattern) => currentUrl.includes(pattern)) ||
-          TWO_FA_TEXT_PATTERNS.some((pattern) => pageContent.includes(pattern));
-
-        if (is2FAPage) {
-          await this.logInfo(
-            "2FA page detected instead of send reset link button, handling 2FA..."
-          );
-          await this.handle2FA();
-          // After 2FA, might need to retry the recovery process
-          return false;
-        }
-
-        await this.logError("Could not find or click 'Send reset link' button");
-        await this.takeScreenshot();
-        return false;
-      }
-
-      await this.delay(2000);
-      await this.takeScreenshot();
-
-      // Step 5: Check for captcha and handle it if present
-      await this.logInfo(
-        "Checking for captcha after clicking send reset link button..."
-      );
-      await this.handleCaptcha({
-        sessionUrl: this.sessionUrl,
-      });
-
-      await this.delay(3000);
-
-      // Step 6: Wait for "Check your inbox" confirmation page
-      await this.logInfo("Waiting for 'Check your inbox' confirmation...");
-      const inboxConfirmationFound = await SelectorUtils.waitForSelector(
-        this.page,
-        ACCOUNT_LOCKED_SELECTORS.checkInboxHeader,
-        30000
-      );
-
-      if (!inboxConfirmationFound) {
-        await this.logError("Did not see 'Check your inbox' confirmation page");
-        await this.takeScreenshot();
-        return false;
-      }
-
-      await this.logInfo("'Check your inbox' confirmation page detected");
-      await this.takeScreenshot();
-
-      // Step 6: Get password reset URL from email
-      await this.logInfo("Fetching password reset email...");
-      const resetUrl = await getPasswordResetUrl(); // Waits 60s, then fetches reset emails from last 3 min
-
-      if (!resetUrl) {
-        await this.logError("Could not get password reset URL from email");
-        return false;
-      }
-
-      await this.logInfo(`Password reset URL retrieved: ${resetUrl}`);
-
-      // Step 7: Open reset URL in new tab
-      await this.logInfo("Opening password reset URL in new tab...");
-      let resetPage;
-      try {
-        resetPage = await this.browser!.newPage();
-        await this.logInfo(`Navigating to reset URL: ${resetUrl}`);
-        await resetPage.goto(resetUrl, {
-          waitUntil: "domcontentloaded", // More lenient than networkidle2
-          timeout: 30000,
-        });
-        await this.delay(3000);
-        await this.logInfo("Password reset page loaded successfully");
-      } catch (error) {
-        await this.logError("Error opening password reset page:", error);
-        if (resetPage) {
-          await resetPage.close();
-        }
-        return false;
-      }
-
-      // Step 8: Wait for password reset form
-      await this.logInfo("Waiting for password reset form...");
-      const resetFormFound = await SelectorUtils.waitForSelector(
-        resetPage,
-        ACCOUNT_LOCKED_SELECTORS.passwordResetForm,
-        30000
-      );
-
-      if (!resetFormFound) {
-        await this.logError("Password reset form not found");
-        await resetPage.close();
-        return false;
-      }
-
-      await this.logInfo("Password reset form loaded");
-      await this.delay(2000);
-
-      // Step 9: Generate random password
-      const newPassword = generateRandomPassword(12);
-      await this.logInfo("Generated new random password");
-
-      // Step 10: Enter new password
-      await this.logInfo("Entering new password...");
-      const newPasswordEntered = await SelectorUtils.findAndType(
-        resetPage,
-        ACCOUNT_LOCKED_SELECTORS.newPasswordInput,
-        newPassword
-      );
-
-      if (!newPasswordEntered) {
-        await this.logError("Could not enter new password");
-        await resetPage.close();
-        return false;
-      }
-
-      await this.delay(1000);
-
-      // Step 11: Confirm password
-      await this.logInfo("Confirming password...");
-      const confirmPasswordEntered = await SelectorUtils.findAndType(
-        resetPage,
-        ACCOUNT_LOCKED_SELECTORS.confirmPasswordInput,
-        newPassword
-      );
-
-      if (!confirmPasswordEntered) {
-        await this.logError("Could not confirm password");
-        await resetPage.close();
-        return false;
-      }
-
-      await this.delay(2000);
-
-      // Step 12: Click "Set new password" button
-      await this.logInfo("Clicking 'Set new password' button...");
-      const passwordSet = await SelectorUtils.findAndClick(
-        resetPage,
-        ACCOUNT_LOCKED_SELECTORS.setPasswordButton
-      );
-
-      if (!passwordSet) {
-        await this.logError("Could not click 'Set new password' button");
-        await resetPage.close();
-        return false;
-      }
-
-      await this.logInfo("Clicked 'Set new password' button");
-      await this.delay(3000);
-
-      // Step 13: Password successfully changed on Booking.com
-      // NOW update database and send email
       if (this.jobId) {
-        await this.logInfo(
-          "Password successfully changed on Booking.com, now updating database for all properties with same username (job " +
-            this.jobId +
-            ")"
-        );
-        const updateResult =
-          await propertyPasswordUpdateService.updateBookingPasswordByJobId(
-            this.jobId,
-            newPassword
-          );
-
-        if (updateResult.success) {
-          await this.logInfo(
-            `Booking password updated successfully for ${updateResult.totalUpdated} properties in database`
-          );
-          await this.logInfo(
-            `Affected properties: ${updateResult.affectedProperties
-              .map((p) => p.propertyName)
-              .join(", ")}`
-          );
-
-          // Send password change notification email with all affected properties
-          await this.sendPasswordChangeEmail(
-            newPassword,
-            "Password mismatch detected - password reset required",
-            updateResult
-          );
-        } else {
-          await this.logError(
-            "Failed to update booking password in database after successful Booking.com password change"
-          );
-        }
-      } else {
-        await this.logInfo(
-          "No jobId available, skipping password database update"
+        await jobService.updateJobStatusWithReason(
+          this.jobId,
+          JobStatus.Failed,
+          `Login failed: the password for "${username}" does not match. Please update the credentials and retry.`
         );
       }
-
-      // Step 14: Close the reset tab
-      await this.logInfo("Closing password reset tab...");
-      await resetPage.close();
-
-      await this.logInfo("Password reset process completed successfully");
-      await this.takeScreenshot();
-
-      // Step 14: Navigate back to sign-in page if needed
-      await this.delay(2000);
-      const pageUrl = this.page.url();
-      const recoveryPageContent = await this.page.content();
-
-      if (
-        recoveryPageContent.includes("Check your inbox") ||
-        pageUrl.includes("account-recovery")
-      ) {
-        await this.logInfo("Navigating back to sign-in page...");
-
-        // Try to click "Back to sign-in" link if it exists
-        const backToSignInClicked = await this.page
-          .evaluate(() => {
-            const links = Array.from(
-              document.querySelectorAll('a.nw-link-signin, a[href*="sign-in"]')
-            );
-            for (const link of links) {
-              const linkText = link.textContent?.trim() || "";
-              if (
-                linkText.includes("Back to sign-in") ||
-                linkText.includes("sign-in")
-              ) {
-                (link as HTMLElement).click();
-                return true;
-              }
-            }
-            return false;
-          })
-          .catch(() => false);
-
-        if (!backToSignInClicked) {
-          // If no link found, navigate directly to sign-in page
-          await this.page.goto("https://admin.booking.com/sign-in", {
-            waitUntil: "networkidle2",
-            timeout: 30000,
-          });
-        }
-
-        await this.delay(3000);
-        await this.takeScreenshot();
-      }
-
-      // Wait for sign-in page to load properly
-      await this.delay(3000);
-
-      // Step 15: Fetch new credentials from database and retry login
-      await this.logInfo(
-        "Password reset completed, fetching new credentials from database..."
-      );
-
-      if (!this.jobId) {
-        await this.logError(
-          "No jobId available, cannot fetch new credentials for retry"
-        );
-        return true; // Password was reset, but can't auto-retry
-      }
-
-      const newCredentials =
-        await propertyCredentialsService.getBookingCredentialsFromJob(
-          this.jobId
-        );
-
-      if (!newCredentials || !newCredentials.bookingPassword) {
-        await this.logError(
-          "Could not fetch new credentials from database for retry"
-        );
-        return true; // Password was reset, but can't auto-retry
-      }
-
-      // Decrypt the new password
-      const decryptedPassword = decryptPassword(newCredentials.bookingPassword);
-      await this.logInfo("New credentials fetched and decrypted successfully");
-
-      // Step 16: Retry login with new credentials using existing login method
-      await this.logInfo(
-        "Retrying login with new password using login method..."
-      );
-
-      await this.login(
-        {
-          email: newCredentials.bookingUsername || "",
-          password: decryptedPassword,
-        },
-        newCredentials.propertyId,
-        true // skipAlreadyLogged = true to force re-login
-      );
-
-      await this.logInfo(
-        "Login retry completed with new password, continuing main flow..."
-      );
 
       return true;
     } catch (error) {
-      await this.logError("Error handling password mismatch:", error);
-      await this.takeScreenshot();
+      await this.logError("Error checking for password mismatch:", error);
       return false;
     }
   }
