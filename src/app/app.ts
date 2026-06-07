@@ -888,14 +888,14 @@ app.post("/api/scraping/stop", (async (
  *   post:
  *     tags:
  *       - Scraping Jobs
- *     summary: Stop and delete a running Expedia/Agoda scraping job
+ *     summary: Stop a running Expedia/Agoda scraping job
  *     description: |
- *       Stops a running Expedia or Agoda scraping job and deletes it from the database.
+ *       Stops a running Expedia or Agoda scraping job and updates its status to Stopped.
  *       - Sets the in-memory scraping flag to stopped so the scraper exits its loop
  *       - Force-terminates the worker thread holding the job
  *       - Releases the OTP slot if it was occupied by this job
  *       - Recreates a fresh worker thread ready for the next job
- *       - Deletes the job and all its scraped items from the database
+ *       - Updates the job status to Stopped in the database
  *     requestBody:
  *       required: true
  *       content:
@@ -922,19 +922,19 @@ app.post("/api/scraping/stop", (async (
  *                   example: 200
  *                 message:
  *                   type: string
- *                   example: "Expedia scraping job stopped and deleted successfully"
+ *                   example: "Expedia scraping job stopped successfully"
  *                 jobId:
  *                   type: string
  *                   example: "507f1f77bcf86cd799439011"
+ *                 finalStatus:
+ *                   type: string
+ *                   example: "Stopped"
  *                 wasRunning:
  *                   type: boolean
  *                   description: Whether the scraping state manager was actively running
  *                 workerStopped:
  *                   type: boolean
  *                   description: Whether the worker thread was found and force-terminated
- *                 itemsDeleted:
- *                   type: integer
- *                   description: Number of job items deleted from the database
  *       400:
  *         description: jobId is missing
  *       404:
@@ -977,29 +977,29 @@ app.post("/api/expedia/stop-job", (async (
     //    (already finished or still queued — queued jobs are also removed here).
     const workerStopped = await otpAwareWorkerPool.stopJob(jobId);
 
-    // 4. Delete the job and all its items from the database.
-    const { deleted, itemsDeleted } = await jobService.deleteJob(jobId);
+    // 4. Update job status to Stopped in the database.
+    const updatedJob = await jobService.updateJobStatus(jobId, JobStatus.Stopped);
 
-    if (!deleted) {
+    if (!updatedJob) {
       return res.status(500).json({
         status: 500,
-        message: `Worker stopped but failed to delete job ${jobId} from database`,
+        message: `Worker stopped but failed to update job ${jobId} status`,
         jobId,
         workerStopped,
       });
     }
 
     console.log(
-      `Expedia job ${jobId} stopped, OTP released, and deleted (wasRunning=${wasRunning}, workerStopped=${workerStopped}, itemsDeleted=${itemsDeleted})`
+      `Expedia job ${jobId} stopped and marked as Stopped (wasRunning=${wasRunning}, workerStopped=${workerStopped})`
     );
 
     return res.status(200).json({
       status: 200,
-      message: "Expedia scraping job stopped and deleted successfully",
+      message: "Expedia scraping job stopped successfully",
       jobId,
+      finalStatus: JobStatus.Stopped,
       wasRunning,
       workerStopped,
-      itemsDeleted,
     });
   } catch (err: any) {
     console.error("Error in /api/expedia/stop-job:", err);
