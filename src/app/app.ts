@@ -1177,14 +1177,14 @@ app.post("/api/booking/stop-job", (async (
       });
     }
 
-    // 2. Stop the scraping operation
+    // 2. Stop the scraping state flag so the scraper exits its loop
     const wasRunning = scrapingStateManager.isRunning();
     if (wasRunning) {
       scrapingStateManager.stopScraping();
-      console.log(`Stopping scraping for job ${jobId}`);
+      console.log(`Stopping scraping state for job ${jobId}`);
     }
 
-    // 3. Update job status to Failed
+    // 3. Update job status to Failed in DB
     const updatedJob = await jobService.updateJobStatus(
       jobId,
       JobStatus.Failed
@@ -1196,7 +1196,14 @@ app.post("/api/booking/stop-job", (async (
       });
     }
 
-    console.log(`Job ${jobId} has been stopped and marked as Failed`);
+    // 4. Force-stop the worker thread, release OTP/phone slot, and free the
+    //    worker for the next queued job. workerStopped=false just means the job
+    //    was not found as the active job on any thread (already finished or never
+    //    started), which is not an error.
+    const workerStopped = await otpAwareWorkerPool.stopJob(jobId);
+    console.log(
+      `Job ${jobId} has been stopped and marked as Failed (workerStopped=${workerStopped})`
+    );
 
     res.status(200).json({
       status: 200,
@@ -1204,6 +1211,7 @@ app.post("/api/booking/stop-job", (async (
       jobId,
       finalStatus: JobStatus.Failed,
       wasRunning,
+      workerStopped,
     });
   } catch (err: any) {
     console.error("Error in /api/booking/stop-job:", err);
