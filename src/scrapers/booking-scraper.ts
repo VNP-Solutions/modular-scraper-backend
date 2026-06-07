@@ -4313,15 +4313,17 @@ export class BookingScraper extends BaseScraper {
         try {
           const job = await jobService.getJobById(params.jobId);
           if (job && job.end_date) {
-            // Parse end_date from MM/DD/YYYY format to UTC midnight
+            // Parse end_date from MM/DD/YYYY format to UTC midnight,
+            // advancing the year by 1 (same day/month, next year).
             const [month, day, year] = job.end_date.split("/");
+            const nextYear = parseInt(year) + 1;
             endDateForFilter = new Date(
-              Date.UTC(parseInt(year), parseInt(month) - 1, parseInt(day))
+              Date.UTC(nextYear, parseInt(month) - 1, parseInt(day))
             );
             await this.logInfo(
               `Found end_date in job: ${
                 job.end_date
-              } (parsed as ${endDateForFilter.toISOString()})`
+              } (using next-year date: ${endDateForFilter.toISOString()})`
             );
           } else {
             await this.logInfo(
