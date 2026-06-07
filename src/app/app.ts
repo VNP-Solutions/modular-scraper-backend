@@ -1201,33 +1201,43 @@ app.post("/api/booking/stop-job", (async (
       });
     }
 
-    // 2. Stop the scraping operation
+    // 2. Stop the scraping state flag so the scraper exits its loop gracefully
     const wasRunning = scrapingStateManager.isRunning();
     if (wasRunning) {
       scrapingStateManager.stopScraping();
-      console.log(`Stopping scraping for job ${jobId}`);
+      console.log(`Stopping scraping state for booking job ${jobId}`);
     }
 
-    // 3. Update job status to Failed
-    const updatedJob = await jobService.updateJobStatus(
-      jobId,
-      JobStatus.Failed
-    );
-    if (!updatedJob) {
+    // 3. Force-stop the worker thread and release the phone_number_slots row
+    //    held by this job. releaseJobOtpResources inside stopJob calls
+    //    phoneNumberSlotService.releaseByJobId(jobId) for Booking job types.
+    //    workerStopped=false means the job was not found on any active thread
+    //    (already finished or still queued — queued jobs are also removed here).
+    const workerStopped = await otpAwareWorkerPool.stopJob(jobId);
+
+    // 4. Delete the job and all its scraped items from the database.
+    const { deleted, itemsDeleted } = await jobService.deleteJob(jobId);
+
+    if (!deleted) {
       return res.status(500).json({
         status: 500,
-        message: `Failed to update job ${jobId} status`,
+        message: `Worker stopped but failed to delete job ${jobId} from database`,
+        jobId,
+        workerStopped,
       });
     }
 
-    console.log(`Job ${jobId} has been stopped and marked as Failed`);
+    console.log(
+      `Booking job ${jobId} stopped, phone slot released, and deleted (wasRunning=${wasRunning}, workerStopped=${workerStopped}, itemsDeleted=${itemsDeleted})`
+    );
 
     res.status(200).json({
       status: 200,
-      message: "Booking scraping job stopped successfully",
+      message: "Booking scraping job stopped and deleted successfully",
       jobId,
-      finalStatus: JobStatus.Failed,
       wasRunning,
+      workerStopped,
+      itemsDeleted,
     });
   } catch (err: any) {
     console.error("Error in /api/booking/stop-job:", err);
