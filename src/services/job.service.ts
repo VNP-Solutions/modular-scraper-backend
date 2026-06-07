@@ -869,6 +869,24 @@ export class JobService {
   }
 
   /**
+   * Delete a job and all its items from the database
+   */
+  async deleteJob(jobId: string): Promise<{ deleted: boolean; itemsDeleted: number }> {
+    try {
+      const objectId = this.validateObjectId(jobId, "jobId");
+      const itemsResult = await JobItem.deleteMany({ job_id: objectId });
+      const jobResult = await Job.findByIdAndDelete(objectId);
+      return {
+        deleted: !!jobResult,
+        itemsDeleted: itemsResult.deletedCount || 0,
+      };
+    } catch (error) {
+      console.error(`Error deleting job ${jobId}: ${error}`);
+      return { deleted: false, itemsDeleted: 0 };
+    }
+  }
+
+  /**
    * Delete job items for a job
    */
   async deleteJobItems(jobId: string): Promise<{ deletedCount: number }> {
