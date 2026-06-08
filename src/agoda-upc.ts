@@ -6,7 +6,6 @@ import {
   isRecoverableUpcNavigationError,
   openBookingListPage,
   recoverUpcBookingListTab,
-  releaseUpcOtp,
   type UpcCollectSession,
 } from "./agoda/upc/upc-booking-flow.js";
 import { delay } from "./common/delay.js";
@@ -25,8 +24,6 @@ export interface AgodaUpcPhaseResult {
 }
 
 export { ReservationIdQueue };
-
-const RELEASE_OTP_AFTER_N_RESERVATIONS = 5;
 
 /**
  * Consumes reservation IDs from a queue (fed while API mapping runs, or pre-filled for batch).
@@ -239,30 +236,6 @@ export async function runAgodaUpcPhaseStreaming(
       }
       } finally {
         gate?.notifyReservationComplete(bookingId);
-
-        /**
-         * Limited safety net: if the OTP slot is still held after
-         * `RELEASE_OTP_AFTER_N_RESERVATIONS` reservations, release it now so
-         * other queued jobs can use it while this job keeps scraping the
-         * remaining bookings. Covers two cases the normal release path
-         * (`releaseUpcOtp` after payout OTP verified) does NOT handle:
-         *   1) No booking on this property ever requires payout OTP.
-         *   2) Every OTP attempt failed (so verification never succeeded).
-         * Without this, the slot would only be freed by the end-of-phase
-         * safety net below, which can take a long time on big properties.
-         * `releaseUpcOtp` is guarded by `session.otpReleased`, so this is a
-         * no-op once already released.
-         */
-        if (
-          !upcCollectSessionRef.otpReleased &&
-          processed >= RELEASE_OTP_AFTER_N_RESERVATIONS
-        ) {
-          releaseUpcOtp(
-            jobId,
-            upcCollectSessionRef,
-            `${processed} reservations processed without normal release (threshold ${RELEASE_OTP_AFTER_N_RESERVATIONS}) — limited safety net`
-          );
-        }
       }
     }
 
@@ -298,16 +271,6 @@ export async function runAgodaUpcPhaseStreaming(
       bookingIdsFailed: failed.length > 0 ? failed : [],
     };
   } finally {
-    /**
-     * Safety net: if we never hit the "after OTP verified" or "no OTP needed"
-     * release points (e.g. UPC phase crashed mid-booking while still owning
-     * the OTP slot), release here so the pool doesn't stay blocked for other
-     * jobs. `releaseUpcOtp` is a no-op if already released or if this job
-     * no longer owns the slot. Same role as the end-of-job release in
-     * `agoda-retrieval-proxy/booking-retriveal-data.ts`.
-     */
-    releaseUpcOtp(jobId, upcCollectSessionRef, "UPC phase finished");
-
     if (listPage) {
       try {
         await listPage.close();

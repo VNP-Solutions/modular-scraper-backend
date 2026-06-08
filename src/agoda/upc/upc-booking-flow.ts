@@ -1514,12 +1514,6 @@ export async function collectUpcForBookingId(
   const mode = await waitForUpcOrOtpIframe(page, jobId);
   if (mode === "otp") {
     await fillPayoutOtpInFrame(page, jobId, agodaUsername);
-    /**
-     * OTP was accepted — release the slot now so other queued jobs can use it
-     * while this job keeps scraping the remaining reservations. Same pattern
-     * as `agoda-retrieval-proxy/retriveal-data.ts` (~line 1711).
-     */
-    releaseUpcOtp(jobId, session, "after payout OTP verified");
     const reOk = await reSearchThenOpenGetPayout(
       page,
       bookingListUrl,

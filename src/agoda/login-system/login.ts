@@ -15,6 +15,7 @@ import {
 } from "../../common/screenshot-helper.js";
 import { timeManager } from "../../common/time-manager.js";
 import { timeoutManager } from "../../common/timeout-manager.js";
+import { otpCompletionNotifier } from "../../common/otp-completion-notifier.js";
 import { cleanupOnError } from "../utils/error-cleanup.js";
 import { getAgodaSignInLink } from "./email-link-helper.js";
 import { getAgodaOtpCode } from "./email-otp-helper.js";
@@ -336,17 +337,9 @@ async function agodaLogin(
         try {
           await handleDirectLinkFlow(page, jobId);
 
-          /**
-           * Do NOT release the OTP here — the Get Payout flow may still need
-           * it for payout verification. Release happens in the UPC phase
-           * (`releaseUpcOtp`) after payout OTP is verified, or immediately if
-           * Get Payout shows the UPC widget without a verification panel. This
-           * matches the `agoda-retrieval-proxy` branch.
-           */
           if (jobId) {
-            await dualLogInfo(
-              "OTP kept occupied — will release after Get Payout verification (or if no payout OTP is needed)"
-            );
+            otpCompletionNotifier.notifyOtpCompleted(jobId);
+            await dualLogInfo("OTP released after login (email link flow)");
           }
         } catch (directLinkError: any) {
           await dualLogError(
@@ -372,17 +365,9 @@ async function agodaLogin(
             jobId
           );
 
-          /**
-           * Do NOT release the OTP here — the Get Payout flow may still need
-           * it for payout verification. Release happens in the UPC phase
-           * (`releaseUpcOtp`) after payout OTP is verified, or immediately if
-           * Get Payout shows the UPC widget without a verification panel. This
-           * matches the `agoda-retrieval-proxy` branch.
-           */
           if (jobId) {
-            await dualLogInfo(
-              "OTP kept occupied — will release after Get Payout verification (or if no payout OTP is needed)"
-            );
+            otpCompletionNotifier.notifyOtpCompleted(jobId);
+            await dualLogInfo("OTP released after login (OTP form flow)");
           }
         } catch (otpError: any) {
           await dualLogError("Error during OTP flow:", otpError);
