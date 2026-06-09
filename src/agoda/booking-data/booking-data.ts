@@ -19,12 +19,6 @@ import {
   fetchBookingDataFromAPI,
   mapApiResponseToCsvRecords,
 } from "../api/booking-api.js";
-import {
-  ReservationIdQueue,
-  runAgodaUpcPhase,
-  runAgodaUpcPhaseStreaming,
-} from "../../agoda-upc.js";
-import { UpcReservationGate } from "../upc-reservation-gate.js";
 import { automateNeedHelpWithCleanup } from "../need-help/need-help.js";
 import {
   checkAndDeleteExistingFile,
@@ -516,9 +510,7 @@ export async function getAgodaBookingData(
   agodaId: string,
   startDate: string,
   endDate: string,
-  jobId?: string,
-  /** Passed through to UPC phase (parallel with export / Need Help) for logging only */
-  agodaUsername?: string
+  jobId?: string
 ): Promise<any[]> {
   let newPage: Page | undefined;
   let client: any;
@@ -881,12 +873,6 @@ export async function getAgodaBookingData(
 
     // Fetch booking data from API
     let apiResponse: any;
-    let upcReservationQueue: ReservationIdQueue | null = null;
-    let upcReservationGate: UpcReservationGate | null = null;
-    let upcStreamingPromise: ReturnType<
-      typeof runAgodaUpcPhaseStreaming
-    > | null = null;
-    let incrementalPropertyId: string | undefined;
 
     try {
       apiResponse = await fetchBookingDataFromAPI(
@@ -897,76 +883,16 @@ export async function getAgodaBookingData(
         jobId
       );
 
-      if (jobId) {
-        const jobPeek = await jobService.getJobById(jobId);
-        incrementalPropertyId = jobPeek?.property_id?.toString();
-      }
-
-      // UPC on a separate tab; API mapping waits for UPC to finish each reservation before fetching the next summary (avoids session churn during payout/OTP).
-      if (jobId && incrementalPropertyId) {
-        upcReservationQueue = new ReservationIdQueue();
-        upcReservationGate = new UpcReservationGate();
-        upcStreamingPromise = runAgodaUpcPhaseStreaming(browser, {
-          jobId,
-          agodaId,
-          agodaUsername,
-          listStartDate: effectiveStartDate,
-          listEndDate: effectiveEndDate,
-          queue: upcReservationQueue,
-          gate: upcReservationGate,
-        });
-      }
-
       // Map API response to CsvRecord format (fetches additional details for each booking)
       // Pass formatted dates (DD-MM-YYYY) for Referer header in API calls
-      const propertyIdForIncrementalSave =
-        incrementalPropertyId && jobId ? incrementalPropertyId : undefined;
-
       formattedRecords = await mapApiResponseToCsvRecords(
         apiResponse,
         newPage,
         agodaId,
         formattedStartDate, // DD-MM-YYYY format for Referer header
         formattedEndDate, // DD-MM-YYYY format for Referer header
-        jobId,
-        propertyIdForIncrementalSave
-          ? {
-              onEachMappedRecord: async (record, meta) => {
-                const jid = jobId;
-                const pid = propertyIdForIncrementalSave;
-                if (!jid || !pid) return;
-                try {
-                  const jobItemData = mapCsvToJobItem(record, jid, pid);
-                  await jobService.createJobItem(jobItemData);
-                  const rid = record.BookingIDExternal_reference_ID?.trim();
-                  if (
-                    meta.source === "main" &&
-                    rid &&
-                    upcReservationQueue &&
-                    upcReservationGate
-                  ) {
-                    const done =
-                      upcReservationGate.waitUntilUpcDoneForReservation(rid);
-                    upcReservationQueue.enqueue(rid);
-                    await done;
-                  }
-                } catch (persistErr: unknown) {
-                  await dualLogError(
-                    "Incremental save during API mapping failed",
-                    persistErr instanceof Error
-                      ? persistErr.message
-                      : String(persistErr),
-                    { jobId }
-                  );
-                }
-              },
-            }
-          : undefined
+        jobId
       );
-
-      if (upcReservationQueue) {
-        upcReservationQueue.close();
-      }
 
       // Filter out records that don't have a valid BookingIDExternal_reference_ID
       formattedRecords = formattedRecords.filter((record) => {
@@ -1003,37 +929,7 @@ export async function getAgodaBookingData(
       if (jobId) {
         await takeSuccessScreenshot(newPage, jobId, "api_call_completed");
       }
-
-      if (upcStreamingPromise) {
-        try {
-          const upcResult = await upcStreamingPromise;
-          await dualLogInfo(
-            "Agoda UPC streaming finished (overlapped booking-summary API mapping)",
-            {
-              jobId,
-              bookingIdsRequested: upcResult.bookingIdsRequested,
-              bookingIdsSucceeded: upcResult.bookingIdsSucceeded,
-              bookingIdsFailed: upcResult.bookingIdsFailed?.length ?? 0,
-            }
-          );
-        } catch (upcStreamingErr: unknown) {
-          await dualLogError(
-            "Agoda UPC streaming error (job continues):",
-            upcStreamingErr instanceof Error
-              ? upcStreamingErr.message
-              : String(upcStreamingErr),
-            { jobId }
-          );
-        }
-      }
     } catch (apiError: any) {
-      upcReservationQueue?.close();
-      if (upcStreamingPromise) {
-        await upcStreamingPromise.catch(() => {
-          /* drain streaming UPC after API/map failure */
-        });
-      }
-
       await dualLogError(
         "Error fetching booking data from API:",
         apiError.message,
@@ -1115,141 +1011,74 @@ export async function getAgodaBookingData(
         if (job && job.property_id) {
           const propertyIdForDb = job.property_id.toString();
 
-          let saveResult: { saved: number; errors: number };
+          await dualLogInfo(
+            `Starting database save with property_id: ${propertyIdForDb}`,
+            { jobId, propertyIdForDb }
+          );
 
-          if (incrementalPropertyId) {
-            await dualLogInfo(
-              `Job items were persisted during API mapping; skipping batch save`,
-              {
+          const saveResult = await saveCsvRecordsToDatabase(
+            formattedRecords,
+            jobId,
+            propertyIdForDb
+          );
+
+          await dualLogInfo(
+            `Database save completed: ${saveResult.saved} saved, ${saveResult.errors} errors`,
+            { jobId, saveResult }
+          );
+
+          if (saveResult.saved > 0) {
+            try {
+              await dualLogInfo(
+                `Starting CSV export after successful database save`,
+                { jobId, propertyIdForDb }
+              );
+
+              await exportBookingDataToCsv(
                 jobId,
                 propertyIdForDb,
-                recordCount: formattedRecords.length,
-              }
-            );
-            saveResult = {
-              saved: formattedRecords.length,
-              errors: 0,
-            };
-          } else {
-            await dualLogInfo(
-              `Starting database save with property_id: ${propertyIdForDb}`,
-              { jobId, propertyIdForDb }
-            );
+                job.property_name
+              );
 
-            saveResult = await saveCsvRecordsToDatabase(
-              formattedRecords,
-              jobId,
-              propertyIdForDb
-            );
+              await dualLogInfo(`CSV export completed successfully`, {
+                jobId,
+                propertyIdForDb,
+              });
 
-            await dualLogInfo(
-              `Database save completed: ${saveResult.saved} saved, ${saveResult.errors} errors`,
-              { jobId, saveResult }
-            );
-          }
-
-          const canExport =
-            Boolean(incrementalPropertyId) || saveResult.saved > 0;
-
-          if (canExport) {
-            const upcReservationIds = [
-              ...new Set(
-                formattedRecords
-                  .map((r) => r.BookingIDExternal_reference_ID?.trim())
-                  .filter((id): id is string => Boolean(id))
-              ),
-            ];
-
-            const runUpcParallel = async () => {
-              if (incrementalPropertyId) {
-                await dualLogInfo(
-                  "Agoda UPC already ran during API mapping (streaming) — skipping second UPC pass",
-                  { jobId }
-                );
-                return;
-              }
-              if (!jobId || upcReservationIds.length === 0) return;
               try {
                 await dualLogInfo(
-                  `Agoda UPC: starting in parallel with export/Need Help (${upcReservationIds.length} reservation(s), own browser tab)`,
-                  { jobId }
-                );
-                const upcResult = await runAgodaUpcPhase(browser, {
-                  jobId,
-                  agodaId,
-                  bookingIds: upcReservationIds,
-                  agodaUsername,
-                  listStartDate: effectiveStartDate,
-                  listEndDate: effectiveEndDate,
-                });
-                await dualLogInfo("Agoda UPC phase summary (parallel path)", {
-                  jobId,
-                  ...upcResult,
-                });
-              } catch (upcErr: unknown) {
-                await dualLogError(
-                  "Agoda UPC parallel phase error (job continues):",
-                  upcErr instanceof Error ? upcErr.message : upcErr,
-                  { jobId }
-                );
-              }
-            };
-
-            const runExportAndNeedHelp = async () => {
-              try {
-                await dualLogInfo(
-                  `Starting CSV export after successful database save`,
+                  `Starting Need Help automation with cleanup after CSV export`,
                   { jobId, propertyIdForDb }
                 );
 
-                await exportBookingDataToCsv(
+                await automateNeedHelpWithCleanup(newPage, {
                   jobId,
-                  propertyIdForDb,
-                  job.property_name
-                );
-
-                await dualLogInfo(`CSV export completed successfully`, {
-                  jobId,
-                  propertyIdForDb,
+                  cleanupAfter: true,
+                  agodaId: agodaId,
+                  propertyName: job.property_name,
                 });
 
-                try {
-                  await dualLogInfo(
-                    `Starting Need Help automation with cleanup after CSV export`,
-                    { jobId, propertyIdForDb }
-                  );
-
-                  await automateNeedHelpWithCleanup(newPage, {
+                await dualLogInfo(
+                  `Need Help automation with cleanup completed`,
+                  {
                     jobId,
-                    cleanupAfter: true,
-                    agodaId: agodaId,
-                    propertyName: job.property_name,
-                  });
-
-                  await dualLogInfo(
-                    `Need Help automation with cleanup completed`,
-                    {
-                      jobId,
-                      propertyIdForDb,
-                    }
-                  );
-                } catch (chatError: any) {
-                  await dualLogError(
-                    `Error during Need Help automation (continuing with job completion):`,
-                    chatError.message,
-                    { jobId }
-                  );
-                }
-              } catch (csvExportError: any) {
+                    propertyIdForDb,
+                  }
+                );
+              } catch (chatError: any) {
                 await dualLogError(
-                  `Error during CSV export (continuing with job completion):`,
-                  csvExportError.message,
+                  `Error during Need Help automation (continuing with job completion):`,
+                  chatError.message,
                   { jobId }
                 );
               }
-            };
-
-            await Promise.all([runUpcParallel(), runExportAndNeedHelp()]);
+            } catch (csvExportError: any) {
+              await dualLogError(
+                `Error during CSV export (continuing with job completion):`,
+                csvExportError.message,
+                { jobId }
+              );
+            }
           } else {
             await dualLogInfo(
               `Skipping CSV export - no records were saved to database`,
