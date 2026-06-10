@@ -25,6 +25,8 @@ export interface BookingRowData {
   guest_name: string;
   check_in_date: Date | null;
   check_out_date: Date | null;
+  check_in_str: string | null;
+  check_out_str: string | null;
   reservation_status: string;
   room_type: string;
 }
@@ -91,15 +93,18 @@ async function persistBookingRowData(
       {
         jobId,
         bookingId,
+        check_in_str: rowData.check_in_str,
+        check_out_str: rowData.check_out_str,
         check_in_date: rowData.check_in_date?.toISOString(),
         check_out_date: rowData.check_out_date?.toISOString(),
       }
     );
+    return;
   }
 
   try {
-    const checkIn = rowData.check_in_date ?? new Date();
-    const checkOut = rowData.check_out_date ?? checkIn;
+    const checkIn = rowData.check_in_date;
+    const checkOut = rowData.check_out_date;
     const updated = await retrievalService.updateRetrievalItemGuestAndDates(
       retrievalId,
       bookingId,
@@ -165,39 +170,20 @@ export async function extractBookingRowData(
         const tds = row.querySelectorAll("td");
         let checkInStr: string | null = null;
         let checkOutStr: string | null = null;
-        const datePattern = /[A-Za-z]{3,}\s+\d{1,2},\s*\d{4}/;
-        const dateRangePattern =
-          /([A-Za-z]{3,}\s+\d{1,2},\s*\d{4})\s*-\s*([A-Za-z]{3,}\s+\d{1,2},\s*\d{4})/;
 
-        for (const td of Array.from(tds)) {
-          const cellText = (td.textContent || "").trim();
-          if (!datePattern.test(cellText)) continue;
-
-          const datePs = td.querySelectorAll("p");
-          const texts = Array.from(datePs)
-            .map((p) => (p.textContent || "").trim())
-            .filter(Boolean);
-
-          if (texts.length >= 2) {
-            checkInStr = texts[0].replace(/\s*-\s*$/, "").trim() || null;
-            checkOutStr = texts[1] || null;
-          } else if (texts.length === 1) {
-            const full = texts[0];
-            const rangeMatch = full.match(dateRangePattern);
-            if (rangeMatch) {
-              checkInStr = rangeMatch[1];
-              checkOutStr = rangeMatch[2];
-            } else {
-              checkInStr = full.replace(/\s*-\s*$/, "").trim() || null;
-            }
-          } else {
-            const rangeMatch = cellText.match(dateRangePattern);
-            if (rangeMatch) {
-              checkInStr = rangeMatch[1];
-              checkOutStr = rangeMatch[2];
-            }
+        // Date cell: td[2] — first <p> is check-in, last <p> is check-out
+        // e.g. <p>Jan 28, 2026 - </p><p>Feb 1, 2026</p>
+        if (tds.length >= 3) {
+          const datePs = tds[2].querySelectorAll("p");
+          if (datePs.length >= 1) {
+            checkInStr =
+              (datePs[0].textContent || "").replace(/\s*-\s*$/, "").trim() ||
+              null;
           }
-          break;
+          if (datePs.length >= 2) {
+            checkOutStr = (datePs[datePs.length - 1].textContent || "").trim() ||
+              null;
+          }
         }
         return {
           guest_name: (row.querySelector('p[data-testid="guest-name"]')?.textContent || "").trim(),
@@ -218,8 +204,12 @@ export async function extractBookingRowData(
 
     return {
       guest_name: raw.guest_name,
+      check_in_str: raw.check_in_str,
+      check_out_str: raw.check_out_str,
       check_in_date: raw.check_in_str ? parseAgodaRowDate(raw.check_in_str) : null,
-      check_out_date: raw.check_out_str ? parseAgodaRowDate(raw.check_out_str) : null,
+      check_out_date: raw.check_out_str
+        ? parseAgodaRowDate(raw.check_out_str)
+        : null,
       reservation_status: raw.reservation_status,
       room_type: raw.room_type,
     };
