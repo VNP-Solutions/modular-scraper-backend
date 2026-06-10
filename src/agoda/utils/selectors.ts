@@ -42,6 +42,10 @@ export const BOOKING_RESULTS = {
  * Booking Detail Sidebar Selectors
  */
 export const BOOKING_DETAIL = {
+  // Side panel root
+  PANEL:
+    '#detail-side-panel, [data-element-name="ycs-booking-detail"]',
+
   // Tab list container
   TAB_LIST:
     '[data-element-name="ycs-booking-detail-tab"], [data-testid="booking-detail-panel-tabs"]',
@@ -49,6 +53,13 @@ export const BOOKING_DETAIL = {
   // Get payout (UPC) tab button
   PAYOUT_TAB:
     'button[data-element-name="ycs-booking-detail-tab-payout"], button[data-testid="ycs-booking-detail-tab-payout"]',
+
+  // Summary stay dates (short format: "Apr 26, 2026 - Apr 27, 2026")
+  SUMMARY_STAY_DATES:
+    '[data-element-name="ycs-booking-detail-summary-staydates"]',
+
+  // Accordion stay dates (long format: "Sunday, April 26, 2026 - Monday, April 27, 2026")
+  ACCORDION_STAY_DATES_VALUE: '[data-testid="accordion-staydate-value"]',
 } as const;
 
 /**

@@ -34,6 +34,10 @@ export interface BookingRowData {
 const AGODA_ROW_DATE_PATTERN =
   /([A-Za-z]{3,})\s+(\d{1,2}),\s*(\d{4})/;
 
+/** Matches short or long stay-date text (e.g. "Apr 26, 2026" or "Sunday, April 26, 2026") */
+const AGODA_STAY_DATE_PART_PATTERN =
+  /(?:[A-Za-z]+,\s+)?([A-Za-z]{3,})\s+(\d{1,2}),\s*(\d{4})/g;
+
 const AGODA_ROW_MONTH_MAP: Record<string, number> = {
   jan: 0,
   feb: 1,
@@ -74,32 +78,116 @@ function parseAgodaRowDate(text: string): Date | null {
 }
 
 /**
- * Save guest name and stay dates from a booking search result row.
+ * Parse a stay-date range string into check-in / check-out text parts.
+ * Handles "Apr 26, 2026 - Apr 27, 2026" and "Sunday, April 26, 2026 - Monday, April 27, 2026".
  */
-async function persistBookingRowData(
-  page: Page,
-  bookingRowSelector: string,
+function parseStayDateRangeText(text: string): {
+  checkInStr: string | null;
+  checkOutStr: string | null;
+} {
+  if (!text?.trim()) return { checkInStr: null, checkOutStr: null };
+
+  const matches = [...text.matchAll(AGODA_STAY_DATE_PART_PATTERN)];
+  if (matches.length < 2) return { checkInStr: null, checkOutStr: null };
+
+  const toShortDate = (m: RegExpMatchArray) =>
+    `${m[1]} ${m[2]}, ${m[3]}`;
+
+  return {
+    checkInStr: toShortDate(matches[0]),
+    checkOutStr: toShortDate(matches[1]),
+  };
+}
+
+function bookingRowDataFromDateStrings(
+  checkInStr: string | null,
+  checkOutStr: string | null,
+  partial?: BookingRowData | null
+): BookingRowData | null {
+  if (!checkInStr || !checkOutStr) return null;
+
+  const checkInDate = parseAgodaRowDate(checkInStr);
+  const checkOutDate = parseAgodaRowDate(checkOutStr);
+  if (!checkInDate || !checkOutDate) return null;
+
+  return {
+    guest_name: partial?.guest_name ?? "",
+    check_in_str: checkInStr,
+    check_out_str: checkOutStr,
+    check_in_date: checkInDate,
+    check_out_date: checkOutDate,
+    reservation_status: partial?.reservation_status ?? "",
+    room_type: partial?.room_type ?? "",
+  };
+}
+
+/**
+ * Extract stay dates from the booking detail sidebar (fallback when table row fails).
+ * 1) Summary block — short format
+ * 2) Accordion stay dates — long format
+ */
+async function extractStayDatesFromSidebar(
+  page: Page
+): Promise<{ checkInStr: string | null; checkOutStr: string | null; source: string }> {
+  const result = await page.evaluate(
+    (selectors: { summary: string; accordion: string }) => {
+      const dateInText = (text: string) =>
+        /[A-Za-z]{3,}\s+\d{1,2},\s*\d{4}/.test(text);
+
+      const readDateText = (root: Element | null): string | null => {
+        if (!root) return null;
+        const ps = root.querySelectorAll("p");
+        for (const p of Array.from(ps)) {
+          const t = (p.textContent || "").trim();
+          if (t && dateInText(t)) return t;
+        }
+        const cellText = (root.textContent || "").trim();
+        return dateInText(cellText) ? cellText : null;
+      };
+
+      const summaryText = readDateText(
+        document.querySelector(selectors.summary)
+      );
+      if (summaryText) {
+        return { text: summaryText, source: "summary-staydates" };
+      }
+
+      const accordionText = readDateText(
+        document.querySelector(selectors.accordion)
+      );
+      if (accordionText) {
+        return { text: accordionText, source: "accordion-staydate" };
+      }
+
+      return { text: null, source: "" };
+    },
+    {
+      summary: BOOKING_DETAIL.SUMMARY_STAY_DATES,
+      accordion: BOOKING_DETAIL.ACCORDION_STAY_DATES_VALUE,
+    }
+  );
+
+  if (!result.text) {
+    return { checkInStr: null, checkOutStr: null, source: "" };
+  }
+
+  const { checkInStr, checkOutStr } = parseStayDateRangeText(result.text);
+  return { checkInStr, checkOutStr, source: result.source };
+}
+
+/**
+ * Persist guest name and stay dates to the retrieval item.
+ */
+async function persistBookingDates(
+  retrievalId: string,
   bookingId: string,
-  retrievalId: string
-): Promise<void> {
+  rowData: BookingRowData,
+  source: string
+): Promise<boolean> {
   const jobId = getRetrievalJobId();
-  const rowData = await extractBookingRowData(page, bookingRowSelector);
-  if (!rowData) return;
 
   if (!rowData.check_in_date || !rowData.check_out_date) {
-    await dualLogError(
-      `Could not parse full stay dates for booking ${bookingId}`,
-      undefined,
-      {
-        jobId,
-        bookingId,
-        check_in_str: rowData.check_in_str,
-        check_out_str: rowData.check_out_str,
-        check_in_date: rowData.check_in_date?.toISOString(),
-        check_out_date: rowData.check_out_date?.toISOString(),
-      }
-    );
-    return;
+    return false;
   }
 
   try {
@@ -118,40 +206,121 @@ async function persistBookingRowData(
     );
     if (updated) {
       await dualLogInfo(
-        `✅ Saved guest name and stay dates for booking ${bookingId}: ${rowData.guest_name}, ${checkIn.toISOString().slice(0, 10)} - ${checkOut.toISOString().slice(0, 10)}`,
+        `✅ Saved stay dates for booking ${bookingId} (${source}): ${checkIn.toISOString().slice(0, 10)} - ${checkOut.toISOString().slice(0, 10)}`,
         { jobId, bookingId }
       );
-    } else {
-      const retrieval = await retrievalService.getRetrievalById(retrievalId);
-      if (retrieval?.property_id) {
-        const propertyId = retrieval.property_id.toString();
-        const parentRetrievalId =
-          retrieval.parent_retrieval_id?.toString() ?? retrievalId;
-        await retrievalService.upsertRetrievalItem({
-          retrieval_id: retrievalId,
-          parent_retrieval_id: parentRetrievalId,
-          property_id: propertyId,
-          guest_name: rowData.guest_name || "—",
-          reservation_id: bookingId,
-          check_in_date: checkIn,
-          check_out_date: checkOut,
-          room_type: rowData.room_type || "—",
-          booked_date: rowData.check_in_date ?? checkIn,
-          reservation_status: rowData.reservation_status || "—",
-        });
-        await dualLogInfo(
-          `✅ Created retrieval item with guest name and stay dates for booking ${bookingId}: ${rowData.guest_name}, ${checkIn.toISOString().slice(0, 10)} - ${checkOut.toISOString().slice(0, 10)}`,
-          { jobId, bookingId }
-        );
-      }
+      return true;
+    }
+
+    const retrieval = await retrievalService.getRetrievalById(retrievalId);
+    if (retrieval?.property_id) {
+      const propertyId = retrieval.property_id.toString();
+      const parentRetrievalId =
+        retrieval.parent_retrieval_id?.toString() ?? retrievalId;
+      await retrievalService.upsertRetrievalItem({
+        retrieval_id: retrievalId,
+        parent_retrieval_id: parentRetrievalId,
+        property_id: propertyId,
+        guest_name: rowData.guest_name || "—",
+        reservation_id: bookingId,
+        check_in_date: checkIn,
+        check_out_date: checkOut,
+        room_type: rowData.room_type || "—",
+        booked_date: rowData.check_in_date,
+        reservation_status: rowData.reservation_status || "—",
+      });
+      await dualLogInfo(
+        `✅ Created retrieval item with stay dates for booking ${bookingId} (${source}): ${checkIn.toISOString().slice(0, 10)} - ${checkOut.toISOString().slice(0, 10)}`,
+        { jobId, bookingId }
+      );
+      return true;
     }
   } catch (dbErr: any) {
     await dualLogError(
-      `Failed to update retrieval item with row data for booking ${bookingId}`,
+      `Failed to save stay dates for booking ${bookingId} (${source})`,
       dbErr,
       { jobId, bookingId }
     );
   }
+
+  return false;
+}
+
+/**
+ * Save guest name and stay dates from an already-extracted booking row.
+ */
+async function persistBookingRowData(
+  rowData: BookingRowData | null,
+  bookingId: string,
+  retrievalId: string
+): Promise<boolean> {
+  const jobId = getRetrievalJobId();
+  if (!rowData) return false;
+
+  if (!rowData.check_in_date || !rowData.check_out_date) {
+    await dualLogInfo(
+      `Table row dates incomplete for booking ${bookingId}, will try sidebar fallback`,
+      {
+        jobId,
+        bookingId,
+        check_in_str: rowData.check_in_str,
+        check_out_str: rowData.check_out_str,
+      }
+    );
+    return false;
+  }
+
+  return persistBookingDates(retrievalId, bookingId, rowData, "booking-row");
+}
+
+/**
+ * Fallback: read stay dates from the booking detail sidebar after it opens.
+ */
+async function persistBookingDatesFromSidebar(
+  page: Page,
+  bookingId: string,
+  retrievalId: string,
+  partialRowData?: BookingRowData | null
+): Promise<boolean> {
+  const jobId = getRetrievalJobId();
+  const sidebarDates = await extractStayDatesFromSidebar(page);
+
+  if (!sidebarDates.checkInStr || !sidebarDates.checkOutStr) {
+    await dualLogError(
+      `Sidebar stay dates not found for booking ${bookingId}`,
+      undefined,
+      { jobId, bookingId, source: sidebarDates.source }
+    );
+    return false;
+  }
+
+  const rowData = bookingRowDataFromDateStrings(
+    sidebarDates.checkInStr,
+    sidebarDates.checkOutStr,
+    partialRowData
+  );
+
+  if (!rowData) {
+    await dualLogError(
+      `Could not parse sidebar stay dates for booking ${bookingId}`,
+      undefined,
+      {
+        jobId,
+        bookingId,
+        check_in_str: sidebarDates.checkInStr,
+        check_out_str: sidebarDates.checkOutStr,
+        source: sidebarDates.source,
+      }
+    );
+    return false;
+  }
+
+  return persistBookingDates(
+    retrievalId,
+    bookingId,
+    rowData,
+    sidebarDates.source
+  );
 }
 
 /**
@@ -383,6 +552,9 @@ export async function searchBookingAndNavigateToPayout(
     }
 
     // Now verify the booking row is actually present
+    let datesSaved = false;
+    let partialRowData: BookingRowData | null = null;
+
     try {
       await page.waitForSelector(bookingRowSelector, {
         visible: true,
@@ -396,7 +568,12 @@ export async function searchBookingAndNavigateToPayout(
       await takeScreenshot(page, retrievalId ?? jobId ?? "", `search_results_${bookingId}`, "step", "agoda", retrievalId ? "retrieval" : "job");
 
       if (retrievalId) {
-        await persistBookingRowData(page, bookingRowSelector, bookingId, retrievalId);
+        partialRowData = await extractBookingRowData(page, bookingRowSelector);
+        datesSaved = await persistBookingRowData(
+          partialRowData,
+          bookingId,
+          retrievalId
+        );
       }
     } catch (error) {
       await dualLogError(`Booking row not found for ID: ${bookingId}`, error, {
@@ -484,6 +661,19 @@ export async function searchBookingAndNavigateToPayout(
         jobId,
         bookingId,
       });
+
+      if (retrievalId && !datesSaved) {
+        await dualLogInfo(
+          "Trying sidebar fallback for stay dates after panel opened",
+          { jobId, bookingId }
+        );
+        datesSaved = await persistBookingDatesFromSidebar(
+          page,
+          bookingId,
+          retrievalId,
+          partialRowData
+        );
+      }
     } catch (error) {
       await dualLogError("Booking detail sidebar did not appear", error, {
         jobId,
@@ -2054,6 +2244,9 @@ async function reSearchAndNavigateToPayout(
     }
 
     // Now verify the booking row is actually present
+    let datesSaved = false;
+    let partialRowData: BookingRowData | null = null;
+
     try {
       await page.waitForSelector(bookingRowSelector, {
         visible: true,
@@ -2067,7 +2260,12 @@ async function reSearchAndNavigateToPayout(
       await takeScreenshot(page, jobId ?? "", `re_search_results_${bookingId}`, "step", "agoda", "retrieval");
 
       if (retrievalId) {
-        await persistBookingRowData(page, bookingRowSelector, bookingId, retrievalId);
+        partialRowData = await extractBookingRowData(page, bookingRowSelector);
+        datesSaved = await persistBookingRowData(
+          partialRowData,
+          bookingId,
+          retrievalId
+        );
       }
     } catch (error) {
       await dualLogError(`Booking row not found for ID: ${bookingId}`, error, {
@@ -2155,6 +2353,19 @@ async function reSearchAndNavigateToPayout(
         jobId,
         bookingId,
       });
+
+      if (retrievalId && !datesSaved) {
+        await dualLogInfo(
+          "Trying sidebar fallback for stay dates after panel opened (re-search)",
+          { jobId, bookingId }
+        );
+        datesSaved = await persistBookingDatesFromSidebar(
+          page,
+          bookingId,
+          retrievalId,
+          partialRowData
+        );
+      }
     } catch (error) {
       await dualLogError("Booking detail sidebar did not appear", error, {
         jobId,
