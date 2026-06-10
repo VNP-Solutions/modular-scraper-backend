@@ -54,11 +54,17 @@ export const BOOKING_DETAIL = {
   PAYOUT_TAB:
     'button[data-element-name="ycs-booking-detail-tab-payout"], button[data-testid="ycs-booking-detail-tab-payout"]',
 
+  // Top summary card (loads before tab content)
+  SHORT_SUMMARY: '[data-testid="detail-short-summary"]',
+
   // Summary stay dates (short format: "Apr 26, 2026 - Apr 27, 2026")
   SUMMARY_STAY_DATES:
     '[data-element-name="ycs-booking-detail-summary-staydates"]',
 
-  // Accordion stay dates (long format: "Sunday, April 26, 2026 - Monday, April 27, 2026")
+  // Accordion stay dates row (long format in booking details tab)
+  ACCORDION_STAY_DATES: '[data-testid="accordion-staydate"]',
+
+  // Accordion stay dates value cell
   ACCORDION_STAY_DATES_VALUE: '[data-testid="accordion-staydate-value"]',
 } as const;
 

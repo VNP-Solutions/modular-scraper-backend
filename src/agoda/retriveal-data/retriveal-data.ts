@@ -122,22 +122,110 @@ function bookingRowDataFromDateStrings(
 }
 
 /**
+ * Wait until sidebar summary or accordion stay-date content is in the DOM.
+ * Tab list alone is not enough — summary card loads asynchronously.
+ */
+async function waitForSidebarStayDatesContent(
+  page: Page,
+  bookingId: string
+): Promise<void> {
+  const jobId = getRetrievalJobId();
+
+  try {
+    await Promise.race([
+      page.waitForSelector(BOOKING_DETAIL.SUMMARY_STAY_DATES, {
+        visible: true,
+        timeout: 15000,
+      }),
+      page.waitForSelector(BOOKING_DETAIL.ACCORDION_STAY_DATES, {
+        visible: true,
+        timeout: 15000,
+      }),
+      page.waitForSelector(BOOKING_DETAIL.ACCORDION_STAY_DATES_VALUE, {
+        visible: true,
+        timeout: 15000,
+      }),
+      page.waitForSelector(BOOKING_DETAIL.SHORT_SUMMARY, {
+        visible: true,
+        timeout: 15000,
+      }),
+    ]);
+    await dualLogInfo("Sidebar stay-date container appeared", {
+      jobId,
+      bookingId,
+    });
+    await delay(500);
+  } catch {
+    await dualLogInfo(
+      "Sidebar stay-date container wait timed out (will still try to read)",
+      { jobId, bookingId }
+    );
+  }
+}
+
+/**
+ * Wait for accordion "Stay dates" row in booking details (below summary card).
+ */
+async function waitForAccordionStayDateSection(
+  page: Page,
+  bookingId: string
+): Promise<void> {
+  const jobId = getRetrievalJobId();
+
+  try {
+    await page.waitForSelector(BOOKING_DETAIL.ACCORDION_STAY_DATES, {
+      visible: true,
+      timeout: 10000,
+    });
+    await page.evaluate((accordionSelector: string) => {
+      const el = document.querySelector(accordionSelector);
+      el?.scrollIntoView({ block: "center", behavior: "instant" });
+    }, BOOKING_DETAIL.ACCORDION_STAY_DATES);
+    await delay(400);
+    await dualLogInfo("Accordion stay-date section ready", { jobId, bookingId });
+  } catch {
+    await dualLogInfo(
+      "Accordion stay-date section wait timed out (will still try to read)",
+      { jobId, bookingId }
+    );
+  }
+}
+
+/**
  * Extract stay dates from the booking detail sidebar (fallback when table row fails).
- * 1) Summary block — short format
- * 2) Accordion stay dates — long format
+ * Tries in order until a full check-in + check-out range is parsed:
+ * 1) Summary block — "Apr 26, 2026 - Apr 27, 2026"
+ * 2) Accordion value — "Saturday, March 21, 2026 - Sunday, March 22, 2026"
+ * 3) Accordion row — same text via parent [data-testid="accordion-staydate"]
  */
 async function extractStayDatesFromSidebar(
   page: Page
-): Promise<{ checkInStr: string | null; checkOutStr: string | null; source: string }> {
+): Promise<{
+  checkInStr: string | null;
+  checkOutStr: string | null;
+  source: string;
+  debug?: Record<string, unknown>;
+}> {
   const result = await page.evaluate(
-    (selectors: { summary: string; accordion: string }) => {
+    (selectors: {
+      panel: string;
+      summary: string;
+      accordionRow: string;
+      accordionValue: string;
+    }) => {
+      const panel =
+        document.querySelector("#detail-side-panel") ||
+        document.querySelector(selectors.panel);
+
+      const queryScoped = (selector: string): Element | null =>
+        panel?.querySelector(selector) ?? document.querySelector(selector);
+
       const dateInText = (text: string) =>
         /[A-Za-z]{3,}\s+\d{1,2},\s*\d{4}/.test(text);
 
       const readDateText = (root: Element | null): string | null => {
         if (!root) return null;
-        const ps = root.querySelectorAll("p");
-        for (const p of Array.from(ps)) {
+        for (const p of Array.from(root.querySelectorAll("p"))) {
           const t = (p.textContent || "").trim();
           if (t && dateInText(t)) return t;
         }
@@ -145,34 +233,77 @@ async function extractStayDatesFromSidebar(
         return dateInText(cellText) ? cellText : null;
       };
 
-      const summaryText = readDateText(
-        document.querySelector(selectors.summary)
-      );
+      const candidates: { text: string; source: string }[] = [];
+
+      const summaryBlock = queryScoped(selectors.summary);
+      const summaryText = readDateText(summaryBlock);
       if (summaryText) {
-        return { text: summaryText, source: "summary-staydates" };
+        candidates.push({ text: summaryText, source: "summary-staydates" });
       }
 
-      const accordionText = readDateText(
-        document.querySelector(selectors.accordion)
-      );
-      if (accordionText) {
-        return { text: accordionText, source: "accordion-staydate" };
+      const accordionValueBlock = queryScoped(selectors.accordionValue);
+      const accordionValueText = readDateText(accordionValueBlock);
+      if (accordionValueText) {
+        candidates.push({
+          text: accordionValueText,
+          source: "accordion-staydate-value",
+        });
       }
 
-      return { text: null, source: "" };
+      const accordionRowBlock = queryScoped(selectors.accordionRow);
+      const accordionRowText = readDateText(accordionRowBlock);
+      if (
+        accordionRowText &&
+        accordionRowText !== accordionValueText
+      ) {
+        candidates.push({
+          text: accordionRowText,
+          source: "accordion-staydate",
+        });
+      }
+
+      return {
+        candidates,
+        debug: {
+          hasPanel: !!panel,
+          hasSummaryBlock: !!summaryBlock,
+          hasAccordionValueBlock: !!accordionValueBlock,
+          hasAccordionRowBlock: !!accordionRowBlock,
+          summarySnippet: summaryBlock?.textContent?.trim().slice(0, 80),
+          accordionSnippet: accordionValueBlock?.textContent?.trim().slice(0, 120),
+        },
+      };
     },
     {
+      panel: BOOKING_DETAIL.PANEL,
       summary: BOOKING_DETAIL.SUMMARY_STAY_DATES,
-      accordion: BOOKING_DETAIL.ACCORDION_STAY_DATES_VALUE,
+      accordionRow: BOOKING_DETAIL.ACCORDION_STAY_DATES,
+      accordionValue: BOOKING_DETAIL.ACCORDION_STAY_DATES_VALUE,
     }
   );
 
-  if (!result.text) {
-    return { checkInStr: null, checkOutStr: null, source: "" };
+  for (const candidate of result.candidates) {
+    const { checkInStr, checkOutStr } = parseStayDateRangeText(candidate.text);
+    if (checkInStr && checkOutStr) {
+      return {
+        checkInStr,
+        checkOutStr,
+        source: candidate.source,
+        debug: result.debug,
+      };
+    }
   }
 
-  const { checkInStr, checkOutStr } = parseStayDateRangeText(result.text);
-  return { checkInStr, checkOutStr, source: result.source };
+  return {
+    checkInStr: null,
+    checkOutStr: null,
+    source: "",
+    debug: {
+      ...result.debug,
+      candidateCount: result.candidates.length,
+      candidates: result.candidates.map((c) => c.text.slice(0, 80)),
+    },
+  };
 }
 
 /**
@@ -283,13 +414,29 @@ async function persistBookingDatesFromSidebar(
   partialRowData?: BookingRowData | null
 ): Promise<boolean> {
   const jobId = getRetrievalJobId();
-  const sidebarDates = await extractStayDatesFromSidebar(page);
+
+  await waitForSidebarStayDatesContent(page, bookingId);
+  let sidebarDates = await extractStayDatesFromSidebar(page);
+
+  if (!sidebarDates.checkInStr || !sidebarDates.checkOutStr) {
+    await dualLogInfo(
+      "Summary stay dates incomplete — trying accordion stay-date section",
+      { jobId, bookingId, debug: sidebarDates.debug }
+    );
+    await waitForAccordionStayDateSection(page, bookingId);
+    sidebarDates = await extractStayDatesFromSidebar(page);
+  }
 
   if (!sidebarDates.checkInStr || !sidebarDates.checkOutStr) {
     await dualLogError(
       `Sidebar stay dates not found for booking ${bookingId}`,
       undefined,
-      { jobId, bookingId, source: sidebarDates.source }
+      {
+        jobId,
+        bookingId,
+        source: sidebarDates.source,
+        debug: sidebarDates.debug,
+      }
     );
     return false;
   }
@@ -342,16 +489,37 @@ export async function extractBookingRowData(
 
         // Date cell: td[2] — first <p> is check-in, last <p> is check-out
         // e.g. <p>Jan 28, 2026 - </p><p>Feb 1, 2026</p>
+        // or single <p>Mar 21, 2026 - Mar 22, 2026</p>
+        const dateRangePattern =
+          /([A-Za-z]{3,}\s+\d{1,2},\s*\d{4})\s*-\s*([A-Za-z]{3,}\s+\d{1,2},\s*\d{4})/;
+
         if (tds.length >= 3) {
           const datePs = tds[2].querySelectorAll("p");
-          if (datePs.length >= 1) {
+          if (datePs.length >= 2) {
             checkInStr =
               (datePs[0].textContent || "").replace(/\s*-\s*$/, "").trim() ||
               null;
+            checkOutStr =
+              (datePs[datePs.length - 1].textContent || "").trim() || null;
+          } else if (datePs.length === 1) {
+            const full = (datePs[0].textContent || "").trim();
+            const rangeMatch = full.match(dateRangePattern);
+            if (rangeMatch) {
+              checkInStr = rangeMatch[1];
+              checkOutStr = rangeMatch[2];
+            } else {
+              checkInStr = full.replace(/\s*-\s*$/, "").trim() || null;
+            }
           }
-          if (datePs.length >= 2) {
-            checkOutStr = (datePs[datePs.length - 1].textContent || "").trim() ||
-              null;
+
+          // Second <p> may be empty/hidden while td still has full range text
+          if (!checkOutStr && tds[2]) {
+            const cellText = (tds[2].textContent || "").trim();
+            const rangeMatch = cellText.match(dateRangePattern);
+            if (rangeMatch) {
+              checkInStr = rangeMatch[1];
+              checkOutStr = rangeMatch[2];
+            }
           }
         }
         return {
