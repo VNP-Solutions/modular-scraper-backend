@@ -29,15 +29,124 @@ export interface BookingRowData {
   room_type: string;
 }
 
+const AGODA_ROW_DATE_PATTERN =
+  /([A-Za-z]{3,})\s+(\d{1,2}),\s*(\d{4})/;
+
+const AGODA_ROW_MONTH_MAP: Record<string, number> = {
+  jan: 0,
+  feb: 1,
+  mar: 2,
+  apr: 3,
+  may: 4,
+  jun: 5,
+  jul: 6,
+  aug: 7,
+  sep: 8,
+  oct: 9,
+  nov: 10,
+  dec: 11,
+};
+
 /**
  * Parse date string from Agoda row (e.g. "Mar 11, 2026", "Mar 14, 2026")
+ * Uses UTC calendar date so check-in/check-out match the UI regardless of server TZ.
  */
 function parseAgodaRowDate(text: string): Date | null {
   if (!text || typeof text !== "string") return null;
   const cleaned = text.replace(/\s*-\s*$/, "").trim();
   if (!cleaned) return null;
+
+  const match = cleaned.match(AGODA_ROW_DATE_PATTERN);
+  if (match) {
+    const month = AGODA_ROW_MONTH_MAP[match[1].toLowerCase().slice(0, 3)];
+    if (month === undefined) return null;
+    const day = parseInt(match[2], 10);
+    const year = parseInt(match[3], 10);
+    const parsed = new Date(Date.UTC(year, month, day));
+    return isNaN(parsed.getTime()) ? null : parsed;
+  }
+
   const d = new Date(cleaned);
-  return isNaN(d.getTime()) ? null : d;
+  if (isNaN(d.getTime())) return null;
+  return new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+}
+
+/**
+ * Save guest name and stay dates from a booking search result row.
+ */
+async function persistBookingRowData(
+  page: Page,
+  bookingRowSelector: string,
+  bookingId: string,
+  retrievalId: string
+): Promise<void> {
+  const jobId = getRetrievalJobId();
+  const rowData = await extractBookingRowData(page, bookingRowSelector);
+  if (!rowData) return;
+
+  if (!rowData.check_in_date || !rowData.check_out_date) {
+    await dualLogError(
+      `Could not parse full stay dates for booking ${bookingId}`,
+      undefined,
+      {
+        jobId,
+        bookingId,
+        check_in_date: rowData.check_in_date?.toISOString(),
+        check_out_date: rowData.check_out_date?.toISOString(),
+      }
+    );
+  }
+
+  try {
+    const checkIn = rowData.check_in_date ?? new Date();
+    const checkOut = rowData.check_out_date ?? checkIn;
+    const updated = await retrievalService.updateRetrievalItemGuestAndDates(
+      retrievalId,
+      bookingId,
+      {
+        guest_name: rowData.guest_name || "—",
+        check_in_date: checkIn,
+        check_out_date: checkOut,
+        room_type: rowData.room_type || "—",
+        reservation_status: rowData.reservation_status || "—",
+      }
+    );
+    if (updated) {
+      await dualLogInfo(
+        `✅ Saved guest name and stay dates for booking ${bookingId}: ${rowData.guest_name}, ${checkIn.toISOString().slice(0, 10)} - ${checkOut.toISOString().slice(0, 10)}`,
+        { jobId, bookingId }
+      );
+    } else {
+      const retrieval = await retrievalService.getRetrievalById(retrievalId);
+      if (retrieval?.property_id) {
+        const propertyId = retrieval.property_id.toString();
+        const parentRetrievalId =
+          retrieval.parent_retrieval_id?.toString() ?? retrievalId;
+        await retrievalService.upsertRetrievalItem({
+          retrieval_id: retrievalId,
+          parent_retrieval_id: parentRetrievalId,
+          property_id: propertyId,
+          guest_name: rowData.guest_name || "—",
+          reservation_id: bookingId,
+          check_in_date: checkIn,
+          check_out_date: checkOut,
+          room_type: rowData.room_type || "—",
+          booked_date: rowData.check_in_date ?? checkIn,
+          reservation_status: rowData.reservation_status || "—",
+        });
+        await dualLogInfo(
+          `✅ Created retrieval item with guest name and stay dates for booking ${bookingId}: ${rowData.guest_name}, ${checkIn.toISOString().slice(0, 10)} - ${checkOut.toISOString().slice(0, 10)}`,
+          { jobId, bookingId }
+        );
+      }
+    }
+  } catch (dbErr: any) {
+    await dualLogError(
+      `Failed to update retrieval item with row data for booking ${bookingId}`,
+      dbErr,
+      { jobId, bookingId }
+    );
+  }
 }
 
 /**
@@ -56,11 +165,39 @@ export async function extractBookingRowData(
         const tds = row.querySelectorAll("td");
         let checkInStr: string | null = null;
         let checkOutStr: string | null = null;
-        if (tds.length >= 3) {
-          const datePs = tds[2].querySelectorAll("p");
-          const texts = Array.from(datePs).map((p) => (p.textContent || "").trim());
-          if (texts.length >= 1) checkInStr = texts[0].replace(/\s*-\s*$/, "").trim() || null;
-          if (texts.length >= 2) checkOutStr = texts[1] || null;
+        const datePattern = /[A-Za-z]{3,}\s+\d{1,2},\s*\d{4}/;
+        const dateRangePattern =
+          /([A-Za-z]{3,}\s+\d{1,2},\s*\d{4})\s*-\s*([A-Za-z]{3,}\s+\d{1,2},\s*\d{4})/;
+
+        for (const td of Array.from(tds)) {
+          const cellText = (td.textContent || "").trim();
+          if (!datePattern.test(cellText)) continue;
+
+          const datePs = td.querySelectorAll("p");
+          const texts = Array.from(datePs)
+            .map((p) => (p.textContent || "").trim())
+            .filter(Boolean);
+
+          if (texts.length >= 2) {
+            checkInStr = texts[0].replace(/\s*-\s*$/, "").trim() || null;
+            checkOutStr = texts[1] || null;
+          } else if (texts.length === 1) {
+            const full = texts[0];
+            const rangeMatch = full.match(dateRangePattern);
+            if (rangeMatch) {
+              checkInStr = rangeMatch[1];
+              checkOutStr = rangeMatch[2];
+            } else {
+              checkInStr = full.replace(/\s*-\s*$/, "").trim() || null;
+            }
+          } else {
+            const rangeMatch = cellText.match(dateRangePattern);
+            if (rangeMatch) {
+              checkInStr = rangeMatch[1];
+              checkOutStr = rangeMatch[2];
+            }
+          }
+          break;
         }
         return {
           guest_name: (row.querySelector('p[data-testid="guest-name"]')?.textContent || "").trim(),
@@ -268,62 +405,8 @@ export async function searchBookingAndNavigateToPayout(
       // Screenshot: search results with matched booking row
       await takeScreenshot(page, retrievalId ?? jobId ?? "", `search_results_${bookingId}`, "step", "agoda", retrievalId ? "retrieval" : "job");
 
-      // Extract guest name and stay dates from the row and update retrieval item (same pattern as card info)
       if (retrievalId) {
-        const rowData = await extractBookingRowData(page, bookingRowSelector);
-        if (rowData) {
-          try {
-            const checkIn = rowData.check_in_date ?? new Date();
-            const checkOut = rowData.check_out_date ?? new Date();
-            const updated = await retrievalService.updateRetrievalItemGuestAndDates(
-              retrievalId,
-              bookingId,
-              {
-                guest_name: rowData.guest_name || "—",
-                check_in_date: checkIn,
-                check_out_date: checkOut,
-                room_type: rowData.room_type || "—",
-                reservation_status: rowData.reservation_status || "—",
-              }
-            );
-            if (updated) {
-              await dualLogInfo(
-                `✅ Saved guest name and stay dates for booking ${bookingId}: ${rowData.guest_name}, ${checkIn.toISOString().slice(0, 10)} - ${checkOut.toISOString().slice(0, 10)}`,
-                { jobId, bookingId }
-              );
-            } else {
-              // Item doesn't exist yet; create it with full row data (upsert)
-              const retrieval = await retrievalService.getRetrievalById(retrievalId);
-              if (retrieval?.property_id) {
-                const propertyId = retrieval.property_id.toString();
-                const parentRetrievalId =
-                  retrieval.parent_retrieval_id?.toString() ?? retrievalId;
-                await retrievalService.upsertRetrievalItem({
-                  retrieval_id: retrievalId,
-                  parent_retrieval_id: parentRetrievalId,
-                  property_id: propertyId,
-                  guest_name: rowData.guest_name || "—",
-                  reservation_id: bookingId,
-                  check_in_date: checkIn,
-                  check_out_date: checkOut,
-                  room_type: rowData.room_type || "—",
-                  booked_date: rowData.check_in_date ?? checkIn,
-                  reservation_status: rowData.reservation_status || "—",
-                });
-                await dualLogInfo(
-                  `✅ Created retrieval item with guest name and stay dates for booking ${bookingId}: ${rowData.guest_name}, ${checkIn.toISOString().slice(0, 10)} - ${checkOut.toISOString().slice(0, 10)}`,
-                  { jobId, bookingId }
-                );
-              }
-            }
-          } catch (dbErr: any) {
-            await dualLogError(
-              `Failed to update retrieval item with row data for booking ${bookingId}`,
-              dbErr,
-              { jobId, bookingId }
-            );
-          }
-        }
+        await persistBookingRowData(page, bookingRowSelector, bookingId, retrievalId);
       }
     } catch (error) {
       await dualLogError(`Booking row not found for ID: ${bookingId}`, error, {
@@ -830,7 +913,8 @@ export async function searchBookingAndNavigateToPayout(
           // Re-search for the same booking ID
           const reSearchSuccess = await reSearchAndNavigateToPayout(
             page,
-            bookingId
+            bookingId,
+            retrievalId
           );
           if (!reSearchSuccess) {
             await dualLogError(
@@ -919,7 +1003,8 @@ export async function searchBookingAndNavigateToPayout(
         // Re-search for the same booking ID
         const reSearchSuccess = await reSearchAndNavigateToPayout(
           page,
-          bookingId
+          bookingId,
+          retrievalId
         );
         if (!reSearchSuccess) {
           await dualLogError(
@@ -1772,7 +1857,8 @@ async function handleOtpVerification(
  */
 async function reSearchAndNavigateToPayout(
   page: Page,
-  bookingId: string
+  bookingId: string,
+  retrievalId?: string
 ): Promise<boolean> {
   const jobId = getRetrievalJobId();
   try {
@@ -1989,6 +2075,10 @@ async function reSearchAndNavigateToPayout(
       });
       // Screenshot: search results with matched booking row (re-search after OTP)
       await takeScreenshot(page, jobId ?? "", `re_search_results_${bookingId}`, "step", "agoda", "retrieval");
+
+      if (retrievalId) {
+        await persistBookingRowData(page, bookingRowSelector, bookingId, retrievalId);
+      }
     } catch (error) {
       await dualLogError(`Booking row not found for ID: ${bookingId}`, error, {
         jobId,
