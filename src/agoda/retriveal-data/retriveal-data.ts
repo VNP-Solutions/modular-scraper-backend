@@ -1,4 +1,4 @@
-import { Page } from "puppeteer";
+import { HTTPResponse, Page } from "puppeteer";
 import {
   getRetrievalJobId,
   isOtpReleasedForRetrieval,
@@ -119,6 +119,177 @@ function bookingRowDataFromDateStrings(
     reservation_status: partial?.reservation_status ?? "",
     room_type: partial?.room_type ?? "",
   };
+}
+
+/** Agoda YCS Booking/list API response (POST .../api/reporting/Booking/list/{hotelId}) */
+interface AgodaBookingListApiItem {
+  bookingId: number;
+  guestName?: string;
+  checkinDate?: string;
+  checkoutDate?: string;
+  roomTypeName?: string;
+  ackRequestType?: number;
+}
+
+interface AgodaBookingListApiResponse {
+  pagedBookingList?: {
+    items?: AgodaBookingListApiItem[];
+  };
+}
+
+const BOOKING_LIST_API_PATH = "/api/reporting/Booking/list/";
+
+const ACK_REQUEST_TYPE_LABELS: Record<number, string> = {
+  0: "Unanswered",
+  1: "Confirmed",
+  2: "Amended",
+};
+
+/** Parse API ISO date (e.g. "2026-04-29T00:00:00") as UTC calendar date */
+function parseApiIsoDate(iso: string): Date | null {
+  const match = iso.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!match) return null;
+  const parsed = new Date(
+    Date.UTC(
+      parseInt(match[1], 10),
+      parseInt(match[2], 10) - 1,
+      parseInt(match[3], 10)
+    )
+  );
+  return isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function bookingRowDataFromApiJson(
+  json: AgodaBookingListApiResponse,
+  bookingId: string
+): BookingRowData | null {
+  const items = json.pagedBookingList?.items ?? [];
+  if (items.length === 0) return null;
+
+  const bookingIdNum = parseInt(bookingId, 10);
+  const item =
+    items.find((i) => i.bookingId === bookingIdNum) ?? items[0];
+
+  if (!item?.checkinDate || !item?.checkoutDate) return null;
+
+  const checkIn = parseApiIsoDate(item.checkinDate);
+  const checkOut = parseApiIsoDate(item.checkoutDate);
+  if (!checkIn || !checkOut) return null;
+
+  const statusLabel =
+    item.ackRequestType !== undefined
+      ? (ACK_REQUEST_TYPE_LABELS[item.ackRequestType] ??
+        String(item.ackRequestType))
+      : "";
+
+  return {
+    guest_name: item.guestName || "",
+    check_in_str: item.checkinDate,
+    check_out_str: item.checkoutDate,
+    check_in_date: checkIn,
+    check_out_date: checkOut,
+    room_type: item.roomTypeName || "",
+    reservation_status: statusLabel,
+  };
+}
+
+/** Start listening for Booking/list API before clicking Search */
+function startBookingListApiCapture(
+  page: Page,
+  bookingId: string
+): Promise<HTTPResponse | null> {
+  return page
+    .waitForResponse(
+      (res) => {
+        if (res.request().method() !== "POST") return false;
+        if (!res.url().includes(BOOKING_LIST_API_PATH)) return false;
+        if (res.status() !== 200) return false;
+
+        const postData = res.request().postData() ?? "";
+        return (
+          postData.includes(`"bookingId":${bookingId}`) ||
+          postData.includes(`"bookingId": ${bookingId}`) ||
+          postData.includes(`"bookingId":"${bookingId}"`)
+        );
+      },
+      { timeout: 20000 }
+    )
+    .catch(() => null);
+}
+
+async function tryPersistFromBookingListApi(
+  apiResponsePromise: Promise<HTTPResponse | null>,
+  retrievalId: string,
+  bookingId: string
+): Promise<boolean> {
+  const jobId = getRetrievalJobId();
+
+  const response = await apiResponsePromise;
+  if (!response) {
+    await dualLogInfo(
+      `Booking list API response not captured for booking ${bookingId}, will try DOM fallback`,
+      { jobId, bookingId }
+    );
+    return false;
+  }
+
+  try {
+    const json = (await response.json()) as AgodaBookingListApiResponse;
+    const rowData = bookingRowDataFromApiJson(json, bookingId);
+    if (!rowData) {
+      await dualLogInfo(
+        `Booking list API returned no usable item for booking ${bookingId}`,
+        {
+          jobId,
+          bookingId,
+          itemCount: json.pagedBookingList?.items?.length ?? 0,
+        }
+      );
+      return false;
+    }
+
+    return persistBookingDates(
+      retrievalId,
+      bookingId,
+      rowData,
+      "booking-list-api"
+    );
+  } catch (err: any) {
+    await dualLogError(
+      `Failed to parse Booking list API response for booking ${bookingId}`,
+      err,
+      { jobId, bookingId }
+    );
+    return false;
+  }
+}
+
+async function persistGuestAndDatesAfterSearch(
+  page: Page,
+  bookingId: string,
+  retrievalId: string,
+  bookingRowSelector: string,
+  bookingListApiPromise: Promise<HTTPResponse | null>
+): Promise<{ datesSaved: boolean; partialRowData: BookingRowData | null }> {
+  let datesSaved = await tryPersistFromBookingListApi(
+    bookingListApiPromise,
+    retrievalId,
+    bookingId
+  );
+
+  let partialRowData: BookingRowData | null = null;
+  if (!datesSaved) {
+    partialRowData = await extractBookingRowData(page, bookingRowSelector);
+    datesSaved = await persistBookingRowData(
+      partialRowData,
+      bookingId,
+      retrievalId
+    );
+  } else {
+    partialRowData = await extractBookingRowData(page, bookingRowSelector);
+  }
+
+  return { datesSaved, partialRowData };
 }
 
 /**
@@ -567,13 +738,15 @@ export async function searchBookingAndNavigateToPayout(
   page: Page,
   bookingId: string,
   userEmail?: string,
-  retrievalId?: string
+  retrievalId?: string,
+  agodaId?: string
 ): Promise<boolean> {
   const jobId = getRetrievalJobId();
   try {
     await dualLogInfo(`Starting search for booking ID: ${bookingId}`, {
       jobId,
       bookingId,
+      agodaId,
     });
 
     // Step 1: Find and fill the booking ID input field
@@ -660,8 +833,10 @@ export async function searchBookingAndNavigateToPayout(
     // Wait for input to be fully processed (React debouncing)
     await delay(500);
 
-    // Step 2: Click the Search button
+    // Step 2: Click the Search button (listen for Booking/list API before click)
     await dualLogInfo("Clicking Search button...", { jobId, bookingId });
+
+    const bookingListApiPromise = startBookingListApiCapture(page, bookingId);
 
     try {
       await page.waitForSelector(BOOKING_SEARCH.BUTTON, {
@@ -736,12 +911,15 @@ export async function searchBookingAndNavigateToPayout(
       await takeScreenshot(page, retrievalId ?? jobId ?? "", `search_results_${bookingId}`, "step", "agoda", retrievalId ? "retrieval" : "job");
 
       if (retrievalId) {
-        partialRowData = await extractBookingRowData(page, bookingRowSelector);
-        datesSaved = await persistBookingRowData(
-          partialRowData,
+        const result = await persistGuestAndDatesAfterSearch(
+          page,
           bookingId,
-          retrievalId
+          retrievalId,
+          bookingRowSelector,
+          bookingListApiPromise
         );
+        datesSaved = result.datesSaved;
+        partialRowData = result.partialRowData;
       }
     } catch (error) {
       await dualLogError(`Booking row not found for ID: ${bookingId}`, error, {
@@ -1262,7 +1440,8 @@ export async function searchBookingAndNavigateToPayout(
           const reSearchSuccess = await reSearchAndNavigateToPayout(
             page,
             bookingId,
-            retrievalId
+            retrievalId,
+            agodaId
           );
           if (!reSearchSuccess) {
             await dualLogError(
@@ -1352,7 +1531,8 @@ export async function searchBookingAndNavigateToPayout(
         const reSearchSuccess = await reSearchAndNavigateToPayout(
           page,
           bookingId,
-          retrievalId
+          retrievalId,
+          agodaId
         );
         if (!reSearchSuccess) {
           await dualLogError(
@@ -2206,7 +2386,8 @@ async function handleOtpVerification(
 async function reSearchAndNavigateToPayout(
   page: Page,
   bookingId: string,
-  retrievalId?: string
+  retrievalId?: string,
+  agodaId?: string
 ): Promise<boolean> {
   const jobId = getRetrievalJobId();
   try {
@@ -2352,8 +2533,10 @@ async function reSearchAndNavigateToPayout(
     // Wait for input to be fully processed (React debouncing)
     await delay(500);
 
-    // Step 2: Click the Search button
+    // Step 2: Click the Search button (listen for Booking/list API before click)
     await dualLogInfo("Clicking Search button...", { jobId, bookingId });
+
+    const bookingListApiPromise = startBookingListApiCapture(page, bookingId);
 
     try {
       await page.waitForSelector(BOOKING_SEARCH.BUTTON, {
@@ -2428,12 +2611,15 @@ async function reSearchAndNavigateToPayout(
       await takeScreenshot(page, jobId ?? "", `re_search_results_${bookingId}`, "step", "agoda", "retrieval");
 
       if (retrievalId) {
-        partialRowData = await extractBookingRowData(page, bookingRowSelector);
-        datesSaved = await persistBookingRowData(
-          partialRowData,
+        const result = await persistGuestAndDatesAfterSearch(
+          page,
           bookingId,
-          retrievalId
+          retrievalId,
+          bookingRowSelector,
+          bookingListApiPromise
         );
+        datesSaved = result.datesSaved;
+        partialRowData = result.partialRowData;
       }
     } catch (error) {
       await dualLogError(`Booking row not found for ID: ${bookingId}`, error, {

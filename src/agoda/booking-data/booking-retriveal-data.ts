@@ -557,6 +557,7 @@ export async function getAgodaRetrivealData(
                 bookingId,
                 agodaUsername,
                 retrievalId,
+                agodaId,
               );
 
               if (success) {
