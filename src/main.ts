@@ -15,7 +15,6 @@ import { progressManager } from "./common/progress-manager.js";
 import { takeScreenshot } from "./common/screenshot-helper.js";
 import { scrapingStateManager } from "./common/scraping-state.js";
 import { timeManager } from "./common/time-manager.js";
-import { splitDateRange } from "./date-split/date-split.js";
 import { getNextDateFromCompleted } from "./date-split/helper.js";
 import login from "./login/login.js";
 import { JobStatus } from "./models/job.model.js";
@@ -485,7 +484,7 @@ async function runScrapingWithRestart(
               jobId
             );
             await dualLogInfo(
-              "Property search and reservation completed successfully!"
+              "Property search completed successfully! Property found."
             );
             // Screenshot: property search complete
             await takeScreenshot(
@@ -502,114 +501,28 @@ async function runScrapingWithRestart(
           await dualLogInfo(
             "No expedia ID provided, skipping property search."
           );
+          // Close browser when done with this attempt
+          if (browser) {
+            await browser.close();
+            browser = null;
+          }
+          await dualLogInfo("Browser closed successfully.");
+          break; // Exit the retry loop
         }
 
-        // Step 4: Process date range with time management
-        try {
-          if (currentStartDate && endDate && expediaId) {
-            // Check pause state before date splitting
-            await scrapingStateManager.waitWhilePaused();
-            if (!scrapingStateManager.isRunning()) {
-              await dualLogInfo("Scraping was stopped, exiting...");
-              await browser.close();
-              if (jobId) {
-                await jobService.updateJobStatus(
-                  jobId,
-                  JobStatus.Failed,
-                  "Scraping was stopped"
-                );
-                await finalizeJobLogging("failed");
-              }
-              return;
-            }
-
-            await splitDateRange(
-              browser,
-              page,
-              currentStartDate,
-              endDate,
-              expediaId,
-              jobId
-            );
-
-            // If we reach here, all dates were processed successfully
-            await dualLogInfo("All dates processed successfully!");
-            // Screenshot: all dates processed
-            await takeScreenshot(
-              page,
-              jobId ?? "",
-              "all_dates_processed",
-              "step"
-            );
-            // Close browser when done with this attempt
-            if (browser) {
-              await browser.close();
-              browser = null;
-            }
-            await dualLogInfo("Browser closed successfully.");
-            break; // Exit the retry loop
-          } else {
-            await dualLogInfo(
-              "No start date or end date, or expedia ID provided, skipping date selection."
-            );
-            break; // Exit the retry loop
-          }
-        } catch (error: any) {
-          // Check if this is a browser restart error
-          if (error.message.startsWith("BROWSER_RESTART_NEEDED:")) {
-            const resumeDate = error.message.split(":")[1];
-            await dualLogInfo(
-              `Browser restart needed. Will resume from: ${resumeDate}`,
-              {
-                jobId,
-                resumeDate,
-                currentStartDate,
-                endDate,
-                attemptCount,
-                timeSession: timeManager.getSessionInfo(),
-                dateComparison: endDate
-                  ? compareDates(resumeDate, endDate)
-                  : null,
-              }
-            );
-
-            // Close current browser
-            if (browser) {
-              await browser.close();
-              browser = null;
-            }
-
-            // Reset time session for next attempt
-            await timeManager.resetSession(jobId);
-
-            // Update the start date for next iteration
-            currentStartDate = resumeDate;
-
-            await dualLogInfo(`Updated currentStartDate for next iteration`, {
-              jobId,
-              newCurrentStartDate: currentStartDate,
-              endDate,
-              willContinue:
-                currentStartDate && endDate
-                  ? compareDates(currentStartDate, endDate) <= 0
-                  : false,
-              attemptCount: attemptCount + 1,
-            });
-
-            // Continue to next iteration (browser restart)
-            continue;
-          } else {
-            // Other errors should be propagated
-            await dualLogError("Date selection failed:", error);
-            // Close browser when done with this attempt
-            if (browser) {
-              await browser.close();
-              browser = null;
-            }
-            await dualLogInfo("Browser closed successfully.");
-            throw error;
-          }
+        // Verification-only flow: login + 2FA succeeded and the property was
+        // located. Stop here without processing the date range or scraping any
+        // reservation data.
+        await dualLogInfo(
+          "Login, verification and property search completed. Stopping (verification-only mode)."
+        );
+        // Close browser when done with this attempt
+        if (browser) {
+          await browser.close();
+          browser = null;
         }
+        await dualLogInfo("Browser closed successfully.");
+        break; // Exit the retry loop
       } else {
         await dualLogInfo("No login credentials provided.");
         await dualLogInfo("Browser closed successfully.");

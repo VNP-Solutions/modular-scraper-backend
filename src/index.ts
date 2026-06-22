@@ -2,6 +2,7 @@ import dotenv from "dotenv";
 import mongoose from "mongoose";
 import open from "open";
 import app from "./app/app.js";
+import { configureDnsServers } from "./common/configure-dns.js";
 import { loadAndSetCredentials } from "./common/load-token.js";
 import { otpAwareWorkerPool } from "./common/otp-aware-worker-pool.js";
 import {
@@ -20,6 +21,9 @@ const connectDB = async (): Promise<void> => {
     if (!DATABASE_URI) {
       throw new Error("DATABASE_URI environment variable is not defined");
     }
+
+    // Ensure SRV (mongodb+srv://) lookups use a reachable DNS resolver.
+    configureDnsServers();
 
     await mongoose.connect(DATABASE_URI);
     console.log("Connected to MongoDB successfully");

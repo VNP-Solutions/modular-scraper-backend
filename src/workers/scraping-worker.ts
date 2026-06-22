@@ -16,6 +16,7 @@ import {
   finalizeJobLogging,
   initializeJobLogging,
 } from "../common/log-helper.js";
+import { configureDnsServers } from "../common/configure-dns.js";
 import { progressManager } from "../common/progress-manager.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import graphqlScraping from "../expedia-graphql.js";
@@ -121,6 +122,9 @@ class ScrapingWorker {
       if (!DATABASE_URI) {
         throw new Error("DATABASE_URI environment variable is not defined");
       }
+
+      // Ensure SRV (mongodb+srv://) lookups use a reachable DNS resolver.
+      configureDnsServers();
 
       await mongoose.connect(DATABASE_URI);
       console.log("Worker: Connected to MongoDB successfully");
@@ -416,17 +420,11 @@ class ScrapingWorker {
       // 7. Get final job statistics
       const progress = await jobService.getJobProgress(jobId);
 
-      // 8. Determine final status based on completion
-      let finalStatus = "Completed";
-      let failedReason: string | undefined;
-      if (progress.totalItems === 0) {
-        finalStatus = "Failed";
-        failedReason = "No reservations found for the date range";
-      } else if (progress.completionPercentage < 100) {
-        finalStatus = "Partial";
-        failedReason =
-          "Scraping completed partially; some dates could not be processed";
-      }
+      // 8. Verification-only flow: reaching here means login + 2FA succeeded
+      // and the property was located. No reservations are collected in this
+      // mode, so the job is Completed regardless of item count.
+      const finalStatus = "Completed";
+      const failedReason: string | undefined = undefined;
 
       // 9. Update final job status
       await jobService.updateJobStatus(
@@ -435,8 +433,11 @@ class ScrapingWorker {
         failedReason
       );
 
-      await this.maybeApplyOver160FlagOnCompletion(jobId, finalStatus);
-      await this.maybeUploadJobItemsToGoogleDrive(jobId, finalStatus);
+      // Item-based post-processing only makes sense when reservations exist.
+      if (progress.totalItems > 0) {
+        await this.maybeApplyOver160FlagOnCompletion(jobId, finalStatus);
+        await this.maybeUploadJobItemsToGoogleDrive(jobId, finalStatus);
+      }
 
       // 10. Stop scraping state manager
       scrapingStateManager.stopScraping();
@@ -577,17 +578,11 @@ class ScrapingWorker {
       // 9. Get final job statistics
       const progress = await jobService.getJobProgress(jobId);
 
-      // 10. Determine final status based on completion
-      let finalStatus = "Completed";
-      let failedReason: string | undefined;
-      if (progress.totalItems === 0) {
-        finalStatus = "Failed";
-        failedReason = "No reservations found for the date range";
-      } else if (progress.completionPercentage < 100) {
-        finalStatus = "Partial";
-        failedReason =
-          "Scraping completed partially; some dates could not be processed";
-      }
+      // 10. Verification-only flow: reaching here means login + 2FA succeeded
+      // and the property was located. No reservations are collected in this
+      // mode, so the job is Completed regardless of item count.
+      const finalStatus = "Completed";
+      const failedReason: string | undefined = undefined;
 
       // 11. Update final job status
       await jobService.updateJobStatus(
@@ -596,8 +591,11 @@ class ScrapingWorker {
         failedReason
       );
 
-      await this.maybeApplyOver160FlagOnCompletion(jobId, finalStatus);
-      await this.maybeUploadJobItemsToGoogleDrive(jobId, finalStatus);
+      // Item-based post-processing only makes sense when reservations exist.
+      if (progress.totalItems > 0) {
+        await this.maybeApplyOver160FlagOnCompletion(jobId, finalStatus);
+        await this.maybeUploadJobItemsToGoogleDrive(jobId, finalStatus);
+      }
 
       // 12. Stop scraping state manager
       scrapingStateManager.stopScraping();

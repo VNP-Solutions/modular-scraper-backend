@@ -11,6 +11,10 @@ import { WorkerJobData } from "../common/worker-types.js";
 import { specs, swaggerUi } from "../config/swagger.js";
 import { getAccess, getOauth2Callback } from "../get-access/access.js";
 import { JobStatus } from "../models/job.model.js";
+import {
+  checkExpediaProperties,
+  PropertyToCheck,
+} from "../property-check/property-check.js";
 import { ScheduledJob } from "../models/scheduled-job.model.js";
 import { propertyCredentialsService } from "../services/job-credentials.service.js";
 import {
@@ -2991,6 +2995,141 @@ app.post("/api/agoda/rerun-failed-job", (async (
       status: 500,
       message: "Error processing Agoda job rerun",
       error: err.message,
+    });
+  }
+}) as any);
+
+/**
+ * @swagger
+ * /api/expedia/check-properties:
+ *   post:
+ *     tags:
+ *       - Scraping Jobs
+ *     summary: Check whether Expedia properties exist for an account
+ *     description: |
+ *       Logs into Expedia Partner Central once (email/password + 2FA), then
+ *       searches each provided Expedia property id to determine whether the
+ *       property exists for that account. Runs synchronously and returns one
+ *       result object per provided property.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - username
+ *               - password
+ *               - expedia_ids
+ *             properties:
+ *               username:
+ *                 type: string
+ *                 description: Expedia Partner Central email/username
+ *                 example: "user@example.com"
+ *               password:
+ *                 type: string
+ *                 description: Expedia Partner Central password (plaintext)
+ *               expedia_ids:
+ *                 type: array
+ *                 description: Properties to check
+ *                 items:
+ *                   type: object
+ *                   required:
+ *                     - _id
+ *                     - expedia_id
+ *                   properties:
+ *                     _id:
+ *                       type: string
+ *                       example: "507f1f77bcf86cd799439011"
+ *                     expedia_id:
+ *                       type: string
+ *                       example: "12345678"
+ *     responses:
+ *       200:
+ *         description: Per-property check results
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 type: object
+ *                 properties:
+ *                   _id:
+ *                     type: string
+ *                   expedia_id:
+ *                     type: string
+ *                   status:
+ *                     type: boolean
+ *                     description: true if the property was found, false otherwise
+ *                   success_message:
+ *                     type: string
+ *                   error_message:
+ *                     type: string
+ *       400:
+ *         description: Invalid request body
+ *       409:
+ *         description: Another scraping/check operation is already running
+ *       500:
+ *         description: Login, 2FA, or processing error
+ */
+app.post("/api/expedia/check-properties", (async (
+  req: express.Request,
+  res: express.Response
+) => {
+  try {
+    const { username, password, expedia_ids } = req.body;
+
+    if (!username || !password) {
+      return res.status(400).json({
+        status: 400,
+        message: "username and password are required in request body",
+      });
+    }
+
+    if (!Array.isArray(expedia_ids) || expedia_ids.length === 0) {
+      return res.status(400).json({
+        status: 400,
+        message:
+          "expedia_ids must be a non-empty array of { _id, expedia_id } objects",
+      });
+    }
+
+    const invalidEntry = expedia_ids.find(
+      (entry: any) =>
+        !entry ||
+        typeof entry !== "object" ||
+        entry._id === undefined ||
+        entry.expedia_id === undefined
+    );
+    if (invalidEntry) {
+      return res.status(400).json({
+        status: 400,
+        message: "Each expedia_ids entry must include _id and expedia_id",
+      });
+    }
+
+    // Prevent collision with an in-flight scraping job or another check run.
+    if (scrapingStateManager.isRunning()) {
+      return res.status(409).json({
+        status: 409,
+        message: "A scraping or property-check operation is already running",
+      });
+    }
+
+    const results = await checkExpediaProperties(
+      username,
+      password,
+      expedia_ids as PropertyToCheck[]
+    );
+
+    return res.status(200).json(results);
+  } catch (err: any) {
+    console.error("Error in /api/expedia/check-properties:", err);
+    const message = getFailedReasonForUser(err, "Login failed");
+    return res.status(500).json({
+      status: 500,
+      message,
+      error: err?.message,
     });
   }
 }) as any);

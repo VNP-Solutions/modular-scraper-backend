@@ -1,5 +1,6 @@
 import { Browser, Page } from "puppeteer";
 import { delay } from "../common/delay.js";
+import { FAILED_REASON, setFailedReasonCode } from "../common/failed-reason.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import { timeoutManager } from "../common/timeout-manager.js";
@@ -103,75 +104,18 @@ export async function propertySearchAndClickReservation(
           ]);
 
           await dualLogInfo("Successfully navigated to property page");
+          await dualLogInfo(`Property ${propertyId} located.`);
         } else {
-          throw new Error(`Could not find property with ID: ${propertyId}`);
+          const notFoundError = new Error(
+            `Could not find property with ID: ${propertyId}`
+          );
+          setFailedReasonCode(notFoundError, FAILED_REASON.PROPERTY_NOT_FOUND);
+          throw notFoundError;
         }
       } catch (error: any) {
         await dualLogError(`Error finding/clicking property: ${error.message}`);
         throw error;
       }
-    }
-
-    // Check pause state before finding reservations
-    await scrapingStateManager.waitWhilePaused();
-    if (!scrapingStateManager.isRunning()) {
-      await dualLogError("Scraping was stopped during property search");
-      throw new Error("Scraping was stopped during property search");
-    }
-
-    // Find and click the Reservations link
-    await dualLogInfo("Looking for Reservations link...");
-
-    try {
-      // Wait for the drawer content to load
-      await page.waitForSelector(".uitk-drawer-content", {
-        visible: true,
-        timeout: loadingTimeout,
-      });
-
-      // Click using JavaScript with the exact structure
-      const clicked = await page.evaluate(() => {
-        const reservationsItem = Array.from(
-          document.querySelectorAll(".uitk-action-list-item-content")
-        ).find((item) => {
-          const textDiv = item.querySelector(".uitk-text.overflow-wrap");
-          return textDiv && textDiv.textContent?.trim() === "Reservations";
-        });
-
-        if (reservationsItem) {
-          const link = reservationsItem.querySelector(
-            "a.uitk-action-list-item-link"
-          );
-          if (link instanceof HTMLElement) {
-            link.click();
-            return true;
-          }
-        }
-        return false;
-      });
-
-      if (!clicked) {
-        throw new Error("Could not find or click Reservations link");
-      }
-
-      // Wait for navigation to complete
-      await Promise.all([
-        page.waitForNavigation({
-          waitUntil: "networkidle0",
-          timeout: loadingTimeout,
-        }),
-        delay(8000),
-      ]);
-
-      await dualLogInfo("Successfully navigated to Reservations page");
-    } catch (error) {
-      await dualLogError(`Error searching for property ${propertyId}:`, error);
-      // Close browser when done with this attempt
-      if (browser) {
-        await browser.close();
-      }
-      await dualLogInfo("Browser closed successfully.");
-      throw error;
     }
   } catch (error: any) {
     await dualLogError(`Error searching for property ${propertyId}:`, error);
