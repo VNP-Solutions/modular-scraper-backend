@@ -1,4 +1,9 @@
 import fetch from "node-fetch";
+import {
+  randomPause,
+  simulateHumanMouseMove,
+  simulateHumanOnPage,
+} from "../common/human-browser-helper.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
 import { JobStatus } from "../models/job.model.js";
 import { jobService } from "./job.service.js";
@@ -389,6 +394,14 @@ export class VccsManagementService {
         urlSource,
       });
 
+      // Light human-like gesture before navigating to the next card page
+      try {
+        await simulateHumanMouseMove(page);
+        await randomPause(200, 600);
+      } catch {
+        // Ignore — page may not be ready for mouse events yet
+      }
+
       // Navigate - Booking.com will automatically:
       // 1. Check authentication cookies
       // 2. Generate new session token
@@ -409,8 +422,12 @@ export class VccsManagementService {
         redirected: finalUrl !== cardDetailsUrl,
       });
 
-      // Wait for page to fully render
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      // Mouse + scroll after the page renders (replaces a flat 2s wait)
+      try {
+        await simulateHumanOnPage(page);
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+      }
 
       // Check if we're on a 2FA/captcha page (your existing detection can handle this)
       const currentPageType = await page.evaluate(() => {
@@ -1309,8 +1326,8 @@ export class VccsManagementService {
           `Successfully processed reservation ${vccs.hres_id} (${processed}/${vccsData.data.vccs.length})`
         );
 
-        // Add a small delay between requests to avoid rate limiting
-        await new Promise((resolve) => setTimeout(resolve, 1000));
+        // Small delay between card fetches (same ballpark as before, ~1s)
+        await randomPause(800, 1500);
       } catch (error) {
         errors++;
         dualLogError(`Error processing reservation ${vccs.hres_id}`, {
