@@ -150,6 +150,9 @@ tmp/
 temp/
 screenshots/
 
+# Local Chrome user profiles (LOCAL_BROWSER=true)
+.local-chrome-profiles/
+
 # Docker files (per code review feedback) - REMOVED: We need Dockerfiles in monorepo
 # Dockerfile*
 # docker-compose*.yml

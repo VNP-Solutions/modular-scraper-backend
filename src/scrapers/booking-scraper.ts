@@ -50,7 +50,9 @@ import {
   CaptchaService,
   CaptchaSolveResult,
 } from "../services/captcha-service.js";
+import { browserlessSessionService } from "../services/browserless-session.service.js";
 import { cookieStorageService } from "../services/cookie-storage.service.js";
+import { localChromeSessionService } from "../services/local-chrome-session.service.js";
 import { propertyCredentialsService } from "../services/job-credentials.service.js";
 import { jobService } from "../services/job.service.js";
 import { phoneNumberSlotService } from "../services/phone-number-slot.service.js";
@@ -102,6 +104,12 @@ export class BookingScraper extends BaseScraper {
    */
   private skipTrustUnavailableStreakForJobRun = false;
 
+  /** True when connected to a persisted Browserless session (disconnect instead of close on cleanup). */
+  private usingPersistentBrowserlessSession = false;
+
+  /** True when using system Chrome + userDataDir profile (LOCAL_BROWSER=true). */
+  private usingLocalChromeProfile = false;
+
   constructor(context?: ScraperContext) {
     super("booking", "https://admin.booking.com");
     this.browserlessToken =
@@ -151,8 +159,39 @@ export class BookingScraper extends BaseScraper {
     );
   }
 
+  private async resolveBookingLoginEmail(
+    jobId?: string,
+    loginEmailOverride?: string
+  ): Promise<string | null> {
+    if (loginEmailOverride?.trim()) {
+      return loginEmailOverride.trim();
+    }
+
+    if (jobId) {
+      try {
+        const latest =
+          await propertyCredentialsService.getBookingCredentialsFromJob(jobId);
+        if (latest?.bookingUsername) {
+          return latest.bookingUsername.trim();
+        }
+      } catch (error) {
+        await this.logWarn(
+          `Could not resolve Booking email from job ${jobId}`,
+          error
+        );
+      }
+    }
+
+    if (this.credentials?.email) {
+      return this.credentials.email.trim();
+    }
+
+    return null;
+  }
+
   async setupBrowser(
-    jobId?: string
+    jobId?: string,
+    loginEmail?: string
   ): Promise<{ browser: Browser; page: Page }> {
     try {
       // Check environment - use local browser for local/development
@@ -161,7 +200,7 @@ export class BookingScraper extends BaseScraper {
         await this.logInfo(
           "Environment set to local/development, using local browser"
         );
-        return await this.setupLocalBrowser(jobId);
+        return await this.setupLocalBrowser(jobId, loginEmail);
       }
 
       await this.logInfo(
@@ -176,26 +215,98 @@ export class BookingScraper extends BaseScraper {
         ? await timeoutManager.getSelectorTimeout(jobId)
         : 30000;
 
-      // Create Browserless session for UI access
-      const session = await this.createBrowserlessSession();
-      if (session && session.id) {
-        await this.logInfo("Browserless UI session created");
-      } else {
+      const resolvedLoginEmail = await this.resolveBookingLoginEmail(
+        jobId,
+        loginEmail
+      );
+      let session:
+        | Awaited<
+            ReturnType<
+              typeof browserlessSessionService.getOrCreateSessionForEmail
+            >
+          >
+        | null = null;
+
+      if (resolvedLoginEmail) {
         await this.logInfo(
-          "Failed to create Browserless session, falling back to local browser"
+          `Resolving Browserless session for Booking account ${resolvedLoginEmail}`
         );
-        // Fallback to local browser
-        return await this.setupLocalBrowser(jobId);
+        try {
+          session = await browserlessSessionService.getOrCreateSessionForEmail(
+            resolvedLoginEmail,
+            PlatformsType.BOOKING
+          );
+          this.usingPersistentBrowserlessSession = true;
+        } catch (sessionError) {
+          await this.logError(
+            "Failed to get or create persisted Browserless session",
+            sessionError
+          );
+        }
+      } else {
+        await this.logWarn(
+          "No Booking login email available; creating anonymous Browserless session"
+        );
       }
 
-      // Connect to the created Browserless session
-      const browser = await puppeteer.connect({
-        browserWSEndpoint: session.connect,
-        protocolTimeout: 300000,
-        defaultViewport: null,
-      });
+      if (!session) {
+        const fallbackSession = await this.createBrowserlessSession();
+        if (!fallbackSession?.connect) {
+          await this.logInfo(
+            "Failed to create Browserless session, falling back to local browser"
+          );
+          return await this.setupLocalBrowser(jobId, loginEmail);
+        }
+        session = {
+          session: fallbackSession,
+          isNew: true,
+          reused: false,
+        };
+        this.usingPersistentBrowserlessSession = false;
+      }
 
-      const page = await browser.newPage();
+      await this.logInfo(
+        session.reused
+          ? "Reusing persisted Browserless session"
+          : "Using new Browserless session",
+        {
+          sessionId: session.session.id,
+          loginEmail: resolvedLoginEmail ?? "unknown",
+        }
+      );
+
+      let browser: Browser;
+      try {
+        browser = await browserlessSessionService.connectToSession(
+          session.session.connect
+        );
+      } catch (connectError) {
+        if (resolvedLoginEmail && session.reused) {
+          await this.logWarn(
+            "Failed to connect to saved Browserless session; creating a fresh one",
+            connectError
+          );
+          await browserlessSessionService.invalidateSessionForEmail(
+            resolvedLoginEmail,
+            session.session,
+            PlatformsType.BOOKING
+          );
+          session = await browserlessSessionService.getOrCreateSessionForEmail(
+            resolvedLoginEmail,
+            PlatformsType.BOOKING
+          );
+          this.usingPersistentBrowserlessSession = true;
+          browser = await browserlessSessionService.connectToSession(
+            session.session.connect
+          );
+        } else {
+          throw connectError;
+        }
+      }
+
+      const existingPages = await browser.pages();
+      const page =
+        existingPages.length > 0 ? existingPages[0] : await browser.newPage();
       await this.logInfo("Connected to Browserless session successfully");
 
       // Apply anti-detection before any navigation so evaluateOnNewDocument fires
@@ -211,21 +322,17 @@ export class BookingScraper extends BaseScraper {
 
       await this.generateLiveUrl(page);
 
-      // Load saved cookies if they exist for the current property
-      if (this.propertyIdForDb) {
-        const cookies = await cookieStorageService.loadCookies(
-          this.propertyIdForDb,
-          PlatformsType.BOOKING
+      if (browserlessSessionService.shouldUseUnblock(session.isNew)) {
+        await browserlessSessionService.applyUnblockCookies(page, this.baseUrl);
+      } else if (session.reused) {
+        await this.logInfo(
+          "Skipping Browserless unblock on reused session (live browser state preserved)"
         );
-        if (cookies) {
-          await page.setCookie(...cookies);
-          await this.logInfo(
-            `Loaded ${cookies.length} cookies from storage for property ${this.propertyIdForDb}`
-          );
-        } else {
-          await this.logInfo("No saved cookies found for this property");
-        }
       }
+
+      await this.logInfo(
+        "Skipping property cookie_storage load; Browserless session persists cookies by account email"
+      );
 
       // Navigate to login page
       await this.logInfo("Navigating to Booking.com admin portal");
@@ -253,9 +360,84 @@ export class BookingScraper extends BaseScraper {
   }
 
   /**
-   * Setup local browser for development/testing
+   * Setup local browser for development/testing.
+   * LOCAL_BROWSER=true → system Chrome + per-email userDataDir (persisted session).
+   * Otherwise → bundled Chromium, fresh profile each run (existing behavior).
    */
   private async setupLocalBrowser(
+    jobId?: string,
+    loginEmail?: string
+  ): Promise<{ browser: Browser; page: Page }> {
+    if (localChromeSessionService.isEnabled()) {
+      return this.setupLocalChromeProfileBrowser(jobId, loginEmail);
+    }
+    return this.setupEphemeralLocalBrowser(jobId);
+  }
+
+  private async setupLocalChromeProfileBrowser(
+    jobId?: string,
+    loginEmail?: string
+  ): Promise<{ browser: Browser; page: Page }> {
+    try {
+      const resolvedEmail = await this.resolveBookingLoginEmail(jobId, loginEmail);
+      await this.logInfo(
+        "LOCAL_BROWSER enabled — launching system Chrome with userDataDir profile",
+        { loginEmail: resolvedEmail ?? localChromeSessionService.getDefaultProfileEmail() }
+      );
+
+      const loadingTimeout = jobId
+        ? await timeoutManager.getLoadingTimeout(jobId)
+        : 120000;
+      const selectorTimeout = jobId
+        ? await timeoutManager.getSelectorTimeout(jobId)
+        : 30000;
+
+      const { browser, page, userDataDir, reusedProfile } =
+        await localChromeSessionService.launchForEmail(resolvedEmail);
+
+      this.usingLocalChromeProfile = true;
+
+      await this.applyAntiDetection(page);
+      await page.setDefaultNavigationTimeout(loadingTimeout);
+      await page.setDefaultTimeout(selectorTimeout);
+      await page.setViewport({ width: 1905, height: 945 });
+
+      await this.logInfo(
+        reusedProfile
+          ? "Reusing existing Chrome user profile from disk"
+          : "Created new Chrome user profile (first run for this email)",
+        { userDataDir }
+      );
+
+      await this.logInfo(
+        "Skipping property cookie_storage; Chrome userDataDir persists session by email"
+      );
+
+      await this.logInfo("Navigating to Booking.com admin portal");
+      try {
+        await page.goto(this.baseUrl, {
+          waitUntil: "networkidle2",
+          timeout: loadingTimeout,
+        });
+      } catch {
+        await this.logInfo("Navigation slow, trying with domcontentloaded");
+        await page.goto(this.baseUrl, {
+          waitUntil: "domcontentloaded",
+          timeout: 60000,
+        });
+        await this.delay(5000);
+      }
+
+      await this.takeScreenshot();
+      await this.logInfo("Local Chrome profile browser setup completed");
+      return { browser, page };
+    } catch (error) {
+      await this.logError("Local Chrome profile browser setup failed", error);
+      throw error;
+    }
+  }
+
+  private async setupEphemeralLocalBrowser(
     jobId?: string
   ): Promise<{ browser: Browser; page: Page }> {
     try {
@@ -619,16 +801,28 @@ export class BookingScraper extends BaseScraper {
 
     // Save cookies AFTER browsing + search so cached-cookie runs start from the
     // post-search state (skipping both login AND property search next time).
-    const cookies = await this.page.cookies();
-    if (this.propertyIdForDb) {
-      const success = await cookieStorageService.saveCookies(
-        this.propertyIdForDb,
-        PlatformsType.BOOKING,
-        cookies
-      );
-      if (!success) {
-        await this.logWarn("Failed to save cookies to storage");
+    // Skip when using Browserless persisted session — cookies live in the session userDataDir.
+    // Skip when using local Chrome userDataDir profile (LOCAL_BROWSER=true).
+    if (!this.usingPersistentBrowserlessSession && !this.usingLocalChromeProfile) {
+      const cookies = await this.page.cookies();
+      if (this.propertyIdForDb) {
+        const success = await cookieStorageService.saveCookies(
+          this.propertyIdForDb,
+          PlatformsType.BOOKING,
+          cookies
+        );
+        if (!success) {
+          await this.logWarn("Failed to save cookies to storage");
+        }
       }
+    } else if (this.usingLocalChromeProfile) {
+      await this.logInfo(
+        "Skipping property cookie_storage save; Chrome userDataDir profile persists session by email"
+      );
+    } else if (this.usingPersistentBrowserlessSession) {
+      await this.logInfo(
+        "Skipping property cookie_storage save; Browserless session persists cookies by email"
+      );
     }
 
     await this.takeScreenshot();
@@ -4249,7 +4443,10 @@ export class BookingScraper extends BaseScraper {
         throw err;
       }
 
-      const { browser, page } = await this.setupBrowser(leaseJobId);
+      const { browser, page } = await this.setupBrowser(
+        leaseJobId,
+        params.credentials?.email
+      );
       this.browser = browser;
       this.page = page;
 
@@ -4809,8 +5006,23 @@ export class BookingScraper extends BaseScraper {
       }
 
       if (this.browser) {
-        await this.browser.close();
-        await this.logInfo("Browser closed successfully");
+        if (
+          this.usingPersistentBrowserlessSession &&
+          browserlessSessionService.getProcessKeepAliveMs() > 0
+        ) {
+          await this.browser.disconnect();
+          await this.logInfo(
+            "Browser disconnected; persisted Browserless session kept alive"
+          );
+        } else if (this.usingLocalChromeProfile) {
+          await this.browser.close();
+          await this.logInfo(
+            "Chrome closed; userDataDir profile saved for next local run"
+          );
+        } else {
+          await this.browser.close();
+          await this.logInfo("Browser closed successfully");
+        }
       }
     } catch (error) {
       await dualLogError(
@@ -4874,52 +5086,13 @@ export class BookingScraper extends BaseScraper {
 
   private async createBrowserlessSession(): Promise<any> {
     try {
-      await this.logInfo("Creating Browserless session with UI access");
-
-      const sessionConfig = {
-        ttl: 86400000, // 24h
-        stealth: true,
-        headless: false,
-        args: [
-          "--no-sandbox",
-          "--disable-dev-shm-usage",
-          "--disable-background-timer-throttling",
-          "--disable-backgrounding-occluded-windows",
-          "--disable-renderer-backgrounding",
-          "--enable-javascript",
-          "--disable-web-security",
-          "--window-size=2560,1440",
-        ],
-      };
-
-      const response = await fetch(
-        `https://production-sfo.browserless.io/session?token=${this.browserlessToken}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(sessionConfig),
-        }
-      );
-
-      await this.logInfo(
-        `Response status: ${response.status} ${response.statusText}`
-      );
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        await this.logError(
-          `Failed to create session: ${response.status} "${errorText}"`
-        );
-        return null;
-      }
-
-      const session = (await response.json()) as any;
-
+      await this.logInfo("Creating anonymous Browserless session (no email)");
+      const session =
+        await browserlessSessionService.createPersistentSession();
       await this.logInfo("Browserless session created successfully", {
         sessionId: session.id,
         browserWSEndpoint: session.connect,
       });
-
       return session;
     } catch (error) {
       await this.logError("Session creation failed", error);

@@ -320,12 +320,15 @@ export class BookingTrustSchedulerService {
       bookingScraper.setPropertyIdForDb(propertyId);
       bookingScraper.setScraperJobId(leaseJobId);
 
-      const { browser, page } = await bookingScraper.setupBrowser(leaseJobId);
+      const credentials = property.credentials?.[0];
+      const { browser, page } = await bookingScraper.setupBrowser(
+        leaseJobId,
+        credentials?.bookingUsername
+      );
       bookingScraper.setBrowserData(page, browser);
 
       // Attempt booking login
       try {
-        const credentials = property.credentials?.[0];
         const password = credentials?.bookingPassword
           ? decryptPassword(credentials.bookingPassword)
           : undefined;

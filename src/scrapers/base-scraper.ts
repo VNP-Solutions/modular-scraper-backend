@@ -95,7 +95,8 @@ export abstract class BaseScraper {
 
   // Abstract methods that each platform must implement
   abstract setupBrowser(
-    jobId?: string
+    jobId?: string,
+    loginEmail?: string
   ): Promise<{ browser: Browser; page: Page }>;
   abstract login(
     credentials: LoginCredentials,
@@ -208,7 +209,10 @@ export abstract class BaseScraper {
       }
 
       // Step 1: Setup browser
-      const { browser, page } = await this.setupBrowser(params.jobId);
+      const { browser, page } = await this.setupBrowser(
+        params.jobId,
+        params.credentials?.email
+      );
       this.browser = browser;
       this.page = page;
 

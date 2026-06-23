@@ -13,7 +13,10 @@ export class ExpediaScraper extends BaseScraper {
     super('expedia', 'https://www.expediapartnercentral.com/Account/Logon?signedOff=true');
   }
 
-  async setupBrowser(jobId?: string): Promise<{ browser: Browser; page: Page }> {
+  async setupBrowser(
+    jobId?: string,
+    _loginEmail?: string
+  ): Promise<{ browser: Browser; page: Page }> {
     try {
       await this.logInfo('Setting up Expedia browser');
       
