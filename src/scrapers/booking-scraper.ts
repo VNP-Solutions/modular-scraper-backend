@@ -304,13 +304,13 @@ export class BookingScraper extends BaseScraper {
         }
       }
 
-      const existingPages = await browser.pages();
-      const page =
-        existingPages.length > 0 ? existingPages[0] : await browser.newPage();
+      const page = await this.prepareBrowserlessPage(browser, session.reused);
       await this.logInfo("Connected to Browserless session successfully");
 
       // Apply anti-detection before any navigation so evaluateOnNewDocument fires
       await this.applyAntiDetection(page);
+
+      await this.activatePageForAutomation(page);
 
       // Set viewport and timeouts
       await page.setViewport({
@@ -336,19 +336,7 @@ export class BookingScraper extends BaseScraper {
 
       // Navigate to login page
       await this.logInfo("Navigating to Booking.com admin portal");
-      try {
-        await page.goto(this.baseUrl, {
-          waitUntil: "networkidle2",
-          timeout: loadingTimeout,
-        });
-      } catch (navError) {
-        await this.logInfo("Navigation slow, trying with domcontentloaded");
-        await page.goto(this.baseUrl, {
-          waitUntil: "domcontentloaded",
-          timeout: 60000,
-        });
-        await this.delay(5000);
-      }
+      await this.navigateWithStaleTabRecovery(page, this.baseUrl, loadingTimeout);
 
       await this.takeScreenshot();
 
@@ -1095,6 +1083,167 @@ export class BookingScraper extends BaseScraper {
       msg.includes("Target closed") ||
       msg.includes("Navigating frame was detached")
     );
+  }
+
+  /** Max wait for a CDP evaluate probe before treating the tab as frozen. */
+  private static readonly PAGE_PROBE_TIMEOUT_MS = 8_000;
+
+  /**
+   * Returns true when the page can run a trivial evaluate (renderer + CDP are responsive).
+   */
+  private async probePageResponsive(
+    page: Page,
+    timeoutMs = BookingScraper.PAGE_PROBE_TIMEOUT_MS
+  ): Promise<boolean> {
+    if (page.isClosed()) {
+      return false;
+    }
+    try {
+      await Promise.race([
+        page.evaluate(() => true),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("Page probe timeout")), timeoutMs)
+        ),
+      ]);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Reload a frozen tab in-place (same session cookies/profile). Mirrors what a Live URL reload does.
+   */
+  private async recoverPageByReload(
+    page: Page,
+    loadingTimeout = 90_000
+  ): Promise<boolean> {
+    if (page.isClosed()) {
+      return false;
+    }
+    try {
+      await page.reload({
+        waitUntil: "domcontentloaded",
+        timeout: loadingTimeout,
+      });
+      await this.delay(1500);
+      return await this.probePageResponsive(page);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Keep the tab in an active, focused lifecycle state and warm the renderer before real navigation.
+   * Reduces frozen tabs after reconnecting to a persisted Browserless session.
+   */
+  private async activatePageForAutomation(page: Page): Promise<void> {
+    try {
+      await page.bringToFront();
+    } catch {
+      /* non-fatal */
+    }
+
+    try {
+      const cdp = await page.createCDPSession();
+      await cdp.send("Page.setWebLifecycleState", { state: "active" });
+      await cdp.send("Emulation.setFocusEmulationEnabled", { enabled: true });
+    } catch (error) {
+      await this.logWarn(
+        "Could not mark Browserless tab as active via CDP",
+        error
+      );
+    }
+
+    if (await this.probePageResponsive(page, 3_000)) {
+      return;
+    }
+
+    try {
+      await page.goto("about:blank", {
+        waitUntil: "domcontentloaded",
+        timeout: 15_000,
+      });
+      await this.delay(500);
+    } catch {
+      /* warmup navigation is best-effort */
+    }
+
+    if (await this.probePageResponsive(page)) {
+      return;
+    }
+
+    await this.logWarn(
+      "Browserless tab unresponsive after warmup; reloading in same session"
+    );
+    await this.recoverPageByReload(page, 30_000);
+  }
+
+  /**
+   * Navigate with domcontentloaded, then reload if the tab is still unresponsive.
+   */
+  private async navigateWithStaleTabRecovery(
+    page: Page,
+    url: string,
+    loadingTimeout: number
+  ): Promise<void> {
+    try {
+      await page.goto(url, {
+        waitUntil: "domcontentloaded",
+        timeout: loadingTimeout,
+      });
+    } catch (navError) {
+      await this.logInfo("Navigation slow or timed out; continuing after domcontentloaded", {
+        url,
+        error: navError instanceof Error ? navError.message : String(navError),
+      });
+    }
+
+    await this.delay(2000);
+
+    if (await this.probePageResponsive(page)) {
+      return;
+    }
+
+    await this.logWarn(
+      "[booking] Tab unresponsive after navigation; reloading in same Browserless session",
+      { url }
+    );
+    await this.recoverPageByReload(page, loadingTimeout);
+  }
+
+  /**
+   * Attach to a Browserless session tab. Reused sessions always get a fresh tab so prior
+   * frozen/stale tabs are not inherited (session cookies/profile are unchanged).
+   */
+  private async prepareBrowserlessPage(
+    browser: Browser,
+    reusedSession: boolean
+  ): Promise<Page> {
+    const openPages = (await browser.pages()).filter((p) => !p.isClosed());
+
+    if (!reusedSession) {
+      return openPages.length > 0 ? openPages[0] : await browser.newPage();
+    }
+
+    const page = await browser.newPage();
+    await this.logInfo(
+      "Opened fresh tab on reused Browserless session (closing prior tabs; cookies preserved)",
+      { priorTabCount: openPages.length }
+    );
+
+    for (const oldTab of openPages) {
+      if (oldTab === page || oldTab.isClosed()) {
+        continue;
+      }
+      try {
+        await oldTab.close();
+      } catch {
+        /* ignore */
+      }
+    }
+
+    return page;
   }
 
   /**
