@@ -464,6 +464,35 @@ export async function splitDateRange(
       `Total reservation IDs collected in memory: ${allReservationIds.length}`
     );
 
+    // Phase 1 ends on the results view — reveal the search form for Phase 2
+    await dualLogInfo(
+      "Phase 1 complete: navigating back to search form before reservation ID processing..."
+    );
+    try {
+      const showSearchClicked = await page.evaluate(() => {
+        const link = document.querySelector("a.showSearch") as HTMLElement | null;
+        if (link) {
+          link.click();
+          return true;
+        }
+        return false;
+      });
+
+      if (showSearchClicked) {
+        await dualLogInfo("Clicked 'Add more reservation IDs' after final chunk");
+        await delay(2000);
+      } else {
+        await dualLogInfo(
+          "'Add more reservation IDs' not found — search form may already be visible"
+        );
+      }
+    } catch (navErr) {
+      await dualLogError(
+        "Error navigating back to search form after Phase 1:",
+        navErr
+      );
+    }
+
     if (allReservationIds.length > 0) {
       await dualLogInfo(
         `All collected reservation IDs: ${allReservationIds.join(", ")}`

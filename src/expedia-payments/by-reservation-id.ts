@@ -2,6 +2,7 @@ import { Browser, Page } from "puppeteer";
 import { delay } from "../common/delay.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
+import { takeScreenshot } from "../common/screenshot-helper.js";
 import { timeoutManager } from "../common/timeout-manager.js";
 import { dbDataService } from "../services/db-data.service.js";
 import { dbEntryService } from "../services/db-entry.service.js";
@@ -17,7 +18,129 @@ const RESERVATION_ID_SELECTORS = {
   tagsWrapper: "#section-reservationIdSearch .tags-input-wrapper",
   hiddenInput: "#reservationIdInput",
   addButton: "#addButton",
+  showSearchLink: "a.showSearch",
+  dateRangeTab: "#tab-dateRangeSearch",
 } as const;
+
+async function areSearchTabsVisible(page: Page): Promise<boolean> {
+  return page.evaluate(
+    (reservationTabSelector, dateRangeTabSelector) => {
+      const isVisible = (el: Element | null) => {
+        if (!el) return false;
+        const style = window.getComputedStyle(el);
+        if (style.display === "none" || style.visibility === "hidden")
+          return false;
+        const rect = el.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      };
+
+      return (
+        isVisible(document.querySelector(reservationTabSelector)) ||
+        isVisible(document.querySelector(dateRangeTabSelector))
+      );
+    },
+    RESERVATION_ID_SELECTORS.tab,
+    RESERVATION_ID_SELECTORS.dateRangeTab
+  );
+}
+
+/**
+ * After a date-range search, Expedia hides the tabbed search form and shows results.
+ * Click "Add more reservation IDs" to reveal the tabs again before Phase 2 / next batch.
+ */
+async function ensureSearchFormVisible(
+  page: Page,
+  jobId?: string
+): Promise<void> {
+  const timeout = await timeoutManager.getLoadingTimeout(jobId);
+
+  if (await areSearchTabsVisible(page)) {
+    await dualLogInfo("Search form tabs already visible");
+    return;
+  }
+
+  await dualLogInfo(
+    `Search form tabs hidden — likely on results view (url: ${page.url()}). Clicking 'Add more reservation IDs'...`
+  );
+
+  const showSearchClicked = await page.evaluate((showSearchSelector) => {
+    const link = document.querySelector(showSearchSelector) as HTMLElement | null;
+    if (link) {
+      link.click();
+      return true;
+    }
+    return false;
+  }, RESERVATION_ID_SELECTORS.showSearchLink);
+
+  if (showSearchClicked) {
+    await dualLogInfo("Clicked 'Add more reservation IDs' link");
+    await delay(2000);
+  } else {
+    await dualLogInfo("'Add more reservation IDs' link not found on page");
+  }
+
+  try {
+    await page.waitForFunction(
+      (reservationTabSelector, dateRangeTabSelector) => {
+        const isVisible = (el: Element | null) => {
+          if (!el) return false;
+          const style = window.getComputedStyle(el);
+          if (style.display === "none" || style.visibility === "hidden")
+            return false;
+          const rect = el.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0;
+        };
+
+        return (
+          isVisible(document.querySelector(reservationTabSelector)) ||
+          isVisible(document.querySelector(dateRangeTabSelector))
+        );
+      },
+      { timeout },
+      RESERVATION_ID_SELECTORS.tab,
+      RESERVATION_ID_SELECTORS.dateRangeTab
+    );
+    await dualLogInfo("Search form tabs are now visible");
+  } catch (err) {
+    if (jobId) {
+      await takeScreenshot(
+        page,
+        jobId,
+        "search_form_tabs_not_found",
+        "error",
+        "expedia"
+      ).catch(() => undefined);
+    }
+    throw new Error(
+      `Could not reveal Expedia search form tabs (url: ${page.url()}). ` +
+        `After date-range results the page may not show 'Add more reservation IDs'. ` +
+        `Original error: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+}
+
+async function clickReservationIdTab(page: Page): Promise<void> {
+  const tabHandle = await page.$(RESERVATION_ID_SELECTORS.tab);
+  if (tabHandle) {
+    await tabHandle.click();
+    return;
+  }
+
+  const clickedByText = await page.evaluate(() => {
+    for (const button of Array.from(document.querySelectorAll("button"))) {
+      const label = button.querySelector(".tab-label");
+      if (label?.textContent?.trim() === "By Reservation ID") {
+        button.click();
+        return true;
+      }
+    }
+    return false;
+  });
+
+  if (!clickedByText) {
+    throw new Error("Could not find 'By Reservation ID' tab button");
+  }
+}
 
 /**
  * Wait until the "By Reservation ID" tab pane and its tags-input are visible.
@@ -67,14 +190,9 @@ async function switchToReservationIdTab(
 
   await dualLogInfo("Switching to 'By Reservation ID' tab...");
 
-  await page.waitForSelector(RESERVATION_ID_SELECTORS.tab, {
-    visible: true,
-    timeout,
-  });
+  await ensureSearchFormVisible(page, jobId);
 
-  const clickTab = async (): Promise<void> => {
-    await page.click(RESERVATION_ID_SELECTORS.tab);
-  };
+  await page.waitForSelector(RESERVATION_ID_SELECTORS.tab, { timeout });
 
   const isFormVisible = async (): Promise<boolean> =>
     page.evaluate(
@@ -98,7 +216,7 @@ async function switchToReservationIdTab(
     );
 
   if (!(await isFormVisible())) {
-    await clickTab();
+    await clickReservationIdTab(page);
     await delay(1000);
   }
 
@@ -109,7 +227,7 @@ async function switchToReservationIdTab(
       "Reservation ID tab content not ready after first click, retrying tab switch...",
       firstAttemptErr
     );
-    await clickTab();
+    await clickReservationIdTab(page);
     await delay(1500);
     await waitForReservationIdSearchForm(page, timeout);
   }
