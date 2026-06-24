@@ -2,6 +2,7 @@ import { Browser, Page } from "puppeteer";
 import { delay } from "../common/delay.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
+import { timeoutManager } from "../common/timeout-manager.js";
 import { dbDataService } from "../services/db-data.service.js";
 import { dbEntryService } from "../services/db-entry.service.js";
 import { dbDatachecking } from "./db-data-checking.js";
@@ -9,28 +10,110 @@ import { extractInvoiceRows } from "./extract-invoice-rows.js";
 
 const BATCH_SIZE = 100;
 
+const RESERVATION_ID_SELECTORS = {
+  tab: "#tab-reservationIdSearch",
+  section: "#section-reservationIdSearch",
+  tagsInput: "#section-reservationIdSearch .tags-input-wrapper input",
+  tagsWrapper: "#section-reservationIdSearch .tags-input-wrapper",
+  hiddenInput: "#reservationIdInput",
+  addButton: "#addButton",
+} as const;
+
+/**
+ * Wait until the "By Reservation ID" tab pane and its tags-input are visible.
+ */
+async function waitForReservationIdSearchForm(
+  page: Page,
+  timeout: number
+): Promise<void> {
+  await page.waitForSelector(RESERVATION_ID_SELECTORS.section, { timeout });
+
+  await page.waitForFunction(
+    (sectionSelector, tagsInputSelector) => {
+      const isVisible = (el: Element | null) => {
+        if (!el) return false;
+        const style = window.getComputedStyle(el);
+        if (style.display === "none" || style.visibility === "hidden")
+          return false;
+        const rect = el.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      };
+
+      const section = document.querySelector(sectionSelector);
+      if (!isVisible(section)) return false;
+
+      const input = document.querySelector(tagsInputSelector);
+      return isVisible(input);
+    },
+    { timeout },
+    RESERVATION_ID_SELECTORS.section,
+    RESERVATION_ID_SELECTORS.tagsInput
+  );
+
+  await page.waitForSelector(RESERVATION_ID_SELECTORS.tagsInput, {
+    visible: true,
+    timeout: Math.min(timeout, 15000),
+  });
+}
+
 /**
  * Switch to the "By Reservation ID" tab
  */
-async function switchToReservationIdTab(page: Page): Promise<void> {
+async function switchToReservationIdTab(
+  page: Page,
+  jobId?: string
+): Promise<void> {
+  const timeout = await timeoutManager.getLoadingTimeout(jobId);
+
   await dualLogInfo("Switching to 'By Reservation ID' tab...");
 
-  const clicked = await page.evaluate(() => {
-    const btn = document.querySelector(
-      "#tab-reservationIdSearch"
-    ) as HTMLElement | null;
-    if (btn) {
-      btn.click();
-      return true;
-    }
-    return false;
+  await page.waitForSelector(RESERVATION_ID_SELECTORS.tab, {
+    visible: true,
+    timeout,
   });
 
-  if (!clicked) {
-    throw new Error("Could not find or click 'By Reservation ID' tab");
+  const clickTab = async (): Promise<void> => {
+    await page.click(RESERVATION_ID_SELECTORS.tab);
+  };
+
+  const isFormVisible = async (): Promise<boolean> =>
+    page.evaluate(
+      (sectionSelector, tagsInputSelector) => {
+        const isVisible = (el: Element | null) => {
+          if (!el) return false;
+          const style = window.getComputedStyle(el);
+          if (style.display === "none" || style.visibility === "hidden")
+            return false;
+          const rect = el.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0;
+        };
+
+        const section = document.querySelector(sectionSelector);
+        if (!isVisible(section)) return false;
+        const input = document.querySelector(tagsInputSelector);
+        return isVisible(input);
+      },
+      RESERVATION_ID_SELECTORS.section,
+      RESERVATION_ID_SELECTORS.tagsInput
+    );
+
+  if (!(await isFormVisible())) {
+    await clickTab();
+    await delay(1000);
   }
 
-  await delay(2000);
+  try {
+    await waitForReservationIdSearchForm(page, timeout);
+  } catch (firstAttemptErr) {
+    await dualLogInfo(
+      "Reservation ID tab content not ready after first click, retrying tab switch...",
+      firstAttemptErr
+    );
+    await clickTab();
+    await delay(1500);
+    await waitForReservationIdSearchForm(page, timeout);
+  }
+
   await dualLogInfo("Successfully switched to 'By Reservation ID' tab");
 }
 
@@ -42,56 +125,48 @@ async function switchToReservationIdTab(page: Page): Promise<void> {
 async function inputReservationIds(
   page: Page,
   ids: string[],
-  batchNumber: number
+  batchNumber: number,
+  jobId?: string
 ): Promise<void> {
   await dualLogInfo(
     `Batch ${batchNumber}: Entering ${ids.length} reservation ID(s)...`
   );
 
-  // Wait for the visible tags-input wrapper to be present & clear any old tags
-  await page.waitForSelector(".tags-input-wrapper input", {
-    visible: true,
-    timeout: 15000,
-  });
+  const timeout = await timeoutManager.getLoadingTimeout(jobId);
+  await waitForReservationIdSearchForm(page, timeout);
 
   // Clear existing tags / reset via JS
-  await page.evaluate(() => {
-    // Try to clear all existing tags if the control exposes a clear method
+  await page.evaluate((selectors) => {
     const hiddenInput = document.querySelector(
-      "#reservationIdInput"
+      selectors.hiddenInput
     ) as HTMLInputElement | null;
     if (hiddenInput) {
       hiddenInput.value = "";
       hiddenInput.dispatchEvent(new Event("change", { bubbles: true }));
     }
 
-    // Remove all existing tag spans/elements visually
-    const wrapper = document.querySelector(".tags-input-wrapper");
+    const wrapper = document.querySelector(selectors.tagsWrapper);
     if (wrapper) {
       const tags = wrapper.querySelectorAll(
         ".tag, .badge, span[data-id], li.tag-item"
       );
       tags.forEach((t) => t.remove());
     }
-  });
+  }, RESERVATION_ID_SELECTORS);
 
   await delay(500);
 
-  // Type each ID followed by comma into the visible input to trigger tag creation
-  const visibleInput = await page.$(".tags-input-wrapper input");
+  const visibleInput = await page.$(RESERVATION_ID_SELECTORS.tagsInput);
   if (!visibleInput) {
     throw new Error("Could not find tags-input visible input element");
   }
 
-  // Use comma-separated string approach — type all IDs joined by comma then press Enter
   const idsString = ids.join(",");
 
-  // Click to focus
   await visibleInput.click();
   await delay(300);
 
-  // Type the comma-separated IDs
-  await page.type(".tags-input-wrapper input", idsString, { delay: 5 });
+  await page.type(RESERVATION_ID_SELECTORS.tagsInput, idsString, { delay: 5 });
   await delay(500);
 
   // Press Enter to confirm the tags
@@ -99,25 +174,28 @@ async function inputReservationIds(
   await delay(500);
 
   // Also set the hidden backing input directly as a safety net
-  await page.evaluate((idList: string) => {
-    const hiddenInput = document.querySelector(
-      "#reservationIdInput"
-    ) as HTMLInputElement | null;
-    if (hiddenInput) {
-      hiddenInput.value = idList;
-      hiddenInput.dispatchEvent(new Event("input", { bubbles: true }));
-      hiddenInput.dispatchEvent(new Event("change", { bubbles: true }));
-    }
+  await page.evaluate(
+    (idList: string, selectors: typeof RESERVATION_ID_SELECTORS) => {
+      const hiddenInput = document.querySelector(
+        selectors.hiddenInput
+      ) as HTMLInputElement | null;
+      if (hiddenInput) {
+        hiddenInput.value = idList;
+        hiddenInput.dispatchEvent(new Event("input", { bubbles: true }));
+        hiddenInput.dispatchEvent(new Event("change", { bubbles: true }));
+      }
 
-    // Enable Add button
-    const addBtn = document.querySelector(
-      "#addButton"
-    ) as HTMLButtonElement | null;
-    if (addBtn) {
-      addBtn.disabled = false;
-      addBtn.removeAttribute("disabled");
-    }
-  }, idsString);
+      const addBtn = document.querySelector(
+        selectors.addButton
+      ) as HTMLButtonElement | null;
+      if (addBtn) {
+        addBtn.disabled = false;
+        addBtn.removeAttribute("disabled");
+      }
+    },
+    idsString,
+    RESERVATION_ID_SELECTORS
+  );
 
   await delay(500);
 
@@ -126,14 +204,16 @@ async function inputReservationIds(
   );
 
   // Click the Add button
-  const addClicked = await page.evaluate(() => {
-    const addBtn = document.querySelector("#addButton") as HTMLElement | null;
+  const addClicked = await page.evaluate((addButtonSelector) => {
+    const addBtn = document.querySelector(
+      addButtonSelector
+    ) as HTMLElement | null;
     if (addBtn) {
       addBtn.click();
       return true;
     }
     return false;
-  });
+  }, RESERVATION_ID_SELECTORS.addButton);
 
   if (!addClicked) {
     throw new Error("Could not click #addButton");
@@ -200,10 +280,10 @@ export async function processReservationIds(
 
     try {
       // Step 1: Switch to By Reservation ID tab
-      await switchToReservationIdTab(page);
+      await switchToReservationIdTab(page, jobId);
 
       // Step 2: Enter IDs and click Add
-      await inputReservationIds(page, batch, batchNumber);
+      await inputReservationIds(page, batch, batchNumber, jobId);
 
       // Step 3: Wait for the table to load
       await dualLogInfo(
