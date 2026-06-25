@@ -3116,13 +3116,34 @@ app.post("/api/expedia/check-properties", (async (
       });
     }
 
-    const results = await checkExpediaProperties(
+    // This check is time consuming (login + 2FA + per-property search), so we
+    // acknowledge the request immediately and run the work in the background.
+    // Results are persisted as DB side-effects (expedia_credential_verified /
+    // expedia_access_level), so the caller does not need them in the response.
+    void checkExpediaProperties(
       username,
       password,
       expedia_ids as PropertyToCheck[]
-    );
+    )
+      .then((results) => {
+        console.log(
+          `check-properties completed for ${results.length} property(ies).`
+        );
+      })
+      .catch((err: any) => {
+        const message = getFailedReasonForUser(err, "Login failed");
+        console.error(
+          "Background check-properties failed:",
+          message,
+          err?.message
+        );
+      });
 
-    return res.status(200).json(results);
+    return res.status(200).json({
+      status: 200,
+      message:
+        "Request accepted. Property check is running in the background; results are written to the database.",
+    });
   } catch (err: any) {
     console.error("Error in /api/expedia/check-properties:", err);
     const message = getFailedReasonForUser(err, "Login failed");
