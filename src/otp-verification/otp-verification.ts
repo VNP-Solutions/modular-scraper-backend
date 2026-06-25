@@ -18,8 +18,12 @@ dotenv.config();
 /**
  * Partner Central OTP notification subject (e.g. SMS → email / IFTTT). Full example:
  * Login attempt from ASHBURN, US to Partner Central Your verification code is 584207. Don't share this code; we will never ask for it.
+ *
+ * The origin city in "Login attempt from <CITY>" is dynamic (it reflects wherever
+ * the login appears to originate), so we must NOT hardcode a specific city. We only
+ * anchor on the stable phrases shared by every OTP email.
  */
-const PARTNER_CENTRAL_OTP_SUBJECT_LOGIN_PREFIX = "Login attempt from ASHBURN";
+const PARTNER_CENTRAL_OTP_SUBJECT_LOGIN_PREFIX = "Login attempt from";
 const PARTNER_CENTRAL_OTP_SUBJECT_CODE_PHRASE =
   "Partner Central Your verification code is";
 
@@ -564,293 +568,121 @@ async function handleOtpVerification(
           throw error;
         }
 
+        // Click the dropdown toggle: a <span data-testid="fallbacks-toggle">.
         await dualLogInfo(
-          "Found fallbacks section, clicking dropdown arrow..."
+          "Found fallbacks section, opening dropdown via fallbacks-toggle..."
         );
 
-        // Click the dropdown arrow to expand options
-        await page.click('[data-testid="fallbacks-toggle"]');
+        const fallbacksToggle = await page
+          .waitForSelector('span[data-testid="fallbacks-toggle"]', {
+            visible: true,
+            timeout: selectorTimeout,
+          })
+          .catch(() => null);
+
+        if (!fallbacksToggle) {
+          throw new Error(
+            'Fallback dropdown toggle (span[data-testid="fallbacks-toggle"]) not found'
+          );
+        }
+
+        await fallbacksToggle.click();
         await delay(2000);
 
-        // Wait for the dropdown to fully expand and items to be visible
+        // Wait for the dropdown to expand and items to be visible.
         await dualLogInfo("Waiting for fallback items to be visible...");
         await page.waitForSelector('[data-testid="fallback-item"]', {
           visible: true,
           timeout: selectorTimeout,
         });
+        await delay(2000);
 
-        // Additional wait to ensure all content is loaded
-        await delay(3000);
+        // Select the option whose phone number ends with our last 3 digits,
+        // then click its "Send me a text" link (wrapped by div.fds-list-item-link).
+        await dualLogInfo(`Looking for phone ending with: ${ourLastThree}`);
 
-        await dualLogInfo(
-          "Dropdown opened, looking for matching phone number..."
-        );
-
-        // First, let's check if the elements exist at all
-        const elementsExist = await page.evaluate(() => {
+        const clickResult = await page.evaluate((ourLastThree) => {
           try {
-            const fallbackItems = document.querySelectorAll(
-              '[data-testid="fallback-item"]'
+            const items = Array.from(
+              document.querySelectorAll('[data-testid="fallback-item"]')
             );
-            const itemsInfo = [];
 
-            for (let i = 0; i < fallbackItems.length; i++) {
-              const item = fallbackItems[i];
+            const available: string[] = [];
+
+            for (const item of items) {
               const phoneHeader = item.querySelector(
                 ".fds-list-item-content-header"
               );
-              const textLink = item.querySelector(".fds-list-item-link a");
+              const phoneNumber = phoneHeader?.textContent?.trim() || "";
 
-              itemsInfo.push({
-                hasPhoneHeader: !!phoneHeader,
-                hasTextLink: !!textLink,
-                phoneText: phoneHeader?.textContent?.trim() || "N/A",
-                linkText: textLink?.textContent?.trim() || "N/A",
-              });
-            }
+              // Only consider masked phone numbers (e.g. "*******408").
+              if (!phoneNumber.includes("*")) continue;
+              available.push(phoneNumber);
 
-            return {
-              success: true,
-              itemCount: fallbackItems.length,
-              items: itemsInfo,
-            };
-          } catch (error) {
-            return {
-              success: false,
-              error: error instanceof Error ? error.message : "Unknown error",
-            };
-          }
-        });
+              if (phoneNumber.slice(-3) !== ourLastThree) continue;
 
-        await dualLogInfo(
-          "Elements check result:",
-          JSON.stringify(elementsExist, null, 2)
-        );
-
-        if (!elementsExist || !elementsExist.success) {
-          throw new Error(
-            `Failed to check fallback elements: ${
-              elementsExist?.error || "Unknown error"
-            }`
-          );
-        }
-
-        if (elementsExist.itemCount === 0) {
-          throw new Error("No fallback items found in the dropdown");
-        }
-
-        // Now look for phone numbers in the fallback options
-        await dualLogInfo("Looking for phone ending with:", ourLastThree);
-
-        const matchingOption = await page.evaluate((ourLastThree) => {
-          try {
-            const fallbackItems = document.querySelectorAll(
-              '[data-testid="fallback-item"]'
-            );
-
-            console.log("Found fallback items:", fallbackItems.length);
-
-            for (let i = 0; i < fallbackItems.length; i++) {
-              const item = fallbackItems[i];
-              const phoneHeader = item.querySelector(
-                ".fds-list-item-content-header"
+              // The "Send me a text" link is wrapped by a div.fds-list-item-link.
+              const wrappers = Array.from(
+                item.querySelectorAll(".fds-list-item-link")
               );
-              const textLink = item.querySelector(".fds-list-item-link a");
 
-              if (phoneHeader && textLink) {
-                const phoneNumber = phoneHeader.textContent?.trim() || "";
-                const linkText = textLink.textContent?.trim() || "";
-
-                console.log("Found item:", phoneNumber);
-
-                // Check if this is a phone number (contains asterisks and digits)
-                if (
-                  phoneNumber.includes("*") &&
-                  linkText === "Send me a text"
-                ) {
-                  // Extract last 3 digits from the phone number
-                  const phoneLastThree = phoneNumber.slice(-3);
-
-                  if (phoneLastThree === ourLastThree) {
-                    console.log("Found matching phone number!");
-                    return {
-                      found: true,
-                      phoneNumber: phoneNumber,
-                      element: item,
-                    };
-                  }
+              for (const wrapper of wrappers) {
+                const text = wrapper.textContent?.trim() || "";
+                if (text.includes("Send me a text")) {
+                  const clickable =
+                    (wrapper.querySelector("a, button") as HTMLElement | null) ||
+                    (wrapper as HTMLElement);
+                  clickable.click();
+                  return { success: true, phoneNumber, available };
                 }
               }
             }
 
-            console.log("No matching phone number found");
-            return { found: false, phoneNumber: null };
+            return { success: false, phoneNumber: "", available };
           } catch (error) {
-            console.error(
-              "Error in page.evaluate:",
-              error instanceof Error ? error.message : "Unknown error"
-            );
             return {
-              found: false,
+              success: false,
+              phoneNumber: "",
+              available: [] as string[],
               error: error instanceof Error ? error.message : "Unknown error",
             };
           }
         }, ourLastThree);
 
-        await dualLogInfo(`Matching option result:`, matchingOption);
+        await dualLogInfo("Fallback selection result:", JSON.stringify(clickResult));
 
-        if (!matchingOption) {
-          // If page.evaluate returned undefined, try a simpler approach
-          await dualLogInfo(
-            "page.evaluate returned undefined, trying alternative approach..."
-          );
-
-          // Try clicking on the first "Send me a text" link that contains digits ending with our number
-          const alternativeClick = await page.evaluate((ourLastThree) => {
-            try {
-              const textLinks = Array.from(
-                document.querySelectorAll(".fds-list-item-link a")
-              );
-
-              for (const link of textLinks) {
-                if (link.textContent?.trim() === "Send me a text") {
-                  const item = link.closest('[data-testid="fallback-item"]');
-                  if (item) {
-                    const phoneHeader = item.querySelector(
-                      ".fds-list-item-content-header"
-                    );
-                    if (phoneHeader) {
-                      const phoneNumber = phoneHeader.textContent?.trim() || "";
-                      if (phoneNumber.slice(-3) === ourLastThree) {
-                        (link as HTMLElement).click();
-                        return { success: true, phoneNumber: phoneNumber };
-                      }
-                    }
-                  }
-                }
-              }
-              return {
-                success: false,
-                error: "No matching phone found in alternative approach",
-              };
-            } catch (error) {
-              return {
-                success: false,
-                error: error instanceof Error ? error.message : "Unknown error",
-              };
-            }
-          }, ourLastThree);
-
-          if (alternativeClick.success) {
-            await dualLogInfo(
-              `Alternative approach succeeded: clicked 'Send me a text' for ${alternativeClick.phoneNumber}`
-            );
-            await delay(3000);
-
-            // Continue with verification process
-            await page.waitForSelector('input[name="passcode-input"]', {
-              visible: true,
-              timeout: selectorTimeout,
-            });
-
-            await dualLogInfo(
-              "SMS verification page loaded, trying to get verification code from email..."
-            );
-            const smsOtpCheckpointUrl = page.url();
-            await dualLogInfo(
-              `OTP checkpoint URL (SMS path): ${smsOtpCheckpointUrl}`
-            );
-            await enterPasscodeFromEmailWithRetries(page, jobId, entityType, {
-              otpCheckpointUrl: smsOtpCheckpointUrl,
-              postVerifyUrlWaitMs: loadingTimeout,
-              initialDelayMs: 30 * 1000,
-            });
-          } else {
-            throw new Error(
-              `Both primary and alternative approaches failed: ${alternativeClick.error}`
-            );
-          }
-        } else if (matchingOption.error) {
-          throw new Error(`Error in page evaluation: ${matchingOption.error}`);
-        } else if (matchingOption.found) {
-          await dualLogInfo(
-            `Found matching phone number: ${matchingOption.phoneNumber}`
-          );
-
-          // Click on "Send me a text" for the matching phone number
-          const clickResult = await page.evaluate((ourLastThree) => {
-            try {
-              const fallbackItems = document.querySelectorAll(
-                '[data-testid="fallback-item"]'
-              );
-
-              for (const item of fallbackItems) {
-                const phoneHeader = item.querySelector(
-                  ".fds-list-item-content-header"
-                );
-                const textLink = item.querySelector(".fds-list-item-link a");
-
-                if (
-                  phoneHeader &&
-                  textLink &&
-                  textLink.textContent?.trim() === "Send me a text"
-                ) {
-                  const phoneNumber = phoneHeader.textContent?.trim() || "";
-                  if (phoneNumber.slice(-3) === ourLastThree) {
-                    (textLink as HTMLElement).click();
-                    return { success: true, phoneNumber: phoneNumber };
-                  }
-                }
-              }
-              return {
-                success: false,
-                error: "Could not find matching phone to click",
-              };
-            } catch (error) {
-              return {
-                success: false,
-                error: error instanceof Error ? error.message : "Unknown error",
-              };
-            }
-          }, ourLastThree);
-
-          if (!clickResult.success) {
-            throw new Error(
-              `Failed to click "Send me a text": ${clickResult.error}`
-            );
-          }
-
-          await dualLogInfo(
-            `Clicked 'Send me a text' for phone: ${clickResult.phoneNumber}`
-          );
-          await delay(3000);
-
-          // Wait for SMS verification page to load
-          await page.waitForSelector('input[name="passcode-input"]', {
-            visible: true,
-            timeout: selectorTimeout,
-          });
-
-          await dualLogInfo(
-            "SMS verification page loaded, trying to get verification code from email..."
-          );
-
-          const smsOtpCheckpointUrl = page.url();
-          await dualLogInfo(
-            `OTP checkpoint URL (SMS path): ${smsOtpCheckpointUrl}`
-          );
-          await enterPasscodeFromEmailWithRetries(page, jobId, entityType, {
-            otpCheckpointUrl: smsOtpCheckpointUrl,
-            postVerifyUrlWaitMs: loadingTimeout,
-            initialDelayMs: 30 * 1000,
-          });
-        } else {
+        if (!clickResult.success) {
           throw new Error(
             `No matching phone number found in fallback options. Expected ending with ${ourLastThree}. Available options: ${
-              matchingOption.phoneNumber || "none found"
-            }`
+              clickResult.available?.join(", ") || "none found"
+            }${clickResult.error ? `. Error: ${clickResult.error}` : ""}`
           );
         }
+
+        await dualLogInfo(
+          `Clicked 'Send me a text' for phone: ${clickResult.phoneNumber}`
+        );
+        await delay(3000);
+
+        // Continue: wait for the SMS passcode input, then enter the code from email.
+        await page.waitForSelector('input[name="passcode-input"]', {
+          visible: true,
+          timeout: selectorTimeout,
+        });
+
+        await dualLogInfo(
+          "SMS verification page loaded, trying to get verification code from email..."
+        );
+
+        const smsOtpCheckpointUrl = page.url();
+        await dualLogInfo(
+          `OTP checkpoint URL (SMS path): ${smsOtpCheckpointUrl}`
+        );
+        await enterPasscodeFromEmailWithRetries(page, jobId, entityType, {
+          otpCheckpointUrl: smsOtpCheckpointUrl,
+          postVerifyUrlWaitMs: loadingTimeout,
+          initialDelayMs: 30 * 1000,
+        });
       } catch (fallbackError) {
         const errorMessage =
           fallbackError instanceof Error
