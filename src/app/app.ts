@@ -2,6 +2,7 @@ import bodyParser from "body-parser";
 import cors from "cors";
 import express from "express";
 import createError from "../common/error.js";
+import { triggerDbmsExpediaCheckLambda } from "../common/dbms-notifier.js";
 import { otpAwareWorkerPool } from "../common/otp-aware-worker-pool.js";
 import { otpStatusManager } from "../common/otp-status-manager.js";
 import { progressManager } from "../common/progress-manager.js";
@@ -3137,6 +3138,11 @@ app.post("/api/expedia/check-properties", (async (
           message,
           err?.message
         );
+      })
+      .finally(() => {
+        // Searching API finished — ask DBMS to re-trigger its Lambda so the
+        // next queued account-group payload (if any) gets processed.
+        void triggerDbmsExpediaCheckLambda();
       });
 
     return res.status(200).json({
