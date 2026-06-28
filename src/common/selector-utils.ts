@@ -1,4 +1,10 @@
 import { Page } from "puppeteer";
+import {
+  humanType,
+  moveMouseBezier,
+  randomBetween,
+  randomPause,
+} from "./human-browser-helper.js";
 
 // Generic selector utility functions
 export class SelectorUtils {
@@ -126,10 +132,21 @@ export class SelectorUtils {
         const box = await element.boundingBox();
         if (!box) return false;
 
-        // Simulate human interaction
-        await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
-        await new Promise((resolve) => setTimeout(resolve, 100));
-        await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+        const targetX = box.x + box.width / 2 + randomBetween(-4, 4);
+        const targetY = box.y + box.height / 2 + randomBetween(-3, 3);
+        const viewport = page.viewport();
+        const startX = randomBetween(
+          40,
+          Math.max(41, (viewport?.width ?? 1280) - 40)
+        );
+        const startY = randomBetween(
+          40,
+          Math.max(41, (viewport?.height ?? 900) - 40)
+        );
+
+        await moveMouseBezier(page, startX, startY, targetX, targetY);
+        await randomPause(80, 180);
+        await page.mouse.click(targetX, targetY);
         return true;
       } catch (error) {
         return false;
@@ -147,7 +164,7 @@ export class SelectorUtils {
   ): Promise<boolean> {
     return this.trySelectors(page, selectors, async (selector) => {
       try {
-        await page.type(selector, text);
+        await humanType(page, selector, text);
         return true;
       } catch (error) {
         return false;

@@ -9,6 +9,7 @@ import {
   PlatformsType,
   shouldRetryBookingError,
 } from "../common/booking-error-types.js";
+import { applyBookingAntiDetection } from "../common/booking-anti-detection.js";
 import {
   ACCOUNT_LOCKED_SELECTORS,
   BOOKING_LOGIN_EXCLUDE_URLS,
@@ -20,6 +21,7 @@ import {
   TWO_FA_TEXT_PATTERNS,
 } from "../common/booking-selectors.js";
 import { delay } from "../common/delay.js";
+import { simulateHumanMouseMove } from "../common/human-browser-helper.js";
 import { emailNotifier } from "../common/email-notifier.js";
 import { decryptPassword } from "../common/encription.js";
 import {
@@ -472,74 +474,7 @@ export class BookingScraper extends BaseScraper {
 
       const page = await browser.newPage();
 
-      // Set user agent to match your working curl exactly
-      await page.setUserAgent(
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
-      );
-
-      // Set comprehensive headers to match your working curl exactly
-      await page.setExtraHTTPHeaders({
-        "Accept-Language": "en-GB,en-US;q=0.9,en;q=0.8",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Cache-Control": "max-age=0",
-        "sec-ch-ua":
-          '"Chromium";v="140", "Not=A?Brand";v="24", "Google Chrome";v="140"',
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": '"macOS"',
-        DNT: "1",
-        "Upgrade-Insecure-Requests": "1",
-      });
-
-      // Hide automation indicators to avoid detection
-      await page.evaluateOnNewDocument(() => {
-        // Remove webdriver property
-        delete (navigator as any).webdriver;
-
-        // Override the plugins property to use a real value
-        Object.defineProperty(navigator, "plugins", {
-          get: () => [1, 2, 3, 4, 5],
-        });
-
-        // Override the languages property to use a real value
-        Object.defineProperty(navigator, "languages", {
-          get: () => ["en-US", "en"],
-        });
-
-        // Override chrome property
-        (window as any).chrome = {
-          runtime: {},
-        };
-
-        // Mock permissions
-        const originalQuery = window.navigator.permissions.query;
-        window.navigator.permissions.query = (parameters) => {
-          if (parameters.name === "notifications") {
-            return Promise.resolve({
-              state: Notification.permission,
-              name: "notifications",
-              onchange: null,
-              addEventListener: () => {},
-              removeEventListener: () => {},
-              dispatchEvent: () => false,
-            } as PermissionStatus);
-          }
-          return originalQuery(parameters);
-        };
-
-        // Override screen properties to match real browser
-        Object.defineProperty(screen, "availWidth", {
-          get: () => 1920,
-        });
-        Object.defineProperty(screen, "availHeight", {
-          get: () => 1080,
-        });
-        Object.defineProperty(screen, "width", {
-          get: () => 1920,
-        });
-        Object.defineProperty(screen, "height", {
-          get: () => 1080,
-        });
-      });
+      await this.applyAntiDetection(page);
 
       // Set default timeouts
       await page.setDefaultNavigationTimeout(loadingTimeout);
@@ -601,93 +536,8 @@ export class BookingScraper extends BaseScraper {
    */
   private async applyAntiDetection(page: Page): Promise<void> {
     try {
-      await page.setUserAgent(
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
-      );
-
-      await page.setExtraHTTPHeaders({
-        "Accept-Language": "en-GB,en-US;q=0.9,en;q=0.8",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Cache-Control": "max-age=0",
-        "sec-ch-ua":
-          '"Chromium";v="140", "Not=A?Brand";v="24", "Google Chrome";v="140"',
-        "sec-ch-ua-mobile": "?0",
-        "sec-ch-ua-platform": '"macOS"',
-        DNT: "1",
-        "Upgrade-Insecure-Requests": "1",
-      });
-
-      await page.evaluateOnNewDocument(() => {
-        // Hide the webdriver flag — the single most-checked bot signal
-        Object.defineProperty(navigator, "webdriver", {
-          get: () => undefined,
-        });
-
-        // Expose a realistic chrome.runtime so sites don't see a headless shell
-        (window as any).chrome = {
-          app: { isInstalled: false, InstallState: {}, RunningState: {} },
-          runtime: {
-            onMessage: { addListener: () => {}, removeListener: () => {} },
-            connect: () => {},
-            sendMessage: () => {},
-          },
-        };
-
-        // Realistic plugin list (headless Chrome has 0 plugins by default)
-        Object.defineProperty(navigator, "plugins", {
-          get: () => {
-            const arr = [1, 2, 3, 4, 5] as unknown as PluginArray;
-            return arr;
-          },
-        });
-
-        // Languages
-        Object.defineProperty(navigator, "languages", {
-          get: () => ["en-US", "en", "en-GB"],
-        });
-
-        // Permissions: don't reveal the "denied" state Puppeteer normally returns
-        const origQuery = window.navigator.permissions.query;
-        window.navigator.permissions.query = (parameters: any) => {
-          if (parameters.name === "notifications") {
-            return Promise.resolve({
-              state: Notification.permission,
-              name: "notifications",
-              onchange: null,
-              addEventListener: () => {},
-              removeEventListener: () => {},
-              dispatchEvent: () => false,
-            } as PermissionStatus);
-          }
-          return origQuery.call(window.navigator.permissions, parameters);
-        };
-
-        // Screen dimensions — match the viewport we set
-        Object.defineProperty(screen, "availWidth", { get: () => 1905 });
-        Object.defineProperty(screen, "availHeight", { get: () => 945 });
-        Object.defineProperty(screen, "width", { get: () => 1905 });
-        Object.defineProperty(screen, "height", { get: () => 945 });
-
-        // Hardware concurrency — 0 is a headless giveaway
-        Object.defineProperty(navigator, "hardwareConcurrency", {
-          get: () => 8,
-        });
-
-        // deviceMemory — headless exposes 0 or undefined
-        Object.defineProperty(navigator, "deviceMemory", { get: () => 8 });
-
-        // Connection info — headless often has no connection object
-        Object.defineProperty(navigator, "connection", {
-          get: () => ({
-            rtt: 50,
-            downlink: 10,
-            effectiveType: "4g",
-            saveData: false,
-          }),
-        });
-      });
+      await applyBookingAntiDetection(page);
     } catch (err) {
-      // Non-fatal — log but don't break the caller
       console.error("[applyAntiDetection] failed:", err);
     }
   }
@@ -1533,6 +1383,12 @@ export class BookingScraper extends BaseScraper {
       });
 
       await this.logInfo("Entering email address");
+
+      try {
+        await simulateHumanMouseMove(this.page!);
+      } catch {
+        // Non-fatal
+      }
 
       // Check if scraping should continue before entering email
       await this.throwIfScrapingShouldStop("enter_email");
