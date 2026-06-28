@@ -17,13 +17,9 @@ dotenv.config();
 
 /**
  * Partner Central OTP notification subject (e.g. SMS → email / IFTTT). Full example:
- * Login attempt from ASHBURN, US to Partner Central Your verification code is 584207. Don't share this code; we will never ask for it.
- *
- * The origin city in "Login attempt from <CITY>" is dynamic (it reflects wherever
- * the login appears to originate), so we must NOT hardcode a specific city. We only
- * anchor on the stable phrases shared by every OTP email.
+ * Login attempt from BOARDMAN, US to Partner Central Your verification code is 584207. Don't share this code; we will never ask for it.
  */
-const PARTNER_CENTRAL_OTP_SUBJECT_LOGIN_PREFIX = "Login attempt from";
+const PARTNER_CENTRAL_OTP_SUBJECT_LOGIN_PREFIX = "Login attempt from BOARDMAN";
 const PARTNER_CENTRAL_OTP_SUBJECT_CODE_PHRASE =
   "Partner Central Your verification code is";
 
