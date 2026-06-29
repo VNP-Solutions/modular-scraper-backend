@@ -7,6 +7,7 @@ import {
   OtpStatus,
   OtpStatusValue,
 } from "../models/otp-status.model.js";
+import { triggerDbmsExpediaCheckLambda } from "./dbms-notifier.js";
 
 dotenv.config();
 
@@ -224,33 +225,10 @@ export class OtpStatusManager extends EventEmitter {
   }
 
   /**
-   * Trigger Lambda API
+   * Re-trigger the DBMS Expedia-check Lambda (e.g. after OTP release or job failure).
    */
-  public async triggerLambdaAPI(platform?: string): Promise<void> {
-    const resolvedPlatform = platform || this.getOtpPlatform();
-    const mainBackendUrl = process.env.MAIN_BACKEND_URL;
-    if (!mainBackendUrl) {
-      console.log("MAIN_BACKEND_URL not configured, skipping Lambda trigger");
-      return;
-    }
-
-    try {
-      const response = await fetch(`${mainBackendUrl}/jobs/trigger-lambda`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ platform: resolvedPlatform }),
-      });
-
-      if (response.ok) {
-        console.log(`Lambda triggered successfully for platform: ${resolvedPlatform}`);
-      } else {
-        console.error(`Lambda trigger failed: ${response.status}`);
-      }
-    } catch (error) {
-      console.error("Error calling Lambda API:", error);
-    }
+  public async triggerLambdaAPI(_platform?: string): Promise<void> {
+    await triggerDbmsExpediaCheckLambda();
   }
 
   /**
