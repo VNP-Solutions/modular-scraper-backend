@@ -9,7 +9,7 @@ import {
   PlatformsType,
   shouldRetryBookingError,
 } from "../common/booking-error-types.js";
-import { applyBookingAntiDetection } from "../common/booking-anti-detection.js";
+import { applyBookingAntiDetection, type BookingBrowserProfile } from "../common/booking-anti-detection.js";
 import {
   ACCOUNT_LOCKED_SELECTORS,
   BOOKING_LOGIN_EXCLUDE_URLS,
@@ -94,6 +94,9 @@ export class BookingScraper extends BaseScraper {
   private sessionParams?: { ses: string; lang: string }; // Store session and language parameters
   /** During shared group login, copy screenshot_urls to other property jobs in the group. */
   private bookingGroupScreenshotMirrorJobIds: string[] | null = null;
+
+  /** Shared fingerprint profile — reused across tabs in one scrape session. */
+  private browserProfile?: BookingBrowserProfile;
 
   /**
    * Consecutive trust-unavailable card pages (legacy flow). Resets on successful card or non-trust outcome.
@@ -314,11 +317,7 @@ export class BookingScraper extends BaseScraper {
 
       await this.activatePageForAutomation(page);
 
-      // Set viewport and timeouts
-      await page.setViewport({
-        width: 1905,
-        height: 945,
-      });
+      // Viewport is set by applyAntiDetection (includes deviceScaleFactor)
       await page.setDefaultNavigationTimeout(loadingTimeout);
       await page.setDefaultTimeout(selectorTimeout);
 
@@ -390,7 +389,6 @@ export class BookingScraper extends BaseScraper {
       await this.applyAntiDetection(page);
       await page.setDefaultNavigationTimeout(loadingTimeout);
       await page.setDefaultTimeout(selectorTimeout);
-      await page.setViewport({ width: 1905, height: 945 });
 
       await this.logInfo(
         reusedProfile
@@ -480,12 +478,6 @@ export class BookingScraper extends BaseScraper {
       await page.setDefaultNavigationTimeout(loadingTimeout);
       await page.setDefaultTimeout(selectorTimeout);
 
-      // Set viewport
-      await page.setViewport({
-        width: 1905,
-        height: 945,
-      });
-
       // Load saved cookies if they exist for the current property
       if (this.propertyIdForDb) {
         const cookies = await cookieStorageService.loadCookies(
@@ -536,7 +528,25 @@ export class BookingScraper extends BaseScraper {
    */
   private async applyAntiDetection(page: Page): Promise<void> {
     try {
-      await applyBookingAntiDetection(page);
+      const hadProfile = Boolean(this.browserProfile);
+      this.browserProfile = await applyBookingAntiDetection(
+        page,
+        this.browserProfile
+      );
+      if (
+        !hadProfile &&
+        this.browserProfile.detectedIp &&
+        this.browserProfile.detectedCountryCode
+      ) {
+        await this.logInfo("Browser profile matched to egress IP", {
+          platform: this.browserProfile.browserPlatform,
+          ip: this.browserProfile.detectedIp,
+          country: this.browserProfile.detectedCountryCode,
+          timezone: this.browserProfile.timezone,
+          guestCountry: this.browserProfile.guestCountry,
+          locale: this.browserProfile.locale,
+        });
+      }
     } catch (err) {
       console.error("[applyAntiDetection] failed:", err);
     }
