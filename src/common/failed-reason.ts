@@ -182,3 +182,56 @@ export function getFailedReasonWithFallback(
 ): string {
   return getFailedReasonForUser(error, fallback);
 }
+
+const CRITICAL_GRAPHQL_JOB_ERROR_CODES: ReadonlySet<FailedReasonCode> =
+  new Set([
+    FAILED_REASON.PROPERTY_NOT_FOUND,
+    FAILED_REASON.LOGIN_FAILED,
+    FAILED_REASON.OTP_VERIFICATION_FAILED,
+    FAILED_REASON.OTP_VERIFICATION_CODE_NOT_FOUND,
+    FAILED_REASON.OTP_VERIFICATION_PAGE_TIMEOUT,
+    FAILED_REASON.GRAPHQL_NOT_AUTHORIZED,
+    FAILED_REASON.BROWSER_SESSION_LOST,
+    FAILED_REASON.SCRAPING_STOPPED,
+  ]);
+
+/**
+ * Transient GraphQL/reservation-search failures where skipping the current
+ * date and continuing the job is preferable to failing the entire run.
+ */
+export function isSkippableGraphQLDateError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+
+  const e = error as Record<string, unknown>;
+  const name = String(e.name || "");
+  const message = String(e.message || "").toLowerCase();
+  const code = e[FAILED_REASON_CODE_KEY];
+
+  if (name === "NETWORK_TIMEOUT" || name === "DOWNSTREAM_SERVICE_ERROR") {
+    return true;
+  }
+  if (code === FAILED_REASON.GRAPHQL_TIMEOUT) {
+    return true;
+  }
+  if (
+    message.includes("network timeout") ||
+    message.includes("graphql api network timeout") ||
+    message.includes("graphql api request timed out")
+  ) {
+    return true;
+  }
+  if (message.includes("downstream service error")) {
+    return true;
+  }
+
+  return false;
+}
+
+/** Errors that should stop the entire job rather than skip a single date. */
+export function isCriticalGraphQLJobError(error: unknown): boolean {
+  if (!hasFailedReasonCode(error)) return false;
+  const code = (error as Record<string, unknown>)[
+    FAILED_REASON_CODE_KEY
+  ] as FailedReasonCode;
+  return CRITICAL_GRAPHQL_JOB_ERROR_CODES.has(code);
+}

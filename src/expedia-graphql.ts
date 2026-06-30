@@ -12,6 +12,8 @@ import {
   FAILED_REASON,
   getFailedReasonWithFallback,
   hasFailedReasonCode,
+  isCriticalGraphQLJobError,
+  isSkippableGraphQLDateError,
   isStatusAlreadySaved,
   markStatusSaved,
   setFailedReasonCode,
@@ -800,6 +802,7 @@ async function makeGraphQLRequest(
             }`,
           );
           timeoutError.name = "NETWORK_TIMEOUT";
+          setFailedReasonCode(timeoutError, FAILED_REASON.GRAPHQL_TIMEOUT);
           throw timeoutError;
         }
 
@@ -818,6 +821,14 @@ async function makeGraphQLRequest(
               errorType: "DOWNSTREAM_SERVICE_ERROR",
             },
           );
+          const downstreamError = new Error(
+            `GraphQL API downstream service error: ${
+              responseData.errors[0]?.message || "Downstream service error"
+            }`,
+          );
+          downstreamError.name = "DOWNSTREAM_SERVICE_ERROR";
+          setFailedReasonCode(downstreamError, FAILED_REASON.GRAPHQL_ERROR);
+          throw downstreamError;
         }
 
         // Top-level message may be empty; Expedia also puts text on extensions.exception.message
@@ -1824,6 +1835,7 @@ async function runScrapingWithRestart(
 
   // Get all individual dates to process
   const datesToProcess = generateDateRange(startDate!, endDate!);
+  const skippedDates: string[] = [];
   console.log(
     `📅 Date splitting: Processing ${datesToProcess.length} days individually`,
   );
@@ -2120,12 +2132,37 @@ async function runScrapingWithRestart(
             error,
           );
 
-          // For critical errors, stop processing all dates
+          // For browser restart errors, retry this date
           if (
-            !(error instanceof Error) ||
-            !error.message.startsWith("BROWSER_RESTART_NEEDED:")
+            error instanceof Error &&
+            error.message.startsWith("BROWSER_RESTART_NEEDED:")
           ) {
-            // Clean up progress file on error
+            console.log(
+              `🔄 Retrying date ${singleDate}, attempt ${
+                attemptCount + 1
+              }/${maxAttempts}`,
+            );
+            continue;
+          }
+
+          // Transient GraphQL errors (timeout, downstream) — skip this date, no cap on skips
+          if (isSkippableGraphQLDateError(error)) {
+            await dualLogWarn(
+              `GraphQL timeout/error on ${singleDate} — continuing with next date`,
+              {
+                jobId,
+                date: singleDate,
+                errorMessage: error?.message,
+                skippedSoFar: skippedDates.length + 1,
+              },
+            );
+            skippedDates.push(singleDate);
+            dateCompleted = true;
+            break;
+          }
+
+          // For critical errors, stop processing all dates
+          if (isCriticalGraphQLJobError(error)) {
             if (jobId) {
               await progressManager.handleJobError(jobId, error);
             }
@@ -2136,20 +2173,24 @@ async function runScrapingWithRestart(
             throw error;
           }
 
-          // For browser restart errors, retry this date
-          // (attemptCount already incremented at start of while loop)
-          console.log(
-            `🔄 Retrying date ${singleDate}, attempt ${
-              attemptCount + 1
-            }/${maxAttempts}`,
+          // Unknown errors: stop the job to avoid silently missing data
+          if (jobId) {
+            await progressManager.handleJobError(jobId, error);
+          }
+
+          console.error(
+            `❌ Critical error on date ${singleDate}, stopping all date processing`,
           );
+          throw error;
         }
       } // End of retry while loop for this date
 
       if (!dateCompleted) {
-        console.error(
-          `❌ Failed to complete date ${singleDate} after ${maxAttempts} attempts, skipping to next date`,
+        await dualLogWarn(
+          `Failed to complete date ${singleDate} after ${maxAttempts} attempts, skipping to next date`,
+          { jobId, date: singleDate, maxAttempts },
         );
+        skippedDates.push(singleDate);
       }
 
       // Add random delay (default 1-5 seconds) before processing next date
@@ -2175,7 +2216,29 @@ async function runScrapingWithRestart(
       }
     } // End of date processing for loop
 
-    console.log("🎉 All dates processed successfully!");
+    if (skippedDates.length > 0) {
+      const processedCount = datesToProcess.length - skippedDates.length;
+      await dualLogWarn(
+        `GraphQL timeouts/errors on ${skippedDates.length} date(s); continued and processed ${processedCount} date(s)`,
+        {
+          jobId,
+          skippedCount: skippedDates.length,
+          totalDates: datesToProcess.length,
+          processedCount,
+        },
+      );
+
+      // Only fail when every single date in the range could not be processed
+      if (skippedDates.length === datesToProcess.length) {
+        const allSkippedError = new Error(
+          "All dates failed due to GraphQL timeouts or transient API errors",
+        );
+        setFailedReasonCode(allSkippedError, FAILED_REASON.GRAPHQL_TIMEOUT);
+        throw allSkippedError;
+      }
+    }
+
+    console.log("🎉 Date range processing finished!");
   } catch (error: any) {
     // Handle any unexpected errors during the entire scraping process
     await dualLogError("Unexpected error during GraphQL scraping:", error);
