@@ -15,7 +15,7 @@ const options: swaggerJsdoc.Options = {
       title: "Module Scrapper API",
       version: "1.0.0",
       description:
-        "API documentation for the Expedia property scraping service with pause/resume functionality",
+        "Agoda property check API — login and verify property access",
       contact: {
         name: "API Support",
         email: "support@example.com",
@@ -121,36 +121,16 @@ const options: swaggerJsdoc.Options = {
         Reservation: {
           type: "object",
           properties: {
-            reservationId: {
-              type: "string",
-              description: "Unique reservation identifier",
-            },
-            propertyId: {
-              type: "string",
-              description: "Property identifier",
-            },
+            reservationId: { type: "string" },
+            propertyId: { type: "string" },
           },
-          required: ["reservationId", "propertyId"],
         },
       },
     },
     tags: [
-      {
-        name: "Health",
-        description: "Health check endpoints",
-      },
-      {
-        name: "Authentication",
-        description: "Authentication related endpoints",
-      },
-      {
-        name: "Scraping Control",
-        description: "Endpoints for controlling scraping operations",
-      },
-      {
-        name: "Scraping Jobs",
-        description: "Endpoints for starting scraping jobs",
-      },
+      { name: "Health", description: "Health check endpoints" },
+      { name: "Authentication", description: "Gmail OAuth for Agoda login emails" },
+      { name: "Agoda", description: "Agoda property check jobs" },
     ],
   },
   apis: ["./src/app/*.ts"], // Path to the API docs

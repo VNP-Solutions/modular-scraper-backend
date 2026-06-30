@@ -35,14 +35,12 @@
     "nodemailer": "^6.9.8",
     "nodemon": "^3.1.10",
     "open": "^10.1.2",
-    "papaparse": "^5.5.3",
     "puppeteer": "24.9.0",
     "puppeteer-core": "24.10.2",
     "socket.io": "^4.8.1",
     "steel-sdk": "^0.5.0",
     "swagger-jsdoc": "^6.2.8",
-    "swagger-ui-express": "^5.0.1",
-    "xlsx": "^0.18.5"
+    "swagger-ui-express": "^5.0.1"
   },
   "devDependencies": {
     "@types/dotenv": "^6.1.1",
@@ -51,7 +49,6 @@
     "@types/mongoose": "^5.11.96",
     "@types/node": "^22.15.29",
     "@types/nodemailer": "^6.4.14",
-    "@types/papaparse": "^5.3.16",
     "@types/swagger-jsdoc": "^6.0.4",
     "@types/swagger-ui-express": "^4.1.8",
     "ts-node": "^10.9.2",

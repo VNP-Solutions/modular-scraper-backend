@@ -16,7 +16,6 @@ import {
 } from "../../common/screenshot-helper.js";
 import { timeManager } from "../../common/time-manager.js";
 import { timeoutManager } from "../../common/timeout-manager.js";
-import { cleanupOnError } from "../utils/error-cleanup.js";
 import { getAgodaSignInLink } from "./email-link-helper.js";
 import { getAgodaOtpCode } from "./email-otp-helper.js";
 
@@ -456,34 +455,6 @@ async function agodaLogin(
     // Notify that OTP work is completed (on error) so other jobs can proceed
     if (jobId) {
       otpCompletionNotifier.notifyOtpCompleted(jobId);
-    }
-    // Standardized cleanup on login error
-    try {
-      await dualLogInfo("Starting standardized cleanup due to login error", {
-        jobId,
-        timeSession: timeManager.getSessionInfo(),
-      });
-
-      const cleanupResult = await cleanupOnError(jobId, {
-        operation: "agoda_login_error",
-      });
-
-      await dualLogInfo("Standardized cleanup completed after login error", {
-        jobId,
-        downloadFilesCleanedCount: cleanupResult.downloadFilesCleanedCount,
-        exportFilesCleanedCount: cleanupResult.exportFilesCleanedCount,
-        foldersRemovedCount: cleanupResult.foldersRemovedCount,
-        totalFilesProcessed: cleanupResult.totalFilesProcessed,
-        errors: cleanupResult.errors.length,
-        timeSession: timeManager.getSessionInfo(),
-      });
-    } catch (cleanupError: any) {
-      await dualLogError(
-        "Error during standardized cleanup (continuing with error handling):",
-        cleanupError.message,
-        { jobId }
-      );
-      // Don't throw cleanup error - continue with original error handling
     }
 
     // Clean up browser if needed

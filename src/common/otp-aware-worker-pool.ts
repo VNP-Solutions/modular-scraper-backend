@@ -412,10 +412,7 @@ export class OtpAwareWorkerPool extends EventEmitter {
   }
 
   private jobRequiresOtp(jobData: WorkerJobData): boolean {
-    // Jobs that require OTP verification
-    return ["property-run", "graphql-run", "agoda-property-run"].includes(
-      jobData.jobType
-    );
+    return jobData.jobType === "agoda-property-run";
   }
 
   /**
@@ -435,24 +432,8 @@ export class OtpAwareWorkerPool extends EventEmitter {
     }
   }
 
-  private getJobPlatform(jobData: WorkerJobData): OtpPlatform {
-    // Determine platform based on job type
-    if (
-      [
-        "property-run",
-        "graphql-run",
-        "rerun-failed",
-        "reservation-run",
-      ].includes(jobData.jobType)
-    ) {
-      return OtpPlatform.Expedia;
-    } else if (
-      ["agoda-property-run", "agoda-rerun-failed"].includes(jobData.jobType)
-    ) {
-      return OtpPlatform.Agoda;
-    }
-    // Default to Expedia for unknown job types
-    return OtpPlatform.Expedia;
+  private getJobPlatform(_jobData: WorkerJobData): OtpPlatform {
+    return OtpPlatform.Agoda;
   }
 
   private async tryAssignJob(queuedJob: QueuedJob): Promise<void> {

@@ -13,7 +13,6 @@ dotenv.config();
 
 export async function browserSetupLocal(
   jobId?: string,
-  platform?: "expedia" | "agoda",
   brightDataSessionId?: string,
   windowSize?: { width: number; height: number },
   timezone?: string, // Added for timezone spoofing
@@ -268,9 +267,7 @@ export async function browserSetupLocal(
     await page.setDefaultNavigationTimeout(loadingTimeout);
     await page.setDefaultTimeout(selectorTimeout);
 
-    // Navigate to partner central with retry logic
-    const platformName = platform === "agoda" ? "Agoda" : "Expedia";
-    await dualLogInfo(`Navigating to ${platformName} platform...`);
+    await dualLogInfo("Navigating to Agoda login...");
 
     const maxRetries = 3;
     let navigationSuccess = false;
@@ -282,30 +279,10 @@ export async function browserSetupLocal(
           maxRetries,
         });
 
-        if (platform === "expedia") {
-          await page.goto(
-            "https://www.expediapartnercentral.com/Account/Logon?signedOff=true",
-            {
-              waitUntil: "domcontentloaded",
-              timeout: loadingTimeout,
-            }
-          );
-        } else if (platform === "agoda") {
-          await page.goto("https://ycs.agoda.com", {
-            waitUntil: "domcontentloaded",
-            timeout: loadingTimeout,
-          });
-          await page.waitForNavigation({ waitUntil: "networkidle0" });
-        } else {
-          // Default to Expedia for backward compatibility
-          await page.goto(
-            "https://www.expediapartnercentral.com/Account/Logon?signedOff=true",
-            {
-              waitUntil: "domcontentloaded",
-              timeout: loadingTimeout,
-            }
-          );
-        }
+        await page.goto("https://ycs.agoda.com/mldc/en-us/public/login", {
+          waitUntil: "networkidle2",
+          timeout: loadingTimeout,
+        });
 
         // Wait for page to stabilize
         await delay(3000);

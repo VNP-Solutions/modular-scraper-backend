@@ -149,7 +149,7 @@ export class ScreenshotHelper {
 
 /**
  * Takes a "step" (success) screenshot.
- * Used throughout agoda.ts, agoda/login-system/login.ts, agoda/booking-data/booking-data.ts
+ * Used throughout agoda.ts and agoda/login-system/login.ts
  */
 export async function takeSuccessScreenshot(
   page: Page | null,
@@ -162,7 +162,7 @@ export async function takeSuccessScreenshot(
 
 /**
  * Takes an "error" screenshot.
- * Used throughout agoda.ts, agoda/login-system/login.ts, agoda/booking-data/booking-data.ts
+ * Used throughout agoda.ts and agoda/login-system/login.ts
  */
 export async function takeErrorScreenshot(
   page: Page | null,

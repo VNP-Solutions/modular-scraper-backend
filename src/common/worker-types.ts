@@ -1,28 +1,15 @@
 export interface WorkerJobData {
-  jobType:
-    | "property-run"
-    | "rerun-failed"
-    | "reservation-run"
-    | "graphql-run"
-    | "agoda-property-run"
-    | "agoda-rerun-failed"
-    | "stop";
+  jobType: "agoda-property-run" | "stop";
   jobId: string;
   startDate?: string;
   endDate?: string;
-  expediaId?: string;
-  user_email?: string;
-  user_password?: string;
   agodaId?: string;
   agodaUsername?: string;
   agodaPassword?: string;
-  reservations?: any[];
-  originalStatus?: string;
-  // Bright Data isolation config
-  brightDataSessionId?: string; // Session ID for Bright Data proxy
-  windowSize?: { width: number; height: number }; // Window size for browser
-  timezone?: string; // Timezone for browser emulation
-  acceptLanguage?: string; // Accept-Language header for browser
+  brightDataSessionId?: string;
+  windowSize?: { width: number; height: number };
+  timezone?: string;
+  acceptLanguage?: string;
 }
 
 export interface WorkerMessage {
