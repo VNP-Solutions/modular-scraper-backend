@@ -1,5 +1,5 @@
 export const configs = {
-  headless_browser: false,
+  headless_browser: true,
 };
 
 /** Default when ENVIRONMENT is unset: local PC with visible Chromium. */
