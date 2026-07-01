@@ -129,7 +129,11 @@ export class JobService {
         return null;
       }
 
-      if (!property.expedia_id || property.expedia_id === "0") {
+      if (
+        property.expedia_id == null ||
+        property.expedia_id === 0 ||
+        String(property.expedia_id) === "0"
+      ) {
         console.error(
           `Property ${property._id} has no valid expedia_id (current: ${property.expedia_id})`
         );
@@ -151,7 +155,7 @@ export class JobService {
         `✅ Found expedia_id: ${property.expedia_id} for job: ${jobId}`
       );
       return {
-        expediaId: property.expedia_id,
+        expediaId: String(property.expedia_id),
         // Map legacy fields from credentials for backward compatibility
         user_email: creds?.expediaUsername,
         user_password: creds?.expediaPassword,
@@ -212,7 +216,11 @@ export class JobService {
         return null;
       }
 
-      if (!property.agoda_id || property.agoda_id === "0") {
+      if (
+        property.agoda_id == null ||
+        property.agoda_id === 0 ||
+        String(property.agoda_id) === "0"
+      ) {
         console.error(
           `Property ${property._id} has no valid agoda_id (current: ${property.agoda_id})`
         );
@@ -221,7 +229,7 @@ export class JobService {
 
       console.log(`✅ Found agoda_id: ${property.agoda_id} for job: ${jobId}`);
       return {
-        agodaId: property.agoda_id,
+        agodaId: String(property.agoda_id),
       };
     } catch (error) {
       console.error(`Error getting agoda_id for job ${jobId}:`, error);

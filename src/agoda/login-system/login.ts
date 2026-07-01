@@ -194,6 +194,40 @@ async function agodaLogin(
       await continueButton.click();
       await dualLogInfo("Continue button clicked successfully!");
 
+      // Inline email/account errors → bad credentials (not OTP/inbox issues).
+      await delay(1500);
+      const emailAccountError = await frame.evaluate(() => {
+        const selectors = [
+          '[data-cy="unified-email-error"]',
+          '[data-cy="email-error"]',
+          '[role="alert"]',
+          ".error-message",
+        ];
+        for (const selector of selectors) {
+          const el = document.querySelector(selector);
+          const text = el?.textContent?.trim();
+          if (text) {
+            return text;
+          }
+        }
+        const bodyText = document.body.innerText || "";
+        const lower = bodyText.toLowerCase();
+        if (
+          lower.includes("account not found") ||
+          lower.includes("invalid email") ||
+          lower.includes("email address is not valid") ||
+          lower.includes("does not exist")
+        ) {
+          return bodyText.slice(0, 200);
+        }
+        return null;
+      });
+      if (emailAccountError) {
+        const err = new Error(`Agoda login failed: ${emailAccountError}`);
+        setFailedReasonCode(err, FAILED_REASON.AGODA_LOGIN_FAILED);
+        throw err;
+      }
+
       // Take screenshot after continue button clicked
       if (jobId) {
         await takeSuccessScreenshot(page, jobId, "continue_button_clicked");

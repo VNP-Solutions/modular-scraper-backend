@@ -1,5 +1,6 @@
 import dotenv from "dotenv";
 import { Browser } from "puppeteer";
+import { useRemoteBrowser } from "./config/index.js";
 import agodaLogin from "./agoda/login-system/login.js";
 import { searchAgodaProperty } from "./agoda/property-search/property-search.js";
 import { browserSetupLocal } from "./browser-setup/browser-local.js";
@@ -83,17 +84,15 @@ async function agoda(
       );
     }
 
-    const environment = process.env.ENVIRONMENT || "production";
-    const setupResult =
-      environment === "production"
-        ? await browserSetupProduction(jobId)
-        : await browserSetupLocal(
-            jobId,
-            brightDataSessionId,
-            windowSize,
-            timezone,
-            acceptLanguage
-          );
+    const setupResult = useRemoteBrowser()
+      ? await browserSetupProduction(jobId)
+      : await browserSetupLocal(
+          jobId,
+          brightDataSessionId,
+          windowSize,
+          timezone,
+          acceptLanguage
+        );
 
     browser = setupResult.browser;
     const page = setupResult.page;

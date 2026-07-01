@@ -412,7 +412,10 @@ export class OtpAwareWorkerPool extends EventEmitter {
   }
 
   private jobRequiresOtp(jobData: WorkerJobData): boolean {
-    return jobData.jobType === "agoda-property-run";
+    return (
+      jobData.jobType === "agoda-property-run" ||
+      jobData.jobType === "agoda-check-properties"
+    );
   }
 
   /**

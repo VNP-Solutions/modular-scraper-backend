@@ -2,6 +2,9 @@ import bodyParser from "body-parser";
 import cors from "cors";
 import express from "express";
 import createError from "../common/error.js";
+import { triggerDbmsAgodaCheckLambda } from "../common/dbms-notifier.js";
+import { getFailedReasonForUser } from "../common/failed-reason.js";
+import { normalizeAgodaCheckRequest } from "../agoda/property-check/request-normalizer.js";
 import {
   getAcceptLanguage,
   getBrightDataSessionId,
@@ -226,6 +229,138 @@ app.post("/api/agoda/property-run-job", (async (
       status: 500,
       message: "Error processing Agoda property check",
       error: err.message,
+    });
+  }
+}) as any);
+
+/**
+ * @swagger
+ * /api/agoda/check-properties:
+ *   post:
+ *     tags:
+ *       - Agoda
+ *     summary: Check whether Agoda properties exist for an account
+ *     description: |
+ *       Logs into Agoda YCS once (email link + OTP), then checks each agoda_id.
+ *       Returns 200 immediately; work runs in otpAwareWorkerPool and results
+ *       are written to the database.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - username
+ *               - password
+ *               - agoda_ids
+ *             properties:
+ *               username:
+ *                 type: string
+ *               password:
+ *                 type: string
+ *               agoda_ids:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *                   properties:
+ *                     _id:
+ *                       type: string
+ *                       description: Property document _id (MongoDB ObjectId)
+ *                     agoda_id:
+ *                       type: string
+ *     responses:
+ *       200:
+ *         description: Request accepted; check running in background. Returns the same property ids sent in the request.
+ *       400:
+ *         description: Invalid request body
+ *       409:
+ *         description: All workers busy and job queue is full
+ */
+app.post("/api/agoda/check-properties", (async (
+  req: express.Request,
+  res: express.Response
+) => {
+  try {
+    const { username, password } = req.body;
+
+    if (!username || !password) {
+      return res.status(400).json({
+        status: 400,
+        message: "username and password are required in request body",
+      });
+    }
+
+    const normalized = normalizeAgodaCheckRequest(req.body);
+    if (!normalized.ok) {
+      return res.status(400).json({
+        status: 400,
+        message: normalized.message,
+      });
+    }
+
+    const { agoda_ids, property_ids, checkSessionId } = normalized.data;
+
+    if (
+      !otpAwareWorkerPool.hasAvailableWorkers() &&
+      otpAwareWorkerPool.isQueueFull()
+    ) {
+      return res.status(409).json({
+        status: 409,
+        message: "All workers busy and job queue is full",
+        property_ids,
+        workerStatus: otpAwareWorkerPool.getStatus(),
+        otpStatus: otpAwareWorkerPool.getOtpStatus(),
+      });
+    }
+
+    const workerJobData: WorkerJobData = {
+      jobType: "agoda-check-properties",
+      jobId: checkSessionId,
+      agodaUsername: username,
+      agodaPassword: password,
+      agoda_ids,
+    };
+
+    console.log(
+      `[api] POST /api/agoda/check-properties accepted — property_ids=[${property_ids.join(", ")}], username=${username}`
+    );
+
+    void otpAwareWorkerPool
+      .executeJob(workerJobData)
+      .then((result) => {
+        console.log(
+          `check-properties completed for property_ids=[${property_ids.join(", ")}]:`,
+          result.data
+        );
+      })
+      .catch((err: any) => {
+        const message =
+          getFailedReasonForUser(err) || "Login failed";
+        console.error(
+          `check-properties failed for property_ids=[${property_ids.join(", ")}]:`,
+          message,
+          err?.error || err?.message
+        );
+      })
+      .finally(() => {
+        void triggerDbmsAgodaCheckLambda();
+      });
+
+    return res.status(200).json({
+      status: 200,
+      message:
+        "Request accepted. Property check is running in a worker thread; results are written to the database.",
+      agoda_ids,
+      property_ids,
+    });
+  } catch (err: any) {
+    console.error("Error in /api/agoda/check-properties:", err);
+    const message = getFailedReasonForUser(err) || "Login failed";
+    return res.status(500).json({
+      status: 500,
+      message,
+      error: err?.message,
     });
   }
 }) as any);

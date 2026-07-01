@@ -126,3 +126,10 @@ export function getFailedReasonForUser(error: any): string | undefined {
   }
   return undefined;
 }
+
+/** True when Agoda username/password (account login) failed — not OTP/inbox issues. */
+export function isAgodaCredentialLoginFailure(error: unknown): boolean {
+  return (
+    (error as any)?.failedReasonCode === FAILED_REASON.AGODA_LOGIN_FAILED
+  );
+}

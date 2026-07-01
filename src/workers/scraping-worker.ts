@@ -2,6 +2,7 @@ import dotenv from "dotenv";
 import mongoose from "mongoose";
 import { parentPort } from "worker_threads";
 import agoda from "../agoda.js";
+import { configureDnsServers } from "../common/configure-dns.js";
 import {
   getFailedReasonForUser,
   isStatusAlreadySaved,
@@ -22,6 +23,7 @@ import { propertyCredentialsService } from "../services/job-credentials.service.
 import { jobService } from "../services/job.service.js";
 
 dotenv.config();
+configureDnsServers();
 
 class ScrapingWorker {
   private currentJobId?: string;
@@ -114,6 +116,10 @@ class ScrapingWorker {
   private async executeJob(jobData: WorkerJobData): Promise<void> {
     this.currentJobId = jobData.jobId;
 
+    console.log(
+      `[worker] Starting job ${jobData.jobId} (type=${jobData.jobType})`
+    );
+
     this.sendMessage({
       type: "job-start",
       jobId: jobData.jobId,
@@ -122,6 +128,17 @@ class ScrapingWorker {
     });
 
     try {
+      if (jobData.jobType === "agoda-check-properties") {
+        const result = await this.handleAgodaCheckProperties(jobData);
+        this.sendMessage({
+          type: "job-complete",
+          jobId: jobData.jobId,
+          data: result,
+          timestamp: new Date(),
+        });
+        return;
+      }
+
       if (jobData.jobType !== "agoda-property-run") {
         throw new Error(`Unknown job type: ${jobData.jobType}`);
       }
@@ -287,6 +304,42 @@ class ScrapingWorker {
       await finalizeJobLogging("failed");
       throw scrapingError;
     }
+  }
+
+  private async handleAgodaCheckProperties(
+    jobData: WorkerJobData
+  ): Promise<{ resultsCount: number; property_ids: string[] }> {
+    const { jobId, agodaUsername, agodaPassword, agoda_ids } = jobData;
+
+    if (!agodaUsername || !agodaPassword) {
+      throw new Error("username and password are required");
+    }
+
+    if (!Array.isArray(agoda_ids) || agoda_ids.length === 0) {
+      throw new Error("agoda_ids must be a non-empty array");
+    }
+
+    const { checkAgodaProperties } = await import(
+      "../agoda/property-check/property-check.js"
+    );
+
+    await dualLogInfo(`Worker: starting Agoda bulk property check ${jobId}`, {
+      jobId,
+      propertyCount: agoda_ids.length,
+    });
+
+    const results = await checkAgodaProperties(
+      agodaUsername,
+      agodaPassword,
+      agoda_ids,
+      jobId
+    );
+
+    await dualLogInfo(
+      `Worker: Agoda bulk property check ${jobId} completed (${results.length} result(s))`
+    );
+
+    return { resultsCount: results.length, property_ids: agoda_ids.map((p) => p._id) };
   }
 
   private async shutdown(): Promise<void> {

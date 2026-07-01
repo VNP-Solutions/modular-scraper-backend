@@ -2,9 +2,11 @@ import dotenv from "dotenv";
 import mongoose from "mongoose";
 import open from "open";
 import app from "./app/app.js";
+import { configureDnsServers } from "./common/configure-dns.js";
 import { loadAndSetCredentials } from "./common/load-token.js";
 import { otpAwareWorkerPool } from "./common/otp-aware-worker-pool.js";
 dotenv.config();
+configureDnsServers();
 
 const port: number = parseInt(process.env.PORT || "3000");
 

@@ -1,11 +1,12 @@
 export interface WorkerJobData {
-  jobType: "agoda-property-run" | "stop";
+  jobType: "agoda-property-run" | "agoda-check-properties" | "stop";
   jobId: string;
   startDate?: string;
   endDate?: string;
   agodaId?: string;
   agodaUsername?: string;
   agodaPassword?: string;
+  agoda_ids?: Array<{ _id: string; agoda_id: string | number }>;
   brightDataSessionId?: string;
   windowSize?: { width: number; height: number };
   timezone?: string;
