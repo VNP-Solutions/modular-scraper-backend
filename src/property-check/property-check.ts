@@ -25,6 +25,13 @@ export interface PropertyCheckResult {
 
 const PROPERTY_SEARCH_INPUT = ".all-properties__search input.fds-field-input";
 
+function isValidObjectId(id: string): boolean {
+  return (
+    mongoose.Types.ObjectId.isValid(id) &&
+    new mongoose.Types.ObjectId(id).toString() === id
+  );
+}
+
 /**
  * Marks every requested property as not credential-verified. Used when the
  * Expedia email/password is incorrect, so the credentials clearly can't be
@@ -34,7 +41,7 @@ async function markAllCredentialUnverified(
   properties: PropertyToCheck[]
 ): Promise<void> {
   const ids = properties
-    .filter((p) => mongoose.Types.ObjectId.isValid(p._id))
+    .filter((p) => isValidObjectId(p._id))
     .map((p) => new mongoose.Types.ObjectId(p._id));
 
   if (ids.length === 0) {
@@ -62,12 +69,15 @@ async function markAllCredentialUnverified(
  * login succeeds and the property is found for this account.
  */
 async function markPropertyVerified(propertyId: string): Promise<void> {
-  if (!mongoose.Types.ObjectId.isValid(propertyId)) {
+  if (!isValidObjectId(propertyId)) {
+    console.error(
+      `[property-check] Skipping DB update — invalid property _id: ${propertyId}`
+    );
     return;
   }
 
   try {
-    await Property.updateOne(
+    const result = await Property.updateOne(
       { _id: new mongoose.Types.ObjectId(propertyId) },
       {
         $set: {
@@ -76,10 +86,25 @@ async function markPropertyVerified(propertyId: string): Promise<void> {
         },
       }
     );
+
+    if (result.matchedCount === 0) {
+      const message = `[property-check] No property document matched _id=${propertyId}; flags were NOT updated.`;
+      console.error(message);
+      await dualLogError(message);
+      return;
+    }
+
+    console.log(
+      `[property-check] Updated property ${propertyId}: expedia_credential_verified=true, expedia_access_level=true (matched=${result.matchedCount}, modified=${result.modifiedCount})`
+    );
     await dualLogInfo(
       `Set expedia_credential_verified=true and expedia_access_level=true for property ${propertyId}.`
     );
   } catch (error) {
+    console.error(
+      `[property-check] Failed to update verification flags for property ${propertyId}:`,
+      error
+    );
     await dualLogError(
       `Failed to update Expedia verification flags for property ${propertyId}:`,
       error
@@ -92,14 +117,28 @@ async function markPropertyVerified(propertyId: string): Promise<void> {
  * succeeds but the property could not be found for this account.
  */
 async function markAccessLevelFalse(propertyId: string): Promise<void> {
-  if (!mongoose.Types.ObjectId.isValid(propertyId)) {
+  if (!isValidObjectId(propertyId)) {
+    console.error(
+      `[property-check] Skipping DB update — invalid property _id: ${propertyId}`
+    );
     return;
   }
 
   try {
-    await Property.updateOne(
+    const result = await Property.updateOne(
       { _id: new mongoose.Types.ObjectId(propertyId) },
       { $set: { expedia_access_level: false } }
+    );
+
+    if (result.matchedCount === 0) {
+      const message = `[property-check] No property document matched _id=${propertyId}; expedia_access_level was NOT updated.`;
+      console.error(message);
+      await dualLogError(message);
+      return;
+    }
+
+    console.log(
+      `[property-check] Updated property ${propertyId}: expedia_access_level=false (not found in Expedia account)`
     );
     await dualLogInfo(
       `Set expedia_access_level=false for property ${propertyId} (not found).`
@@ -125,17 +164,25 @@ async function searchSingleProperty(
   await page.keyboard.press("Backspace");
   await delay(500);
 
-  // Type the property id and let the table filter.
-  await page.type(PROPERTY_SEARCH_INPUT, expediaId, { delay: 150 });
-  await delay(3000);
+  // Type the property id and let the table filter (same pacing as property-search.ts).
+  await page.type(PROPERTY_SEARCH_INPUT, expediaId, { delay: 500 });
+  await delay(2000);
 
-  return page.evaluate((searchId) => {
+  await page.waitForSelector("tbody tr", { visible: true, timeout: 15000 });
+
+  const found = await page.evaluate((searchId) => {
     const rows = Array.from(document.querySelectorAll("tbody tr"));
     return rows.some((row) => {
       const idEl = row.querySelector(".property-cell__property-id span");
       return !!idEl?.textContent && idEl.textContent.includes(searchId);
     });
   }, expediaId);
+
+  console.log(
+    `[property-check] Expedia search for id=${expediaId}: ${found ? "found" : "not found"}`
+  );
+
+  return found;
 }
 
 /**
@@ -187,7 +234,9 @@ export async function checkExpediaProperties(
     // 4. Wait for the all-properties table and its search box.
     await page.waitForSelector(".fds-data-table-wrapper", { visible: true });
     await page.waitForSelector(PROPERTY_SEARCH_INPUT, { visible: true });
-    await delay(5000);
+    await page.waitForSelector("tbody tr", { visible: true, timeout: 30000 });
+    // Give the table time to fully populate (property-search.ts uses a long wait here).
+    await delay(10000);
 
     // 5. Search each property id.
     const results: PropertyCheckResult[] = [];
