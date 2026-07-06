@@ -77,6 +77,18 @@ async function markPropertyVerified(propertyId: string): Promise<void> {
   }
 
   try {
+    // Diagnostic: check if the document actually exists before updating.
+    const existing = await Property.findOne(
+      { _id: new mongoose.Types.ObjectId(propertyId) },
+      { _id: 1, name: 1, expedia_credential_verified: 1, expedia_access_level: 1 }
+    ).lean();
+    console.log(
+      `[property-check] findOne(_id=${propertyId}) result:`,
+      existing
+        ? { _id: existing._id, name: (existing as any).name, expedia_credential_verified: (existing as any).expedia_credential_verified, expedia_access_level: (existing as any).expedia_access_level }
+        : "null (not found)"
+    );
+
     const result = await Property.updateOne(
       { _id: new mongoose.Types.ObjectId(propertyId) },
       {
@@ -85,6 +97,10 @@ async function markPropertyVerified(propertyId: string): Promise<void> {
           expedia_access_level: true,
         },
       }
+    );
+
+    console.log(
+      `[property-check] updateOne result: matchedCount=${result.matchedCount}, modifiedCount=${result.modifiedCount}, acknowledged=${result.acknowledged}`
     );
 
     if (result.matchedCount === 0) {
