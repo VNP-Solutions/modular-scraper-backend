@@ -344,7 +344,7 @@ const PropertySchema = new Schema<IProperty>(
   },
   {
     timestamps: { createdAt: "created_at", updatedAt: "updated_at" },
-    collection: "properties",
+    collection: "Property",
   }
 );
 
