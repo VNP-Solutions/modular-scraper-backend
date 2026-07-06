@@ -73,6 +73,36 @@ async function markAllAgodaCredentialUnverified(
 }
 
 /**
+ * Marks a single property as credential-verified with Agoda access. Used when
+ * login succeeds and the property is found for this account.
+ */
+async function markAgodaPropertyVerified(propertyId: string): Promise<void> {
+  if (!mongoose.Types.ObjectId.isValid(propertyId)) {
+    return;
+  }
+
+  try {
+    await Property.updateOne(
+      { _id: new mongoose.Types.ObjectId(propertyId) },
+      {
+        $set: {
+          agoda_credential_verified: true,
+          agoda_access_level: true,
+        },
+      }
+    );
+    await dualLogInfo(
+      `Set agoda_credential_verified=true and agoda_access_level=true for property ${propertyId}.`
+    );
+  } catch (error) {
+    await dualLogError(
+      `Failed to update Agoda verification flags for property ${propertyId}:`,
+      error
+    );
+  }
+}
+
+/**
  * Marks a single property as not having Agoda access. Used when login
  * succeeds but the property could not be found for this account.
  */
@@ -158,8 +188,10 @@ export async function checkAgodaProperties(
           jobId
         );
 
-        // Logged in but property not found → no Agoda access for this property.
-        if (!searchResult.found) {
+        if (searchResult.found) {
+          await markAgodaPropertyVerified(property._id);
+        } else {
+          // Logged in but property not found → no Agoda access for this property.
           await markAgodaAccessLevelFalse(property._id);
         }
 
