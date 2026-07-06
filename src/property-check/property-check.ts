@@ -1,4 +1,5 @@
 import { Browser, Page } from "puppeteer";
+import mongoose from "mongoose";
 import { browserSetupLocal } from "../browser-setup/browser-local.js";
 import { browserSetupProduction } from "../browser-setup/browser-prod.js";
 import { delay } from "../common/delay.js";
@@ -32,7 +33,14 @@ const PROPERTY_SEARCH_INPUT = ".all-properties__search input.fds-field-input";
 async function markAllCredentialUnverified(
   properties: PropertyToCheck[]
 ): Promise<void> {
-  const ids = properties.map((p) => p._id);
+  const ids = properties
+    .filter((p) => mongoose.Types.ObjectId.isValid(p._id))
+    .map((p) => new mongoose.Types.ObjectId(p._id));
+
+  if (ids.length === 0) {
+    return;
+  }
+
   try {
     await Property.updateMany(
       { _id: { $in: ids } },
@@ -50,13 +58,47 @@ async function markAllCredentialUnverified(
 }
 
 /**
+ * Marks a single property as credential-verified with Expedia access. Used when
+ * login succeeds and the property is found for this account.
+ */
+async function markPropertyVerified(propertyId: string): Promise<void> {
+  if (!mongoose.Types.ObjectId.isValid(propertyId)) {
+    return;
+  }
+
+  try {
+    await Property.updateOne(
+      { _id: new mongoose.Types.ObjectId(propertyId) },
+      {
+        $set: {
+          expedia_credential_verified: true,
+          expedia_access_level: true,
+        },
+      }
+    );
+    await dualLogInfo(
+      `Set expedia_credential_verified=true and expedia_access_level=true for property ${propertyId}.`
+    );
+  } catch (error) {
+    await dualLogError(
+      `Failed to update Expedia verification flags for property ${propertyId}:`,
+      error
+    );
+  }
+}
+
+/**
  * Marks a single property as not having Expedia access. Used when login
  * succeeds but the property could not be found for this account.
  */
 async function markAccessLevelFalse(propertyId: string): Promise<void> {
+  if (!mongoose.Types.ObjectId.isValid(propertyId)) {
+    return;
+  }
+
   try {
     await Property.updateOne(
-      { _id: propertyId },
+      { _id: new mongoose.Types.ObjectId(propertyId) },
       { $set: { expedia_access_level: false } }
     );
     await dualLogInfo(
@@ -153,8 +195,10 @@ export async function checkExpediaProperties(
       const expediaId = String(property.expedia_id);
       try {
         const found = await searchSingleProperty(page, expediaId);
-        // Logged in but property not found → no Expedia access for this property.
-        if (!found) {
+        if (found) {
+          await markPropertyVerified(property._id);
+        } else {
+          // Logged in but property not found → no Expedia access for this property.
           await markAccessLevelFalse(property._id);
         }
         results.push({
