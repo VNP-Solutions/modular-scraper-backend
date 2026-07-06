@@ -245,8 +245,14 @@ export async function checkExpediaProperties(
       try {
         const found = await searchSingleProperty(page, expediaId);
         if (found) {
+          console.log(
+            `[property-check] Property ${expediaId} FOUND → calling markPropertyVerified(_id=${property._id})`
+          );
           await markPropertyVerified(property._id);
         } else {
+          console.log(
+            `[property-check] Property ${expediaId} NOT FOUND → calling markAccessLevelFalse(_id=${property._id})`
+          );
           // Logged in but property not found → no Expedia access for this property.
           await markAccessLevelFalse(property._id);
         }
