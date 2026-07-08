@@ -4236,6 +4236,66 @@ export class BookingScraper extends BaseScraper {
   }
 
   /**
+   * Before property 2+ in a group: return to the multi-property selector, search for the next
+   * hotel_id, and switch to the new property tab — same flow as post-login for the first property.
+   * Without this, scrapeData() starts from secure-admin card pages (previous hotel) and direct
+   * VCCS navigation for the next hotel_id fails with a sign-in redirect.
+   */
+  private async prepareGroupNextPropertyStep(
+    bookingHotelId: string
+  ): Promise<void> {
+    if (!this.page) {
+      return;
+    }
+
+    if (this.isOnSpecificPropertyPage(bookingHotelId)) {
+      await this.logInfo(
+        `[booking] Group: already on property page for hotel_id=${bookingHotelId} — skipping property switch`
+      );
+      await this.extractSessionParams();
+      return;
+    }
+
+    await this.logInfo(
+      `[booking] Group: switching to next property (hotel_id=${bookingHotelId}) via property search`
+    );
+
+    await this.extractSessionParams();
+
+    if (this.sessionParams) {
+      const { ses, lang } = this.sessionParams;
+      const groupsHomeUrl = `https://admin.booking.com/hotel/hoteladmin/groups/home/index.html?lang=${lang}&ses=${ses}`;
+      await this.logInfo(
+        `[booking] Group: navigating to property selector: ${groupsHomeUrl}`
+      );
+      await this.page.goto(groupsHomeUrl, {
+        waitUntil: "networkidle2",
+        timeout: 60_000,
+      });
+      await this.delay(2000);
+      await this.takeScreenshot();
+    } else {
+      await this.logWarn(
+        "[booking] Group: no session params before property switch — property search may fail"
+      );
+    }
+
+    const searchOk = await this.searchProperty(bookingHotelId);
+    if (!searchOk) {
+      const err = new Error(
+        `Group property switch failed: could not search/select hotel_id ${bookingHotelId}`
+      );
+      setFailedReasonCode(err, FAILED_REASON.PROPERTY_NOT_FOUND);
+      throw err;
+    }
+
+    await this.extractSessionParams();
+    await this.logInfo(
+      `[booking] Group: property switch complete for hotel_id=${bookingHotelId}`
+    );
+  }
+
+  /**
    * After a property step fails (e.g. VCCS nav lost session), re-login for the next hotel when the
    * browser is on Booking sign-in so the following step can run.
    */
@@ -4252,9 +4312,13 @@ export class BookingScraper extends BaseScraper {
       (url.includes("booking.com") && url.includes("/sign-in"));
 
     if (!onSignIn) {
-      await dualLogInfo(
-        `[booking] Group: continuing to next property ${nextStep.bookingId} (no sign-in page detected)`
-      );
+      if (!this.isOnSpecificPropertyPage(nextStep.bookingId)) {
+        await this.prepareGroupNextPropertyStep(nextStep.bookingId);
+      } else {
+        await dualLogInfo(
+          `[booking] Group: continuing to next property ${nextStep.bookingId} (already on correct property page)`
+        );
+      }
       return;
     }
 
@@ -4512,6 +4576,10 @@ export class BookingScraper extends BaseScraper {
           otpReleaseJobId: leaseJobId,
           credentials: this.credentials,
         };
+
+        if (i > 0) {
+          await this.prepareGroupNextPropertyStep(step.bookingId);
+        }
 
         const result = await this.scrapeData(stepParams);
 
