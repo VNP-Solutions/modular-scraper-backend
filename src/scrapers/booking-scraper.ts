@@ -1251,6 +1251,76 @@ export class BookingScraper extends BaseScraper {
     }
   }
 
+  private isOnBookingSignInOrAuthPage(): boolean {
+    if (!this.page) return false;
+    const url = this.page.url().toLowerCase();
+    return (
+      url.includes("account.booking.com/sign-in") ||
+      url.includes("account.booking.com/auth-assurance") ||
+      (url.includes("booking.com") && url.includes("/sign-in"))
+    );
+  }
+
+  private isOnVccsManagementPage(hotelId?: string): boolean {
+    if (!this.page) return false;
+    const url = this.page.url();
+    const onVccs =
+      url.includes("vccs_management") ||
+      (url.includes("extranet_ng/manage") && url.includes("vccs"));
+    if (!onVccs) return false;
+    if (hotelId) {
+      return url.includes(`hotel_id=${hotelId}`);
+    }
+    return true;
+  }
+
+  /**
+   * When VCCS direct navigation lands on sign-in (common for property 2+ in a group run),
+   * run the same login + auth-interstitial flow as the card-details fetch, then confirm VCCS
+   * is reachable. Booking's op_token on the sign-in URL usually redirects to the intended
+   * VCCS page after login/2FA completes.
+   */
+  private async recoverVCCSNavigationAfterSignIn(
+    hotelId?: string
+  ): Promise<boolean> {
+    if (!this.page || !this.isOnBookingSignInOrAuthPage()) {
+      return false;
+    }
+
+    await this.logInfo(
+      "[booking] VCCS navigation redirected to sign-in — running login/2FA recovery (card-details flow)"
+    );
+
+    try {
+      await this.login(this.credentials, hotelId, true);
+    } catch (err) {
+      await this.logError(
+        "[booking] Login/2FA recovery failed after VCCS sign-in redirect",
+        err
+      );
+      return false;
+    }
+
+    await this.extractSessionParams();
+    await this.delay(2000);
+
+    if (this.isOnVccsManagementPage(hotelId)) {
+      await this.logInfo(
+        "[booking] ✅ Auth recovery landed on VCCS management page"
+      );
+      return true;
+    }
+
+    if (this.sessionParams && hotelId) {
+      await this.logInfo(
+        "[booking] Auth recovery complete but not on VCCS yet — retrying direct navigation"
+      );
+      return await this.navigateDirectlyToVCCS(hotelId);
+    }
+
+    return false;
+  }
+
   /**
    * Get the latest password from database for the current booking property
    * This ensures we always use the most up-to-date password throughout the scraping process
@@ -4236,66 +4306,6 @@ export class BookingScraper extends BaseScraper {
   }
 
   /**
-   * Before property 2+ in a group: return to the multi-property selector, search for the next
-   * hotel_id, and switch to the new property tab — same flow as post-login for the first property.
-   * Without this, scrapeData() starts from secure-admin card pages (previous hotel) and direct
-   * VCCS navigation for the next hotel_id fails with a sign-in redirect.
-   */
-  private async prepareGroupNextPropertyStep(
-    bookingHotelId: string
-  ): Promise<void> {
-    if (!this.page) {
-      return;
-    }
-
-    if (this.isOnSpecificPropertyPage(bookingHotelId)) {
-      await this.logInfo(
-        `[booking] Group: already on property page for hotel_id=${bookingHotelId} — skipping property switch`
-      );
-      await this.extractSessionParams();
-      return;
-    }
-
-    await this.logInfo(
-      `[booking] Group: switching to next property (hotel_id=${bookingHotelId}) via property search`
-    );
-
-    await this.extractSessionParams();
-
-    if (this.sessionParams) {
-      const { ses, lang } = this.sessionParams;
-      const groupsHomeUrl = `https://admin.booking.com/hotel/hoteladmin/groups/home/index.html?lang=${lang}&ses=${ses}`;
-      await this.logInfo(
-        `[booking] Group: navigating to property selector: ${groupsHomeUrl}`
-      );
-      await this.page.goto(groupsHomeUrl, {
-        waitUntil: "networkidle2",
-        timeout: 60_000,
-      });
-      await this.delay(2000);
-      await this.takeScreenshot();
-    } else {
-      await this.logWarn(
-        "[booking] Group: no session params before property switch — property search may fail"
-      );
-    }
-
-    const searchOk = await this.searchProperty(bookingHotelId);
-    if (!searchOk) {
-      const err = new Error(
-        `Group property switch failed: could not search/select hotel_id ${bookingHotelId}`
-      );
-      setFailedReasonCode(err, FAILED_REASON.PROPERTY_NOT_FOUND);
-      throw err;
-    }
-
-    await this.extractSessionParams();
-    await this.logInfo(
-      `[booking] Group: property switch complete for hotel_id=${bookingHotelId}`
-    );
-  }
-
-  /**
    * After a property step fails (e.g. VCCS nav lost session), re-login for the next hotel when the
    * browser is on Booking sign-in so the following step can run.
    */
@@ -4312,13 +4322,9 @@ export class BookingScraper extends BaseScraper {
       (url.includes("booking.com") && url.includes("/sign-in"));
 
     if (!onSignIn) {
-      if (!this.isOnSpecificPropertyPage(nextStep.bookingId)) {
-        await this.prepareGroupNextPropertyStep(nextStep.bookingId);
-      } else {
-        await dualLogInfo(
-          `[booking] Group: continuing to next property ${nextStep.bookingId} (already on correct property page)`
-        );
-      }
+      await dualLogInfo(
+        `[booking] Group: continuing to next property ${nextStep.bookingId} (no sign-in page detected)`
+      );
       return;
     }
 
@@ -4572,14 +4578,10 @@ export class BookingScraper extends BaseScraper {
           jobId: step.jobId,
           propertyId: step.bookingId,
           propertyIdForDb: step.propertyIdForDb,
-          releaseOtpAtScrapeStart: i === steps.length - 1,
+          releaseOtpAtScrapeStart: false,
           otpReleaseJobId: leaseJobId,
           credentials: this.credentials,
         };
-
-        if (i > 0) {
-          await this.prepareGroupNextPropertyStep(step.bookingId);
-        }
 
         const result = await this.scrapeData(stepParams);
 
@@ -4766,6 +4768,15 @@ export class BookingScraper extends BaseScraper {
           params.propertyId
         );
 
+        if (!navigationSuccess && this.isOnBookingSignInOrAuthPage()) {
+          await this.logInfo(
+            "[booking] Direct VCCS navigation hit sign-in — attempting authentication before retry"
+          );
+          navigationSuccess = await this.recoverVCCSNavigationAfterSignIn(
+            params.propertyId
+          );
+        }
+
         if (!navigationSuccess) {
           await this.logWarn(
             "Direct navigation failed, falling back to menu navigation"
@@ -4774,7 +4785,7 @@ export class BookingScraper extends BaseScraper {
       }
 
       // Fallback to traditional menu navigation if direct navigation not available or failed
-      if (!navigationSuccess) {
+      if (!navigationSuccess && !this.isOnBookingSignInOrAuthPage()) {
         await this.logInfo(
           "Using traditional menu navigation to VCCS Management"
         );
@@ -4782,6 +4793,10 @@ export class BookingScraper extends BaseScraper {
           "finance",
           "vccs_management",
           "vccs_management"
+        );
+      } else if (!navigationSuccess && this.isOnBookingSignInOrAuthPage()) {
+        await this.logWarn(
+          "[booking] Still on sign-in after VCCS auth recovery — menu navigation skipped"
         );
       }
 
