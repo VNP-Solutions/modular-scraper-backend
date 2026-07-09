@@ -180,6 +180,10 @@ export const PASSWORD_MISMATCH_PATTERNS = [
   /after \d+ attempts.*account will be locked/i,
 ];
 
+/** Transient Booking.com server error — not a password mismatch; do not trigger forgot-password flow. */
+export const BOOKING_TECHNICAL_DIFFICULTIES_PATTERN =
+  /we'?re having technical difficulties.*try again later/i;
+
 export const PASSWORD_RECOVERY_SELECTORS = {
   forgotPasswordButton: [
     "button.nw-link-account-recovery",

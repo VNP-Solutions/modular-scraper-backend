@@ -15,6 +15,7 @@ import {
   BOOKING_LOGIN_EXCLUDE_URLS,
   BOOKING_LOGIN_SUCCESS_URLS,
   BOOKING_SELECTORS,
+  BOOKING_TECHNICAL_DIFFICULTIES_PATTERN,
   CAPTCHA_PATTERNS,
   PASSWORD_RECOVERY_SELECTORS,
   TWO_FA_PATTERNS,
@@ -2702,6 +2703,16 @@ export class BookingScraper extends BaseScraper {
       const passwordErrorPageContent = await this.page.content();
       const currentUrl = this.page.url();
 
+      const hasTechnicalDifficulties =
+        BOOKING_TECHNICAL_DIFFICULTIES_PATTERN.test(passwordErrorPageContent);
+
+      if (hasTechnicalDifficulties) {
+        await this.logInfo(
+          "Booking.com technical difficulties error detected — skipping forgot password flow"
+        );
+        return false;
+      }
+
       // Check for specific error messages - be VERY specific!
       const hasUsernamePasswordMismatch =
         /username and password.*don't match/i.test(passwordErrorPageContent) ||
@@ -2753,10 +2764,11 @@ export class BookingScraper extends BaseScraper {
           hasErrorBlock) &&
         isOnSignInPage &&
         hasForgotPasswordButton &&
-        !isJustInformational;
+        !isJustInformational &&
+        !hasTechnicalDifficulties;
 
       await this.logInfo(
-        `Password mismatch detection: mismatch=${hasUsernamePasswordMismatch}, incorrect=${hasIncorrectPassword}, invalid=${hasInvalidCredentials}, warning=${hasAccountLockWarning}, errorBlock=${hasErrorBlock}, signInPage=${isOnSignInPage}, forgotButton=${hasForgotPasswordButton}, justInformational=${isJustInformational}, hasError=${hasPasswordError}`
+        `Password mismatch detection: mismatch=${hasUsernamePasswordMismatch}, incorrect=${hasIncorrectPassword}, invalid=${hasInvalidCredentials}, warning=${hasAccountLockWarning}, errorBlock=${hasErrorBlock}, technicalDifficulties=${hasTechnicalDifficulties}, signInPage=${isOnSignInPage}, forgotButton=${hasForgotPasswordButton}, justInformational=${isJustInformational}, hasError=${hasPasswordError}`
       );
 
       if (!hasPasswordError) {
