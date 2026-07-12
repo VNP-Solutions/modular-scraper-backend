@@ -15,8 +15,10 @@ import {
   BOOKING_LOGIN_EXCLUDE_URLS,
   BOOKING_LOGIN_SUCCESS_URLS,
   BOOKING_SELECTORS,
-  BOOKING_TECHNICAL_DIFFICULTIES_PATTERN,
+  BOOKING_SIGN_IN_ERROR_SELECTORS,
   CAPTCHA_PATTERNS,
+  matchesBookingPasswordMismatch,
+  matchesBookingTechnicalDifficulties,
   PASSWORD_RECOVERY_SELECTORS,
   TWO_FA_PATTERNS,
   TWO_FA_TEXT_PATTERNS,
@@ -2061,6 +2063,24 @@ export class BookingScraper extends BaseScraper {
     try {
       const currentUrl = currentPage.url();
 
+      const visibleError = await this.getBookingSignInVisibleError(currentPage);
+      const onSignInPasswordStep = await currentPage.evaluate(() => {
+        return !!document.querySelector(
+          'input[name="password"], #password, input[autocomplete="current-password"]'
+        );
+      });
+
+      if (
+        this.isBookingSignInUrl(currentUrl) &&
+        onSignInPasswordStep &&
+        visibleError.length > 0
+      ) {
+        await this.logInfo(
+          `Sign-in password step shows error — skipping 2FA handler (visible: "${visibleError}")`
+        );
+        return true;
+      }
+
       // Check if we're on a verification-related page
       const needsVerification = TWO_FA_PATTERNS.some((pattern) =>
         currentUrl.includes(pattern)
@@ -2686,6 +2706,38 @@ export class BookingScraper extends BaseScraper {
     }
   }
 
+  /** Visible password-field error only — avoids false positives from bundled i18n/JS strings. */
+  private async getBookingSignInVisibleError(
+    page: Page = this.page!
+  ): Promise<string> {
+    return page.evaluate((selectors) => {
+      for (const selector of selectors) {
+        const element = document.querySelector(selector);
+        const text = element?.textContent?.replace(/\s+/g, " ").trim();
+        if (text) {
+          return text;
+        }
+      }
+
+      for (const block of document.querySelectorAll("span.error-block")) {
+        const rect = block.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) {
+          continue;
+        }
+        const text = block.textContent?.replace(/\s+/g, " ").trim();
+        if (text) {
+          return text;
+        }
+      }
+
+      return "";
+    }, BOOKING_SIGN_IN_ERROR_SELECTORS);
+  }
+
+  private isBookingSignInUrl(url: string): boolean {
+    return url.includes("sign-in") || url.includes("login");
+  }
+
   /**
    * Handle password mismatch error by resetting password
    * Returns true if password was reset, false if no error detected
@@ -2699,63 +2751,67 @@ export class BookingScraper extends BaseScraper {
       // Wait a bit for error message to appear
       await this.delay(2000);
 
-      // Check page content for password mismatch patterns - MUST be SPECIFIC!
+      const visibleError = await this.getBookingSignInVisibleError();
       const passwordErrorPageContent = await this.page.content();
       const currentUrl = this.page.url();
+      const isOnSignInPage = this.isBookingSignInUrl(currentUrl);
 
+      // Technical difficulties: only trust the visible password error (full HTML contains i18n strings)
       const hasTechnicalDifficulties =
-        BOOKING_TECHNICAL_DIFFICULTIES_PATTERN.test(passwordErrorPageContent);
+        visibleError.length > 0 &&
+        matchesBookingTechnicalDifficulties(visibleError);
 
-      if (hasTechnicalDifficulties) {
+      const visiblePasswordMismatch =
+        visibleError.length > 0 &&
+        (matchesBookingPasswordMismatch(visibleError) ||
+          /username and password entered don't match/i.test(visibleError));
+
+      if (hasTechnicalDifficulties && !visiblePasswordMismatch) {
         await this.logInfo(
-          "Booking.com technical difficulties error detected — skipping forgot password flow"
+          `Booking.com technical difficulties error detected — skipping forgot password flow (visible: "${visibleError}")`
         );
         return false;
       }
 
-      // Check for specific error messages - be VERY specific!
+      // Check for specific error messages — prefer visible error, fall back to page HTML
       const hasUsernamePasswordMismatch =
+        visiblePasswordMismatch ||
         /username and password.*don't match/i.test(passwordErrorPageContent) ||
         /username and password entered don't match/i.test(
           passwordErrorPageContent
         );
-      const hasIncorrectPassword = /password.*incorrect/i.test(
-        passwordErrorPageContent
-      );
-      const hasInvalidCredentials = /invalid.*credentials/i.test(
-        passwordErrorPageContent
-      );
+      const hasIncorrectPassword =
+        (visibleError.length > 0 && /password.*incorrect/i.test(visibleError)) ||
+        /password.*incorrect/i.test(passwordErrorPageContent);
+      const hasInvalidCredentials =
+        (visibleError.length > 0 &&
+          /invalid.*credentials/i.test(visibleError)) ||
+        /invalid.*credentials/i.test(passwordErrorPageContent);
       const hasAccountLockWarning =
+        (visibleError.length > 0 &&
+          /after \d+ attempts.*account will be locked/i.test(visibleError)) ||
         /after \d+ attempts.*account will be locked/i.test(
           passwordErrorPageContent
         );
 
-      // Check for error-block class (Booking.com uses this for actual errors)
-      const hasErrorBlock = /<span class="error-block">/i.test(
-        passwordErrorPageContent
-      );
+      const hasErrorBlock =
+        visibleError.length > 0 ||
+        /<span class="error-block">/i.test(passwordErrorPageContent);
 
-      // Check if on sign-in page
-      const isOnSignInPage =
-        currentUrl.includes("sign-in") || currentUrl.includes("login");
-
-      // Check if forgot password button exists
       const hasForgotPasswordButton = /Forgot your password\?/.test(
         passwordErrorPageContent
       );
 
-      // Exclude ONLY informational messages (not actual errors)
-      // "password was recently updated" is informational, BUT if it appears with error-block, it might be part of error context
       const isJustInformational =
-        /password was recently updated/i.test(passwordErrorPageContent) &&
+        /password was recently updated/i.test(
+          visibleError || passwordErrorPageContent
+        ) &&
         !hasUsernamePasswordMismatch &&
         !hasIncorrectPassword &&
         !hasInvalidCredentials &&
         !hasAccountLockWarning &&
         !hasErrorBlock;
 
-      // MUST have actual error message AND be on sign-in page AND have forgot password button
-      // AND NOT just be an informational message
       const hasPasswordError =
         (hasUsernamePasswordMismatch ||
           hasIncorrectPassword ||
@@ -2768,7 +2824,7 @@ export class BookingScraper extends BaseScraper {
         !hasTechnicalDifficulties;
 
       await this.logInfo(
-        `Password mismatch detection: mismatch=${hasUsernamePasswordMismatch}, incorrect=${hasIncorrectPassword}, invalid=${hasInvalidCredentials}, warning=${hasAccountLockWarning}, errorBlock=${hasErrorBlock}, technicalDifficulties=${hasTechnicalDifficulties}, signInPage=${isOnSignInPage}, forgotButton=${hasForgotPasswordButton}, justInformational=${isJustInformational}, hasError=${hasPasswordError}`
+        `Password mismatch detection: visibleError="${visibleError}", mismatch=${hasUsernamePasswordMismatch}, incorrect=${hasIncorrectPassword}, invalid=${hasInvalidCredentials}, warning=${hasAccountLockWarning}, errorBlock=${hasErrorBlock}, technicalDifficulties=${hasTechnicalDifficulties}, signInPage=${isOnSignInPage}, forgotButton=${hasForgotPasswordButton}, justInformational=${isJustInformational}, hasError=${hasPasswordError}`
       );
 
       if (!hasPasswordError) {

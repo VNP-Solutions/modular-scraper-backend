@@ -184,6 +184,21 @@ export const PASSWORD_MISMATCH_PATTERNS = [
 export const BOOKING_TECHNICAL_DIFFICULTIES_PATTERN =
   /we'?re having technical difficulties.*try again later/i;
 
+/** DOM selectors for the visible sign-in password error (not bundled JS/i18n strings). */
+export const BOOKING_SIGN_IN_ERROR_SELECTORS = [
+  "#password-note .error-block",
+  "#password-note",
+  ".nw-password .error-block",
+] as const;
+
+export function matchesBookingPasswordMismatch(text: string): boolean {
+  return PASSWORD_MISMATCH_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+export function matchesBookingTechnicalDifficulties(text: string): boolean {
+  return BOOKING_TECHNICAL_DIFFICULTIES_PATTERN.test(text);
+}
+
 export const PASSWORD_RECOVERY_SELECTORS = {
   forgotPasswordButton: [
     "button.nw-link-account-recovery",
