@@ -549,12 +549,60 @@ export async function getMultipleVerificationCodes(): Promise<string[]> {
   }
 }
 
+export interface ObscuredEmailHint {
+  localFirstChar: string;
+  domainFirstChar: string;
+}
+
+/**
+ * Parse obscured email shown on Booking "Check your inbox" page.
+ * Example: "e***********@e*****.com" → { localFirstChar: "e", domainFirstChar: "e" }
+ */
+export function parseObscuredEmailHint(
+  obscuredText: string
+): ObscuredEmailHint | null {
+  const match = obscuredText.match(/([a-zA-Z0-9])\*+@([a-zA-Z0-9])\*+/);
+  if (!match) return null;
+  return {
+    localFirstChar: match[1].toLowerCase(),
+    domainFirstChar: match[2].toLowerCase(),
+  };
+}
+
+function extractEmailAddressFromHeader(headerValue: string): string | null {
+  const angleMatch = headerValue.match(/<([^>]+)>/);
+  if (angleMatch?.[1]) return angleMatch[1].trim().toLowerCase();
+
+  const plainMatch = headerValue.match(
+    /([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/
+  );
+  return plainMatch?.[1]?.trim().toLowerCase() ?? null;
+}
+
+/** Match Gmail To header against obscured hint (first char of local + domain). */
+export function emailToMatchesObscuredHint(
+  toHeader: string,
+  hint: ObscuredEmailHint
+): boolean {
+  const email = extractEmailAddressFromHeader(toHeader);
+  if (!email) return false;
+
+  const [localPart, domain] = email.split("@");
+  if (!localPart || !domain) return false;
+
+  return (
+    localPart[0] === hint.localFirstChar && domain[0] === hint.domainFirstChar
+  );
+}
+
 /**
  * Get password reset URL from Booking.com email
  * Looks for email with subject "Booking.com - Reset your Booking.com password"
  * and extracts the reset URL from the email body
  */
-export async function getPasswordResetUrl(): Promise<string | null> {
+export async function getPasswordResetUrl(
+  obscuredEmailHint?: ObscuredEmailHint
+): Promise<string | null> {
   try {
     const credentialsLoaded = await loadCredentials();
     if (!credentialsLoaded) {
@@ -563,8 +611,8 @@ export async function getPasswordResetUrl(): Promise<string | null> {
       );
     }
 
-    // Wait 22-25 seconds for email to arrive (following OTP pattern)
-    const waitTime = 22000 + Math.random() * 3000; // 22-25 seconds
+    // Wait 1 minute for email to arrive
+    const waitTime = 60000;
     await dualLogInfo(
       `Waiting ${Math.round(
         waitTime / 1000
@@ -588,76 +636,97 @@ export async function getPasswordResetUrl(): Promise<string | null> {
     }
 
     await dualLogInfo(
-      `Found ${res.data.messages.length} password reset email(s), using the latest one`
+      `Found ${res.data.messages.length} password reset email(s), searching for matching recipient...`
     );
 
-    // Get the most recent email (first in the list is the latest)
-    const messageId = res.data.messages[0].id;
-    if (!messageId) {
-      await dualLogError("Email ID not found");
-      return null;
+    if (obscuredEmailHint) {
+      await dualLogInfo(
+        `Matching To header against obscured hint: ${obscuredEmailHint.localFirstChar}***@${obscuredEmailHint.domainFirstChar}***`
+      );
     }
 
-    const email = await gmail.users.messages.get({
-      userId: "me",
-      id: messageId,
-      format: "full",
-    });
-
-    // Get email subject to verify
-    const headers = email.data.payload?.headers || [];
-    const subjectHeader = headers.find((h: any) => h.name === "Subject");
-    const subject = subjectHeader?.value || "";
-
-    await dualLogInfo(`Email subject: ${subject}`);
-
-    if (!subject.includes("Reset your Booking.com password")) {
-      await dualLogError("Email subject doesn't match expected pattern");
-      return null;
-    }
-
-    // Extract email body
-    const emailBody = getEmailBodyText(email.data);
-    await dualLogInfo("Found password reset email, extracting URL...");
-
-    // Look for the password reset URL pattern
-    // Pattern: https://account.booking.com/change-password-for-partners?token=...
     const urlPattern =
       /https?:\/\/account\.booking\.com\/change-password-for-partners\?token=[^\s<>"']+/i;
 
-    // First try to extract URLs from HTML (including href attributes)
-    const urlsFromHtml = extractUrlsFromHtml(emailBody);
-    const htmlUrlMatch = urlsFromHtml.find((url) => {
-      // Create a new regex for each test to avoid global flag issues
-      return /https?:\/\/account\.booking\.com\/change-password-for-partners\?token=/i.test(
-        url
+    for (const message of res.data.messages) {
+      const messageId = message.id;
+      if (!messageId) continue;
+
+      const email = await gmail.users.messages.get({
+        userId: "me",
+        id: messageId,
+        format: "full",
+      });
+
+      const headers = email.data.payload?.headers || [];
+      const subjectHeader = headers.find((h: any) => h.name === "Subject");
+      const subject = subjectHeader?.value || "";
+      const toHeader =
+        headers.find((h: any) => (h.name || "").toLowerCase() === "to")
+          ?.value || "";
+
+      if (!subject.includes("Reset your Booking.com password")) {
+        continue;
+      }
+
+      if (
+        obscuredEmailHint &&
+        !emailToMatchesObscuredHint(toHeader, obscuredEmailHint)
+      ) {
+        await dualLogInfo(
+          `Skipping email - To "${toHeader}" does not match obscured hint`
+        );
+        continue;
+      }
+
+      await dualLogInfo(`Email subject: ${subject}`);
+      if (toHeader) {
+        await dualLogInfo(`Email To: ${toHeader}`);
+      }
+
+      const emailBody = getEmailBodyText(email.data);
+      await dualLogInfo("Found matching password reset email, extracting URL...");
+
+      const urlsFromHtml = extractUrlsFromHtml(emailBody);
+      const htmlUrlMatch = urlsFromHtml.find((url) => {
+        return /https?:\/\/account\.booking\.com\/change-password-for-partners\?token=/i.test(
+          url
+        );
+      });
+
+      if (htmlUrlMatch) {
+        const resetUrl = htmlUrlMatch.trim();
+        await dualLogInfo(`Password reset URL found in HTML: ${resetUrl}`);
+        return resetUrl;
+      }
+
+      const urlMatch = emailBody.match(urlPattern);
+      if (urlMatch && urlMatch.length > 0) {
+        const resetUrl = urlMatch[0].trim();
+        await dualLogInfo(`Password reset URL found in body: ${resetUrl}`);
+        return resetUrl;
+      }
+
+      const snippet = email.data.snippet || "";
+      const snippetUrlMatch = snippet.match(urlPattern);
+      if (snippetUrlMatch && snippetUrlMatch.length > 0) {
+        const resetUrl = snippetUrlMatch[0].trim();
+        await dualLogInfo(`Password reset URL found in snippet: ${resetUrl}`);
+        return resetUrl;
+      }
+
+      await dualLogInfo(
+        "Matched email has no reset URL in body, trying next email..."
       );
-    });
-
-    if (htmlUrlMatch) {
-      const resetUrl = htmlUrlMatch.trim();
-      await dualLogInfo(`Password reset URL found in HTML: ${resetUrl}`);
-      return resetUrl;
     }
 
-    // Also try direct pattern matching on body text
-    const urlMatch = emailBody.match(urlPattern);
-    if (urlMatch && urlMatch.length > 0) {
-      const resetUrl = urlMatch[0].trim();
-      await dualLogInfo(`Password reset URL found in body: ${resetUrl}`);
-      return resetUrl;
+    if (obscuredEmailHint) {
+      await dualLogError(
+        "No password reset email matched the obscured recipient hint"
+      );
+    } else {
+      await dualLogError("Password reset URL not found in any matching email");
     }
-
-    // Also check snippet if full body extraction failed
-    const snippet = email.data.snippet || "";
-    const snippetUrlMatch = snippet.match(urlPattern);
-    if (snippetUrlMatch && snippetUrlMatch.length > 0) {
-      const resetUrl = snippetUrlMatch[0].trim();
-      await dualLogInfo(`Password reset URL found in snippet: ${resetUrl}`);
-      return resetUrl;
-    }
-
-    await dualLogError("Password reset URL not found in email body");
     return null;
   } catch (error: any) {
     await dualLogError("Error fetching password reset email:", error.message);

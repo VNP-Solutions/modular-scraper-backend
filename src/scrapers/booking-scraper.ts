@@ -50,7 +50,10 @@ import { timeoutManager } from "../common/timeout-manager.js";
 import { JobStatus } from "../models/job.model.js";
 import { Property } from "../models/property.model.js";
 import handleBookingOtpVerification from "../otp-verification/booking-otp-verification.js";
-import { getPasswordResetUrl } from "../otp-verification/email-verification-utils.js";
+import {
+  getPasswordResetUrl,
+  parseObscuredEmailHint,
+} from "../otp-verification/email-verification-utils.js";
 import {
   CaptchaService,
   CaptchaSolveResult,
@@ -2458,9 +2461,22 @@ export class BookingScraper extends BaseScraper {
       await this.logInfo("'Check your inbox' confirmation page detected");
       await this.takeScreenshot();
 
+      const obscuredEmailHint = await this.extractObscuredEmailHint();
+      if (!obscuredEmailHint) {
+        await this.logError(
+          "Could not extract obscured email hint from confirmation page"
+        );
+        await this.takeScreenshot();
+        return false;
+      }
+
+      await this.logInfo(
+        `Obscured email hint: ${obscuredEmailHint.localFirstChar}***@${obscuredEmailHint.domainFirstChar}***`
+      );
+
       // Step 4: Get password reset URL from email
       await this.logInfo("Fetching password reset email...");
-      const resetUrl = await getPasswordResetUrl(); // Waits 22-25s, then fetches latest 5 emails
+      const resetUrl = await getPasswordResetUrl(obscuredEmailHint);
 
       if (!resetUrl) {
         await this.logError("Could not get password reset URL from email");
@@ -2736,6 +2752,31 @@ export class BookingScraper extends BaseScraper {
 
   private isBookingSignInUrl(url: string): boolean {
     return url.includes("sign-in") || url.includes("login");
+  }
+
+  private async extractObscuredEmailHint(): Promise<{
+    localFirstChar: string;
+    domainFirstChar: string;
+  } | null> {
+    if (!this.page) return null;
+
+    for (const selector of ACCOUNT_LOCKED_SELECTORS.obscuredEmailHint) {
+      try {
+        const text = await this.page.evaluate((sel) => {
+          const element = document.querySelector(sel);
+          return element?.textContent?.trim() || "";
+        }, selector);
+        const hint = parseObscuredEmailHint(text);
+        if (hint) return hint;
+      } catch {
+        continue;
+      }
+    }
+
+    const pageContent = await this.page.content();
+    const match = pageContent.match(/([a-zA-Z0-9])\*+@([a-zA-Z0-9])\*+/);
+    if (!match) return null;
+    return parseObscuredEmailHint(match[0]);
   }
 
   /**
@@ -3117,9 +3158,22 @@ export class BookingScraper extends BaseScraper {
       await this.logInfo("'Check your inbox' confirmation page detected");
       await this.takeScreenshot();
 
+      const obscuredEmailHint = await this.extractObscuredEmailHint();
+      if (!obscuredEmailHint) {
+        await this.logError(
+          "Could not extract obscured email hint from confirmation page"
+        );
+        await this.takeScreenshot();
+        return false;
+      }
+
+      await this.logInfo(
+        `Obscured email hint: ${obscuredEmailHint.localFirstChar}***@${obscuredEmailHint.domainFirstChar}***`
+      );
+
       // Step 6: Get password reset URL from email
       await this.logInfo("Fetching password reset email...");
-      const resetUrl = await getPasswordResetUrl(); // Waits 22-25s, then fetches latest 5 emails
+      const resetUrl = await getPasswordResetUrl(obscuredEmailHint);
 
       if (!resetUrl) {
         await this.logError("Could not get password reset URL from email");
