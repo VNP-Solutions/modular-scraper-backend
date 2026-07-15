@@ -18,9 +18,16 @@ export const FAILED_REASON = {
   BOOKING_CAPTCHA_FAILED: "BOOKING_CAPTCHA_FAILED",
   BOOKING_PAGE_LOAD_FAILED: "BOOKING_PAGE_LOAD_FAILED",
   BOOKING_SIGN_IN_TRY_AGAIN_LATER: "BOOKING_SIGN_IN_TRY_AGAIN_LATER",
+  BOOKING_TECHNICAL_DIFFICULTIES: "BOOKING_TECHNICAL_DIFFICULTIES",
 } as const;
 
 export type FailedReasonCode = (typeof FAILED_REASON)[keyof typeof FAILED_REASON];
+
+export const BOOKING_SIGN_IN_TRY_AGAIN_LATER_MESSAGE =
+  '"Sign in failed, please try again later" show in booking.com';
+
+export const BOOKING_TECHNICAL_DIFFICULTIES_MESSAGE =
+  `"We're having technical difficulties – try again later" shows in Booking.com`;
 
 const FAILED_REASON_MESSAGES: Record<FailedReasonCode, string> = {
   [FAILED_REASON.SCRAPING_STOPPED]:
@@ -59,7 +66,9 @@ const FAILED_REASON_MESSAGES: Record<FailedReasonCode, string> = {
   [FAILED_REASON.BOOKING_PAGE_LOAD_FAILED]:
     "Booking.com page failed to load. Please try again.",
   [FAILED_REASON.BOOKING_SIGN_IN_TRY_AGAIN_LATER]:
-    "Sign in failed, please try again later",
+    BOOKING_SIGN_IN_TRY_AGAIN_LATER_MESSAGE,
+  [FAILED_REASON.BOOKING_TECHNICAL_DIFFICULTIES]:
+    BOOKING_TECHNICAL_DIFFICULTIES_MESSAGE,
 };
 
 /**
