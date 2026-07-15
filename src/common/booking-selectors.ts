@@ -189,6 +189,10 @@ export const PASSWORD_MISMATCH_PATTERNS = [
 export const BOOKING_TECHNICAL_DIFFICULTIES_PATTERN =
   /we'?re having technical difficulties.*try again later/i;
 
+/** Booking.com sign-in server error — fail the job immediately; do not trigger forgot-password flow. */
+export const BOOKING_SIGN_IN_TRY_AGAIN_LATER_PATTERN =
+  /sign[- ]?in failed.*please try again later/i;
+
 /** DOM selectors for the visible sign-in password error (not bundled JS/i18n strings). */
 export const BOOKING_SIGN_IN_ERROR_SELECTORS = [
   "#password-note .error-block",
@@ -202,6 +206,10 @@ export function matchesBookingPasswordMismatch(text: string): boolean {
 
 export function matchesBookingTechnicalDifficulties(text: string): boolean {
   return BOOKING_TECHNICAL_DIFFICULTIES_PATTERN.test(text);
+}
+
+export function matchesBookingSignInTryAgainLater(text: string): boolean {
+  return BOOKING_SIGN_IN_TRY_AGAIN_LATER_PATTERN.test(text);
 }
 
 export const PASSWORD_RECOVERY_SELECTORS = {

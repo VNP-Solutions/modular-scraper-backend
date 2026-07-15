@@ -18,6 +18,7 @@ import {
   BOOKING_SIGN_IN_ERROR_SELECTORS,
   CAPTCHA_PATTERNS,
   matchesBookingPasswordMismatch,
+  matchesBookingSignInTryAgainLater,
   matchesBookingTechnicalDifficulties,
   PASSWORD_RECOVERY_SELECTORS,
   TWO_FA_PATTERNS,
@@ -1563,6 +1564,9 @@ export class BookingScraper extends BaseScraper {
         .waitForNavigation({ waitUntil: "networkidle2", timeout: 30000 })
         .catch(() => {});
 
+      await this.delay(2000);
+      await this.assertBookingSignInNotTryAgainLater();
+
       // Booking may return captcha, account lock, password reset, or 2FA in any order and more than once
       const authResolved = await this.resolveBookingAuthInterstitials({
         loginEmail: effectiveCredentials.email,
@@ -2214,6 +2218,8 @@ export class BookingScraper extends BaseScraper {
         return true;
       }
 
+      await this.assertBookingSignInNotTryAgainLater(currentPage);
+
       const captchaOk = await this.handleCaptcha({
         page: currentPage,
         sessionUrl: this.sessionUrl,
@@ -2754,6 +2760,32 @@ export class BookingScraper extends BaseScraper {
     return url.includes("sign-in") || url.includes("login");
   }
 
+  /**
+   * Fail immediately when Booking.com shows "Sign in failed, please try again later"
+   * on the password step. Does not trigger forgot-password flow.
+   */
+  private async assertBookingSignInNotTryAgainLater(
+    page: Page = this.page!
+  ): Promise<void> {
+    if (!page || !this.isBookingSignInUrl(page.url())) {
+      return;
+    }
+
+    const visibleError = await this.getBookingSignInVisibleError(page);
+    if (!visibleError || !matchesBookingSignInTryAgainLater(visibleError)) {
+      return;
+    }
+
+    await this.logError(
+      `Booking.com sign-in retry-later error — failing job (visible: "${visibleError}")`
+    );
+    await this.takeScreenshot();
+
+    const err = new Error("Sign in failed, please try again later");
+    setFailedReasonCode(err, FAILED_REASON.BOOKING_SIGN_IN_TRY_AGAIN_LATER);
+    throw err;
+  }
+
   private async extractObscuredEmailHint(): Promise<{
     localFirstChar: string;
     domainFirstChar: string;
@@ -2796,6 +2828,13 @@ export class BookingScraper extends BaseScraper {
       const passwordErrorPageContent = await this.page.content();
       const currentUrl = this.page.url();
       const isOnSignInPage = this.isBookingSignInUrl(currentUrl);
+
+      if (
+        visibleError.length > 0 &&
+        matchesBookingSignInTryAgainLater(visibleError)
+      ) {
+        await this.assertBookingSignInNotTryAgainLater();
+      }
 
       // Technical difficulties: only trust the visible password error (full HTML contains i18n strings)
       const hasTechnicalDifficulties =
@@ -2862,7 +2901,9 @@ export class BookingScraper extends BaseScraper {
         isOnSignInPage &&
         hasForgotPasswordButton &&
         !isJustInformational &&
-        !hasTechnicalDifficulties;
+        !hasTechnicalDifficulties &&
+        !(visibleError.length > 0 &&
+          matchesBookingSignInTryAgainLater(visibleError));
 
       await this.logInfo(
         `Password mismatch detection: visibleError="${visibleError}", mismatch=${hasUsernamePasswordMismatch}, incorrect=${hasIncorrectPassword}, invalid=${hasInvalidCredentials}, warning=${hasAccountLockWarning}, errorBlock=${hasErrorBlock}, technicalDifficulties=${hasTechnicalDifficulties}, signInPage=${isOnSignInPage}, forgotButton=${hasForgotPasswordButton}, justInformational=${isJustInformational}, hasError=${hasPasswordError}`
@@ -3413,6 +3454,9 @@ export class BookingScraper extends BaseScraper {
 
       return true;
     } catch (error) {
+      if (hasFailedReasonCode(error)) {
+        throw error;
+      }
       await this.logError("Error handling password mismatch:", error);
       await this.takeScreenshot();
       return false;

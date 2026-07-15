@@ -17,6 +17,7 @@ export const FAILED_REASON = {
   BOOKING_SCRAPING_STOPPED: "BOOKING_SCRAPING_STOPPED",
   BOOKING_CAPTCHA_FAILED: "BOOKING_CAPTCHA_FAILED",
   BOOKING_PAGE_LOAD_FAILED: "BOOKING_PAGE_LOAD_FAILED",
+  BOOKING_SIGN_IN_TRY_AGAIN_LATER: "BOOKING_SIGN_IN_TRY_AGAIN_LATER",
 } as const;
 
 export type FailedReasonCode = (typeof FAILED_REASON)[keyof typeof FAILED_REASON];
@@ -57,6 +58,8 @@ const FAILED_REASON_MESSAGES: Record<FailedReasonCode, string> = {
     "Booking.com CAPTCHA challenge could not be resolved. Please try again.",
   [FAILED_REASON.BOOKING_PAGE_LOAD_FAILED]:
     "Booking.com page failed to load. Please try again.",
+  [FAILED_REASON.BOOKING_SIGN_IN_TRY_AGAIN_LATER]:
+    "Sign in failed, please try again later",
 };
 
 /**
