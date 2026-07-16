@@ -19,6 +19,7 @@ export const FAILED_REASON = {
   BOOKING_PAGE_LOAD_FAILED: "BOOKING_PAGE_LOAD_FAILED",
   BOOKING_SIGN_IN_TRY_AGAIN_LATER: "BOOKING_SIGN_IN_TRY_AGAIN_LATER",
   BOOKING_TECHNICAL_DIFFICULTIES: "BOOKING_TECHNICAL_DIFFICULTIES",
+  BOOKING_CARD_INFO_NOT_AVAILABLE: "BOOKING_CARD_INFO_NOT_AVAILABLE",
 } as const;
 
 export type FailedReasonCode = (typeof FAILED_REASON)[keyof typeof FAILED_REASON];
@@ -28,6 +29,9 @@ export const BOOKING_SIGN_IN_TRY_AGAIN_LATER_MESSAGE =
 
 export const BOOKING_TECHNICAL_DIFFICULTIES_MESSAGE =
   `"We're having technical difficulties – try again later" shows in Booking.com`;
+
+export const BOOKING_CARD_INFO_NOT_AVAILABLE_MESSAGE =
+  "Card info not available, try after 7-8 hours later";
 
 const FAILED_REASON_MESSAGES: Record<FailedReasonCode, string> = {
   [FAILED_REASON.SCRAPING_STOPPED]:
@@ -69,6 +73,8 @@ const FAILED_REASON_MESSAGES: Record<FailedReasonCode, string> = {
     BOOKING_SIGN_IN_TRY_AGAIN_LATER_MESSAGE,
   [FAILED_REASON.BOOKING_TECHNICAL_DIFFICULTIES]:
     BOOKING_TECHNICAL_DIFFICULTIES_MESSAGE,
+  [FAILED_REASON.BOOKING_CARD_INFO_NOT_AVAILABLE]:
+    BOOKING_CARD_INFO_NOT_AVAILABLE_MESSAGE,
 };
 
 /**
@@ -79,6 +85,12 @@ export function setFailedReasonCode(error: any, code: FailedReasonCode): void {
   if (error && typeof error === "object") {
     error.failedReasonCode = code;
   }
+}
+
+export function createBookingCardInfoNotAvailableError(): Error {
+  const err = new Error(BOOKING_CARD_INFO_NOT_AVAILABLE_MESSAGE);
+  setFailedReasonCode(err, FAILED_REASON.BOOKING_CARD_INFO_NOT_AVAILABLE);
+  return err;
 }
 
 /**

@@ -31,6 +31,8 @@ import { decryptPassword } from "../common/encription.js";
 import {
   BOOKING_SIGN_IN_TRY_AGAIN_LATER_MESSAGE,
   BOOKING_TECHNICAL_DIFFICULTIES_MESSAGE,
+  BOOKING_CARD_INFO_NOT_AVAILABLE_MESSAGE,
+  createBookingCardInfoNotAvailableError,
   FAILED_REASON,
   getFailedReasonForUser,
   hasFailedReasonCode,
@@ -114,6 +116,9 @@ export class BookingScraper extends BaseScraper {
    * When true, trust-unavailable streak is not applied (job already had job items in DB at run start).
    */
   private skipTrustUnavailableStreakForJobRun = false;
+
+  /** First VCC card-details open in legacy list flow (fail job if no card on first try). */
+  private vccFirstCardAttemptCompleted = false;
 
   /** True when connected to a persisted Browserless session (disconnect instead of close on cleanup). */
   private usingPersistentBrowserlessSession = false;
@@ -2762,6 +2767,23 @@ export class BookingScraper extends BaseScraper {
     return url.includes("sign-in") || url.includes("login");
   }
 
+  private async failJobForFirstReservationCardInfoNotAvailable(
+    jobId: string,
+    reservationId: string
+  ): Promise<never> {
+    await this.logError(
+      `First reservation ${reservationId}: card info not available — failing job`
+    );
+    await jobService.updateJobStatusWithReason(
+      jobId,
+      JobStatus.Failed,
+      BOOKING_CARD_INFO_NOT_AVAILABLE_MESSAGE
+    );
+    const err = createBookingCardInfoNotAvailableError();
+    markStatusSaved(err);
+    throw err;
+  }
+
   /**
    * Fail immediately for Booking.com sign-in errors that must not trigger
    * forgot-password (technical difficulties, sign-in failed try again later).
@@ -3894,6 +3916,7 @@ export class BookingScraper extends BaseScraper {
 
     try {
       this.consecutiveGuestCardTrustUnavailable = 0;
+      this.vccFirstCardAttemptCompleted = false;
       if (options.jobId) {
         const existingItems = await jobService.getJobItemsCount(options.jobId);
         this.skipTrustUnavailableStreakForJobRun = existingItems > 0;
@@ -4065,6 +4088,9 @@ export class BookingScraper extends BaseScraper {
           await this.logInfo(`Failed to process reservation ${reservation.id}`);
         }
       } catch (error) {
+        if (hasFailedReasonCode(error)) {
+          throw error;
+        }
         errorCount++;
         await this.logInfo(
           `Error processing reservation ${reservation.id}: ${
@@ -4909,6 +4935,7 @@ export class BookingScraper extends BaseScraper {
       );
 
       this.consecutiveGuestCardTrustUnavailable = 0;
+      this.vccFirstCardAttemptCompleted = false;
       if (params.jobId) {
         const existingItems = await jobService.getJobItemsCount(params.jobId);
         this.skipTrustUnavailableStreakForJobRun = existingItems > 0;
@@ -5231,6 +5258,9 @@ export class BookingScraper extends BaseScraper {
         data,
       };
     } catch (error) {
+      if (hasFailedReasonCode(error)) {
+        throw error;
+      }
       await dualLogError(
         `[${new Date().toISOString()}] ${getBookingErrorDescription(
           BookingErrorType.UNKNOWN
@@ -6585,6 +6615,22 @@ export class BookingScraper extends BaseScraper {
         cardData &&
         String(cardData.cardNumber || "").trim()
       );
+
+      const isFirstCardAttempt = !this.vccFirstCardAttemptCompleted;
+      this.vccFirstCardAttemptCompleted = true;
+
+      if (isFirstCardAttempt && !hadCardDetails && jobId) {
+        try {
+          await newPage.close();
+        } catch {
+          /* ignore */
+        }
+        await this.failJobForFirstReservationCardInfoNotAvailable(
+          jobId,
+          reservation.id
+        );
+      }
+
       const trustStreakOk = await this.applyGuestCardTrustUnavailableConsecutiveRule({
         trustUnavailableGuestCardPage,
         hadCardDetails,
@@ -6622,6 +6668,9 @@ export class BookingScraper extends BaseScraper {
       );
       return { success: true, cardInfoStored };
     } catch (error) {
+      if (hasFailedReasonCode(error)) {
+        throw error;
+      }
       await this.logError(
         `Error processing reservation ${reservation.id}:`,
         error
