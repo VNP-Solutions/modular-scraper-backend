@@ -4892,16 +4892,23 @@ export class BookingScraper extends BaseScraper {
         platform: "booking",
       });
       scrapingStateManager.stopScraping();
-      if (!anyStepCompleted && !isStatusAlreadySaved(error)) {
+      if (!anyStepCompleted) {
         try {
           const msg =
-            getFailedReasonForUser(error) || "Booking group scrape failed.";
+            getFailedReasonForUser(error) ||
+            (error instanceof Error ? error.message : String(error)) ||
+            "Booking group scrape failed.";
+          // Always propagate to every job in the group. Inner handlers (e.g. first
+          // reservation card-info fail) may have already saved one job's reason;
+          // failJobSafe preserves that and applies msg to the rest (lease + InQueue steps).
           await this.failAllBookingGroupJobsOnEarlyExit(
             steps,
             leaseJobId,
             msg
           );
-          markStatusSaved(error);
+          if (!isStatusAlreadySaved(error)) {
+            markStatusSaved(error);
+          }
         } catch {
           /* ignore */
         }
