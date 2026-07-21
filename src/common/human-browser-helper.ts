@@ -107,6 +107,38 @@ export async function scrollHumanLike(page: Page): Promise<void> {
 }
 
 /**
+ * Scroll down/up in small random steps for a total random duration (defaults
+ * to 1–5s). Used to look human while parked on a list page between opening
+ * reservation detail tabs.
+ */
+export async function randomScrollForDuration(
+  page: Page,
+  minMs: number = 1000,
+  maxMs: number = 5000
+): Promise<void> {
+  const totalMs = randomBetween(minMs, maxMs);
+  const start = Date.now();
+  let direction = 1;
+
+  while (Date.now() - start < totalMs) {
+    const px = 100 + Math.floor(Math.random() * 250);
+    try {
+      await page.evaluate((y) => window.scrollBy(0, y), px * direction);
+    } catch {
+      // Page may be mid-navigation or closed — stop scrolling early.
+      return;
+    }
+
+    // Occasionally reverse so it doesn't scroll only one way.
+    if (Math.random() < 0.3) direction *= -1;
+
+    const remaining = totalMs - (Date.now() - start);
+    if (remaining <= 0) break;
+    await randomPause(200, Math.min(500, Math.max(50, remaining)));
+  }
+}
+
+/**
  * Quick human-like interaction on the current page: mouse move + scroll + optional
  * hover over the card table. Keeps total extra time modest (~2–4s).
  */

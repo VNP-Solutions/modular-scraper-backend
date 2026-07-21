@@ -1,6 +1,7 @@
 import fetch from "node-fetch";
 import {
   randomPause,
+  randomScrollForDuration,
   simulateHumanMouseMove,
   simulateHumanOnPage,
 } from "../common/human-browser-helper.js";
@@ -1149,8 +1150,29 @@ export class VccsManagementService {
         continue;
       }
 
+      // Open a fresh tab for this reservation's card-details page so the
+      // "view all" list tab (`page`) never navigates away — it stays parked
+      // on the list the whole time. This mirrors a human opening a
+      // reservation in a new tab, reading the card, closing the tab, and
+      // scrolling the list a bit before opening the next one.
+      let cardPage: any = null;
+      const originalScraperPage = scraperInstance
+        ? scraperInstance.page
+        : undefined;
+
       try {
         dualLogInfo(`Processing reservation ${vccs.hres_id}`);
+
+        cardPage = await page.browser().newPage();
+        if (scraperInstance?.applyAntiDetection) {
+          await scraperInstance.applyAntiDetection(cardPage);
+        }
+        if (scraperInstance) {
+          // Login/2FA/captcha handlers on the scraper instance operate on
+          // `this.page` internally, so point it at the reservation tab while
+          // we work on it.
+          scraperInstance.page = cardPage;
+        }
 
         const fetchOutcome: {
           guestCardTrustUnavailable?: boolean;
@@ -1160,7 +1182,7 @@ export class VccsManagementService {
         // Get card details for this reservation using browser navigation
         // Use LATEST authenticated URL from previous fetch (if available)
         const cardDetails = await this.getCardDetailsFromBrowser(
-          page,
+          cardPage,
           vccs.hres_id,
           params,
           scraperInstance, // Pass scraper instance for auth handling
@@ -1325,9 +1347,6 @@ export class VccsManagementService {
         dualLogInfo(
           `Successfully processed reservation ${vccs.hres_id} (${processed}/${vccsData.data.vccs.length})`
         );
-
-        // Small delay between card fetches (same ballpark as before, ~1s)
-        await randomPause(800, 1500);
       } catch (error) {
         errors++;
         dualLogError(`Error processing reservation ${vccs.hres_id}`, {
@@ -1341,6 +1360,30 @@ export class VccsManagementService {
           cardDetails: null,
           saved: false,
         });
+      } finally {
+        // Close the reservation tab and hand control back to the list tab,
+        // then scroll it for a random 1–5s before the next reservation opens —
+        // replaces the old flat inter-reservation delay with human-like idle time.
+        if (cardPage) {
+          try {
+            await cardPage.close();
+          } catch {
+            // Tab may already be closed/detached — nothing to do.
+          }
+        }
+        if (scraperInstance) {
+          scraperInstance.page = originalScraperPage;
+        }
+        try {
+          await page.bringToFront();
+          dualLogInfo(
+            `Back on VCCS list page; scrolling before next reservation`,
+            { reservationId: vccs.hres_id }
+          );
+          await randomScrollForDuration(page, 1000, 5000);
+        } catch {
+          // List tab may be gone if the browser/page was closed elsewhere.
+        }
       }
     }
 
