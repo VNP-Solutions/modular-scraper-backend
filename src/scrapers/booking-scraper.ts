@@ -4246,15 +4246,17 @@ export class BookingScraper extends BaseScraper {
   }
 
   /**
-   * After a property step fails (e.g. VCCS nav lost session), re-login for the next hotel when the
-   * browser is on Booking sign-in so the following step can run.
+   * If the browser got bounced to Booking sign-in (e.g. session lost after a step failure),
+   * re-login for the next hotel so the following step can run. Returns true when a re-login was
+   * performed (in which case `login()` already ran the full humanized post-login flow for
+   * `nextStep`, so the caller should not also run the groups/home switch).
    */
   private async recoverGroupSessionBeforeNextStep(
     params: ScrapingJobParams,
     nextStep: BookingGroupScrapeStep
-  ): Promise<void> {
+  ): Promise<boolean> {
     if (!this.page) {
-      return;
+      return false;
     }
     const url = this.page.url().toLowerCase();
     const onSignIn =
@@ -4262,14 +4264,11 @@ export class BookingScraper extends BaseScraper {
       (url.includes("booking.com") && url.includes("/sign-in"));
 
     if (!onSignIn) {
-      await dualLogInfo(
-        `[booking] Group: continuing to next property ${nextStep.bookingId} (no sign-in page detected)`
-      );
-      return;
+      return false;
     }
 
     await dualLogInfo(
-      `[booking] Group: session signed out after step failure; re-logging in for property ${nextStep.bookingId}`
+      `[booking] Group: session signed out; re-logging in for property ${nextStep.bookingId}`
     );
     await this.applyBookingCredentialsForJob(nextStep.jobId, params.credentials);
     await this.login(this.credentials, nextStep.bookingId);
@@ -4280,6 +4279,138 @@ export class BookingScraper extends BaseScraper {
     const twoFAHandled = await this.handle2FA();
     if (!twoFAHandled) {
       await this.logInfo("2FA not required or skipped after group re-login");
+    }
+    return true;
+  }
+
+  /**
+   * Close every browser tab except the one we're actively using. `searchProperty()` sometimes
+   * has Booking open the selected hotel in a new tab, so without this a long-running group job
+   * (many properties, one browser) would accumulate stale tabs.
+   */
+  private async closeExtraGroupTabs(): Promise<void> {
+    if (!this.browser || !this.page) {
+      return;
+    }
+    try {
+      const pages = await this.browser.pages();
+      for (const p of pages) {
+        if (p === this.page || p.isClosed()) {
+          continue;
+        }
+        try {
+          await p.close();
+        } catch {
+          /* ignore */
+        }
+      }
+    } catch (err) {
+      await this.logWarn(
+        "[booking] Group: failed to close extra tabs before property switch",
+        err
+      );
+    }
+  }
+
+  /**
+   * Between properties in a group, return to the multi-property dashboard
+   * (`/hoteladmin/groups/home/`) using the latest `ses`/`lang` before searching for the next
+   * property. `checkMultiPropertyAccount()` detects this exact URL shape, so landing here first is
+   * what lets the existing `handleSuccessfulLogin` → `searchProperty` (real click) path run for
+   * every property, not just the first one after login.
+   */
+  private async navigateToGroupsHomeForPropertySwitch(
+    anchorBookingId?: string
+  ): Promise<boolean> {
+    if (!this.page) {
+      return false;
+    }
+
+    await this.extractSessionParams();
+    if (!this.sessionParams) {
+      await this.logWarn(
+        "[booking] Group switch: no session params available; skipping groups/home warm-up"
+      );
+      return false;
+    }
+
+    const { ses, lang } = this.sessionParams;
+    const hotelIdPart = anchorBookingId ? `&hotel_id=${anchorBookingId}` : "";
+    const groupsHomeUrl = `https://admin.booking.com/hotel/hoteladmin/groups/home/index.html?lang=${lang}&ses=${ses}${hotelIdPart}`;
+
+    await this.logInfo(
+      `[booking] Group: returning to groups/home overview before switching property: ${groupsHomeUrl}`
+    );
+
+    const maxNavAttempts = 2;
+    for (let attempt = 1; attempt <= maxNavAttempts; attempt++) {
+      const usable = await this.ensureUsablePageForNavigation();
+      if (!usable || !this.page) {
+        await this.logError("No usable page for groups/home navigation");
+        return false;
+      }
+      try {
+        await this.page.goto(groupsHomeUrl, {
+          waitUntil: "networkidle2",
+          timeout: 60000,
+        });
+        break;
+      } catch (navErr) {
+        const retry =
+          attempt < maxNavAttempts && this.isStalePageNavigationError(navErr);
+        if (retry) {
+          await this.logWarn(
+            "[booking] groups/home navigation hit detached/stale page; recovering tab and retrying once",
+            navErr
+          );
+          continue;
+        }
+        throw navErr;
+      }
+    }
+
+    await this.delay(1500);
+    await this.takeScreenshot();
+    return true;
+  }
+
+  /**
+   * Human-like switch to the next property in a group: dashboard → search → click (real
+   * navigation, not a hand-built VCCS URL) → Home/Reservations warm-up. Runs between every two
+   * properties, whether or not the previous step succeeded. Best-effort: any failure here is
+   * logged and swallowed so `scrapeData`'s own direct-nav → menu-nav fallback still runs.
+   */
+  private async switchToNextGroupProperty(
+    params: ScrapingJobParams,
+    previousBookingId: string,
+    nextStep: BookingGroupScrapeStep
+  ): Promise<void> {
+    try {
+      await this.closeExtraGroupTabs();
+
+      const reLoggedIn = await this.recoverGroupSessionBeforeNextStep(
+        params,
+        nextStep
+      );
+      if (reLoggedIn) {
+        return;
+      }
+
+      await dualLogInfo(
+        `[booking] Group: switching to next property ${nextStep.bookingId} via groups/home overview (human-like)`
+      );
+      const reachedGroupsHome = await this.navigateToGroupsHomeForPropertySwitch(
+        previousBookingId
+      );
+      if (!reachedGroupsHome) {
+        return;
+      }
+      await this.handleSuccessfulLogin(nextStep.bookingId);
+    } catch (err) {
+      await this.logWarn(
+        `[booking] Group: human-like switch to property ${nextStep.bookingId} failed; falling back to direct VCCS navigation`,
+        err
+      );
     }
   }
 
@@ -4511,6 +4642,7 @@ export class BookingScraper extends BaseScraper {
         scrapingStateManager.startScraping(step.bookingId, step.jobId);
         if (i > 0) {
           await jobService.startJob(step.jobId, workerTag);
+          await this.switchToNextGroupProperty(params, steps[i - 1].bookingId, step);
         }
 
         const stepParams: ScrapingJobParams = {
@@ -4538,9 +4670,8 @@ export class BookingScraper extends BaseScraper {
           const hasMore = i < steps.length - 1;
           if (hasMore) {
             await dualLogInfo(
-              `[booking] Group: step failed for job ${step.jobId} (${failMsg}); attempting recovery and next property`
+              `[booking] Group: step failed for job ${step.jobId} (${failMsg}); will attempt human-like switch to next property`
             );
-            await this.recoverGroupSessionBeforeNextStep(params, steps[i + 1]);
           } else {
             await dualLogError(
               `[booking] Group: last step failed for job ${step.jobId}`,
