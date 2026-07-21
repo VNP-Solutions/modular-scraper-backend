@@ -64,7 +64,13 @@ function isStalePageContextError(e: unknown): boolean {
     msg.includes("detached frame") ||
     msg.includes("Execution context was destroyed") ||
     msg.includes("Cannot find context") ||
-    msg.includes("Target closed")
+    msg.includes("Target closed") ||
+    // Navigation mid-flight can momentarily leave `document.body` (or `document`
+    // itself) null while the new document is still being constructed. This is
+    // seen in the wild as "Cannot read properties of null (reading 'innerText')"
+    // right after a successful OTP submit, and should be treated the same as a
+    // stale execution context rather than a real failure.
+    msg.includes("Cannot read properties of null")
   );
 }
 
@@ -564,7 +570,9 @@ async function handleBookingOtpVerification(
       let hasError = false;
       try {
         hasError = await page.evaluate(() => {
-          const bodyText = document.body.innerText;
+          // document.body can momentarily be null while a new document is
+          // being constructed right after a successful submit/navigation.
+          const bodyText = document.body ? document.body.innerText : "";
           return bodyText.includes("Enter a valid verification code");
         });
       } catch (e) {
@@ -695,7 +703,39 @@ async function handleBookingOtpVerification(
         // ignore and continue
       }
     } else {
-      await waitForNavigation(page, loadingTimeout);
+      // navDetected can be a false negative: the submit-time race between
+      // navPromise (2500ms) and delay(2000) may resolve via the delay just
+      // before navigation actually fires, so by the time we get here the
+      // page may have *already* navigated away moments ago. Calling
+      // page.waitForNavigation() at that point misses the (past) navigation
+      // event entirely and hangs for the full loadingTimeout (minutes) even
+      // though the OTP succeeded and the browser already moved on - this is
+      // what shows up as the flow getting "stuck" right after logging
+      // "Attempt N successful!". Race the navigation wait against a URL poll
+      // so we bail out as soon as we detect we're no longer on the OTP page.
+      await Promise.race([
+        waitForNavigation(page, loadingTimeout).catch(() => null),
+        (async () => {
+          const pollIntervalMs = 1000;
+          const deadline = Date.now() + loadingTimeout;
+          while (Date.now() < deadline) {
+            await delay(pollIntervalMs);
+            let latestUrl = "";
+            try {
+              latestUrl = page.url();
+            } catch (e) {
+              // Page/context gone - treat as having navigated away already.
+              return;
+            }
+            if (latestUrl && latestUrl !== currentUrl) {
+              await dualLogInfo(
+                "Detected URL change away from OTP page while waiting for navigation; continuing..."
+              );
+              return;
+            }
+          }
+        })(),
+      ]);
     }
 
     await dualLogInfo("Booking.com OTP verification completed!");
