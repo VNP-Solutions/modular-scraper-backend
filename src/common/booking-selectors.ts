@@ -186,7 +186,7 @@ export const BOOKING_TECHNICAL_DIFFICULTIES_PATTERN =
 
 /** Booking.com sign-in server error — fail the job immediately; do not trigger forgot-password flow. */
 export const BOOKING_SIGN_IN_TRY_AGAIN_LATER_PATTERN =
-  /sign[- ]?in failed.*please try again later/i;
+  /sign[- ]?in failed.*try again later/i;
 
 /** DOM selectors for the visible sign-in password error (not bundled JS/i18n strings). */
 export const BOOKING_SIGN_IN_ERROR_SELECTORS = [
