@@ -188,6 +188,10 @@ export const BOOKING_TECHNICAL_DIFFICULTIES_PATTERN =
 export const BOOKING_SIGN_IN_TRY_AGAIN_LATER_PATTERN =
   /sign[- ]?in failed.*try again later/i;
 
+/** Booking.com 2FA/OTP rate-limit error — account has been throttled after too many verification attempts. */
+export const BOOKING_TOO_MANY_ATTEMPTS_PATTERN =
+  /too many attempts.*try again later/i;
+
 /** DOM selectors for the visible sign-in password error (not bundled JS/i18n strings). */
 export const BOOKING_SIGN_IN_ERROR_SELECTORS = [
   "#password-note .error-block",
@@ -201,6 +205,10 @@ export function matchesBookingTechnicalDifficulties(text: string): boolean {
 
 export function matchesBookingSignInTryAgainLater(text: string): boolean {
   return BOOKING_SIGN_IN_TRY_AGAIN_LATER_PATTERN.test(text);
+}
+
+export function matchesBookingTooManyAttempts(text: string): boolean {
+  return BOOKING_TOO_MANY_ATTEMPTS_PATTERN.test(text);
 }
 
 export const PASSWORD_RECOVERY_SELECTORS = {

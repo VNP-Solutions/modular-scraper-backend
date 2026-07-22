@@ -1,8 +1,12 @@
 import dotenv from "dotenv";
 import { Page } from "puppeteer";
-import { TWO_FA_TEXT_PATTERNS } from "../common/booking-selectors.js";
+import {
+  TWO_FA_TEXT_PATTERNS,
+  matchesBookingTooManyAttempts,
+} from "../common/booking-selectors.js";
 import { delay } from "../common/delay.js";
 import {
+  BOOKING_TOO_MANY_ATTEMPTS_MESSAGE,
   FAILED_REASON,
   inferBookingOtpFailedReasonCode,
   setFailedReasonCode,
@@ -72,6 +76,49 @@ function isStalePageContextError(e: unknown): boolean {
     // stale execution context rather than a real failure.
     msg.includes("Cannot read properties of null")
   );
+}
+
+/**
+ * Booking.com throttles repeated 2FA/OTP requests and, instead of showing the
+ * OTP input, renders a visible `span.error-block` with "Too many attempts –
+ * try again later." on the phone-selection/verification page. When this is
+ * present, the missing OTP input is expected (there's no code to enter), so
+ * it must be detected explicitly and reported as its own failure reason
+ * rather than the generic "OTP input field not found" error.
+ */
+async function getBookingVisibleErrorBlockText(page: Page): Promise<string> {
+  try {
+    return await page.evaluate(() => {
+      for (const block of document.querySelectorAll("span.error-block")) {
+        const rect = block.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) continue;
+        const text = block.textContent?.replace(/\s+/g, " ").trim();
+        if (text) return text;
+      }
+      return "";
+    });
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Throws a dedicated BOOKING_TOO_MANY_ATTEMPTS error if Booking.com's
+ * rate-limit message is currently visible on the page. No-op otherwise.
+ */
+async function assertBookingOtpNotRateLimited(page: Page): Promise<void> {
+  const visibleError = await getBookingVisibleErrorBlockText(page);
+  if (!visibleError || !matchesBookingTooManyAttempts(visibleError)) {
+    return;
+  }
+
+  await dualLogError(
+    `Booking.com too-many-attempts error detected — failing job (visible: "${visibleError}")`
+  );
+
+  const error = new Error(BOOKING_TOO_MANY_ATTEMPTS_MESSAGE);
+  setFailedReasonCode(error, FAILED_REASON.BOOKING_TOO_MANY_ATTEMPTS);
+  throw error;
 }
 
 /**
@@ -250,6 +297,8 @@ async function ensureBookingOtpInputSelector(
     discoveryPerSelectorMs
   );
   if (!found) {
+    await assertBookingOtpNotRateLimited(page);
+
     const error = new Error(
       "OTP input field not found after exhaustive search"
     );
@@ -434,6 +483,11 @@ async function handleBookingOtpVerification(
     let otpInputSelector = await findBookingOtpInputSelector(page, 3000);
 
     if (!otpInputSelector) {
+      // Booking.com may have throttled this account instead of sending the
+      // OTP page — detect and fail with a specific reason before falling
+      // back to the generic "not found" debugging path.
+      await assertBookingOtpNotRateLimited(page);
+
       // Log page content for debugging
       const pageContent = await page.content();
       await dualLogInfo("Page content length:", pageContent.length);
