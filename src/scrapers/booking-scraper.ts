@@ -15,6 +15,7 @@ import {
   BOOKING_LOGIN_EXCLUDE_URLS,
   BOOKING_LOGIN_SUCCESS_URLS,
   BOOKING_SELECTORS,
+  BOOKING_SIGN_IN_ERROR_SELECTORS,
   CAPTCHA_PATTERNS,
   matchesBookingSignInTryAgainLater,
   matchesBookingTechnicalDifficulties,
@@ -2210,6 +2211,45 @@ export class BookingScraper extends BaseScraper {
   }
 
   /**
+   * Visible password-field error only — avoids false positives from bundled
+   * JS/i18n strings. Booking.com's page bundle contains many translated error
+   * strings (including "technical difficulties" / "sign in failed") even when
+   * they aren't shown, e.g. on the 2FA/verification step — so checking
+   * `page.content()` directly causes false positives. Only text actually
+   * rendered in the known error selectors (or a visible `.error-block`) counts.
+   */
+  private async getBookingSignInVisibleError(
+    page: Page = this.page!
+  ): Promise<string> {
+    try {
+      return await page.evaluate((selectors) => {
+        for (const selector of selectors) {
+          const element = document.querySelector(selector);
+          const text = element?.textContent?.replace(/\s+/g, " ").trim();
+          if (text) {
+            return text;
+          }
+        }
+
+        for (const block of document.querySelectorAll("span.error-block")) {
+          const rect = block.getBoundingClientRect();
+          if (rect.width <= 0 || rect.height <= 0) {
+            continue;
+          }
+          const text = block.textContent?.replace(/\s+/g, " ").trim();
+          if (text) {
+            return text;
+          }
+        }
+
+        return "";
+      }, BOOKING_SIGN_IN_ERROR_SELECTORS);
+    } catch {
+      return "";
+    }
+  }
+
+  /**
    * Fail immediately for Booking.com sign-in errors that must not trigger
    * the forgot-password flow: "We're having technical difficulties – try
    * again later" (generic server error) and "Sign in failed, please try
@@ -2224,16 +2264,14 @@ export class BookingScraper extends BaseScraper {
       return;
     }
 
-    let pageContent = "";
-    try {
-      pageContent = await page.content();
-    } catch {
+    const visibleError = await this.getBookingSignInVisibleError(page);
+    if (!visibleError) {
       return;
     }
 
-    if (matchesBookingTechnicalDifficulties(pageContent)) {
+    if (matchesBookingTechnicalDifficulties(visibleError)) {
       await this.logError(
-        `Booking.com technical difficulties — failing job (url: "${page.url()}")`
+        `Booking.com technical difficulties — failing job (visible: "${visibleError}")`
       );
       await this.takeScreenshot();
 
@@ -2242,9 +2280,9 @@ export class BookingScraper extends BaseScraper {
       throw err;
     }
 
-    if (matchesBookingSignInTryAgainLater(pageContent)) {
+    if (matchesBookingSignInTryAgainLater(visibleError)) {
       await this.logError(
-        `Booking.com sign-in retry-later error — failing job (url: "${page.url()}")`
+        `Booking.com sign-in retry-later error — failing job (visible: "${visibleError}")`
       );
       await this.takeScreenshot();
 
@@ -2734,18 +2772,22 @@ export class BookingScraper extends BaseScraper {
 
       // Booking.com server errors ("we're having technical difficulties" /
       // "sign in failed, please try again later") must fail the job instead
-      // of triggering the forgot-password flow — re-check here in case this
-      // is the first time we're seeing the error content (defensive; the
-      // interstitial drain already calls assertBookingSignInFatalErrors too).
-      if (matchesBookingTechnicalDifficulties(passwordErrorPageContent)) {
+      // of triggering the forgot-password flow. IMPORTANT: only trust the
+      // *visible* password-field error here — `passwordErrorPageContent`
+      // (full page.content()) contains bundled JS/i18n strings for every
+      // possible error message, so matching against it directly causes false
+      // positives on unrelated pages (e.g. the 2FA/verification step).
+      const visibleSignInError = await this.getBookingSignInVisibleError();
+      if (
+        visibleSignInError.length > 0 &&
+        (matchesBookingTechnicalDifficulties(visibleSignInError) ||
+          matchesBookingSignInTryAgainLater(visibleSignInError))
+      ) {
         await this.assertBookingSignInFatalErrors();
       }
-      if (matchesBookingSignInTryAgainLater(passwordErrorPageContent)) {
-        await this.assertBookingSignInFatalErrors();
-      }
-      const hasTechnicalDifficulties = matchesBookingTechnicalDifficulties(
-        passwordErrorPageContent
-      );
+      const hasTechnicalDifficulties =
+        visibleSignInError.length > 0 &&
+        matchesBookingTechnicalDifficulties(visibleSignInError);
 
       // Check if forgot password button exists
       const hasForgotPasswordButton = /Forgot your password\?/.test(

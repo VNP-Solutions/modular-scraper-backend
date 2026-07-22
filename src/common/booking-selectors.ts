@@ -188,6 +188,13 @@ export const BOOKING_TECHNICAL_DIFFICULTIES_PATTERN =
 export const BOOKING_SIGN_IN_TRY_AGAIN_LATER_PATTERN =
   /sign[- ]?in failed.*please try again later/i;
 
+/** DOM selectors for the visible sign-in password error (not bundled JS/i18n strings). */
+export const BOOKING_SIGN_IN_ERROR_SELECTORS = [
+  "#password-note .error-block",
+  "#password-note",
+  ".nw-password .error-block",
+] as const;
+
 export function matchesBookingTechnicalDifficulties(text: string): boolean {
   return BOOKING_TECHNICAL_DIFFICULTIES_PATTERN.test(text);
 }
