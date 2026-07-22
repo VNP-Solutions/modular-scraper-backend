@@ -16,6 +16,8 @@ import {
   BOOKING_LOGIN_SUCCESS_URLS,
   BOOKING_SELECTORS,
   CAPTCHA_PATTERNS,
+  matchesBookingSignInTryAgainLater,
+  matchesBookingTechnicalDifficulties,
   PASSWORD_RECOVERY_SELECTORS,
   TWO_FA_PATTERNS,
   TWO_FA_TEXT_PATTERNS,
@@ -25,6 +27,10 @@ import { simulateHumanMouseMove } from "../common/human-browser-helper.js";
 import { emailNotifier } from "../common/email-notifier.js";
 import { decryptPassword } from "../common/encription.js";
 import {
+  BOOKING_CARD_INFO_NOT_AVAILABLE_MESSAGE,
+  BOOKING_SIGN_IN_TRY_AGAIN_LATER_MESSAGE,
+  BOOKING_TECHNICAL_DIFFICULTIES_MESSAGE,
+  createBookingCardInfoNotAvailableError,
   FAILED_REASON,
   getFailedReasonForUser,
   hasFailedReasonCode,
@@ -108,6 +114,9 @@ export class BookingScraper extends BaseScraper {
    * When true, trust-unavailable streak is not applied (job already had job items in DB at run start).
    */
   private skipTrustUnavailableStreakForJobRun = false;
+
+  /** First VCC card-details open in legacy list flow (fail job if no card on first try). */
+  private vccFirstCardAttemptCompleted = false;
 
   /** True when connected to a persisted Browserless session (disconnect instead of close on cleanup). */
   private usingPersistentBrowserlessSession = false;
@@ -1497,6 +1506,9 @@ export class BookingScraper extends BaseScraper {
         .waitForNavigation({ waitUntil: "networkidle2", timeout: 30000 })
         .catch(() => {});
 
+      await this.delay(2000);
+      await this.assertBookingSignInFatalErrors();
+
       // Booking may return captcha, account lock, password reset, or 2FA in any order and more than once
       const authResolved = await this.resolveBookingAuthInterstitials({
         loginEmail: effectiveCredentials.email,
@@ -2130,6 +2142,8 @@ export class BookingScraper extends BaseScraper {
         return true;
       }
 
+      await this.assertBookingSignInFatalErrors(currentPage);
+
       const captchaOk = await this.handleCaptcha({
         page: currentPage,
         sessionUrl: this.sessionUrl,
@@ -2188,6 +2202,56 @@ export class BookingScraper extends BaseScraper {
       `Booking auth interstitials: exhausted ${maxRounds} rounds without success URL`
     );
     return false;
+  }
+
+  /** True when the given URL is Booking.com's sign-in/login page. */
+  private isBookingSignInUrl(url: string): boolean {
+    return url.includes("sign-in") || url.includes("login");
+  }
+
+  /**
+   * Fail immediately for Booking.com sign-in errors that must not trigger
+   * the forgot-password flow: "We're having technical difficulties – try
+   * again later" (generic server error) and "Sign in failed, please try
+   * again later" (server-side sign-in error). Both are transient Booking.com
+   * outages, not credential issues, so retrying the password reset flow
+   * would be pointless — we fail the job so it can be retried later instead.
+   */
+  private async assertBookingSignInFatalErrors(
+    page: Page = this.page!
+  ): Promise<void> {
+    if (!page || !this.isBookingSignInUrl(page.url())) {
+      return;
+    }
+
+    let pageContent = "";
+    try {
+      pageContent = await page.content();
+    } catch {
+      return;
+    }
+
+    if (matchesBookingTechnicalDifficulties(pageContent)) {
+      await this.logError(
+        `Booking.com technical difficulties — failing job (url: "${page.url()}")`
+      );
+      await this.takeScreenshot();
+
+      const err = new Error(BOOKING_TECHNICAL_DIFFICULTIES_MESSAGE);
+      setFailedReasonCode(err, FAILED_REASON.BOOKING_TECHNICAL_DIFFICULTIES);
+      throw err;
+    }
+
+    if (matchesBookingSignInTryAgainLater(pageContent)) {
+      await this.logError(
+        `Booking.com sign-in retry-later error — failing job (url: "${page.url()}")`
+      );
+      await this.takeScreenshot();
+
+      const err = new Error(BOOKING_SIGN_IN_TRY_AGAIN_LATER_MESSAGE);
+      setFailedReasonCode(err, FAILED_REASON.BOOKING_SIGN_IN_TRY_AGAIN_LATER);
+      throw err;
+    }
   }
 
   /**
@@ -2668,6 +2732,21 @@ export class BookingScraper extends BaseScraper {
       const isOnSignInPage =
         currentUrl.includes("sign-in") || currentUrl.includes("login");
 
+      // Booking.com server errors ("we're having technical difficulties" /
+      // "sign in failed, please try again later") must fail the job instead
+      // of triggering the forgot-password flow — re-check here in case this
+      // is the first time we're seeing the error content (defensive; the
+      // interstitial drain already calls assertBookingSignInFatalErrors too).
+      if (matchesBookingTechnicalDifficulties(passwordErrorPageContent)) {
+        await this.assertBookingSignInFatalErrors();
+      }
+      if (matchesBookingSignInTryAgainLater(passwordErrorPageContent)) {
+        await this.assertBookingSignInFatalErrors();
+      }
+      const hasTechnicalDifficulties = matchesBookingTechnicalDifficulties(
+        passwordErrorPageContent
+      );
+
       // Check if forgot password button exists
       const hasForgotPasswordButton = /Forgot your password\?/.test(
         passwordErrorPageContent
@@ -2684,7 +2763,7 @@ export class BookingScraper extends BaseScraper {
         !hasErrorBlock;
 
       // MUST have actual error message AND be on sign-in page AND have forgot password button
-      // AND NOT just be an informational message
+      // AND NOT just be an informational message AND NOT a technical-difficulties server error
       const hasPasswordError =
         (hasUsernamePasswordMismatch ||
           hasIncorrectPassword ||
@@ -2693,10 +2772,11 @@ export class BookingScraper extends BaseScraper {
           hasErrorBlock) &&
         isOnSignInPage &&
         hasForgotPasswordButton &&
-        !isJustInformational;
+        !isJustInformational &&
+        !hasTechnicalDifficulties;
 
       await this.logInfo(
-        `Password mismatch detection: mismatch=${hasUsernamePasswordMismatch}, incorrect=${hasIncorrectPassword}, invalid=${hasInvalidCredentials}, warning=${hasAccountLockWarning}, errorBlock=${hasErrorBlock}, signInPage=${isOnSignInPage}, forgotButton=${hasForgotPasswordButton}, justInformational=${isJustInformational}, hasError=${hasPasswordError}`
+        `Password mismatch detection: mismatch=${hasUsernamePasswordMismatch}, incorrect=${hasIncorrectPassword}, invalid=${hasInvalidCredentials}, warning=${hasAccountLockWarning}, errorBlock=${hasErrorBlock}, technicalDifficulties=${hasTechnicalDifficulties}, signInPage=${isOnSignInPage}, forgotButton=${hasForgotPasswordButton}, justInformational=${isJustInformational}, hasError=${hasPasswordError}`
       );
 
       if (!hasPasswordError) {
@@ -3231,6 +3311,9 @@ export class BookingScraper extends BaseScraper {
 
       return true;
     } catch (error) {
+      if (hasFailedReasonCode(error)) {
+        throw error;
+      }
       await this.logError("Error handling password mismatch:", error);
       await this.takeScreenshot();
       return false;
@@ -3625,6 +3708,9 @@ export class BookingScraper extends BaseScraper {
         this.page = originalPage;
       }
     } catch (error) {
+      if (hasFailedReasonCode(error)) {
+        throw error;
+      }
       await dualLogError(
         `[${new Date().toISOString()}] ${getBookingErrorDescription(
           BookingErrorType.DOM_NOT_FOUND
@@ -3659,6 +3745,7 @@ export class BookingScraper extends BaseScraper {
 
     try {
       this.consecutiveGuestCardTrustUnavailable = 0;
+      this.vccFirstCardAttemptCompleted = false;
       if (options.jobId) {
         const existingItems = await jobService.getJobItemsCount(options.jobId);
         this.skipTrustUnavailableStreakForJobRun = existingItems > 0;
@@ -3732,6 +3819,9 @@ export class BookingScraper extends BaseScraper {
       );
       return { processed: processedCount, errors: errorCount };
     } catch (error) {
+      if (hasFailedReasonCode(error)) {
+        throw error;
+      }
       await dualLogError(
         `[${new Date().toISOString()}] ${getBookingErrorDescription(
           BookingErrorType.UNKNOWN
@@ -3830,6 +3920,9 @@ export class BookingScraper extends BaseScraper {
           await this.logInfo(`Failed to process reservation ${reservation.id}`);
         }
       } catch (error) {
+        if (hasFailedReasonCode(error)) {
+          throw error;
+        }
         errorCount++;
         await this.logInfo(
           `Error processing reservation ${reservation.id}: ${
@@ -4762,16 +4855,23 @@ export class BookingScraper extends BaseScraper {
         platform: "booking",
       });
       scrapingStateManager.stopScraping();
-      if (!anyStepCompleted && !isStatusAlreadySaved(error)) {
+      if (!anyStepCompleted) {
         try {
           const msg =
-            getFailedReasonForUser(error) || "Booking group scrape failed.";
+            getFailedReasonForUser(error) ||
+            (error instanceof Error ? error.message : String(error)) ||
+            "Booking group scrape failed.";
+          // Always propagate to every job in the group. Inner handlers (e.g. first
+          // reservation card-info fail) may have already saved one job's reason;
+          // failAllBookingGroupJobsOnEarlyExit preserves that and applies msg to the rest.
           await this.failAllBookingGroupJobsOnEarlyExit(
             steps,
             leaseJobId,
             msg
           );
-          markStatusSaved(error);
+          if (!isStatusAlreadySaved(error)) {
+            markStatusSaved(error);
+          }
         } catch {
           /* ignore */
         }
@@ -4805,6 +4905,7 @@ export class BookingScraper extends BaseScraper {
       );
 
       this.consecutiveGuestCardTrustUnavailable = 0;
+      this.vccFirstCardAttemptCompleted = false;
       if (params.jobId) {
         const existingItems = await jobService.getJobItemsCount(params.jobId);
         this.skipTrustUnavailableStreakForJobRun = existingItems > 0;
@@ -5114,6 +5215,9 @@ export class BookingScraper extends BaseScraper {
         data,
       };
     } catch (error) {
+      if (hasFailedReasonCode(error)) {
+        throw error;
+      }
       await dualLogError(
         `[${new Date().toISOString()}] ${getBookingErrorDescription(
           BookingErrorType.UNKNOWN
@@ -5944,6 +6048,28 @@ export class BookingScraper extends BaseScraper {
   }
 
   /**
+   * When the very first reservation card-details open of a job run comes back with
+   * no card number, Booking.com typically needs 7-8 hours before card details become
+   * available — fail the job immediately instead of burning through every reservation.
+   */
+  private async failJobForFirstReservationCardInfoNotAvailable(
+    jobId: string,
+    reservationId: string
+  ): Promise<never> {
+    await this.logError(
+      `First reservation ${reservationId}: card info not available — failing job`
+    );
+    await jobService.updateJobStatusWithReason(
+      jobId,
+      JobStatus.Failed,
+      BOOKING_CARD_INFO_NOT_AVAILABLE_MESSAGE
+    );
+    const err = createBookingCardInfoNotAvailableError();
+    markStatusSaved(err);
+    throw err;
+  }
+
+  /**
    * Consecutive trust-unavailable card pages in legacy flow: +1 only on that page; reset on card
    * or any other outcome. At 10 in a row (with jobId), mark the job failed ("Trust needed").
    */
@@ -6468,6 +6594,22 @@ export class BookingScraper extends BaseScraper {
         cardData &&
         String(cardData.cardNumber || "").trim()
       );
+
+      const isFirstCardAttempt = !this.vccFirstCardAttemptCompleted;
+      this.vccFirstCardAttemptCompleted = true;
+
+      if (isFirstCardAttempt && !hadCardDetails && jobId) {
+        try {
+          await newPage.close();
+        } catch {
+          /* ignore */
+        }
+        await this.failJobForFirstReservationCardInfoNotAvailable(
+          jobId,
+          reservation.id
+        );
+      }
+
       const trustStreakOk = await this.applyGuestCardTrustUnavailableConsecutiveRule({
         trustUnavailableGuestCardPage,
         hadCardDetails,
@@ -6505,6 +6647,9 @@ export class BookingScraper extends BaseScraper {
       );
       return { success: true, cardInfoStored };
     } catch (error) {
+      if (hasFailedReasonCode(error)) {
+        throw error;
+      }
       await this.logError(
         `Error processing reservation ${reservation.id}:`,
         error

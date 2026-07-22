@@ -180,6 +180,22 @@ export const PASSWORD_MISMATCH_PATTERNS = [
   /after \d+ attempts.*account will be locked/i,
 ];
 
+/** Booking.com generic server error on sign-in — do not trigger forgot-password flow. */
+export const BOOKING_TECHNICAL_DIFFICULTIES_PATTERN =
+  /we'?re having technical difficulties.*try again later/i;
+
+/** Booking.com sign-in server error — fail the job immediately; do not trigger forgot-password flow. */
+export const BOOKING_SIGN_IN_TRY_AGAIN_LATER_PATTERN =
+  /sign[- ]?in failed.*please try again later/i;
+
+export function matchesBookingTechnicalDifficulties(text: string): boolean {
+  return BOOKING_TECHNICAL_DIFFICULTIES_PATTERN.test(text);
+}
+
+export function matchesBookingSignInTryAgainLater(text: string): boolean {
+  return BOOKING_SIGN_IN_TRY_AGAIN_LATER_PATTERN.test(text);
+}
+
 export const PASSWORD_RECOVERY_SELECTORS = {
   forgotPasswordButton: [
     "button.nw-link-account-recovery",

@@ -17,9 +17,21 @@ export const FAILED_REASON = {
   BOOKING_SCRAPING_STOPPED: "BOOKING_SCRAPING_STOPPED",
   BOOKING_CAPTCHA_FAILED: "BOOKING_CAPTCHA_FAILED",
   BOOKING_PAGE_LOAD_FAILED: "BOOKING_PAGE_LOAD_FAILED",
+  BOOKING_SIGN_IN_TRY_AGAIN_LATER: "BOOKING_SIGN_IN_TRY_AGAIN_LATER",
+  BOOKING_TECHNICAL_DIFFICULTIES: "BOOKING_TECHNICAL_DIFFICULTIES",
+  BOOKING_CARD_INFO_NOT_AVAILABLE: "BOOKING_CARD_INFO_NOT_AVAILABLE",
 } as const;
 
 export type FailedReasonCode = (typeof FAILED_REASON)[keyof typeof FAILED_REASON];
+
+export const BOOKING_SIGN_IN_TRY_AGAIN_LATER_MESSAGE =
+  '"Sign in failed, please try again later" show in booking.com';
+
+export const BOOKING_TECHNICAL_DIFFICULTIES_MESSAGE =
+  `"We're having technical difficulties – try again later" shows in Booking.com`;
+
+export const BOOKING_CARD_INFO_NOT_AVAILABLE_MESSAGE =
+  "Card info not available, try after 7-8 hours later";
 
 const FAILED_REASON_MESSAGES: Record<FailedReasonCode, string> = {
   [FAILED_REASON.SCRAPING_STOPPED]:
@@ -57,6 +69,12 @@ const FAILED_REASON_MESSAGES: Record<FailedReasonCode, string> = {
     "Booking.com CAPTCHA challenge could not be resolved. Please try again.",
   [FAILED_REASON.BOOKING_PAGE_LOAD_FAILED]:
     "Booking.com page failed to load. Please try again.",
+  [FAILED_REASON.BOOKING_SIGN_IN_TRY_AGAIN_LATER]:
+    BOOKING_SIGN_IN_TRY_AGAIN_LATER_MESSAGE,
+  [FAILED_REASON.BOOKING_TECHNICAL_DIFFICULTIES]:
+    BOOKING_TECHNICAL_DIFFICULTIES_MESSAGE,
+  [FAILED_REASON.BOOKING_CARD_INFO_NOT_AVAILABLE]:
+    BOOKING_CARD_INFO_NOT_AVAILABLE_MESSAGE,
 };
 
 /**
@@ -96,6 +114,18 @@ export function markStatusSaved(error: any): void {
  */
 export function isStatusAlreadySaved(error: any): boolean {
   return error && typeof error === "object" && error._statusSaved === true;
+}
+
+/**
+ * Build the error thrown when the very first reservation/card attempt of a
+ * job comes back with no card info — Booking.com typically needs 7-8 hours
+ * before card details become available, so we fail fast instead of burning
+ * through the rest of the reservations.
+ */
+export function createBookingCardInfoNotAvailableError(): Error {
+  const err = new Error(BOOKING_CARD_INFO_NOT_AVAILABLE_MESSAGE);
+  setFailedReasonCode(err, FAILED_REASON.BOOKING_CARD_INFO_NOT_AVAILABLE);
+  return err;
 }
 
 /**

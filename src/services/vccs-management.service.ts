@@ -6,6 +6,12 @@ import {
   simulateHumanOnPage,
 } from "../common/human-browser-helper.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
+import {
+  BOOKING_CARD_INFO_NOT_AVAILABLE_MESSAGE,
+  createBookingCardInfoNotAvailableError,
+  hasFailedReasonCode,
+  markStatusSaved,
+} from "../common/failed-reason.js";
 import { JobStatus } from "../models/job.model.js";
 import { jobService } from "./job.service.js";
 
@@ -22,6 +28,31 @@ function isGuestCreditCardTrustUnavailableHtml(html: string): boolean {
 }
 
 const MAX_CONSECUTIVE_GUEST_CARD_TRUST_UNAVAILABLE = 10;
+
+/**
+ * When the very first fetchable reservation card of a job run comes back with
+ * no card number, Booking.com typically needs 7-8 hours before card details
+ * become available — fail the job immediately instead of burning through
+ * every reservation.
+ */
+async function failJobForFirstReservationCardInfoNotAvailable(
+  jobId: string,
+  reservationId: string | number
+): Promise<never> {
+  await dualLogError(
+    `First reservation ${reservationId}: card info not available — failing job`,
+    undefined,
+    { jobId, reservationId, failedReason: BOOKING_CARD_INFO_NOT_AVAILABLE_MESSAGE }
+  );
+  await jobService.updateJobStatusWithReason(
+    jobId,
+    JobStatus.Failed,
+    BOOKING_CARD_INFO_NOT_AVAILABLE_MESSAGE
+  );
+  const err = createBookingCardInfoNotAvailableError();
+  markStatusSaved(err);
+  throw err;
+}
 
 /**
  * Pull the `ses` value out of an authenticated `booking_cc_details.html` URL.
@@ -1084,6 +1115,8 @@ export class VccsManagementService {
     let cardDetailFetchAttempts = 0;
     /** How many fetches returned the guest trust-unavailable page (cumulative). */
     let trustUnavailablePageCount = 0;
+    /** True until the first non-resume-skipped card fetch of this run has completed. */
+    let firstFetchableCardAttempt = true;
 
     const completedReservationIds = jobId
       ? new Set(
@@ -1194,6 +1227,16 @@ export class VccsManagementService {
 
         const hadCardDetails =
           !!cardDetails && !!String(cardDetails.cardNumber || "").trim();
+
+        if (firstFetchableCardAttempt) {
+          firstFetchableCardAttempt = false;
+          if (!hadCardDetails && jobId) {
+            await failJobForFirstReservationCardInfoNotAvailable(
+              jobId,
+              vccs.hres_id
+            );
+          }
+        }
 
         // Trust-needed tracking:
         //   • Goal: "if we never get a card, it's a trust issue."
@@ -1348,6 +1391,9 @@ export class VccsManagementService {
           `Successfully processed reservation ${vccs.hres_id} (${processed}/${vccsData.data.vccs.length})`
         );
       } catch (error) {
+        if (hasFailedReasonCode(error)) {
+          throw error;
+        }
         errors++;
         dualLogError(`Error processing reservation ${vccs.hres_id}`, {
           error,
