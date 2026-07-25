@@ -480,12 +480,21 @@ async function handleBookingOtpVerification(
     const currentUrl = page.url();
     await dualLogInfo(`Current page URL: ${currentUrl}`);
 
+    // Check for Booking.com's rate-limit banner ("Too many attempts – try
+    // again later") *before* running the ~30-selector OTP-input search
+    // below. That search can take up to a minute+ (up to 3s per selector,
+    // ~29 selectors, plus a fallback pass), and the rate-limit banner is a
+    // toast (`role="alert" aria-live="polite"`) that Booking.com auto-
+    // dismisses after a few seconds — so checking for it only *after* the
+    // search fails is too late and misses it entirely.
+    await assertBookingOtpNotRateLimited(page);
+
     let otpInputSelector = await findBookingOtpInputSelector(page, 3000);
 
     if (!otpInputSelector) {
-      // Booking.com may have throttled this account instead of sending the
-      // OTP page — detect and fail with a specific reason before falling
-      // back to the generic "not found" debugging path.
+      // Re-check in case the banner appeared/was still present right as the
+      // search concluded (belt-and-suspenders; the early check above is the
+      // one that matters for the common case).
       await assertBookingOtpNotRateLimited(page);
 
       // Log page content for debugging

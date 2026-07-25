@@ -149,6 +149,11 @@ export const ACCOUNT_LOCKED_SELECTORS = {
     ".nw-step-header",
     ".nw-account-recovery-confirmation h1",
   ],
+  obscuredEmailHint: [
+    ".nw-account-recovery-confirmation strong",
+    ".bui-spacer--largest strong",
+    ".page-header strong",
+  ],
   passwordResetForm: [
     ".nw-reset-password",
     "form.nw-reset-password",
