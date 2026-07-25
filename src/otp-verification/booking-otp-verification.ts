@@ -1,10 +1,12 @@
 import dotenv from "dotenv";
 import { Page } from "puppeteer";
 import {
+  BOOKING_SELECTORS,
   TWO_FA_TEXT_PATTERNS,
   matchesBookingTooManyAttempts,
 } from "../common/booking-selectors.js";
 import { delay } from "../common/delay.js";
+import { decryptPassword } from "../common/encription.js";
 import {
   BOOKING_TOO_MANY_ATTEMPTS_MESSAGE,
   FAILED_REASON,
@@ -12,7 +14,9 @@ import {
   setFailedReasonCode,
 } from "../common/failed-reason.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
+import { SelectorUtils } from "../common/selector-utils.js";
 import { notificationService } from "../services/notification.service.js";
+import { propertyCredentialsService } from "../services/job-credentials.service.js";
 import {
   getOurContactForJob,
   getOurContactFromEnv,
@@ -308,6 +312,149 @@ async function ensureBookingOtpInputSelector(
   return found;
 }
 
+/**
+ * Checks whether a direct OTP input already appears on the current page,
+ * without running the full ~30-selector exhaustive search. Cheap/quick
+ * probe used for the initial page-state detection at the start of
+ * {@link handleBookingOtpVerification}.
+ */
+async function hasBookingOtpInputPresent(page: Page): Promise<boolean> {
+  const quickOtpSelectors = [
+    'input[type="text"][maxlength="6"]',
+    'input[name="pin"]',
+    'input[name="code"]',
+    'input[placeholder*="code"]',
+    'input[autocomplete="one-time-code"]',
+  ];
+
+  for (const selector of quickOtpSelectors) {
+    try {
+      if (await page.$(selector)) return true;
+    } catch {
+      // Continue to next selector
+    }
+  }
+  return false;
+}
+
+/**
+ * Booking.com sometimes bounces the session back to the sign-in
+ * username/email page (login step 1) instead of showing the 2FA
+ * verification-method-selection or OTP-input page — e.g. when the session
+ * expired mid-flow. Recovers by re-entering the job's saved credentials
+ * (username, and password if Booking also re-shows the password page) so
+ * the caller can re-check for the verification/OTP page afterwards.
+ *
+ * Returns true if a recovery attempt was made (regardless of whether it
+ * fully succeeded) so the caller knows to re-check page state; false if no
+ * username page was detected or recovery could not even be attempted.
+ */
+async function reenterBookingCredentialsIfNeeded(
+  page: Page,
+  jobId?: string
+): Promise<boolean> {
+  const onUsernamePage = await SelectorUtils.checkSelectorsExist(
+    page,
+    [...BOOKING_SELECTORS.email]
+  );
+  if (!onUsernamePage) return false;
+
+  await dualLogInfo(
+    "Booking.com showed the sign-in username page instead of 2FA/OTP (session likely reset) — re-entering credentials to recover..."
+  );
+
+  if (!jobId) {
+    await dualLogInfo(
+      "No jobId available to fetch credentials for recovery; cannot re-enter username."
+    );
+    return true;
+  }
+
+  let credentials: {
+    bookingUsername?: string;
+    bookingPassword?: string;
+  } | null = null;
+  try {
+    credentials = await propertyCredentialsService.getBookingCredentialsFromJob(
+      jobId
+    );
+  } catch (e) {
+    await dualLogError(
+      "Failed to fetch Booking.com credentials for username-page recovery:",
+      e
+    );
+    return true;
+  }
+
+  if (!credentials?.bookingUsername || !credentials?.bookingPassword) {
+    await dualLogInfo(
+      "No Booking.com credentials found for job; cannot recover from username page."
+    );
+    return true;
+  }
+
+  const usernameTyped = await SelectorUtils.findAndType(
+    page,
+    [...BOOKING_SELECTORS.email],
+    credentials.bookingUsername
+  );
+  if (!usernameTyped) {
+    await dualLogInfo("Could not type username into sign-in username page.");
+    return true;
+  }
+
+  const continueClicked = await SelectorUtils.findAndClick(page, [
+    ...BOOKING_SELECTORS.continueButton,
+  ]);
+  if (!continueClicked) {
+    await dualLogInfo("Could not click Continue on sign-in username page.");
+    return true;
+  }
+
+  await page
+    .waitForNavigation({ waitUntil: "networkidle2", timeout: 15000 })
+    .catch(() => {});
+  await delay(2000);
+
+  // Booking may show the password field next (full re-login) instead of
+  // jumping straight back to 2FA/OTP.
+  const onPasswordPage = await SelectorUtils.checkSelectorsExist(
+    page,
+    [...BOOKING_SELECTORS.password]
+  );
+  if (onPasswordPage) {
+    await dualLogInfo(
+      "Password page shown after re-entering username; re-entering password to complete login..."
+    );
+
+    const password = decryptPassword(credentials.bookingPassword);
+    const passwordTyped = await SelectorUtils.findAndType(
+      page,
+      [...BOOKING_SELECTORS.password],
+      password
+    );
+    if (!passwordTyped) {
+      await dualLogInfo("Could not type password into sign-in password page.");
+      return true;
+    }
+
+    const loginClicked = await SelectorUtils.findAndClick(page, [
+      ...BOOKING_SELECTORS.loginButton,
+    ]);
+    if (!loginClicked) {
+      await dualLogInfo("Could not click login button on sign-in password page.");
+      return true;
+    }
+
+    await page
+      .waitForNavigation({ waitUntil: "networkidle2", timeout: 20000 })
+      .catch(() => {});
+    await delay(2000);
+  }
+
+  return true;
+}
+
 async function handleBookingOtpVerification(
   page: Page,
   jobId?: string,
@@ -326,7 +473,7 @@ async function handleBookingOtpVerification(
     );
 
     // Check if we're on the verification method selection page
-    const isVerificationPage = await page.evaluate((patterns) => {
+    let isVerificationPage = await page.evaluate((patterns) => {
       const bodyText = document.body.innerText.toLowerCase();
       return patterns.some((p) => bodyText.includes(p.toLowerCase()));
     }, TWO_FA_TEXT_PATTERNS);
@@ -337,14 +484,36 @@ async function handleBookingOtpVerification(
       );
 
       // Check if we're already on an OTP input page
-      const hasOtpInput =
-        (await page.$('input[type="text"][maxlength="6"]')) ||
-        (await page.$('input[name="pin"]')) ||
-        (await page.$('input[name="code"]')) ||
-        (await page.$('input[placeholder*="code"]')) ||
-        (await page.$('input[autocomplete="one-time-code"]'));
+      let hasOtpInput = await hasBookingOtpInputPresent(page);
 
       if (!hasOtpInput) {
+        // Booking.com sometimes shows the sign-in username (or username +
+        // password) page here instead of 2FA/OTP, e.g. when the session
+        // expired mid-flow. Recover by re-entering credentials and re-check
+        // once before giving up.
+        const recoveryAttempted = await reenterBookingCredentialsIfNeeded(
+          page,
+          jobId
+        );
+
+        if (recoveryAttempted) {
+          await dualLogInfo(
+            "Re-checking for verification method selection / OTP input page after credential re-entry..."
+          );
+          await delay(3000);
+
+          isVerificationPage = await page.evaluate((patterns) => {
+            const bodyText = document.body.innerText.toLowerCase();
+            return patterns.some((p) => bodyText.includes(p.toLowerCase()));
+          }, TWO_FA_TEXT_PATTERNS);
+
+          if (!isVerificationPage) {
+            hasOtpInput = await hasBookingOtpInputPresent(page);
+          }
+        }
+      }
+
+      if (!isVerificationPage && !hasOtpInput) {
         const error = new Error(
           "Neither verification method selection nor OTP input page found"
         );
@@ -370,7 +539,9 @@ async function handleBookingOtpVerification(
 
         throw error;
       }
-    } else {
+    }
+
+    if (isVerificationPage) {
       await dualLogInfo(
         "Found verification method selection page, clicking SMS option..."
       );
