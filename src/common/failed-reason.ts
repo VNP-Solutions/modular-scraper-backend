@@ -152,6 +152,40 @@ export function inferBookingOtpFailedReasonCode(
 }
 
 /**
+ * Failure reasons that indicate an account/session-wide block (e.g. a
+ * server-side rate limit) rather than a problem specific to the current
+ * property. When one of these occurs mid-group, retrying the remaining
+ * queued properties in the same run would almost certainly hit the same
+ * wall, so the whole remaining group should be failed immediately instead
+ * of attempted one-by-one.
+ */
+const FATAL_GROUP_ABORT_REASONS: ReadonlySet<FailedReasonCode> = new Set([
+  FAILED_REASON.BOOKING_TOO_MANY_ATTEMPTS,
+  // Booking.com not having card details ready is a backend-wide delay
+  // (typically 7-8 hours), not specific to one property — every other
+  // queued property in the same account/session would almost certainly
+  // hit the same "no card info yet" wall too.
+  FAILED_REASON.BOOKING_CARD_INFO_NOT_AVAILABLE,
+  // Both are Booking.com server-side sign-in errors (not credential issues)
+  // that can also surface from a mid-group re-login (e.g. session dropped
+  // between properties) — every other queued property re-logging in on
+  // the same account would almost certainly hit the same server error too.
+  FAILED_REASON.BOOKING_SIGN_IN_TRY_AGAIN_LATER,
+  FAILED_REASON.BOOKING_TECHNICAL_DIFFICULTIES,
+]);
+
+/**
+ * Returns true if the error carries a failedReasonCode that should abort the
+ * rest of a Booking.com group run (see {@link FATAL_GROUP_ABORT_REASONS}).
+ */
+export function isFatalBookingGroupAbortError(error: any): boolean {
+  return (
+    hasFailedReasonCode(error) &&
+    FATAL_GROUP_ABORT_REASONS.has(error.failedReasonCode as FailedReasonCode)
+  );
+}
+
+/**
  * Get a user-friendly failure reason string from an error.
  * Uses failedReasonCode if present, otherwise returns a generic message.
  */

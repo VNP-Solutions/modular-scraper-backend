@@ -338,6 +338,52 @@ async function hasBookingOtpInputPresent(page: Page): Promise<boolean> {
 }
 
 /**
+ * Polls the page right after "Send verification code" is clicked, returning
+ * as soon as one of three outcomes is observed instead of sleeping for a
+ * fixed duration:
+ *   1. The "Too many attempts" rate-limit banner appears (fail fast).
+ *   2. The OTP input appears (request succeeded — no need to wait further).
+ *   3. The URL changes (navigated away — request succeeded/failed some
+ *      other way; let the normal downstream flow handle it).
+ * Falls through to the `maxWaitMs` cap if the page is just slow to respond
+ * either way (e.g. server round-trip taking a while).
+ */
+async function waitForSendVerificationCodeOutcome(
+  page: Page,
+  initialUrl: string,
+  maxWaitMs = 8000,
+  pollIntervalMs = 200
+): Promise<{ rateLimited: boolean; rateLimitedText?: string }> {
+  const deadline = Date.now() + maxWaitMs;
+
+  while (Date.now() < deadline) {
+    const rateLimitedText = await getBookingVisibleErrorBlockText(page);
+    if (matchesBookingTooManyAttempts(rateLimitedText)) {
+      return { rateLimited: true, rateLimitedText };
+    }
+
+    let currentUrl = "";
+    try {
+      currentUrl = page.url();
+    } catch {
+      // Page/context gone — treat as "moved on", nothing more to detect here.
+      return { rateLimited: false };
+    }
+    if (currentUrl !== initialUrl) {
+      return { rateLimited: false };
+    }
+
+    if (await hasBookingOtpInputPresent(page)) {
+      return { rateLimited: false };
+    }
+
+    await delay(pollIntervalMs);
+  }
+
+  return { rateLimited: false };
+}
+
+/**
  * Booking.com sometimes bounces the session back to the sign-in
  * username/email page (login step 1) instead of showing the 2FA
  * verification-method-selection or OTP-input page — e.g. when the session
@@ -600,6 +646,17 @@ async function handleBookingOtpVerification(
 
       // Look for phone selection page and select the correct phone number
       const phonePick = await selectCorrectPhoneNumber(page, jobId);
+
+      if (phonePick.rateLimited) {
+        await dualLogError(
+          `Booking.com too-many-attempts error detected right after clicking "Send verification code" — failing job (visible: "${phonePick.rateLimitedText}")`
+        );
+
+        const error = new Error(BOOKING_TOO_MANY_ATTEMPTS_MESSAGE);
+        setFailedReasonCode(error, FAILED_REASON.BOOKING_TOO_MANY_ATTEMPTS);
+        throw error;
+      }
+
       if (!phonePick.ok) {
         const error = new Error("Failed to select correct phone number");
         setFailedReasonCode(error, FAILED_REASON.BOOKING_OTP_FAILED);
@@ -1012,7 +1069,12 @@ function bookingPhoneLastThree(phone: string): string {
 async function selectCorrectPhoneNumber(
   page: Page,
   jobId?: string
-): Promise<{ ok: boolean; usedOurContactEnv?: boolean }> {
+): Promise<{
+  ok: boolean;
+  usedOurContactEnv?: boolean;
+  rateLimited?: boolean;
+  rateLimitedText?: string;
+}> {
   try {
     const primaryContact = getOurContactForJob(jobId);
     const envContact = getOurContactFromEnv();
@@ -1210,6 +1272,30 @@ async function selectCorrectPhoneNumber(
 
       if (sendButtonClicked) {
         await dualLogInfo('Clicked "Send verification code" button');
+
+        // Booking.com can reject the request with a "Too many attempts –
+        // try again later" banner right after this click instead of moving
+        // on to the OTP page. Poll for the outcome (banner / OTP input /
+        // navigation) instead of sleeping a fixed duration, so we react as
+        // soon as the banner renders rather than guessing how long that
+        // takes — while still capping the wait if the page is just slow.
+        const urlBeforeSend = page.url();
+        const outcome = await waitForSendVerificationCodeOutcome(
+          page,
+          urlBeforeSend
+        );
+        if (outcome.rateLimited) {
+          await dualLogInfo(
+            `Booking.com too-many-attempts banner detected right after clicking "Send verification code" (visible: "${outcome.rateLimitedText}")`
+          );
+          return {
+            ok: true,
+            usedOurContactEnv: matchedByOurContactEnv,
+            rateLimited: true,
+            rateLimitedText: outcome.rateLimitedText,
+          };
+        }
+
         return { ok: true, usedOurContactEnv: matchedByOurContactEnv };
       } else {
         await dualLogError(

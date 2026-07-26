@@ -35,6 +35,7 @@ import {
   FAILED_REASON,
   getFailedReasonForUser,
   hasFailedReasonCode,
+  isFatalBookingGroupAbortError,
   isStatusAlreadySaved,
   markStatusSaved,
   setFailedReasonCode,
@@ -2058,6 +2059,16 @@ export class BookingScraper extends BaseScraper {
           }
         );
 
+        // Booking.com's own rate-limit ("Too many attempts – try again
+        // later") has no OTP field to solve — there's nothing for a human
+        // to enter manually, and waiting here won't lift Booking's
+        // throttle. Rethrow immediately instead of burning 5 minutes on a
+        // "manual solve" that can never happen, so the job fails with the
+        // correct reason right away.
+        if (isFatalBookingGroupAbortError(otpError)) {
+          throw otpError;
+        }
+
         // Only try Browserless APIs if in Browserless environment
         const environment = process.env.ENVIRONMENT || "browserless";
         const isBrowserless =
@@ -2101,6 +2112,14 @@ export class BookingScraper extends BaseScraper {
         return true;
       }
     } catch (error) {
+      // Preserve fatal group-abort errors (e.g. BOOKING_TOO_MANY_ATTEMPTS)
+      // rethrown from the inner catch above — collapsing them into a plain
+      // `false` here would lose the failedReasonCode and prevent the job
+      // (and group) from failing with the correct reason.
+      if (isFatalBookingGroupAbortError(error)) {
+        throw error;
+      }
+
       await dualLogError(
         `[${new Date().toISOString()}] ${getBookingErrorDescription(
           BookingErrorType.TWO_FA_ERROR
@@ -4602,6 +4621,15 @@ export class BookingScraper extends BaseScraper {
       }
       await this.handleSuccessfulLogin(nextStep.bookingId);
     } catch (err) {
+      // Fatal group-abort errors (e.g. BOOKING_TOO_MANY_ATTEMPTS surfaced
+      // from a re-login's 2FA challenge) must propagate — swallowing them
+      // here would silently fall back to direct navigation, which would
+      // just fail again later with a generic/misleading reason instead of
+      // the correct one.
+      if (isFatalBookingGroupAbortError(err)) {
+        throw err;
+      }
+
       await this.logWarn(
         `[booking] Group: human-like switch to property ${nextStep.bookingId} failed; falling back to direct VCCS navigation`,
         err
@@ -4835,10 +4863,6 @@ export class BookingScraper extends BaseScraper {
         await this.applyBookingCredentialsForJob(step.jobId, params.credentials);
 
         scrapingStateManager.startScraping(step.bookingId, step.jobId);
-        if (i > 0) {
-          await jobService.startJob(step.jobId, workerTag);
-          await this.switchToNextGroupProperty(params, steps[i - 1].bookingId, step);
-        }
 
         const stepParams: ScrapingJobParams = {
           ...params,
@@ -4850,7 +4874,92 @@ export class BookingScraper extends BaseScraper {
           credentials: this.credentials,
         };
 
-        const result = await this.scrapeData(stepParams);
+        let result: ScrapingResult;
+        try {
+          // switchToNextGroupProperty is inside this try too: a re-login it
+          // triggers between properties can hit the same fatal 2FA errors
+          // (e.g. BOOKING_TOO_MANY_ATTEMPTS) as scrapeData itself, and must
+          // be handled identically rather than escaping uncaught.
+          if (i > 0) {
+            await jobService.startJob(step.jobId, workerTag);
+            await this.switchToNextGroupProperty(
+              params,
+              steps[i - 1].bookingId,
+              step
+            );
+          }
+
+          result = await this.scrapeData(stepParams);
+        } catch (stepError) {
+          const failMsg =
+            getFailedReasonForUser(stepError) ||
+            (stepError instanceof Error
+              ? stepError.message
+              : String(stepError)) ||
+            "Property scrape failed";
+
+          if (isFatalBookingGroupAbortError(stepError)) {
+            // Account/session-wide block (e.g. Booking.com's "Too many
+            // attempts" rate-limit) — fail the current job, then fail every
+            // remaining *queued* job in the group with the same reason
+            // instead of attempting each one; they would almost certainly
+            // hit the same wall and just waste time.
+            await dualLogError(
+              `[booking] Group: fatal error for job ${step.jobId} — aborting remaining group steps (${failMsg})`,
+              stepError
+            );
+
+            await jobService.failJobSafe(step.jobId, failMsg);
+            aggregateResults.push({
+              jobId: step.jobId,
+              finalStatus: JobStatus.Failed,
+              progress: null,
+              error: failMsg,
+            });
+            await finalizeJobLogging("failed");
+
+            for (let k = i + 1; k < steps.length; k++) {
+              await jobService.failJobSafe(steps[k].jobId, failMsg);
+              aggregateResults.push({
+                jobId: steps[k].jobId,
+                finalStatus: JobStatus.Failed,
+                progress: null,
+                error: failMsg,
+              });
+              await dualLogInfo(
+                `[booking] Group: failing queued job ${steps[k].jobId} without attempting it (same fatal reason as job ${step.jobId})`
+              );
+            }
+
+            if (!isStatusAlreadySaved(stepError)) {
+              markStatusSaved(stepError);
+            }
+            break;
+          }
+
+          // Non-fatal thrown error: treat like a normal per-property
+          // failure — fail just this job, then continue to the next one
+          // (mirrors the `!result.success` handling below).
+          await dualLogError(
+            `[booking] Group: step threw for job ${step.jobId}`,
+            stepError
+          );
+          await jobService.failJobSafe(step.jobId, failMsg);
+          aggregateResults.push({
+            jobId: step.jobId,
+            finalStatus: JobStatus.Failed,
+            progress: null,
+            error: failMsg,
+          });
+
+          const hasMoreAfterThrow = i < steps.length - 1;
+          await finalizeJobLogging("failed");
+          if (hasMoreAfterThrow) {
+            initializeJobLogging(steps[i + 1].jobId);
+            continue;
+          }
+          break;
+        }
 
         if (!result.success) {
           const failMsg = result.error || "Property scrape failed";

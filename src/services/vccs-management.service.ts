@@ -845,6 +845,14 @@ export class VccsManagementService {
 
       return cardDetails;
     } catch (error) {
+      // Fatal, account-wide errors (e.g. Booking.com's "Too many attempts"
+      // rate-limit surfaced from 2FA handling) must propagate up instead of
+      // being swallowed into a plain `null` — otherwise the caller just
+      // treats this reservation as "card info unavailable" and moves on to
+      // the next one, silently retrying the same doomed 2FA challenge.
+      if (hasFailedReasonCode(error)) {
+        throw error;
+      }
       dualLogError("Failed to get card details from browser", {
         error,
         reservationId,
