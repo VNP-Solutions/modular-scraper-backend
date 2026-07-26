@@ -59,7 +59,7 @@ export function toDbmsOtaType(provider: unknown): DbmsOtaType | null {
 
 class DbmsRecurringJobsService {
   private getBaseUrl(): string | null {
-    const baseUrl = process.env.DBMS_BASE_URL?.trim();
+    const baseUrl = process.env.DBMS_BACKEND_URL?.trim();
     return baseUrl || null;
   }
 
@@ -69,7 +69,7 @@ class DbmsRecurringJobsService {
     const baseUrl = this.getBaseUrl();
     if (!baseUrl) {
       await dualLogInfo(
-        "DBMS: update-historical-run-date skipped — DBMS_BASE_URL is not configured"
+        "DBMS: update-historical-run-date skipped — DBMS_BACKEND_URL is not configured"
       );
       return false;
     }
@@ -123,7 +123,7 @@ class DbmsRecurringJobsService {
     const baseUrl = this.getBaseUrl();
     if (!baseUrl) {
       await dualLogInfo(
-        "DBMS: update property credentials skipped — DBMS_BASE_URL is not configured"
+        "DBMS: update property credentials skipped — DBMS_BACKEND_URL is not configured"
       );
       return false;
     }
@@ -194,7 +194,7 @@ class DbmsRecurringJobsService {
   }): Promise<void> {
     if (!this.getBaseUrl()) {
       await dualLogInfo(
-        "DBMS: update property credentials skipped — DBMS_BASE_URL is not configured"
+        "DBMS: update property credentials skipped — DBMS_BACKEND_URL is not configured"
       );
       return;
     }
@@ -249,7 +249,7 @@ class DbmsRecurringJobsService {
   async notifyHistoricalRunDateForJob(jobId: string): Promise<void> {
     if (!this.getBaseUrl()) {
       await dualLogInfo(
-        `DBMS: update-historical-run-date skipped — DBMS_BASE_URL is not configured`,
+        `DBMS: update-historical-run-date skipped — DBMS_BACKEND_URL is not configured`,
         { jobId }
       );
       return;
