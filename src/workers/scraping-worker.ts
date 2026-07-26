@@ -20,6 +20,7 @@ import { JobStatus } from "../models/job.model.js";
 import reservation from "../reservation/reservation.js";
 import { propertyCredentialsService } from "../services/job-credentials.service.js";
 import { jobService } from "../services/job.service.js";
+import { updateHistoricalRunDate } from "../services/recurring-jobs.service.js";
 import {
   getFailedReasonForUser,
   isStatusAlreadySaved,
@@ -152,6 +153,33 @@ class ScrapingWorker {
   private sendMessage(message: WorkerMessage): void {
     if (parentPort && !this.isShuttingDown) {
       parentPort.postMessage(message);
+    }
+  }
+
+  private isCompletedStatus(finalStatus: JobStatus | string): boolean {
+    return (
+      finalStatus === JobStatus.Completed || finalStatus === "Completed"
+    );
+  }
+
+  /**
+   * After Completed: notify DBMS to update the recurring job's historical run date.
+   * Failures are logged only; they do not fail the job.
+   */
+  private async maybeUpdateHistoricalRunDateOnCompletion(
+    jobId: string,
+    finalStatus: JobStatus | string,
+    options?: { startDate?: string; endDate?: string }
+  ): Promise<void> {
+    if (!this.isCompletedStatus(finalStatus)) return;
+    try {
+      await updateHistoricalRunDate(jobId, options);
+    } catch (err) {
+      await dualLogError(
+        `update-historical-run-date: apply failed for ${jobId}`,
+        err,
+        { jobId }
+      );
     }
   }
 
@@ -938,6 +966,11 @@ class ScrapingWorker {
         await this.maybeUploadAgodaJobItemsToDrive(jobId);
       }
 
+      await this.maybeUpdateHistoricalRunDateOnCompletion(jobId, finalStatus, {
+        startDate,
+        endDate,
+      });
+
       // 10. Stop scraping state manager
       scrapingStateManager.stopScraping();
 
@@ -1136,6 +1169,11 @@ class ScrapingWorker {
       ) {
         await this.maybeUploadAgodaJobItemsToDrive(jobId);
       }
+
+      await this.maybeUpdateHistoricalRunDateOnCompletion(jobId, finalStatus, {
+        startDate,
+        endDate,
+      });
 
       // 12. Stop scraping state manager
       scrapingStateManager.stopScraping();

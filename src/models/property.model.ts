@@ -22,6 +22,7 @@ export interface IProperty extends Document {
   updatedAt: Date;
   user_email?: string;
   user_password?: string;
+  parent_id?: string;
 }
 
 // Mongoose Schema for Property
@@ -97,6 +98,10 @@ const PropertySchema = new Schema<IProperty>(
       required: false,
     },
     user_password: {
+      type: String,
+      required: false,
+    },
+    parent_id: {
       type: String,
       required: false,
     },
