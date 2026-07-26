@@ -51,6 +51,7 @@ import {
   getJobPort,
 } from "../common/job-phone-store.js";
 import { notificationService } from "../services/notification.service.js";
+import { dbmsRecurringJobsService } from "../services/dbms-recurring-jobs.service.js";
 
 /**
  * `maybeUploadBookingJobItemsToDrive` runs only on Booking worker paths. Uses
@@ -162,6 +163,11 @@ class ScrapingWorker {
         { jobId }
       );
     }
+  }
+
+  /** After a Booking job completes, notify DBMS to update the historical run date. */
+  private async maybeNotifyDbmsHistoricalRunDate(jobId: string): Promise<void> {
+    await dbmsRecurringJobsService.notifyHistoricalRunDateForJob(jobId);
   }
 
   /** Distinct value per pool worker thread for `job.worker_assigned` when Running. */
@@ -842,6 +848,7 @@ class ScrapingWorker {
 
       // Booking-only: Drive XLSX (after status is persisted), whether scrape used single or multi platform inside mainMultiPlatform
       await this.maybeUploadBookingJobItemsToDrive(jobId);
+      await this.maybeNotifyDbmsHistoricalRunDate(jobId);
 
       // 10. Stop scraping state manager
       scrapingStateManager.stopScraping();
@@ -1035,6 +1042,7 @@ class ScrapingWorker {
       // some steps (earlier jobs may already be Completed or Partial in MongoDB).
       for (const step of bookingGroup) {
         await this.maybeUploadBookingJobItemsToDrive(step.jobId);
+        await this.maybeNotifyDbmsHistoricalRunDate(step.jobId);
       }
       if (scrapingStateManager.isRunning()) {
         scrapingStateManager.stopScraping();

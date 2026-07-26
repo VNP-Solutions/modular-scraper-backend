@@ -10,9 +10,9 @@ export enum BookingTrustedStatus {
 // Interface for the Property document
 export interface IProperty extends Document {
   _id: Types.ObjectId;
-  expedia_id: string; // The actual Expedia property ID used for scraping
-  booking_id: number; // The actual Booking property ID used for scraping
-  agoda_id: string; // The actual Agoda property ID used for scraping
+  expedia_id: string;
+  booking_id: number;
+  agoda_id: string;
   property_name: string;
   address?: string;
   city?: string;
@@ -29,9 +29,9 @@ export interface IProperty extends Document {
   updatedAt: Date;
   user_email?: string;
   user_password?: string;
-  // Booking trust fields
   booking_trusted_status?: BookingTrustedStatus;
   booking_last_login?: Date;
+  parent_id?: string;
 
   credentials?: IPropertyCredentials[];
 }
@@ -126,6 +126,10 @@ const PropertySchema = new Schema<IProperty>(
     },
     booking_last_login: {
       type: Date,
+      required: false,
+    },
+    parent_id: {
+      type: String,
       required: false,
     },
   },
