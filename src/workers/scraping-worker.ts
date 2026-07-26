@@ -33,6 +33,7 @@ import {
 } from "../services/job.service.js";
 import { resolveExpediaBrightData } from "../common/job-isolation.js";
 import { serverService } from "../services/server.service.js";
+import { updateHistoricalRunDate } from "../services/recurring-jobs.service.js";
 
 // Load environment variables
 dotenv.config();
@@ -200,6 +201,27 @@ class ScrapingWorker {
    * and upload under root/Expedia/DD-MM-YYYY on Google Drive when configured.
    * Failures are logged only; they do not fail the job.
    */
+  /**
+   * After Completed: notify DBMS to update the recurring job's historical run date.
+   * Expedia-only path (this worker). Failures are logged only.
+   */
+  private async maybeUpdateHistoricalRunDateOnCompletion(
+    jobId: string,
+    finalStatus: JobStatus | string,
+    options?: { startDate?: string; endDate?: string }
+  ): Promise<void> {
+    if (!this.isCompletedStatus(finalStatus)) return;
+    try {
+      await updateHistoricalRunDate(jobId, options);
+    } catch (err) {
+      await dualLogError(
+        `update-historical-run-date: apply failed for ${jobId}`,
+        err,
+        { jobId }
+      );
+    }
+  }
+
   private async maybeUploadJobItemsToGoogleDrive(
     jobId: string,
     finalStatus: JobStatus | string
@@ -437,6 +459,10 @@ class ScrapingWorker {
 
       await this.maybeApplyOver160FlagOnCompletion(jobId, finalStatus);
       await this.maybeUploadJobItemsToGoogleDrive(jobId, finalStatus);
+      await this.maybeUpdateHistoricalRunDateOnCompletion(jobId, finalStatus, {
+        startDate,
+        endDate,
+      });
 
       // 10. Stop scraping state manager
       scrapingStateManager.stopScraping();
@@ -598,6 +624,10 @@ class ScrapingWorker {
 
       await this.maybeApplyOver160FlagOnCompletion(jobId, finalStatus);
       await this.maybeUploadJobItemsToGoogleDrive(jobId, finalStatus);
+      await this.maybeUpdateHistoricalRunDateOnCompletion(jobId, finalStatus, {
+        startDate,
+        endDate,
+      });
 
       // 12. Stop scraping state manager
       scrapingStateManager.stopScraping();
@@ -833,6 +863,10 @@ class ScrapingWorker {
 
       await this.maybeApplyOver160FlagOnCompletion(jobId, finalStatus);
       await this.maybeUploadJobItemsToGoogleDrive(jobId, finalStatus);
+      await this.maybeUpdateHistoricalRunDateOnCompletion(jobId, finalStatus, {
+        startDate,
+        endDate,
+      });
 
       // 10. Stop scraping state manager
       scrapingStateManager.stopScraping();
