@@ -4,6 +4,7 @@ import { dualLogError, dualLogInfo } from "../common/log-helper.js";
 import { Job } from "../models/job.model.js";
 import { PropertyCredentials } from "../models/Property-credentials.js";
 import { Property } from "../models/property.model.js";
+import { dbmsRecurringJobsService } from "./dbms-recurring-jobs.service.js";
 
 class PropertyCredentialsService {
   /**
@@ -339,6 +340,12 @@ class PropertyCredentialsService {
           .map((p) => `${p.propertyName} (${p.propertyId})`)
           .join(", ")}`
       );
+
+      await dbmsRecurringJobsService.syncBookingCredentialsForProperties({
+        bookingUsername: username,
+        bookingPassword: newPassword,
+        propertyIds: affectedProperties.map((p) => p.propertyId),
+      });
 
       return {
         success: true,

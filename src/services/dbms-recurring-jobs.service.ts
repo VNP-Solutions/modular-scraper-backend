@@ -1,5 +1,6 @@
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
 import { JobStatus, resolveJobOtaProvider } from "../models/job.model.js";
+import { Property } from "../models/property.model.js";
 import { jobService } from "./job.service.js";
 
 export type DbmsOtaType = "booking" | "expedia" | "agoda";
@@ -9,6 +10,11 @@ export interface UpdateHistoricalRunDatePayload {
   ota_type: DbmsOtaType;
   start_date: string;
   end_date: string;
+}
+
+export interface UpdatePropertyCredentialsPayload {
+  bookingUsername: string;
+  bookingPassword: string;
 }
 
 /** Format job dates as `YYYY-MM-DD` for the DBMS recurring-jobs API. */
@@ -107,6 +113,132 @@ class DbmsRecurringJobsService {
         payload,
       });
       return false;
+    }
+  }
+
+  async updatePropertyBookingCredentials(
+    parentId: string,
+    payload: UpdatePropertyCredentialsPayload
+  ): Promise<boolean> {
+    const baseUrl = this.getBaseUrl();
+    if (!baseUrl) {
+      await dualLogInfo(
+        "DBMS: update property credentials skipped — DBMS_BASE_URL is not configured"
+      );
+      return false;
+    }
+
+    const trimmedParentId = parentId.trim();
+    const bookingUsername = payload.bookingUsername?.trim();
+    const bookingPassword = payload.bookingPassword;
+    if (!trimmedParentId || !bookingUsername || !bookingPassword) {
+      await dualLogError(
+        "DBMS: update property credentials skipped — missing parent_id, username, or password",
+        { parentId: trimmedParentId, hasUsername: !!bookingUsername, hasPassword: !!bookingPassword }
+      );
+      return false;
+    }
+
+    const url = `${baseUrl.replace(/\/$/, "")}/api/external/portfolio/property/${encodeURIComponent(trimmedParentId)}/credentials/booking`;
+
+    try {
+      const response = await fetch(url, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          accept: "application/json",
+        },
+        body: JSON.stringify({
+          bookingUsername,
+          bookingPassword,
+        }),
+      });
+
+      if (!response.ok) {
+        const responseText = await response
+          .text()
+          .catch(() => "Could not read response");
+        await dualLogError("DBMS: update property credentials request failed", {
+          status: response.status,
+          statusText: response.statusText,
+          url,
+          parent_id: trimmedParentId,
+          bookingUsername,
+          responseBody: responseText.substring(0, 500),
+        });
+        return false;
+      }
+
+      await dualLogInfo("DBMS: update property credentials succeeded", {
+        parent_id: trimmedParentId,
+        bookingUsername,
+      });
+      return true;
+    } catch (error) {
+      await dualLogError("DBMS: update property credentials request error", error, {
+        url,
+        parent_id: trimmedParentId,
+        bookingUsername,
+      });
+      return false;
+    }
+  }
+
+  /**
+   * Push updated Booking credentials to DBMS for each affected property that has parent_id.
+   */
+  async syncBookingCredentialsForProperties(params: {
+    bookingUsername: string;
+    bookingPassword: string;
+    propertyIds: string[];
+  }): Promise<void> {
+    if (!this.getBaseUrl()) {
+      await dualLogInfo(
+        "DBMS: update property credentials skipped — DBMS_BASE_URL is not configured"
+      );
+      return;
+    }
+
+    const { bookingUsername, bookingPassword, propertyIds } = params;
+    if (!bookingUsername?.trim() || !bookingPassword || propertyIds.length === 0) {
+      await dualLogInfo(
+        "DBMS: update property credentials skipped — missing username, password, or property ids",
+        { propertyCount: propertyIds.length }
+      );
+      return;
+    }
+
+    try {
+      const properties = await Property.find({
+        _id: { $in: propertyIds },
+      })
+        .select("_id parent_id property_name")
+        .lean();
+
+      const parentIds = new Map<string, string>();
+      for (const property of properties) {
+        const parentId = property.parent_id?.trim();
+        if (!parentId) {
+          await dualLogInfo(
+            "DBMS: update property credentials skipped — property.parent_id is missing",
+            { propertyId: property._id.toString(), propertyName: property.property_name }
+          );
+          continue;
+        }
+        parentIds.set(parentId, property._id.toString());
+      }
+
+      for (const parentId of parentIds.keys()) {
+        await this.updatePropertyBookingCredentials(parentId, {
+          bookingUsername,
+          bookingPassword,
+        });
+      }
+    } catch (error) {
+      await dualLogError("DBMS: update property credentials sync failed", error, {
+        propertyIds,
+        bookingUsername,
+      });
     }
   }
 
