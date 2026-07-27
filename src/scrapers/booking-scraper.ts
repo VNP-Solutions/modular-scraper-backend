@@ -35,6 +35,7 @@ import {
   FAILED_REASON,
   getFailedReasonForUser,
   hasFailedReasonCode,
+  hasNoManual2FASolvePossible,
   isFatalBookingGroupAbortError,
   isStatusAlreadySaved,
   markStatusSaved,
@@ -2059,51 +2060,57 @@ export class BookingScraper extends BaseScraper {
           }
         );
 
-        // Booking.com's own rate-limit ("Too many attempts – try again
-        // later") has no OTP field to solve — there's nothing for a human
-        // to enter manually, and waiting here won't lift Booking's
-        // throttle. Rethrow immediately instead of burning 5 minutes on a
-        // "manual solve" that can never happen, so the job fails with the
-        // correct reason right away.
-        if (isFatalBookingGroupAbortError(otpError)) {
+        // Booking.com's own server-side blocks ("Too many attempts",
+        // "Card info not available", "Sign in failed — try again later",
+        // "We're having technical difficulties") have no OTP field at all —
+        // there's nothing for a human to enter manually no matter the
+        // environment, so always rethrow immediately for these.
+        if (hasNoManual2FASolvePossible(otpError)) {
           throw otpError;
         }
 
-        // Only try Browserless APIs if in Browserless environment
+        // For every other automated OTP failure (wrong/missing code, code
+        // not found in email, etc.) an actual OTP input does exist, so a
+        // human watching the Browserless live URL could still type in the
+        // right code manually. Only try that fallback when a live URL can
+        // actually be generated (Browserless/production); in local mode no
+        // live URL is ever generated, so there's no one to solve it and
+        // waiting 5 minutes would just delay an inevitable failure.
         const environment = process.env.ENVIRONMENT || "browserless";
         const isBrowserless =
           environment === "browserless" || environment === "production";
 
-        if (isBrowserless) {
-          try {
-            const cdp = await currentPage.createCDPSession();
-            await (cdp as any).send("Browserless.startRecording");
-            await this.logInfo("Recording started successfully");
-
-            await this.delay(2000);
-            try {
-              const { liveURL } = (await (cdp as any).send(
-                "Browserless.liveURL",
-                {
-                  timeout: 600_000,
-                }
-              )) as { liveURL: string };
-
-              this.sessionUrl = liveURL;
-              await this.logInfo("Live URL generated for 2FA solving:", {
-                liveURL,
-              });
-            } catch (liveUrlError) {
-              await this.logError("Failed to generate live URL:", liveUrlError);
-            }
-          } catch (browserlessError) {
-            await this.logInfo(
-              "Browserless APIs not available (running locally?), skipping live URL generation for 2FA"
-            );
-          }
-        } else {
+        if (!isBrowserless) {
           await this.logInfo(
-            "Running in local mode - skipping Browserless recording/live URL for 2FA"
+            "Running in local mode - no live URL available for manual 2FA solve, failing immediately"
+          );
+          throw otpError;
+        }
+
+        try {
+          const cdp = await currentPage.createCDPSession();
+          await (cdp as any).send("Browserless.startRecording");
+          await this.logInfo("Recording started successfully");
+
+          await this.delay(2000);
+          try {
+            const { liveURL } = (await (cdp as any).send(
+              "Browserless.liveURL",
+              {
+                timeout: 600_000,
+              }
+            )) as { liveURL: string };
+
+            this.sessionUrl = liveURL;
+            await this.logInfo("Live URL generated for 2FA solving:", {
+              liveURL,
+            });
+          } catch (liveUrlError) {
+            await this.logError("Failed to generate live URL:", liveUrlError);
+          }
+        } catch (browserlessError) {
+          await this.logInfo(
+            "Browserless APIs not available (running locally?), skipping live URL generation for 2FA"
           );
         }
 
@@ -2112,11 +2119,11 @@ export class BookingScraper extends BaseScraper {
         return true;
       }
     } catch (error) {
-      // Preserve fatal group-abort errors (e.g. BOOKING_TOO_MANY_ATTEMPTS)
-      // rethrown from the inner catch above — collapsing them into a plain
-      // `false` here would lose the failedReasonCode and prevent the job
-      // (and group) from failing with the correct reason.
-      if (isFatalBookingGroupAbortError(error)) {
+      // Preserve errors carrying a failedReasonCode (e.g. rethrown from the
+      // inner catch above) — collapsing them into a plain `false` here would
+      // lose the specific reason and prevent the job (and group, for the
+      // fatal ones) from failing with the correct reason.
+      if (hasFailedReasonCode(error)) {
         throw error;
       }
 
@@ -2787,6 +2794,12 @@ export class BookingScraper extends BaseScraper {
 
       return true;
     } catch (error) {
+      // Preserve errors carrying a failedReasonCode (e.g. a fatal OTP
+      // failure rethrown from the handle2FA() call above) — collapsing
+      // them into a plain `false` here would lose the specific reason.
+      if (hasFailedReasonCode(error)) {
+        throw error;
+      }
       await this.logError("Error handling account locked:", error);
       await this.takeScreenshot();
       return false;
@@ -4728,6 +4741,15 @@ export class BookingScraper extends BaseScraper {
       } catch (err: any) {
         lastError = err;
         if (err?.failedReasonCode === FAILED_REASON.BOOKING_SCRAPING_STOPPED) {
+          throw err;
+        }
+        // Fatal group-abort reasons (rate limiting, no card info yet,
+        // server-side sign-in errors, OTP delivery/verification failures)
+        // indicate an account/session-wide block — retrying the same login
+        // with a fresh sign-in will almost certainly hit the identical wall
+        // again, so don't burn maxAttempts retries (and their delays) on
+        // something that won't change; fail fast with the real reason.
+        if (isFatalBookingGroupAbortError(err)) {
           throw err;
         }
         if (attempt >= maxAttempts) {

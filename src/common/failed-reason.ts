@@ -172,6 +172,13 @@ const FATAL_GROUP_ABORT_REASONS: ReadonlySet<FailedReasonCode> = new Set([
   // the same account would almost certainly hit the same server error too.
   FAILED_REASON.BOOKING_SIGN_IN_TRY_AGAIN_LATER,
   FAILED_REASON.BOOKING_TECHNICAL_DIFFICULTIES,
+  // The automated OTP handler already exhausts its own retries/timeouts
+  // before throwing these — a code that never arrived by SMS/email or an
+  // OTP flow that never resolved is almost always an account/session-wide
+  // issue (e.g. delivery outage, rate limiting), not specific to one
+  // property, so don't burn time attempting the rest of the group.
+  FAILED_REASON.BOOKING_OTP_CODE_NOT_FOUND,
+  FAILED_REASON.BOOKING_OTP_FAILED,
 ]);
 
 /**
@@ -182,6 +189,37 @@ export function isFatalBookingGroupAbortError(error: any): boolean {
   return (
     hasFailedReasonCode(error) &&
     FATAL_GROUP_ABORT_REASONS.has(error.failedReasonCode as FailedReasonCode)
+  );
+}
+
+/**
+ * Subset of the fatal group-abort reasons where Booking.com never even
+ * shows an OTP input to begin with (rate-limit banner, server error page,
+ * "check back in 7-8 hours" message) — there is no field for a human to
+ * manually solve no matter the environment, so the Browserless "wait for
+ * manual 2FA" fallback should never be attempted for these. This is
+ * intentionally a *subset* of {@link FATAL_GROUP_ABORT_REASONS}: OTP
+ * failures (wrong/missing code) do have a real OTP input, so those are
+ * excluded here and instead get the manual-solve fallback in
+ * Browserless/production mode.
+ */
+const NO_MANUAL_2FA_SOLVE_REASONS: ReadonlySet<FailedReasonCode> = new Set([
+  FAILED_REASON.BOOKING_TOO_MANY_ATTEMPTS,
+  FAILED_REASON.BOOKING_CARD_INFO_NOT_AVAILABLE,
+  FAILED_REASON.BOOKING_SIGN_IN_TRY_AGAIN_LATER,
+  FAILED_REASON.BOOKING_TECHNICAL_DIFFICULTIES,
+]);
+
+/**
+ * Returns true if the error's failedReasonCode is one where Booking.com
+ * never shows an OTP field to solve, so a human on a Browserless live URL
+ * has nothing to act on — the job should fail immediately regardless of
+ * environment (see {@link NO_MANUAL_2FA_SOLVE_REASONS}).
+ */
+export function hasNoManual2FASolvePossible(error: any): boolean {
+  return (
+    hasFailedReasonCode(error) &&
+    NO_MANUAL_2FA_SOLVE_REASONS.has(error.failedReasonCode as FailedReasonCode)
   );
 }
 
