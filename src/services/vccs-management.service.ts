@@ -620,6 +620,13 @@ export class VccsManagementService {
               reservationId,
               error: loginError,
             });
+            // Preserve fatal reasons (e.g. BOOKING_TOO_MANY_ATTEMPTS,
+            // BOOKING_SIGN_IN_TRY_AGAIN_LATER) instead of collapsing to a
+            // plain `null` — otherwise the caller treats this as a generic
+            // "card info not available" and overwrites the real reason.
+            if (hasFailedReasonCode(loginError)) {
+              throw loginError;
+            }
             return null;
           }
         }
