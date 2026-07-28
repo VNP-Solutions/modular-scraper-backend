@@ -61,7 +61,7 @@ export async function updateHistoricalRunDate(
 
   try {
     const response = await fetch(
-      `${baseUrl}/external/recurring-jobs/update-historical-run-date`,
+      `${baseUrl}/api/external/recurring-jobs/update-historical-run-date`,
       {
         method: "POST",
         headers: {
