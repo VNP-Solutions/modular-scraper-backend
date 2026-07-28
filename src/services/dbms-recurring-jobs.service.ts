@@ -74,7 +74,7 @@ class DbmsRecurringJobsService {
       return false;
     }
 
-    const url = `${baseUrl.replace(/\/$/, "")}/external/recurring-jobs/update-historical-run-date`;
+    const url = `${baseUrl.replace(/\/$/, "")}/api/external/recurring-jobs/update-historical-run-date`;
 
     try {
       const response = await fetch(url, {
