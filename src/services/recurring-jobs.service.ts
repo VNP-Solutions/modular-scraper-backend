@@ -53,7 +53,7 @@ export async function updateHistoricalRunDate(
 
   const payload = {
     parent_id: parentId,
-    ota_type: toOtaType(job.ota_provider),
+    ota_type: "agoda",
     start_date: startDate,
     end_date: endDate,
   };
