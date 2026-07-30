@@ -1,13 +1,10 @@
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
-import { JobStatus, resolveJobOtaProvider } from "../models/job.model.js";
+import { JobStatus } from "../models/job.model.js";
 import { Property } from "../models/property.model.js";
 import { jobService } from "./job.service.js";
 
-export type DbmsOtaType = "booking" | "expedia" | "agoda";
-
 export interface UpdateHistoricalRunDatePayload {
   parent_id: string;
-  ota_type: DbmsOtaType;
   start_date: string;
   end_date: string;
 }
@@ -43,20 +40,6 @@ export function toDbmsApiDateString(
   return null;
 }
 
-export function toDbmsOtaType(provider: unknown): DbmsOtaType | null {
-  const normalized = String(provider ?? "")
-    .trim()
-    .toLowerCase();
-  if (
-    normalized === "booking" ||
-    normalized === "expedia" ||
-    normalized === "agoda"
-  ) {
-    return normalized;
-  }
-  return null;
-}
-
 class DbmsRecurringJobsService {
   private getBaseUrl(): string | null {
     const baseUrl = process.env.DBMS_BACKEND_URL?.trim();
@@ -83,7 +66,10 @@ class DbmsRecurringJobsService {
           "Content-Type": "application/json",
           accept: "application/json",
         },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({
+          ...payload,
+          ota_type: "booking",
+        }),
       });
 
       if (!response.ok) {
@@ -102,7 +88,7 @@ class DbmsRecurringJobsService {
 
       await dualLogInfo("DBMS: update-historical-run-date succeeded", {
         parent_id: payload.parent_id,
-        ota_type: payload.ota_type,
+        ota_type: "booking",
         start_date: payload.start_date,
         end_date: payload.end_date,
       });
@@ -274,15 +260,6 @@ class DbmsRecurringJobsService {
         return;
       }
 
-      const otaType = toDbmsOtaType(resolveJobOtaProvider(job));
-      if (!otaType) {
-        await dualLogInfo(
-          `DBMS: update-historical-run-date skipped — unsupported OTA "${String(resolveJobOtaProvider(job))}"`,
-          { jobId }
-        );
-        return;
-      }
-
       const property = await jobService.getPropertyForJob(jobId);
       const parentId = property?.parent_id?.trim();
       if (!parentId) {
@@ -310,7 +287,6 @@ class DbmsRecurringJobsService {
 
       await this.updateHistoricalRunDate({
         parent_id: parentId,
-        ota_type: otaType,
         start_date: startDate,
         end_date: endDate,
       });
