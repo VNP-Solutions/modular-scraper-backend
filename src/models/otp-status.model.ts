@@ -29,7 +29,7 @@ const OtpStatusSchema = new Schema<IOtpStatus>(
     platform: {
       type: String,
       enum: Object.values(OtpPlatform),
-      required: false,
+      required: true,
     },
     job_id: {
       type: Schema.Types.ObjectId,
@@ -42,6 +42,9 @@ const OtpStatusSchema = new Schema<IOtpStatus>(
     collection: "otp_statuses",
   }
 );
+
+// One OTP lock document per platform — prevents concurrent reserve races
+OtpStatusSchema.index({ platform: 1 }, { unique: true });
 
 export const OtpStatus = mongoose.model<IOtpStatus>(
   "OtpStatus",

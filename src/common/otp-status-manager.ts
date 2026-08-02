@@ -17,6 +17,15 @@ export interface OtpStatusInfo {
   lastUpdated: Date;
 }
 
+function isDuplicateKeyError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: number }).code === 11000
+  );
+}
+
 export class OtpStatusManager extends EventEmitter {
   private static instance: OtpStatusManager | null = null;
   private currentStatus: OtpStatusInfo | null = null;
@@ -41,6 +50,58 @@ export class OtpStatusManager extends EventEmitter {
   }
 
   /**
+   * Remove duplicate OTP docs per platform so a unique index can be applied.
+   * Keeps the most recently updated document for each platform.
+   */
+  private async dedupePlatformDocs(): Promise<void> {
+    const platforms = Object.values(OtpPlatform);
+
+    for (const platform of platforms) {
+      const docs = await OtpStatus.find({ platform })
+        .sort({ updatedAt: -1 })
+        .select("_id")
+        .lean();
+
+      if (docs.length <= 1) {
+        continue;
+      }
+
+      const idsToDelete = docs.slice(1).map((doc) => doc._id);
+      const deleteResult = await OtpStatus.deleteMany({
+        _id: { $in: idsToDelete },
+      });
+
+      console.log(
+        `Removed ${deleteResult.deletedCount} duplicate OTP status doc(s) for platform ${platform}`
+      );
+    }
+  }
+
+  /**
+   * Ensure exactly one OTP status document exists for a platform.
+   */
+  private async ensurePlatformDoc(platform: OtpPlatform): Promise<void> {
+    try {
+      await OtpStatus.updateOne(
+        { platform },
+        {
+          $setOnInsert: {
+            status: OtpStatusValue.Released,
+            platform,
+            job_id: null,
+          },
+        },
+        { upsert: true }
+      );
+    } catch (error) {
+      // Another process created the doc first — unique index makes this expected
+      if (!isDuplicateKeyError(error)) {
+        throw error;
+      }
+    }
+  }
+
+  /**
    * Initialize the OTP status manager by loading current status from database
    */
   public async initialize(): Promise<void> {
@@ -49,33 +110,25 @@ export class OtpStatusManager extends EventEmitter {
     }
 
     try {
-      // Get or create the OTP status document
-      const otpStatusDoc = await OtpStatus.findOne({
-        platform: this.getOtpPlatform(),
-      }).lean();
+      await this.dedupePlatformDocs();
+
+      const platform = this.getOtpPlatform();
+      await this.ensurePlatformDoc(platform);
+
+      const otpStatusDoc = await OtpStatus.findOne({ platform }).lean();
 
       if (!otpStatusDoc) {
-        // Create initial OTP status as Released
-        const newDoc = await OtpStatus.create({
-          status: OtpStatusValue.Released,
-          platform: this.getOtpPlatform(),
-          job_id: null,
-        });
-
-        this.currentStatus = {
-          status: newDoc.status,
-          platform: this.getOtpPlatform(),
-          jobId: null,
-          lastUpdated: newDoc.updatedAt,
-        };
-      } else {
-        this.currentStatus = {
-          status: otpStatusDoc.status,
-          platform: otpStatusDoc.platform || this.getOtpPlatform(),
-          jobId: otpStatusDoc.job_id?.toString() || null,
-          lastUpdated: otpStatusDoc.updatedAt,
-        };
+        throw new Error(
+          `Failed to initialize OTP status document for platform ${platform}`
+        );
       }
+
+      this.currentStatus = {
+        status: otpStatusDoc.status,
+        platform: otpStatusDoc.platform || platform,
+        jobId: otpStatusDoc.job_id?.toString() || null,
+        lastUpdated: otpStatusDoc.updatedAt,
+      };
 
       this.isInitialized = true;
       console.log("OTP Status Manager initialized:", this.currentStatus);
@@ -113,26 +166,12 @@ export class OtpStatusManager extends EventEmitter {
     }
 
     try {
-      // First check if an entry exists for this platform (regardless of status)
-      const existingEntry = await OtpStatus.findOne({
-        platform: platform,
-      }).lean();
+      // Atomically ensure one doc exists (unique index prevents duplicates)
+      await this.ensurePlatformDoc(platform);
 
-      if (!existingEntry) {
-        // No entry exists for this platform, create one as Released first
-        await OtpStatus.create({
-          status: OtpStatusValue.Released,
-          platform: platform,
-          job_id: null,
-        });
-        console.log(
-          `Created new OTP status entry for platform ${platform} as Released`
-        );
-      }
-
-      // Now try to reserve (update from Released to Occupied)
+      // Atomically claim only if currently Released — one winner under concurrency
       const result = await OtpStatus.findOneAndUpdate(
-        { status: OtpStatusValue.Released, platform: platform }, // Only update if currently Released
+        { status: OtpStatusValue.Released, platform: platform },
         {
           status: OtpStatusValue.Occupied,
           platform: platform,
@@ -154,7 +193,17 @@ export class OtpStatusManager extends EventEmitter {
         this.emit("otpReserved", jobId, platform);
         return true;
       } else {
-        // OTP is already occupied
+        // OTP is already occupied — sync in-memory status from DB
+        const occupied = await OtpStatus.findOne({ platform }).lean();
+        if (occupied) {
+          this.currentStatus = {
+            status: occupied.status,
+            platform: occupied.platform || platform,
+            jobId: occupied.job_id?.toString() || null,
+            lastUpdated: occupied.updatedAt,
+          };
+        }
+
         console.log(
           `Failed to reserve OTP for job ${jobId} on platform ${platform} - already occupied`
         );
@@ -192,7 +241,7 @@ export class OtpStatusManager extends EventEmitter {
         // Successfully released
         this.currentStatus = {
           status: OtpStatusValue.Released,
-          platform: null,
+          platform: result.platform || null,
           jobId: null,
           lastUpdated: result.updatedAt,
         };
@@ -221,21 +270,22 @@ export class OtpStatusManager extends EventEmitter {
     }
 
     try {
+      const platform = this.getOtpPlatform();
+      await this.ensurePlatformDoc(platform);
+
       const result = await OtpStatus.findOneAndUpdate(
-        {
-          platform: this.getOtpPlatform(),
-        }, // Match any document
+        { platform },
         {
           status: OtpStatusValue.Released,
           job_id: null,
         },
-        { new: true, upsert: true }
+        { new: true }
       );
 
       if (result) {
         this.currentStatus = {
           status: OtpStatusValue.Released,
-          platform: this.getOtpPlatform(),
+          platform,
           jobId: null,
           lastUpdated: result.updatedAt,
         };
@@ -282,7 +332,9 @@ export class OtpStatusManager extends EventEmitter {
    */
   public async getDetailedStatus(): Promise<IOtpStatus | null> {
     try {
-      return await OtpStatus.findOne().lean();
+      return await OtpStatus.findOne({
+        platform: this.getOtpPlatform(),
+      }).lean();
     } catch (error) {
       console.error("Error getting detailed OTP status:", error);
       return null;
