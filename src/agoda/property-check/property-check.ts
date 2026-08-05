@@ -7,8 +7,11 @@ import { browserSetupProduction } from "../../browser-setup/browser-prod.js";
 import { configs, useRemoteBrowser } from "../../config/index.js";
 import { isAgodaCredentialLoginFailure } from "../../common/failed-reason.js";
 import { dualLogError, dualLogInfo } from "../../common/log-helper.js";
+import {
+  patchManyOtaVerificationFields,
+  patchOtaVerificationFields,
+} from "../../common/ota-verification-patch.js";
 import { scrapingStateManager } from "../../common/scraping-state.js";
-import { Property } from "../../models/property.model.js";
 
 export interface AgodaPropertyToCheck {
   _id: string;
@@ -57,9 +60,10 @@ async function markAllAgodaCredentialUnverified(
   }
 
   try {
-    await Property.updateMany(
-      { _id: { $in: ids } },
-      { $set: { agoda_credential_verified: false } }
+    await patchManyOtaVerificationFields(
+      "agoda",
+      ids.map((id) => id.toString()),
+      { credential_verified: false }
     );
     await dualLogInfo(
       `Set agoda_credential_verified=false for ${ids.length} properties (login failed).`
@@ -82,15 +86,18 @@ async function markAgodaPropertyVerified(propertyId: string): Promise<void> {
   }
 
   try {
-    await Property.updateOne(
-      { _id: new mongoose.Types.ObjectId(propertyId) },
-      {
-        $set: {
-          agoda_credential_verified: true,
-          agoda_access_level: true,
-        },
-      }
-    );
+    const result = await patchOtaVerificationFields("agoda", propertyId, {
+      credential_verified: true,
+      access_level: true,
+    });
+
+    if (result.matchedCount === 0) {
+      await dualLogError(
+        `[agoda-check] No property document matched _id=${propertyId}; flags were NOT updated.`
+      );
+      return;
+    }
+
     await dualLogInfo(
       `Set agoda_credential_verified=true and agoda_access_level=true for property ${propertyId}.`
     );
@@ -103,8 +110,8 @@ async function markAgodaPropertyVerified(propertyId: string): Promise<void> {
 }
 
 /**
- * Marks a single property as not having Agoda access. Used when login
- * succeeds but the property could not be found for this account.
+ * Marks a single property as credential-verified but without Agoda access.
+ * Used when login succeeds but the property could not be found for this account.
  */
 async function markAgodaAccessLevelFalse(propertyId: string): Promise<void> {
   if (!mongoose.Types.ObjectId.isValid(propertyId)) {
@@ -112,16 +119,24 @@ async function markAgodaAccessLevelFalse(propertyId: string): Promise<void> {
   }
 
   try {
-    await Property.updateOne(
-      { _id: new mongoose.Types.ObjectId(propertyId) },
-      { $set: { agoda_access_level: false } }
-    );
+    const result = await patchOtaVerificationFields("agoda", propertyId, {
+      credential_verified: true,
+      access_level: false,
+    });
+
+    if (result.matchedCount === 0) {
+      await dualLogError(
+        `[agoda-check] No property document matched _id=${propertyId}; flags were NOT updated.`
+      );
+      return;
+    }
+
     await dualLogInfo(
-      `Set agoda_access_level=false for property ${propertyId} (not found).`
+      `Set agoda_credential_verified=true and agoda_access_level=false for property ${propertyId} (not found).`
     );
   } catch (error) {
     await dualLogError(
-      `Failed to update agoda_access_level for property ${propertyId}:`,
+      `Failed to update Agoda verification flags for property ${propertyId}:`,
       error
     );
   }
