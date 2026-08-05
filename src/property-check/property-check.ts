@@ -5,9 +5,12 @@ import { browserSetupProduction } from "../browser-setup/browser-prod.js";
 import { delay } from "../common/delay.js";
 import { FAILED_REASON } from "../common/failed-reason.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
+import {
+  patchManyOtaVerificationFields,
+  patchOtaVerificationFields,
+} from "../common/ota-verification-patch.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import login from "../login/login.js";
-import { Property } from "../models/property.model.js";
 import handleOtpVerification from "../otp-verification/otp-verification.js";
 
 export interface PropertyToCheck {
@@ -49,9 +52,10 @@ async function markAllCredentialUnverified(
   }
 
   try {
-    await Property.updateMany(
-      { _id: { $in: ids } },
-      { $set: { expedia_credential_verified: false } }
+    await patchManyOtaVerificationFields(
+      "expedia",
+      ids.map((id) => id.toString()),
+      { credential_verified: false }
     );
     await dualLogInfo(
       `Set expedia_credential_verified=false for ${ids.length} properties (login failed).`
@@ -77,31 +81,10 @@ async function markPropertyVerified(propertyId: string): Promise<void> {
   }
 
   try {
-    // Diagnostic: check if the document actually exists before updating.
-    const existing = await Property.findOne(
-      { _id: new mongoose.Types.ObjectId(propertyId) },
-      { _id: 1, name: 1, expedia_credential_verified: 1, expedia_access_level: 1 }
-    ).lean();
-    console.log(
-      `[property-check] findOne(_id=${propertyId}) result:`,
-      existing
-        ? { _id: existing._id, name: (existing as any).name, expedia_credential_verified: (existing as any).expedia_credential_verified, expedia_access_level: (existing as any).expedia_access_level }
-        : "null (not found)"
-    );
-
-    const result = await Property.updateOne(
-      { _id: new mongoose.Types.ObjectId(propertyId) },
-      {
-        $set: {
-          expedia_credential_verified: true,
-          expedia_access_level: true,
-        },
-      }
-    );
-
-    console.log(
-      `[property-check] updateOne result: matchedCount=${result.matchedCount}, modifiedCount=${result.modifiedCount}, acknowledged=${result.acknowledged}`
-    );
+    const result = await patchOtaVerificationFields("expedia", propertyId, {
+      credential_verified: true,
+      access_level: true,
+    });
 
     if (result.matchedCount === 0) {
       const message = `[property-check] No property document matched _id=${propertyId}; flags were NOT updated.`;
@@ -129,8 +112,8 @@ async function markPropertyVerified(propertyId: string): Promise<void> {
 }
 
 /**
- * Marks a single property as not having Expedia access. Used when login
- * succeeds but the property could not be found for this account.
+ * Marks a single property as credential-verified but without Expedia access.
+ * Used when login succeeds but the property could not be found for this account.
  */
 async function markAccessLevelFalse(propertyId: string): Promise<void> {
   if (!isValidObjectId(propertyId)) {
@@ -141,27 +124,27 @@ async function markAccessLevelFalse(propertyId: string): Promise<void> {
   }
 
   try {
-    const result = await Property.updateOne(
-      { _id: new mongoose.Types.ObjectId(propertyId) },
-      { $set: { expedia_access_level: false } }
-    );
+    const result = await patchOtaVerificationFields("expedia", propertyId, {
+      credential_verified: true,
+      access_level: false,
+    });
 
     if (result.matchedCount === 0) {
-      const message = `[property-check] No property document matched _id=${propertyId}; expedia_access_level was NOT updated.`;
+      const message = `[property-check] No property document matched _id=${propertyId}; verification flags were NOT updated.`;
       console.error(message);
       await dualLogError(message);
       return;
     }
 
     console.log(
-      `[property-check] Updated property ${propertyId}: expedia_access_level=false (not found in Expedia account)`
+      `[property-check] Updated property ${propertyId}: expedia_credential_verified=true, expedia_access_level=false (not found in Expedia account)`
     );
     await dualLogInfo(
-      `Set expedia_access_level=false for property ${propertyId} (not found).`
+      `Set expedia_credential_verified=true and expedia_access_level=false for property ${propertyId} (not found).`
     );
   } catch (error) {
     await dualLogError(
-      `Failed to update expedia_access_level for property ${propertyId}:`,
+      `Failed to update Expedia verification flags for property ${propertyId}:`,
       error
     );
   }
