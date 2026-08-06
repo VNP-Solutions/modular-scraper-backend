@@ -165,7 +165,7 @@ async function searchSingleProperty(
 
   // Type the property id and let the table filter (same pacing as property-search.ts).
   await page.type(PROPERTY_SEARCH_INPUT, expediaId, { delay: 500 });
-  await delay(2000);
+  await delay(8000);
 
   await page.waitForSelector("tbody tr", { visible: true, timeout: 15000 });
 
