@@ -48,6 +48,16 @@ import {
 
 dotenv.config();
 
+/** Expedia wraps bad property / no-access as this auth message (often as DOWNSTREAM_SERVICE_ERROR). */
+function isReservationClientAuthShapeMessage(message: unknown): boolean {
+  const msg = String(message || "").toLowerCase();
+  return (
+    msg.includes("client-name") ||
+    msg.includes("not authorized for client") ||
+    msg.includes("pc-reservations-web")
+  );
+}
+
 // Compute consistent client-hint headers from the static fallback UA.
 // These are used for all direct fetch() API calls that don't go through the browser.
 const { userAgent: GRAPHQL_UA, headers: _graphqlClientHints } =
@@ -1836,6 +1846,11 @@ async function runScrapingWithRestart(
   // Get all individual dates to process
   const datesToProcess = generateDateRange(startDate!, endDate!);
   const skippedDates: string[] = [];
+  // Confirm property-not-found only after this auth-shape error on the first N days
+  // (Expedia wraps it as DOWNSTREAM_SERVICE_ERROR, which otherwise just skips dates).
+  const PROPERTY_NOT_FOUND_CONFIRM_DAYS = 3;
+  let leadingAuthShapeSkipCount = 0;
+  let leadingAuthShapeBroken = false;
   console.log(
     `📅 Date splitting: Processing ${datesToProcess.length} days individually`,
   );
@@ -2121,6 +2136,10 @@ async function runScrapingWithRestart(
             // ✅ Data stored to database via GraphQL processing above
 
             dateCompleted = true; // Mark this date as completed
+            // A successful day before confirmation means this is not property-not-found
+            if (!leadingAuthShapeBroken && i === leadingAuthShapeSkipCount) {
+              leadingAuthShapeBroken = true;
+            }
             break; // Exit the retry attempts for this date
           } catch (graphqlError: any) {
             console.error("❌ GraphQL API call failed:", graphqlError);
@@ -2147,6 +2166,56 @@ async function runScrapingWithRestart(
 
           // Transient GraphQL errors (timeout, downstream) — skip this date, no cap on skips
           if (isSkippableGraphQLDateError(error)) {
+            const isAuthShape =
+              isReservationClientAuthShapeMessage(error?.message);
+
+            // First N days all show "not authorized for client-name=pc-reservations-web"
+            // → treat as property not found (not a transient downstream blip).
+            if (
+              !leadingAuthShapeBroken &&
+              i === leadingAuthShapeSkipCount &&
+              isAuthShape
+            ) {
+              leadingAuthShapeSkipCount++;
+              const confirmDays = Math.min(
+                PROPERTY_NOT_FOUND_CONFIRM_DAYS,
+                datesToProcess.length,
+              );
+              if (leadingAuthShapeSkipCount >= confirmDays) {
+                const propertyNotFoundErr = new Error(
+                  "Property not found. Please verify the Expedia property ID is correct.",
+                );
+                setFailedReasonCode(
+                  propertyNotFoundErr,
+                  FAILED_REASON.PROPERTY_NOT_FOUND,
+                );
+                await dualLogError(
+                  `Auth-shape GraphQL error on first ${confirmDays} day(s) — treating as property not found`,
+                  propertyNotFoundErr,
+                  {
+                    jobId,
+                    expediaId,
+                    confirmDays,
+                    lastDate: singleDate,
+                    errorMessage: error?.message,
+                  },
+                );
+                if (jobId) {
+                  await progressManager.handleJobError(
+                    jobId,
+                    propertyNotFoundErr,
+                  );
+                }
+                throw propertyNotFoundErr;
+              }
+            } else if (
+              !leadingAuthShapeBroken &&
+              i === leadingAuthShapeSkipCount
+            ) {
+              // Skipped for a different transient reason — stop the leading streak
+              leadingAuthShapeBroken = true;
+            }
+
             await dualLogWarn(
               `GraphQL timeout/error on ${singleDate} — continuing with next date`,
               {
@@ -2154,6 +2223,7 @@ async function runScrapingWithRestart(
                 date: singleDate,
                 errorMessage: error?.message,
                 skippedSoFar: skippedDates.length + 1,
+                authShapeHits: leadingAuthShapeSkipCount,
               },
             );
             skippedDates.push(singleDate);
