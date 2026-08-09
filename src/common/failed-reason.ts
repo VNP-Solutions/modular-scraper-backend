@@ -134,6 +134,33 @@ export function createBookingCardInfoNotAvailableError(): Error {
 }
 
 /**
+ * Booking.com shows "Too many attempts – try again later" on the phone-selection
+ * page (before OTP input). The scraper pauses and retries the current property
+ * scrape; this marker distinguishes that case from the same banner elsewhere.
+ */
+export function createBookingPhoneSelectionTooManyAttemptsError(
+  visibleText?: string
+): Error {
+  const err = new Error(BOOKING_TOO_MANY_ATTEMPTS_MESSAGE);
+  setFailedReasonCode(err, FAILED_REASON.BOOKING_TOO_MANY_ATTEMPTS);
+  (err as Error & { _bookingPhoneSelectionRateLimit?: boolean })._bookingPhoneSelectionRateLimit =
+    true;
+  if (visibleText) {
+    (err as Error & { _bookingRateLimitVisibleText?: string })._bookingRateLimitVisibleText =
+      visibleText;
+  }
+  return err;
+}
+
+export function isBookingPhoneSelectionTooManyAttemptsError(error: any): boolean {
+  return (
+    hasFailedReasonCode(error) &&
+    error.failedReasonCode === FAILED_REASON.BOOKING_TOO_MANY_ATTEMPTS &&
+    error._bookingPhoneSelectionRateLimit === true
+  );
+}
+
+/**
  * Infer the best Booking OTP-related failure code from an error message string.
  */
 export function inferBookingOtpFailedReasonCode(

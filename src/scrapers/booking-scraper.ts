@@ -36,6 +36,7 @@ import {
   getFailedReasonForUser,
   hasFailedReasonCode,
   hasNoManual2FASolvePossible,
+  isBookingPhoneSelectionTooManyAttemptsError,
   isFatalBookingGroupAbortError,
   isStatusAlreadySaved,
   markStatusSaved,
@@ -4469,7 +4470,134 @@ export class BookingScraper extends BaseScraper {
     if (params.bookingGroupSteps && params.bookingGroupSteps.length > 0) {
       return this.executeBookingGroupScraping(params);
     }
-    return super.executeScraping(params);
+
+    const maxWaits = this.getBookingPhoneSelectionRateLimitMaxWaits();
+    let waitsDone = 0;
+
+    while (true) {
+      const result = await super.executeScraping(params);
+      if (
+        result.success ||
+        !result.bookingPhoneSelectionRateLimit ||
+        waitsDone >= maxWaits
+      ) {
+        return result;
+      }
+
+      waitsDone++;
+      await this.pauseForBookingPhoneSelectionRateLimit(
+        waitsDone,
+        maxWaits,
+        `single-job executeScraping job=${params.jobId ?? "unknown"}`
+      );
+    }
+  }
+
+  private getBookingPhoneSelectionRateLimitWaitMs(): number {
+    const raw = process.env.BOOKING_TOO_MANY_ATTEMPTS_WAIT_MS;
+    const n = raw !== undefined ? parseInt(raw, 10) : 3_600_000;
+    if (!Number.isFinite(n) || n < 0) return 3_600_000;
+    return Math.min(n, 24 * 3_600_000);
+  }
+
+  private getBookingPhoneSelectionRateLimitMaxWaits(): number {
+    const raw = process.env.BOOKING_TOO_MANY_ATTEMPTS_MAX_WAITS;
+    const n = raw !== undefined ? parseInt(raw, 10) : 2;
+    if (!Number.isFinite(n)) return 2;
+    return Math.min(Math.max(0, n), 10);
+  }
+
+  /**
+   * When Booking.com shows "Too many attempts" on the phone-selection page,
+   * pause (default 1 hour) and retry the wrapped operation from the start of
+   * the current property scrape (up to {@link getBookingPhoneSelectionRateLimitMaxWaits} waits).
+   */
+  private async withBookingPhoneSelectionRateLimitRetry<T>(
+    operation: () => Promise<T>,
+    contextLabel: string,
+    onBeforeRetry?: () => Promise<void>
+  ): Promise<T> {
+    const maxWaits = this.getBookingPhoneSelectionRateLimitMaxWaits();
+    let waitsDone = 0;
+
+    while (true) {
+      try {
+        return await operation();
+      } catch (error) {
+        if (!isBookingPhoneSelectionTooManyAttemptsError(error)) {
+          throw error;
+        }
+        if (waitsDone >= maxWaits) {
+          await dualLogError(
+            `[booking] Phone-selection "Too many attempts" still present after ${waitsDone} pause(s) — failing (${contextLabel})`,
+            error
+          );
+          throw error;
+        }
+
+        waitsDone++;
+        await this.pauseForBookingPhoneSelectionRateLimit(
+          waitsDone,
+          maxWaits,
+          contextLabel,
+          error
+        );
+        if (onBeforeRetry) {
+          await onBeforeRetry();
+        }
+      }
+    }
+  }
+
+  private async pauseForBookingPhoneSelectionRateLimit(
+    waitsDone: number,
+    maxWaits: number,
+    contextLabel: string,
+    error?: unknown
+  ): Promise<void> {
+    const waitMs = this.getBookingPhoneSelectionRateLimitWaitMs();
+    const waitMinutes = Math.round(waitMs / 60_000);
+    const visibleText =
+      error &&
+      typeof error === "object" &&
+      "_bookingRateLimitVisibleText" in error
+        ? String((error as { _bookingRateLimitVisibleText?: string })._bookingRateLimitVisibleText)
+        : undefined;
+
+    await dualLogInfo(
+      `[booking] Phone-selection "Too many attempts" — pausing ${waitMinutes} min (wait ${waitsDone}/${maxWaits}) before restarting current property scrape from VCCS (${contextLabel})`,
+      { visibleText }
+    );
+
+    await this.delayWithScrapingStateChecks(waitMs, contextLabel);
+
+    await dualLogInfo(
+      `[booking] Phone-selection rate-limit pause complete — restarting current property scrape (${contextLabel})`
+    );
+  }
+
+  /** Chunked delay so scraping pause/stop can interrupt a long rate-limit wait. */
+  private async delayWithScrapingStateChecks(
+    totalMs: number,
+    contextLabel: string
+  ): Promise<void> {
+    const chunkMs = 60_000;
+    let remaining = totalMs;
+
+    while (remaining > 0) {
+      await scrapingStateManager.waitWhilePaused();
+      if (!scrapingStateManager.isRunning()) {
+        const err = new Error(
+          `Scraping was stopped during phone-selection rate-limit wait (${contextLabel})`
+        );
+        setFailedReasonCode(err, FAILED_REASON.BOOKING_SCRAPING_STOPPED);
+        throw err;
+      }
+
+      const thisChunk = Math.min(chunkMs, remaining);
+      await this.delay(thisChunk);
+      remaining -= thisChunk;
+    }
   }
 
   /**
@@ -4696,6 +4824,17 @@ export class BookingScraper extends BaseScraper {
     params: ScrapingJobParams,
     steps: NonNullable<ScrapingJobParams["bookingGroupSteps"]>
   ): Promise<void> {
+    return this.withBookingPhoneSelectionRateLimitRetry(
+      () => this.runBookingGroupInitialAuthOnce(params, steps),
+      `group initial auth leaseJob=${params.groupOtpLeaseJobId ?? params.jobId ?? steps[0].jobId}`,
+      () => this.resetBrowserStateForGroupLoginRetry()
+    );
+  }
+
+  private async runBookingGroupInitialAuthOnce(
+    params: ScrapingJobParams,
+    steps: NonNullable<ScrapingJobParams["bookingGroupSteps"]>
+  ): Promise<void> {
     const maxAttempts = this.getBookingGroupLoginMaxAttempts();
     const delayMs = this.getBookingGroupLoginRetryDelayMs();
     let lastError: unknown;
@@ -4902,16 +5041,20 @@ export class BookingScraper extends BaseScraper {
           // triggers between properties can hit the same fatal 2FA errors
           // (e.g. BOOKING_TOO_MANY_ATTEMPTS) as scrapeData itself, and must
           // be handled identically rather than escaping uncaught.
-          if (i > 0) {
-            await jobService.startJob(step.jobId, workerTag);
-            await this.switchToNextGroupProperty(
-              params,
-              steps[i - 1].bookingId,
-              step
-            );
-          }
-
-          result = await this.scrapeData(stepParams);
+          result = await this.withBookingPhoneSelectionRateLimitRetry(
+            async () => {
+              if (i > 0) {
+                await jobService.startJob(step.jobId, workerTag);
+                await this.switchToNextGroupProperty(
+                  params,
+                  steps[i - 1].bookingId,
+                  step
+                );
+              }
+              return await this.scrapeDataOnce(stepParams);
+            },
+            `group step job=${step.jobId}`
+          );
         } catch (stepError) {
           const failMsg =
             getFailedReasonForUser(stepError) ||
@@ -5121,6 +5264,13 @@ export class BookingScraper extends BaseScraper {
   }
 
   async scrapeData(params: ScrapingJobParams): Promise<ScrapingResult> {
+    return this.withBookingPhoneSelectionRateLimitRetry(
+      () => this.scrapeDataOnce(params),
+      `scrapeData job=${params.jobId ?? "unknown"}`
+    );
+  }
+
+  private async scrapeDataOnce(params: ScrapingJobParams): Promise<ScrapingResult> {
     try {
       const shouldReleaseStart = params.releaseOtpAtScrapeStart !== false;
       if (shouldReleaseStart) {

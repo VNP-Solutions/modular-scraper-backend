@@ -9,6 +9,7 @@ import { delay } from "../common/delay.js";
 import { decryptPassword } from "../common/encription.js";
 import {
   BOOKING_TOO_MANY_ATTEMPTS_MESSAGE,
+  createBookingPhoneSelectionTooManyAttemptsError,
   FAILED_REASON,
   inferBookingOtpFailedReasonCode,
   setFailedReasonCode,
@@ -648,13 +649,12 @@ async function handleBookingOtpVerification(
       const phonePick = await selectCorrectPhoneNumber(page, jobId);
 
       if (phonePick.rateLimited) {
-        await dualLogError(
-          `Booking.com too-many-attempts error detected right after clicking "Send verification code" — failing job (visible: "${phonePick.rateLimitedText}")`
+        await dualLogInfo(
+          `Booking.com too-many-attempts on phone-selection page (visible: "${phonePick.rateLimitedText}") — scraper will pause and retry current property scrape`
         );
-
-        const error = new Error(BOOKING_TOO_MANY_ATTEMPTS_MESSAGE);
-        setFailedReasonCode(error, FAILED_REASON.BOOKING_TOO_MANY_ATTEMPTS);
-        throw error;
+        throw createBookingPhoneSelectionTooManyAttemptsError(
+          phonePick.rateLimitedText
+        );
       }
 
       if (!phonePick.ok) {
@@ -1089,6 +1089,18 @@ async function selectCorrectPhoneNumber(
     // Wait for phone selection elements to load (once before tries)
     await delay(3000);
 
+    const preSelectRateLimitText = await getBookingVisibleErrorBlockText(page);
+    if (matchesBookingTooManyAttempts(preSelectRateLimitText)) {
+      await dualLogInfo(
+        `Booking.com too-many-attempts on phone-selection page before send (visible: "${preSelectRateLimitText}") — scraper will pause and retry current property scrape`
+      );
+      return {
+        ok: false,
+        rateLimited: true,
+        rateLimitedText: preSelectRateLimitText,
+      };
+    }
+
     let matchedByOurContactEnv = false;
 
     let phoneSelected:
@@ -1286,11 +1298,10 @@ async function selectCorrectPhoneNumber(
         );
         if (outcome.rateLimited) {
           await dualLogInfo(
-            `Booking.com too-many-attempts banner detected right after clicking "Send verification code" (visible: "${outcome.rateLimitedText}")`
+            `Booking.com too-many-attempts banner on phone-selection page after "Send verification code" (visible: "${outcome.rateLimitedText}") — scraper will pause and retry current property scrape`
           );
           return {
-            ok: true,
-            usedOurContactEnv: matchedByOurContactEnv,
+            ok: false,
             rateLimited: true,
             rateLimitedText: outcome.rateLimitedText,
           };

@@ -11,6 +11,15 @@ import {
   markStatusSaved,
   setFailedReasonCode,
 } from "../common/failed-reason.js";
+
+function isBookingPhoneSelectionRateLimitError(error: unknown): boolean {
+  return (
+    error !== null &&
+    typeof error === "object" &&
+    (error as { _bookingPhoneSelectionRateLimit?: boolean })._bookingPhoneSelectionRateLimit ===
+      true
+  );
+}
 import {
   dualLogError,
   dualLogInfo,
@@ -77,6 +86,8 @@ export interface ScrapingResult {
   data?: any;
   error?: string;
   screenshots?: string[];
+  /** Booking.com phone-selection rate limit — retry after pause (see booking-scraper). */
+  bookingPhoneSelectionRateLimit?: boolean;
 }
 
 export abstract class BaseScraper {
@@ -388,6 +399,8 @@ export abstract class BaseScraper {
         success: false,
         error: error instanceof Error ? error.message : "Unknown error",
         screenshots: [`${this.platform}-error-${Date.now()}.png`],
+        bookingPhoneSelectionRateLimit:
+          isBookingPhoneSelectionRateLimitError(error),
       };
     } finally {
       // Cleanup
