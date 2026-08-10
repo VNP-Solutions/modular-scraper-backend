@@ -19,10 +19,13 @@
  * }
  * ```
  *
- * Email Pattern Example:
+ * Email Pattern Examples:
  * From: Agoda <no-reply@account.agoda.com>
  * Subject: Your PIN code for logging into YCS
  * Content: "Your PIN code for logging into YCS is 056 721"
+ *
+ * Subject: Your PIN code for Partner Portal
+ * Content: "Your one-time PIN code is: 469867"
  */
 
 import dotenv from "dotenv";
@@ -98,17 +101,20 @@ function isAgodaOtpEmail(headers: any[], snippet: string): boolean {
     fromValue.includes("agoda") ||
     fromValue.includes("no-reply@account.agoda.com");
 
-  // Check if it's an OTP/PIN related email
+  // Check if it's an OTP/PIN related email (YCS and Partner Portal templates)
   const isOtpEmail =
     subjectValue.includes("pin") ||
     subjectValue.includes("otp") ||
     subjectValue.includes("code") ||
     subjectValue.includes("passcode") ||
     subjectValue.includes("ycs") ||
+    subjectValue.includes("partner portal") ||
     snippet.includes("PIN code") ||
     snippet.includes("OTP") ||
     snippet.includes("passcode") ||
-    snippet.includes("logging into YCS");
+    snippet.includes("logging into YCS") ||
+    snippet.includes("Partner Portal") ||
+    snippet.includes("one-time PIN code");
 
   return isFromAgoda && isOtpEmail;
 }
@@ -121,6 +127,13 @@ async function extractOtpCode(emailBody: string): Promise<string | null> {
 
   // Look for various patterns of OTP codes - ordered by priority (most specific first)
   const otpPatterns = [
+    // ULTRA HIGH PRIORITY: Partner Portal template (current format)
+    /Your one-time PIN code is:\s*(\d{6})/gi,
+    /one-time PIN code is:\s*(\d{6})/gi,
+    /Your PIN code for Partner Portal[\s\S]*?(\d{6})/gi,
+    /PIN code for Partner Portal[\s\S]*?(\d{6})/gi,
+    /(\d{6})(?:\s*Please enter this PIN code in Partner Portal)/gi,
+
     // ULTRA HIGH PRIORITY: Find non-commented spans (actual visible OTP)
     /(?:Your PIN code|PIN code)[\s\S]*?YCS is[\s\S]*?<span>(\d{3})<\/span>\s*<span>(\d{3})<\/span>/gi,
 
@@ -160,9 +173,13 @@ async function extractOtpCode(emailBody: string): Promise<string | null> {
   await dualLogInfo(`📄 Email preview: ${preview}...`);
 
   // Look for the specific Agoda PIN text in the email
-  const pinTextMatch = emailBody.match(
+  const partnerPortalMatch = emailBody.match(
+    /Your one-time PIN code is:\s*(\d{6})/i
+  );
+  const ycsPinTextMatch = emailBody.match(
     /Your PIN code for logging into YCS is[\s\S]*?(\d{3}\s+\d{3})/i
   );
+  const pinTextMatch = partnerPortalMatch || ycsPinTextMatch;
   if (pinTextMatch) {
     await dualLogInfo(
       `🎯 Found Agoda PIN context: "${pinTextMatch[0]}" -> Code: ${pinTextMatch[1]}`
@@ -445,9 +462,9 @@ export async function getAgodaOtpCode(
     const gmail = google.gmail({ version: "v1", auth: oauth2Client });
 
     // Search for emails from Agoda with OTP/PIN related content (sorted by newest first)
-    // Include "passcode" to catch "One-time passcode for YCS login" emails
+    // Include passcode / Partner Portal to catch current and legacy OTP email subjects
     let searchQuery =
-      "from:agoda.com OR from:no-reply@account.agoda.com subject:(PIN OR OTP OR code OR passcode OR YCS)";
+      "from:agoda.com OR from:no-reply@account.agoda.com subject:(PIN OR OTP OR code OR passcode OR YCS OR \"Partner Portal\")";
     
     // Add recipient email filter if provided
     if (recipientEmail) {

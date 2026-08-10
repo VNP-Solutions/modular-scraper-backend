@@ -3,11 +3,14 @@
  *
  * This module provides functionality to extract OTP (PIN) codes from Agoda YCS retrieval emails.
  *
- * Email Pattern:
+ * Email Pattern Examples:
  * From: Agoda <no-reply@account.agoda.com>
  * To: user_email (agodausername)
- * Subject: "One-time passcode for YCS login"
+ * Subject: "One-time passcode for YCS login" (legacy)
  * Body: Contains "Your PIN code for YCS login" and a 6-digit code
+ *
+ * Subject: "Your PIN code for Partner Portal" (current)
+ * Body: "Your one-time PIN code is: 469867"
  *
  * Usage:
  * ```typescript
@@ -129,18 +132,21 @@ function isYcsRetrievalOtpEmail(
   // Check if it's sent to the user's email
   const isToUser = toValue.includes(userEmailLower);
 
-  // Check subject
-  const hasCorrectSubject = subjectValue.includes(
-    "one-time passcode for ycs login"
-  );
-
-  // Check if it mentions YCS login PIN
-  const hasYcsPinText =
+  // Accept legacy YCS and current Partner Portal OTP email subjects/snippets
+  const isOtpRelated =
+    subjectValue.includes("one-time passcode for ycs login") ||
+    subjectValue.includes("pin code for partner portal") ||
+    subjectValue.includes("partner portal") ||
+    subjectValue.includes("pin") ||
+    subjectValue.includes("passcode") ||
+    subjectValue.includes("ycs") ||
     snippet.includes("PIN code for YCS login") ||
     snippet.includes("one-time PIN code") ||
-    snippet.includes("YCS login");
+    snippet.includes("YCS login") ||
+    snippet.includes("Partner Portal") ||
+    snippet.includes("PIN code for Partner Portal");
 
-  return isFromAgoda && isToUser && hasCorrectSubject && hasYcsPinText;
+  return isFromAgoda && isToUser && isOtpRelated;
 }
 
 /**
@@ -159,13 +165,16 @@ async function extractYcsRetrievalOtpCode(
   const preview = emailBody.substring(0, 500).replace(/\s+/g, " ");
   await dualLogInfo(`📄 Email preview: ${preview}...`);
 
-  // Priority patterns for YCS retrieval OTP emails
+  // Priority patterns for YCS retrieval and Partner Portal OTP emails
   const otpPatterns = [
-    // ULTRA HIGH PRIORITY: "Your one-time PIN code is:" followed by 6 digits (exact format from email)
+    // ULTRA HIGH PRIORITY: Partner Portal template (current format)
     /Your one-time PIN code is:\s*(\d{6})/gi,
     /one-time PIN code is:\s*(\d{6})/gi,
+    /Your PIN code for Partner Portal[\s\S]*?(\d{6})/gi,
+    /PIN code for Partner Portal[\s\S]*?(\d{6})/gi,
+    /(\d{6})(?:\s*Please enter this PIN code in Partner Portal)/gi,
 
-    // HIGHEST PRIORITY: "Your PIN code for YCS login" followed by 6 digits
+    // HIGHEST PRIORITY: "Your PIN code for YCS login" followed by 6 digits (legacy)
     /Your PIN code for YCS login[\s\S]*?(\d{6})/gi,
     /PIN code for YCS login[\s\S]*?(\d{6})/gi,
 
@@ -285,9 +294,8 @@ export async function getYcsRetrievalOtpCode(
 
     const gmail = google.gmail({ version: "v1", auth: oauth2Client });
 
-    // Search for emails from Agoda with YCS retrieval OTP subject
-    // Search by subject and sender
-    const searchQuery = `from:no-reply@account.agoda.com subject:"One-time passcode for YCS login" to:${userEmail}`;
+    // Search legacy YCS and current Partner Portal OTP subjects
+    const searchQuery = `from:no-reply@account.agoda.com subject:(PIN OR passcode OR "Partner Portal" OR YCS) to:${userEmail}`;
 
     await dualLogInfo(
       `🔍 Searching for YCS retrieval OTP emails with query: ${searchQuery}`
