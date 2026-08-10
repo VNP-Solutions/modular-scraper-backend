@@ -1,26 +1,13 @@
 /**
  * Agoda YCS Retrieval Email OTP Helper
  *
- * This module provides functionality to extract OTP (PIN) codes from Agoda YCS retrieval emails.
+ * Extracts OTP (PIN) codes from Agoda payout/retrieval emails via Gmail API.
  *
- * Email Pattern Examples:
- * From: Agoda <no-reply@account.agoda.com>
- * To: user_email (agodausername)
- * Subject: "One-time passcode for YCS login" (legacy)
- * Body: Contains "Your PIN code for YCS login" and a 6-digit code
- *
- * Subject: "Your PIN code for Partner Portal" (current)
- * Body: "Your one-time PIN code is: 469867"
- *
- * Usage:
- * ```typescript
- * import { getYcsRetrievalOtpCode } from './retriveal-email.js';
- *
- * const result = await getYcsRetrievalOtpCode('user@example.com');
- * if (result.otpCode) {
- *   console.log('OTP Code:', result.otpCode);
- * }
- * ```
+ * Partner Portal OTP email structure (HTML):
+ * - Subject: "Your PIN code for Partner Portal"
+ * - OTP in styled cell: background-color:#f5f7fc, letter-spacing:8px
+ * - Text: "Your one-time PIN code is:" followed by 6-digit code
+ * - Footer contains Singapore postal code 049712 (NOT the OTP)
  */
 
 import dotenv from "dotenv";
@@ -31,9 +18,6 @@ import { oauth2Client } from "../../config/google-config.js";
 
 dotenv.config();
 
-/**
- * Interface for YCS Retrieval OTP extraction result
- */
 export interface YcsRetrievalOtpResult {
   otpCode: string | null;
   emailFound: boolean;
@@ -41,22 +25,35 @@ export interface YcsRetrievalOtpResult {
   emailDate?: string;
 }
 
-/**
- * Load Gmail credentials and set them on oauth2Client
- */
+const BLOCKED_OTP_VALUES = new Set([
+  "737373",
+  "123456",
+  "000000",
+  "111111",
+  "222222",
+  "333333",
+  "444444",
+  "555555",
+  "666666",
+  "777777",
+  "888888",
+  "999999",
+  "049712", // Agoda Singapore postal code in email footer
+  "200506", // Company registration number prefix in footer
+]);
+
 async function loadCredentials(): Promise<boolean> {
   try {
     const tokenPath = process.env.TOKEN_PATH || "token.json";
 
     if (!fs.existsSync(tokenPath)) {
       throw new Error(
-        `Token file not found at ${tokenPath}. Please complete authentication setup first.`
+        `Token file not found at ${tokenPath}. Please run the authentication setup first.`
       );
     }
 
     const token = JSON.parse(fs.readFileSync(tokenPath, "utf8"));
 
-    // Check if refresh token exists
     if (!token.refresh_token) {
       throw new Error(
         "No refresh token found. Please re-authenticate with offline access."
@@ -74,41 +71,83 @@ async function loadCredentials(): Promise<boolean> {
   }
 }
 
-/**
- * Get email body from Gmail message payload
- */
-function getEmailBody(payload: any): string {
-  let body = "";
+function normalizeEmailText(emailBody: string): string {
+  return emailBody
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n")
+    .replace(/<\/div>/gi, "\n")
+    .replace(/<\/td>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/\u00a0/g, " ")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n\s*\n/g, "\n")
+    .trim();
+}
 
-  if (payload.body?.data) {
-    // Plain text or HTML body
-    body = Buffer.from(payload.body.data, "base64").toString("utf-8");
-  } else if (payload.parts) {
-    // Multipart message
-    for (const part of payload.parts) {
-      if (part.mimeType === "text/plain" || part.mimeType === "text/html") {
-        if (part.body?.data) {
-          body += Buffer.from(part.body.data, "base64").toString("utf-8");
-        }
-      } else if (part.parts) {
-        // Nested parts
-        body += getEmailBody(part);
+function getEmailBody(payload: any): { plain: string; html: string } {
+  let plainText = "";
+  let htmlText = "";
+
+  function collectParts(node: any): void {
+    if (node.body?.data) {
+      const decoded = Buffer.from(node.body.data, "base64").toString("utf-8");
+      if (node.mimeType === "text/plain") {
+        plainText += decoded + "\n";
+      } else if (node.mimeType === "text/html") {
+        htmlText += decoded + "\n";
+      }
+    }
+
+    if (node.parts && Array.isArray(node.parts)) {
+      for (const part of node.parts) {
+        collectParts(part);
       }
     }
   }
 
-  return body;
+  collectParts(payload);
+
+  return {
+    plain: plainText.trim(),
+    html: htmlText.trim(),
+  };
 }
 
-/**
- * Check if an email matches YCS retrieval OTP email criteria
- */
+function isSignInLinkEmail(subjectValue: string, snippet: string): boolean {
+  return (
+    subjectValue.includes("sign-in link") ||
+    subjectValue.includes("sign in link") ||
+    (subjectValue.includes("sign-in") && !subjectValue.includes("pin")) ||
+    (subjectValue.includes("sign in") &&
+      !subjectValue.includes("pin") &&
+      !subjectValue.includes("passcode")) ||
+    snippet.includes("sign in to") ||
+    snippet.includes("verification link")
+  );
+}
+
+function isOtpPinEmail(subjectValue: string, snippet: string): boolean {
+  if (isSignInLinkEmail(subjectValue, snippet)) {
+    return false;
+  }
+
+  return (
+    subjectValue.includes("pin code for partner portal") ||
+    subjectValue.includes("one-time passcode for ycs login") ||
+    (subjectValue.includes("passcode") && subjectValue.includes("ycs")) ||
+    snippet.includes("one-time PIN code is") ||
+    snippet.includes("PIN code for YCS login") ||
+    snippet.includes("PIN code for Partner Portal") ||
+    snippet.includes("Please enter this PIN code in Partner Portal")
+  );
+}
+
 function isYcsRetrievalOtpEmail(
   headers: any[],
   snippet: string,
   userEmail: string
 ): boolean {
-  // Check sender
   const fromHeader = headers.find((h) => h.name?.toLowerCase() === "from");
   const toHeader = headers.find((h) => h.name?.toLowerCase() === "to");
   const subjectHeader = headers.find(
@@ -122,148 +161,120 @@ function isYcsRetrievalOtpEmail(
   const fromValue = fromHeader.value.toLowerCase();
   const toValue = toHeader.value.toLowerCase();
   const subjectValue = subjectHeader.value.toLowerCase();
-  const userEmailLower = userEmail.toLowerCase();
 
-  // Check if it's from Agoda no-reply account
   const isFromAgoda =
     fromValue.includes("no-reply@account.agoda.com") ||
     fromValue.includes("agoda");
 
-  // Check if it's sent to the user's email
-  const isToUser = toValue.includes(userEmailLower);
+  const isToUser = toValue.includes(userEmail.toLowerCase());
 
-  // Accept legacy YCS and current Partner Portal OTP email subjects/snippets
-  const isOtpRelated =
-    subjectValue.includes("one-time passcode for ycs login") ||
-    subjectValue.includes("pin code for partner portal") ||
-    subjectValue.includes("partner portal") ||
-    subjectValue.includes("pin") ||
-    subjectValue.includes("passcode") ||
-    subjectValue.includes("ycs") ||
-    snippet.includes("PIN code for YCS login") ||
-    snippet.includes("one-time PIN code") ||
-    snippet.includes("YCS login") ||
-    snippet.includes("Partner Portal") ||
-    snippet.includes("PIN code for Partner Portal");
+  return isFromAgoda && isToUser && isOtpPinEmail(subjectValue, snippet);
+}
 
-  return isFromAgoda && isToUser && isOtpRelated;
+function isAddressOrFooterNumber(
+  code: string,
+  text: string,
+  matchIndex: number
+): boolean {
+  const contextStart = Math.max(0, matchIndex - 60);
+  const contextEnd = Math.min(text.length, matchIndex + code.length + 40);
+  const context = text.substring(contextStart, contextEnd).toLowerCase();
+
+  return (
+    context.includes("singapore") ||
+    context.includes("cecil street") ||
+    context.includes("prudential tower") ||
+    context.includes("registration number") ||
+    context.includes("copyright") ||
+    context.includes("postal")
+  );
+}
+
+function validateOtpCode(
+  code: string,
+  text: string,
+  matchIndex: number
+): string | null {
+  const cleanOtp = code.replace(/\s+/g, "");
+
+  if (!/^\d{6}$/.test(cleanOtp)) {
+    return null;
+  }
+
+  if (BLOCKED_OTP_VALUES.has(cleanOtp)) {
+    return null;
+  }
+
+  if (isAddressOrFooterNumber(cleanOtp, text, matchIndex)) {
+    return null;
+  }
+
+  return cleanOtp;
 }
 
 /**
- * Extract OTP/PIN code from YCS retrieval email body
+ * Extract OTP using context-anchored patterns only (never generic 6-digit scan)
  */
+function extractOtpFromText(text: string): string | null {
+  const otpPatterns: RegExp[] = [
+    // Partner Portal HTML OTP box (background-color:#f5f7fc cell)
+    /background-color:#f5f7fc[\s\S]{0,400}?>(\s*\d{6}\s*)</gi,
+    /letter-spacing:8px[\s\S]{0,200}?>(\s*\d{6}\s*)</gi,
+
+    // Partner Portal text patterns (plain text + normalized HTML)
+    /Your one-time PIN code is:\s*(\d{6})/gi,
+    /one-time PIN code is:\s*(\d{6})/gi,
+    /one-time PIN code is:[\s\S]{0,500}?(\d{6})/gi,
+    /(\d{6})\s*Please enter this PIN code in Partner Portal/gi,
+
+    // Legacy YCS
+    /Your PIN code for YCS login[\s\S]{0,200}?(\d{6})/gi,
+    /PIN code for YCS login[\s\S]{0,200}?(\d{6})/gi,
+    /(\d{6})\s*Please enter this code on the YCS/gi,
+  ];
+
+  for (const pattern of otpPatterns) {
+    for (const match of text.matchAll(pattern)) {
+      const rawCode = match[1]?.trim();
+      if (!rawCode) {
+        continue;
+      }
+
+      const validOtp = validateOtpCode(
+        rawCode,
+        text,
+        match.index ?? 0
+      );
+
+      if (validOtp) {
+        return validOtp;
+      }
+    }
+  }
+
+  return null;
+}
+
 async function extractYcsRetrievalOtpCode(
-  emailBody: string
+  plainBody: string,
+  htmlBody: string
 ): Promise<string | null> {
   await dualLogInfo(
     "🔍 Searching for OTP/PIN code in YCS retrieval email body..."
   );
 
-  await dualLogInfo(`📧 Email body length: ${emailBody.length} characters`);
+  const normalizedHtml = htmlBody ? normalizeEmailText(htmlBody) : "";
+  const bodies = [plainBody, htmlBody, normalizedHtml].filter(Boolean);
 
-  // Log first 500 characters for debugging
-  const preview = emailBody.substring(0, 500).replace(/\s+/g, " ");
-  await dualLogInfo(`📄 Email preview: ${preview}...`);
+  for (const body of bodies) {
+    await dualLogInfo(`📧 Trying extraction on body (${body.length} chars)`);
+    const preview = body.substring(0, 300).replace(/\s+/g, " ");
+    await dualLogInfo(`📄 Preview: ${preview}...`);
 
-  // Priority patterns for YCS retrieval and Partner Portal OTP emails
-  const otpPatterns = [
-    // ULTRA HIGH PRIORITY: Partner Portal template (current format)
-    /Your one-time PIN code is:\s*(\d{6})/gi,
-    /one-time PIN code is:\s*(\d{6})/gi,
-    /Your PIN code for Partner Portal[\s\S]*?(\d{6})/gi,
-    /PIN code for Partner Portal[\s\S]*?(\d{6})/gi,
-    /(\d{6})(?:\s*Please enter this PIN code in Partner Portal)/gi,
-
-    // HIGHEST PRIORITY: "Your PIN code for YCS login" followed by 6 digits (legacy)
-    /Your PIN code for YCS login[\s\S]*?(\d{6})/gi,
-    /PIN code for YCS login[\s\S]*?(\d{6})/gi,
-
-    // HIGH PRIORITY: "Your PIN code for YCS login" with flexible spacing
-    /Your PIN code for YCS login[\s\S]*?(\d{3}\s*\d{3})/gi,
-    /PIN code for YCS login[\s\S]*?(\d{3}\s*\d{3})/gi,
-
-    // MEDIUM PRIORITY: 6 digits after "PIN code" or "OTP"
-    /PIN code[\s\S]{0,100}?(\d{6})/gi,
-    /OTP code[\s\S]{0,100}?(\d{6})/gi,
-
-    // MEDIUM PRIORITY: Standalone 6 digits (word boundaries)
-    /\b(\d{6})\b/g,
-  ];
-
-  for (let i = 0; i < otpPatterns.length; i++) {
-    const pattern = otpPatterns[i];
-    await dualLogInfo(`🔎 Trying OTP pattern ${i + 1}/${otpPatterns.length}`);
-
-    const matches = Array.from(emailBody.matchAll(pattern));
-    if (matches.length > 0) {
-      await dualLogInfo(
-        `✅ Found ${matches.length} matches with pattern ${i + 1}`
-      );
-
-      for (const match of matches) {
-        const fullMatch = match[0];
-        let otpCode = null;
-
-        if (match[1]) {
-          otpCode = match[1].trim();
-          await dualLogInfo(
-            `🔢 Pattern ${i + 1} found: "${fullMatch}" -> Code: ${otpCode}`
-          );
-        }
-
-        if (otpCode) {
-          // Clean up the code (remove spaces if any)
-          let cleanOtp = otpCode.replace(/\s+/g, "");
-
-          // Handle "3 digits + 3 digits" format (e.g., "068 913" -> "068913")
-          if (cleanOtp.length === 6 && /^\d{6}$/.test(cleanOtp)) {
-            // Already 6 digits, use as is
-          } else if (cleanOtp.length > 6) {
-            // Might have extra characters, try to extract just 6 digits
-            const digitMatch = cleanOtp.match(/(\d{6})/);
-            if (digitMatch) {
-              cleanOtp = digitMatch[1];
-            }
-          }
-
-          // Validate it's 6 digits AND not a known template value
-          if (/^\d{6}$/.test(cleanOtp)) {
-            // Filter out known template/CSS values
-            const templateValues = [
-              "737373", // CSS gray color
-              "123456", // Template example
-              "000000", // CSS black color
-              "111111", // Template example
-              "222222", // Template example
-              "333333", // CSS dark gray
-              "444444", // CSS gray
-              "555555", // CSS gray
-              "666666", // CSS gray
-              "777777", // CSS gray
-              "888888", // CSS gray
-              "999999", // CSS light gray
-              "ffffff", // CSS white
-              "FFFFFF", // CSS white
-            ];
-
-            if (templateValues.includes(cleanOtp)) {
-              await dualLogInfo(
-                `❌ Skipping template/CSS value: ${cleanOtp} (not a real OTP)`
-              );
-              continue; // Skip this match and try the next one
-            }
-
-            await dualLogInfo(`✅ Valid 6-digit OTP code found: ${cleanOtp}`);
-            return cleanOtp;
-          } else {
-            await dualLogInfo(
-              `❌ Invalid OTP format: ${otpCode} (not 6 digits)`
-            );
-          }
-        }
-      }
-    } else {
-      await dualLogInfo(`❌ No matches found with pattern ${i + 1}`);
+    const otp = extractOtpFromText(body);
+    if (otp) {
+      await dualLogInfo(`✅ Valid 6-digit OTP code found: ${otp}`);
+      return otp;
     }
   }
 
@@ -271,20 +282,12 @@ async function extractYcsRetrievalOtpCode(
   return null;
 }
 
-/**
- * Get YCS Retrieval OTP code from recent emails
- * @param userEmail - The user's email address (agodausername) to filter emails
- * @param maxResults - Maximum number of emails to check (default: 5)
- * @param referenceCode - Optional reference code (extracted from page for logging, but NOT used for email matching as it's not in the email)
- * @returns Promise<YcsRetrievalOtpResult> - OTP code and email information
- */
 export async function getYcsRetrievalOtpCode(
   userEmail: string,
   maxResults: number = 5,
   referenceCode?: string
 ): Promise<YcsRetrievalOtpResult> {
   try {
-    // Load credentials before making API calls
     const credentialsLoaded = await loadCredentials();
     if (!credentialsLoaded) {
       throw new Error(
@@ -294,41 +297,39 @@ export async function getYcsRetrievalOtpCode(
 
     const gmail = google.gmail({ version: "v1", auth: oauth2Client });
 
-    // Search legacy YCS and current Partner Portal OTP subjects
-    const searchQuery = `from:no-reply@account.agoda.com subject:(PIN OR passcode OR "Partner Portal" OR YCS) to:${userEmail}`;
+    const searchQuery = `from:no-reply@account.agoda.com (subject:"PIN code for Partner Portal" OR subject:"One-time passcode for YCS login" OR subject:passcode) -subject:"sign-in" -subject:"sign in link" to:${userEmail}`;
 
     await dualLogInfo(
       `🔍 Searching for YCS retrieval OTP emails with query: ${searchQuery}`
     );
 
+    if (referenceCode) {
+      await dualLogInfo(
+        `📋 Reference code from page (logging only): ${referenceCode}`
+      );
+    }
+
     const res = await gmail.users.messages.list({
       userId: "me",
       maxResults,
       q: searchQuery,
-      // Gmail returns messages in reverse chronological order (newest first) by default
     });
 
     if (!res.data.messages || res.data.messages.length === 0) {
       await dualLogInfo(`No YCS retrieval OTP emails found for ${userEmail}.`);
-      return {
-        otpCode: null,
-        emailFound: false,
-      };
+      return { otpCode: null, emailFound: false };
     }
 
     await dualLogInfo(
-      `Found ${res.data.messages.length} potential YCS retrieval OTP emails (processing newest first)`
+      `Found ${res.data.messages.length} potential OTP emails (newest first)`
     );
 
-    // Note: Reference code is NOT included in payout OTP emails, so we only filter by recipient email
-    // Check each email for OTP code (emails are already sorted newest first)
     for (let i = 0; i < res.data.messages.length; i++) {
       const msg = res.data.messages[i];
       await dualLogInfo(
-        `📧 Processing email ${i + 1}/${
-          res.data.messages.length
-        } (newest first)`
+        `📧 Processing email ${i + 1}/${res.data.messages.length}`
       );
+
       if (!msg.id) {
         continue;
       }
@@ -342,45 +343,39 @@ export async function getYcsRetrievalOtpCode(
 
         const headers = email.data.payload?.headers || [];
         const snippet = email.data.snippet || "";
+        const subjectHeader = headers.find(
+          (h) => h.name?.toLowerCase() === "subject"
+        );
+        const subjectValue = (subjectHeader?.value || "").toLowerCase();
 
-        // Verify this is actually a YCS retrieval OTP email
-        if (!isYcsRetrievalOtpEmail(headers, snippet, userEmail)) {
+        if (isSignInLinkEmail(subjectValue, snippet)) {
           await dualLogInfo(
-            `Skipping email ${i + 1} - doesn't match YCS retrieval OTP criteria`
+            `Skipping sign-in link email: ${subjectHeader?.value || "unknown"}`
           );
           continue;
         }
 
-        const subjectHeader = headers.find(
-          (h) => h.name?.toLowerCase() === "subject"
-        );
+        if (!isYcsRetrievalOtpEmail(headers, snippet, userEmail)) {
+          await dualLogInfo(
+            `Skipping non-OTP email: ${subjectHeader?.value || "unknown"}`
+          );
+          continue;
+        }
+
         const dateHeader = headers.find(
           (h) => h.name?.toLowerCase() === "date"
         );
 
         await dualLogInfo(
-          `Processing YCS retrieval OTP email: ${
-            subjectHeader?.value || "Unknown subject"
-          }`
+          `Processing OTP email: ${subjectHeader?.value || "Unknown subject"}`
         );
 
         if (dateHeader?.value) {
           await dualLogInfo(`📅 Email date: ${dateHeader.value}`);
         }
 
-        // Get full email body
-        const fullBody = getEmailBody(email.data.payload);
-
-        // Log a preview of the email body for debugging
-        const bodyPreview = fullBody.substring(0, 200).replace(/\s+/g, " ");
-        await dualLogInfo(`📄 Email body preview: ${bodyPreview}...`);
-
-        // Note: Reference code is NOT included in payout OTP emails
-        // We only filter by recipient email address (already done in Gmail search query)
-        // So we proceed directly to extract OTP code
-
-        // Extract OTP code
-        const otpCode = await extractYcsRetrievalOtpCode(fullBody);
+        const { plain, html } = getEmailBody(email.data.payload);
+        const otpCode = await extractYcsRetrievalOtpCode(plain, html);
 
         if (otpCode) {
           await dualLogInfo(`✅ YCS Retrieval OTP code found: ${otpCode}`);
@@ -390,29 +385,18 @@ export async function getYcsRetrievalOtpCode(
             emailSubject: subjectHeader?.value || undefined,
             emailDate: dateHeader?.value || undefined,
           };
-        } else {
-          await dualLogInfo(
-            "No OTP code found in this email, checking next..."
-          );
         }
+
+        await dualLogInfo("No OTP in this email, checking next...");
       } catch (emailError) {
         await dualLogError(`Error processing email ${msg.id}:`, emailError);
-        continue;
       }
     }
 
-    await dualLogInfo(
-      "No OTP code found in any recent YCS retrieval OTP emails."
-    );
-    return {
-      otpCode: null,
-      emailFound: true, // Email was found but no OTP code extracted
-    };
+    await dualLogInfo("No OTP code found in any recent OTP emails.");
+    return { otpCode: null, emailFound: true };
   } catch (error) {
     await dualLogError("Error fetching YCS retrieval OTP code:", error);
-    return {
-      otpCode: null,
-      emailFound: false,
-    };
+    return { otpCode: null, emailFound: false };
   }
 }
