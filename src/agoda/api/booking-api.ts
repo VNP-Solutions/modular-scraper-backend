@@ -4,6 +4,9 @@ import { BROWSER_CONFIG } from "../../common/browser-constants.js";
 import { delay } from "../../common/delay.js";
 import { dualLogError, dualLogInfo } from "../../common/log-helper.js";
 
+/** Agoda migrated YCS from ycs.agoda.com to portal.agoda.com (307 redirect) */
+const AGODA_PORTAL_ORIGIN = "https://portal.agoda.com";
+
 // Interface for CSV record mapping (shared with booking-data.ts)
 export interface CsvRecord {
   BookingIDExternal_reference_ID: string;
@@ -114,6 +117,15 @@ function convertDateToTimestamp(dateString: string): number {
   return date.getTime();
 }
 
+/** Converts YYYY-MM-DD or MM/DD/YYYY to DD-MM-YYYY for Agoda Referer URLs */
+function toAgodaRefererDate(dateString: string): string {
+  const date = parseCsvDate(dateString);
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const year = date.getUTCFullYear();
+  return `${day}-${month}-${year}`;
+}
+
 /**
  * Extracts cookies from Puppeteer page
  * @param page - Puppeteer page object
@@ -136,13 +148,13 @@ async function extractCookiesFromPage(
       throw new Error("No cookies found on page");
     }
 
-    // Filter cookies for ycs.agoda.com domain
+    // Filter cookies for agoda.com domain (portal.agoda.com / ycs.agoda.com)
     const agodaCookies = cookies.filter(
       (cookie) =>
         cookie.domain.includes("agoda.com") ||
+        cookie.domain.includes("portal.agoda.com") ||
         cookie.domain.includes("ycs.agoda.com") ||
-        cookie.domain === ".agoda.com" ||
-        cookie.domain === "ycs.agoda.com"
+        cookie.domain === ".agoda.com"
     );
 
     // If no domain-specific cookies, use all cookies
@@ -371,8 +383,12 @@ export async function fetchBookingDataFromAPI(
     const startTimestamp = convertDateToTimestamp(startDate);
     const endTimestamp = convertDateToTimestamp(endDate);
 
-    // Construct API URL
-    const apiUrl = `https://ycs.agoda.com/mldc/en-us/api/reporting/Booking/list/${agodaId}`;
+    const refererStartDate = toAgodaRefererDate(startDate);
+    const refererEndDate = toAgodaRefererDate(endDate);
+
+    // Construct API URL (portal.agoda.com — ycs.agoda.com now 307-redirects here)
+    const apiUrl = `${AGODA_PORTAL_ORIGIN}/mldc/en-us/api/reporting/Booking/list/${agodaId}`;
+    const refererUrl = `${AGODA_PORTAL_ORIGIN}/mldc/en-us/app/reporting/booking/${agodaId}?bookingType=confirmed%2Camended&startDate=${refererStartDate}&endDate=${refererEndDate}`;
 
     const headers = {
       Accept: "application/json, text/plain, */*",
@@ -381,8 +397,8 @@ export async function fetchBookingDataFromAPI(
       "Content-Type": "application/json-patch+json",
       Cookie: cookieString,
       DNT: "1",
-      Origin: "https://ycs.agoda.com",
-      Referer: `https://ycs.agoda.com/mldc/en-us/app/reporting/booking/${agodaId}`,
+      Origin: AGODA_PORTAL_ORIGIN,
+      Referer: refererUrl,
       "Request-Id": requestId,
       "User-Agent": browserSettings.userAgent,
       "sec-ch-ua": browserSettings.secChUa,
@@ -394,33 +410,32 @@ export async function fetchBookingDataFromAPI(
       traceparent: traceParent,
     };
 
-    const stayDatePeriod = {
+    const checkInDatePeriod = {
       from: `/Date(${startTimestamp})/`,
       to: `/Date(${endTimestamp})/`,
     };
 
-    // Try 1: with bookingDatePeriod & lastUpdateDatePeriod (some properties need this)
-    const bodyWithPeriods = {
+    // Current portal API format (as of Aug 2026)
+    const body = {
       hotelId: parseInt(agodaId, 10),
       customerName: "",
-      ackRequestTypes: ["All"],
-      bookingDatePeriod: {},
-      stayDatePeriod,
-      lastUpdateDatePeriod: {},
+      ackRequestTypes: ["ConfirmBooking", "AmendBooking"],
+      checkInDatePeriod,
       pageIndex: 1,
       pageSize: 1000,
+      sortBy: "stay_date__asc",
     };
 
-    await dualLogInfo("Making API request (with bookingDatePeriod/lastUpdateDatePeriod)", {
+    await dualLogInfo("Making API request to portal.agoda.com", {
       url: apiUrl,
-      body: bodyWithPeriods,
+      body,
       jobId,
     });
 
     let response = await fetch(apiUrl, {
       method: "POST",
       headers,
-      body: JSON.stringify(bodyWithPeriods),
+      body: JSON.stringify(body),
     });
 
     if (!response.ok) {
@@ -438,23 +453,23 @@ export async function fetchBookingDataFromAPI(
     let list = extractBookingsArray(responseData);
 
     if (!list || list.length === 0) {
-      // Try 2: browser-style body without period filters (some properties need this)
-      const bodyWithoutPeriods = {
+      // Fallback: legacy body shape (stayDatePeriod + ackRequestTypes All)
+      const legacyBody = {
         hotelId: parseInt(agodaId, 10),
         customerName: "",
         ackRequestTypes: ["All"],
-        stayDatePeriod,
+        stayDatePeriod: checkInDatePeriod,
         pageIndex: 1,
         pageSize: 1000,
       };
-      await dualLogInfo("No bookings from first request, retrying with browser-style body (no period filters)", {
+      await dualLogInfo("No bookings from portal request, retrying with legacy body shape", {
         url: apiUrl,
         jobId,
       });
       response = await fetch(apiUrl, {
         method: "POST",
         headers: { ...headers, "Request-Id": generateRequestId(), traceparent: generateTraceParent() },
-        body: JSON.stringify(bodyWithoutPeriods),
+        body: JSON.stringify(legacyBody),
       });
       if (!response.ok) {
         const errorText = await response.text();
@@ -539,10 +554,10 @@ export async function fetchBookingSummary(
 
     // Construct API URL - bookingToken should already be URL encoded from the API response
     const encodedToken = encodeURIComponent(bookingToken);
-    const apiUrl = `https://ycs.agoda.com/mldc/en-us/api/reporting/Booking/details/${agodaId}/bookingSummary?bookingToken=${encodedToken}`;
+    const apiUrl = `${AGODA_PORTAL_ORIGIN}/mldc/en-us/api/reporting/Booking/details/${agodaId}/bookingSummary?bookingToken=${encodedToken}`;
 
-    // Build Referer header with date parameters (matching exact Postman format)
-    let refererUrl = `https://ycs.agoda.com/mldc/en-us/app/reporting/booking/${agodaId}`;
+    // Build Referer header with date parameters (matching browser format)
+    let refererUrl = `${AGODA_PORTAL_ORIGIN}/mldc/en-us/app/reporting/booking/${agodaId}`;
     if (startDate && endDate) {
       refererUrl += `?startDate=${startDate}&endDate=${endDate}`;
     }

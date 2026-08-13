@@ -164,7 +164,7 @@ export async function browserSetupProduction(
           );
         } else if (platform === "agoda") {
           // Navigate directly to the login page to avoid redirect timing issues
-          await page.goto("https://ycs.agoda.com/mldc/en-us/public/login", {
+          await page.goto("https://portal.agoda.com/mldc/en-us/public/login", {
             waitUntil: "networkidle2", // Wait for network to be idle to handle redirects
             timeout: 0, // No timeout for Agoda navigation
           });

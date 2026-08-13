@@ -566,7 +566,7 @@ export async function getAgodaBookingData(
     );
 
     // Construct the booking URL with agoda_id and date range using converted dates
-    const bookingUrl = `https://ycs.agoda.com/mldc/en-us/app/reporting/booking/${agodaId}?startDate=${formattedStartDate}&endDate=${formattedEndDate}`;
+    const bookingUrl = `https://portal.agoda.com/mldc/en-us/app/reporting/booking/${agodaId}?bookingType=confirmed%2Camended&startDate=${formattedStartDate}&endDate=${formattedEndDate}`;
     await dualLogInfo(`Navigating to booking data URL: ${bookingUrl}`);
 
     await delay(5000);

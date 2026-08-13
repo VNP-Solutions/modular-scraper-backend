@@ -155,29 +155,27 @@ async function extractSignInLink(emailBody: string): Promise<string | null> {
 
         await dualLogInfo(`🔗 Checking link: ${cleanLink}`);
 
-        // Highest priority: YCS links with token (the actual sign-in button)
-        if (
-          cleanLink.includes("ycs.agoda.com") &&
-          cleanLink.includes("token")
-        ) {
+        const isAgodaPortalLink =
+          cleanLink.includes("portal.agoda.com") ||
+          cleanLink.includes("ycs.agoda.com");
+
+        // Highest priority: portal/YCS links with token (the actual sign-in button)
+        if (isAgodaPortalLink && cleanLink.includes("token")) {
           await dualLogInfo(
-            `✅ Found YCS sign-in link with token: ${cleanLink}`
+            `✅ Found Agoda portal sign-in link with token: ${cleanLink}`
           );
           return cleanLink;
         }
 
-        // Second priority: YCS links with login endpoint
-        if (
-          cleanLink.includes("ycs.agoda.com") &&
-          cleanLink.includes("/login")
-        ) {
-          await dualLogInfo(`✅ Found YCS login link: ${cleanLink}`);
+        // Second priority: portal/YCS links with login endpoint
+        if (isAgodaPortalLink && cleanLink.includes("/login")) {
+          await dualLogInfo(`✅ Found Agoda portal login link: ${cleanLink}`);
           return cleanLink;
         }
 
-        // Third priority: YCS domain links
-        if (cleanLink.includes("ycs.agoda.com")) {
-          await dualLogInfo(`🔗 Found YCS link (may be logo): ${cleanLink}`);
+        // Third priority: portal/YCS domain links
+        if (isAgodaPortalLink) {
+          await dualLogInfo(`🔗 Found Agoda portal link (may be logo): ${cleanLink}`);
           // Don't return immediately, continue looking for better matches
         }
 

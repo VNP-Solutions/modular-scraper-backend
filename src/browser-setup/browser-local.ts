@@ -291,7 +291,7 @@ export async function browserSetupLocal(
             }
           );
         } else if (platform === "agoda") {
-          await page.goto("https://ycs.agoda.com", {
+          await page.goto("https://portal.agoda.com", {
             waitUntil: "domcontentloaded",
             timeout: loadingTimeout,
           });
