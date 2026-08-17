@@ -129,55 +129,6 @@ export const BOOKING_LOGIN_SUCCESS_URLS = [
 
 export const BOOKING_LOGIN_EXCLUDE_URLS = ["sign-in"];
 
-export const ACCOUNT_LOCKED_PATTERNS = [
-  /account locked/i,
-  /we'?ve locked your.*account/i,
-  /locked your.*booking\.com account/i,
-  /nw-account-locked/i,
-  /unlock with email/i,
-];
-
-export const ACCOUNT_LOCKED_SELECTORS = {
-  unlockButton: [
-    '.nw-account-locked button[type="submit"]',
-    'form.nw-account-locked button[type="submit"]',
-    'button[type="submit"].Y2GrMepHg4YXB1IIqu9a',
-    'button.Y2GrMepHg4YXB1IIqu9a[type="submit"]',
-  ],
-  checkInboxHeader: [
-    "h1.slu34oiFrdKys6tKacjT.nw-step-header",
-    ".nw-step-header",
-    ".nw-account-recovery-confirmation h1",
-  ],
-  obscuredEmailHint: [
-    ".nw-account-recovery-confirmation strong",
-    ".bui-spacer--largest strong",
-    ".page-header strong",
-  ],
-  passwordResetForm: [
-    ".nw-reset-password",
-    "form.nw-reset-password",
-    "h1.slu34oiFrdKys6tKacjT.nw-step-header",
-  ],
-  newPasswordInput: [
-    'input[name="new_password"]',
-    "#new_password",
-    'input[type="password"][name="new_password"]',
-    '.nw-password input[type="password"]',
-  ],
-  confirmPasswordInput: [
-    'input[name="confirmed_password"]',
-    "#confirmed_password",
-    'input[type="password"][name="confirmed_password"]',
-    '.nw-confirm-password input[type="password"]',
-  ],
-  setPasswordButton: [
-    '.nw-reset-password button[type="submit"]',
-    'form.nw-reset-password button[type="submit"]',
-    'button[type="submit"].Y2GrMepHg4YXB1IIqu9a',
-  ],
-};
-
 export const PASSWORD_MISMATCH_PATTERNS = [
   /username and password.*don't match/i,
   /password.*incorrect/i,
@@ -216,21 +167,3 @@ export function matchesBookingTooManyAttempts(text: string): boolean {
   return BOOKING_TOO_MANY_ATTEMPTS_PATTERN.test(text);
 }
 
-export const PASSWORD_RECOVERY_SELECTORS = {
-  forgotPasswordButton: [
-    "button.nw-link-account-recovery",
-    'button[data-ga-label="forgot password"]',
-    ".nw-link-account-recovery",
-  ],
-  usernameRecoveryForm: ["form.nw-account-recovery", ".nw-account-recovery"],
-  usernameInput: [
-    'input[name="login_name_recovery"]',
-    "#login_name_recovery",
-    '.nw-login-name input[type="text"]',
-  ],
-  sendResetLinkButton: [
-    'form.nw-account-recovery button[type="submit"]',
-    '.nw-account-recovery button[type="submit"]',
-    'button[type="submit"].Y2GrMepHg4YXB1IIqu9a',
-  ],
-};

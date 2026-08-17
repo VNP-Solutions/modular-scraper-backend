@@ -40,10 +40,12 @@ involves a full login (captcha + 2FA) plus one search per property.
 | Logged in, property not found | `true` | `false` |
 
 Only a genuine username/password rejection sets `booking_credential_verified` to
-`false`. A Booking.com server-side failure — "too many attempts", "sign in failed,
-try again later", technical difficulties — leaves every flag untouched, because
-*could not check* is a different verdict from *no access*, and writing the latter
-would corrupt the DBMS record. When such a failure happens mid-run the remaining
+`false` — carried by the dedicated `BOOKING_INVALID_CREDENTIALS` failure code, so
+it can't be confused with the generic `BOOKING_LOGIN_FAILED` catch-all. A
+Booking.com server-side failure — "too many attempts", "sign in failed, try again
+later", technical difficulties — leaves every flag untouched, because *could not
+check* is a different verdict from *no access*, and writing the latter would
+corrupt the DBMS record. When such a failure happens mid-run the remaining
 properties are reported as `Not checked — <reason>` and are likewise left alone.
 
 Both single-property and multi-property accounts are handled: multi-property
@@ -62,8 +64,10 @@ accounts are searched through the property list, while a single-property account
 
 1. `BookingScraper.setupBrowser()` — Browserless session, or local Chrome when
    `ENVIRONMENT=local`, with anti-detection applied.
-2. `BookingScraper.login()` — resolves whatever Booking.com puts in the way:
-   captcha, account lock, forced password reset, and 2FA/OTP.
+2. `BookingScraper.login()` — resolves captcha and 2FA/OTP. If Booking.com
+   rejects the username/password it fails immediately with
+   `BOOKING_INVALID_CREDENTIALS` rather than attempting any recovery: this
+   service never resets or rotates a Booking.com password.
 3. Property list search, one `booking_id` at a time, never clicking through.
 4. `patchOtaVerificationFields()` writes only the two verification flags via
    `$set`, so no other OTA fields on the document are disturbed.

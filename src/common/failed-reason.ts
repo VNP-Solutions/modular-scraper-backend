@@ -11,6 +11,7 @@ export const FAILED_REASON = {
   BROWSER_SESSION_LOST: "BROWSER_SESSION_LOST",
   // Booking-specific
   BOOKING_LOGIN_FAILED: "BOOKING_LOGIN_FAILED",
+  BOOKING_INVALID_CREDENTIALS: "BOOKING_INVALID_CREDENTIALS",
   BOOKING_2FA_FAILED: "BOOKING_2FA_FAILED",
   BOOKING_OTP_FAILED: "BOOKING_OTP_FAILED",
   BOOKING_OTP_CODE_NOT_FOUND: "BOOKING_OTP_CODE_NOT_FOUND",
@@ -32,6 +33,9 @@ export const BOOKING_TECHNICAL_DIFFICULTIES_MESSAGE =
 
 export const BOOKING_TOO_MANY_ATTEMPTS_MESSAGE =
   '"Too many attempts – try again later" shows in booking.com';
+
+export const BOOKING_INVALID_CREDENTIALS_MESSAGE =
+  "Booking.com rejected the username/password.";
 
 const FAILED_REASON_MESSAGES: Record<FailedReasonCode, string> = {
   [FAILED_REASON.SCRAPING_STOPPED]:
@@ -57,6 +61,8 @@ const FAILED_REASON_MESSAGES: Record<FailedReasonCode, string> = {
   // Booking-specific
   [FAILED_REASON.BOOKING_LOGIN_FAILED]:
     "Booking.com login failed. Please check your credentials and try again.",
+  [FAILED_REASON.BOOKING_INVALID_CREDENTIALS]:
+    BOOKING_INVALID_CREDENTIALS_MESSAGE,
   [FAILED_REASON.BOOKING_2FA_FAILED]:
     "Booking.com two-factor authentication failed. Please try again.",
   [FAILED_REASON.BOOKING_OTP_FAILED]:
@@ -132,6 +138,33 @@ export function createBookingPhoneSelectionTooManyAttemptsError(
       visibleText;
   }
   return err;
+}
+
+/**
+ * Booking.com rejected the username/password outright. Distinct from the
+ * generic {@link FAILED_REASON.BOOKING_LOGIN_FAILED}, which is also used as a
+ * catch-all for unclassified login errors (broken selector, navigation
+ * timeout). Only this code means "the credentials themselves are wrong", so
+ * only this code may flip `booking_credential_verified` to false.
+ */
+export function createBookingInvalidCredentialsError(
+  visibleText?: string
+): Error {
+  const err = new Error(
+    visibleText
+      ? `${BOOKING_INVALID_CREDENTIALS_MESSAGE} (${visibleText})`
+      : BOOKING_INVALID_CREDENTIALS_MESSAGE
+  );
+  setFailedReasonCode(err, FAILED_REASON.BOOKING_INVALID_CREDENTIALS);
+  return err;
+}
+
+/** True when Booking.com explicitly rejected the username/password. */
+export function isBookingInvalidCredentialsError(error: any): boolean {
+  return (
+    hasFailedReasonCode(error) &&
+    error.failedReasonCode === FAILED_REASON.BOOKING_INVALID_CREDENTIALS
+  );
 }
 
 /**

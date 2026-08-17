@@ -1,12 +1,10 @@
 import mongoose from "mongoose";
 import { Page } from "puppeteer";
-import {
-  BOOKING_SELECTORS,
-  PASSWORD_MISMATCH_PATTERNS,
-} from "../common/booking-selectors.js";
+import { BOOKING_SELECTORS } from "../common/booking-selectors.js";
 import { delay } from "../common/delay.js";
 import {
   getFailedReasonForUser,
+  isBookingInvalidCredentialsError,
   isFatalBookingGroupAbortError,
 } from "../common/failed-reason.js";
 import { humanType } from "../common/human-browser-helper.js";
@@ -144,45 +142,6 @@ async function markAccessLevelFalse(propertyId: string): Promise<void> {
 }
 
 /**
- * Reads the visible sign-in error text (not bundled JS/i18n strings) so a
- * genuine credential rejection can be told apart from a Booking.com
- * server-side error. Same visible-only technique the scraper uses.
- */
-async function getVisibleLoginErrorText(page: Page): Promise<string> {
-  try {
-    return await page.evaluate((selectors) => {
-      const candidates = [
-        ...selectors.flatMap((s) => Array.from(document.querySelectorAll(s))),
-        ...Array.from(document.querySelectorAll("span.error-block")),
-      ];
-
-      for (const el of candidates) {
-        const rect = el.getBoundingClientRect();
-        if (rect.width <= 0 || rect.height <= 0) continue;
-        const text = el.textContent?.replace(/\s+/g, " ").trim();
-        if (text) return text;
-      }
-      return "";
-    }, [...BOOKING_SELECTORS.errorMessages]);
-  } catch {
-    return "";
-  }
-}
-
-/**
- * True only when Booking.com actually rejected the username/password. A
- * server-side error ("Sign in failed, try again later"), a 2FA problem or a
- * broken selector must NOT flip `booking_credential_verified` to false —
- * that would write a wrong verdict back to the DBMS.
- */
-function isCredentialRejection(visibleErrorText: string): boolean {
-  if (!visibleErrorText) return false;
-  return PASSWORD_MISMATCH_PATTERNS.some((pattern) =>
-    pattern.test(visibleErrorText)
-  );
-}
-
-/**
  * Reads the hotel id Booking.com landed on, for accounts that hold exactly one
  * property and therefore never show a property list to search.
  */
@@ -259,20 +218,22 @@ export async function checkBookingProperties(
     const { browser, page } = await scraper.setupBrowser(undefined, username);
     scraper.setBrowserData(page, browser);
 
-    // 2. Login. Captcha, account-lock and 2FA are resolved inside login().
+    // 2. Login. Captcha and 2FA are resolved inside login().
     try {
       await scraper.login({ email: username, password });
     } catch (loginError) {
-      // Only a genuine username/password rejection invalidates the
-      // credentials for every property on this account.
-      const visibleError = await getVisibleLoginErrorText(page);
-      if (isCredentialRejection(visibleError)) {
+      // Only an outright username/password rejection invalidates the
+      // credentials for every property on this account. Anything else — a
+      // Booking.com server error, a 2FA problem, a broken selector — means we
+      // could not check, which is not the same verdict as "not verified", so
+      // the flags stay untouched.
+      if (isBookingInvalidCredentialsError(loginError)) {
         await markAllCredentialUnverified(properties);
       } else {
         await dualLogInfo(
-          `[booking-property-check] Login failed without a credential rejection (visible: "${
-            visibleError || "none"
-          }") — leaving booking_credential_verified untouched.`
+          `[booking-property-check] Login failed without a credential rejection (${
+            (loginError as any)?.failedReasonCode ?? "no reason code"
+          }) — leaving booking_credential_verified untouched.`
         );
       }
       throw loginError;
