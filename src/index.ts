@@ -6,8 +6,6 @@ import app from "./app/app.js";
 import { loadAndSetCredentials } from "./common/load-token.js";
 import { setCurrentWorkerId } from "./common/log-helper.js";
 import { otpAwareWorkerPool } from "./common/otp-aware-worker-pool.js";
-import { jobQueueUrlService } from "./services/job-queue-url.service.js";
-import { bookingTrustCron } from "./services/booking-trust-cron.service.js";
 dotenv.config();
 
 // Set main thread ID for system tasks (schedulers, cron, API calls)
@@ -34,24 +32,6 @@ const connectDB = async (): Promise<void> => {
   }
 };
 
-// * Initialize job queue URLs on startup
-const initializeJobQueueUrls = async (): Promise<void> => {
-  try {
-    console.log("Initializing job queue URLs...");
-
-    // Show URL statistics (URLs are managed by another project)
-    const stats = await jobQueueUrlService.getUrlStatistics();
-    console.log("Job Queue URL Statistics:", stats);
-
-    console.log(
-      "URL status monitoring initialized. URLs are managed by another project."
-    );
-  } catch (err) {
-    console.error("Error initializing job queue URLs:", err);
-    // Don't exit the process, as this is not critical for server startup
-  }
-};
-
 // * MongoDB disconnection function
 const disconnectDB = async (): Promise<void> => {
   try {
@@ -67,9 +47,6 @@ const gracefulShutdown = async (signal: string): Promise<void> => {
   console.log(`Received ${signal}. Starting graceful shutdown...`);
 
   try {
-    console.log("Stopping booking trust scheduler...");
-    bookingTrustCron.stop();
-
     // Shutdown worker pool first
     console.log("Shutting down worker pool...");
     await otpAwareWorkerPool.shutdown();
@@ -95,12 +72,6 @@ app.listen(port, async () => {
   try {
     await connectDB();
 
-    console.log("Starting booking trust verification scheduler...");
-    bookingTrustCron.start();
-
-    // Initialize job queue URLs after database connection
-    await initializeJobQueueUrls();
-
     const tokenPath = process.env.TOKEN_PATH || "token.json";
     const ok = await loadAndSetCredentials(tokenPath);
     if (!ok) {
@@ -113,7 +84,6 @@ app.listen(port, async () => {
         otpAwareWorkerPool.getStatus().totalWorkers
       } workers`
     );
-    console.log("Booking trust verification scheduler started");
   } catch (err) {
     console.log("Server cannot be connected because of the error:");
     console.log(err);

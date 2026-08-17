@@ -29,10 +29,10 @@ const options: swaggerJsdoc.Options = {
   definition: {
     openapi: "3.0.0",
     info: {
-      title: "Module Scrapper API",
+      title: "Booking Property Check API",
       version: "1.0.0",
       description:
-        "API documentation for the Expedia property scraping service with pause/resume functionality",
+        "API documentation for the Booking.com property access check service",
       contact: {
         name: "API Support",
         email: "support@example.com",
@@ -54,58 +54,6 @@ const options: swaggerJsdoc.Options = {
     ],
     components: {
       schemas: {
-        ScrapingState: {
-          type: "object",
-          properties: {
-            isRunning: {
-              type: "boolean",
-              description: "Whether a scraping job is currently active",
-            },
-            isPaused: {
-              type: "boolean",
-              description: "Whether the current job is paused",
-            },
-            currentPropertyId: {
-              type: "string",
-              description: "The property ID being scraped",
-            },
-            currentJobId: {
-              type: "string",
-              description: "Unique identifier for the current job",
-            },
-            startDate: {
-              type: "string",
-              format: "date",
-              description: "Start date for the scraping job",
-            },
-            endDate: {
-              type: "string",
-              format: "date",
-              description: "End date for the scraping job",
-            },
-            currentPage: {
-              type: "integer",
-              description: "Current page being processed",
-            },
-            totalPages: {
-              type: "integer",
-              description: "Total number of pages to process",
-            },
-            processedCount: {
-              type: "integer",
-              description: "Number of items processed so far",
-            },
-            totalCount: {
-              type: "integer",
-              description: "Total number of items to process",
-            },
-            lastUpdated: {
-              type: "string",
-              format: "date-time",
-              description: "Timestamp of the last state update",
-            },
-          },
-        },
         ApiResponse: {
           type: "object",
           properties: {
@@ -139,20 +87,6 @@ const options: swaggerJsdoc.Options = {
             },
           },
         },
-        Reservation: {
-          type: "object",
-          properties: {
-            reservationId: {
-              type: "string",
-              description: "Unique reservation identifier",
-            },
-            propertyId: {
-              type: "string",
-              description: "Property identifier",
-            },
-          },
-          required: ["reservationId", "propertyId"],
-        },
       },
     },
     tags: [
@@ -165,32 +99,13 @@ const options: swaggerJsdoc.Options = {
         description: "Authentication related endpoints",
       },
       {
-        name: "Scraping Control",
-        description: "Endpoints for controlling scraping operations",
-      },
-      {
-        name: "Expedia Jobs",
-        description: "Endpoints for starting Expedia scraping jobs",
-      },
-      {
         name: "Booking Jobs",
-        description: "Endpoints for starting Booking scraping jobs",
-      },
-      {
-        name: "Job Monitoring",
-        description: "Endpoints for monitoring job progress and results",
-      },
-      {
-        name: "Cookie Storage",
-        description: "Endpoints for managing encrypted property cookies",
+        description: "Endpoints for checking Booking.com property access",
       },
     ],
     paths: loadYamlDocs(),
   },
-  apis: [
-    "./src/app/app.ts",
-    "./src/routes/**/*.ts", // Include all route files for API documentation
-  ],
+  apis: ["./src/app/app.ts"],
 };
 
 const specs = swaggerJsdoc(options) as any;

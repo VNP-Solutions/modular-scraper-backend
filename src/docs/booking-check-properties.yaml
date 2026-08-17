@@ -1,0 +1,114 @@
+"/api/booking/check-properties":
+  post:
+    tags:
+      - Booking Jobs
+    summary: Check whether Booking.com properties exist for an account
+    description: |
+      Logs into Booking.com Partner Admin once (email/password, plus captcha
+      and 2FA if Booking.com challenges the sign-in), then searches each
+      provided Booking.com hotel id to determine whether the property exists
+      for that account.
+
+      The request is acknowledged immediately and the check runs in the
+      background. Results are written to the database rather than returned:
+
+      * Login rejected the username/password -> `booking_credential_verified`
+        is set to `false` for every requested property.
+      * Login succeeded and the property was found ->
+        `booking_credential_verified` and `booking_access_level` are both set
+        to `true`.
+      * Login succeeded and the property was not found ->
+        `booking_credential_verified` is `true` and `booking_access_level` is
+        `false`.
+
+      A Booking.com server-side failure (rate limit, "sign in failed - try
+      again later", technical difficulties) leaves the flags untouched, since
+      "could not check" is not the same verdict as "no access".
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required:
+              - username
+              - password
+              - booking_ids
+            properties:
+              username:
+                type: string
+                description: Booking.com Partner Admin email/username
+                example: "user@example.com"
+              password:
+                type: string
+                description: Booking.com Partner Admin password (plaintext)
+              booking_ids:
+                type: array
+                description: |
+                  Properties to check. A single property may instead be sent as
+                  top-level `property_id` + `booking_id`.
+                items:
+                  type: object
+                  required:
+                    - _id
+                    - booking_id
+                  properties:
+                    _id:
+                      type: string
+                      description: MongoDB ObjectId of the property document
+                      example: "507f1f77bcf86cd799439011"
+                    booking_id:
+                      type: string
+                      description: Booking.com hotel id
+                      example: "12345678"
+    responses:
+      '200':
+        description: Request accepted; the check runs in the background
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: integer
+                  example: 200
+                message:
+                  type: string
+                  example: >-
+                    Request accepted. Property check is running in the
+                    background; results are written to the database.
+      '400':
+        description: Invalid request body
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: integer
+                  example: 400
+                message:
+                  type: string
+                  example: >-
+                    booking_ids must be a non-empty array of { _id, booking_id }
+                    objects (or send property_id + booking_id for a single
+                    property)
+      '409':
+        description: Another scraping or property-check operation is already running
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  type: integer
+                  example: 409
+                message:
+                  type: string
+                  example: A scraping or property-check operation is already running
+      '500':
+        description: Error accepting the property check
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ErrorResponse'

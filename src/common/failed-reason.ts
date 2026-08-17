@@ -19,7 +19,6 @@ export const FAILED_REASON = {
   BOOKING_PAGE_LOAD_FAILED: "BOOKING_PAGE_LOAD_FAILED",
   BOOKING_SIGN_IN_TRY_AGAIN_LATER: "BOOKING_SIGN_IN_TRY_AGAIN_LATER",
   BOOKING_TECHNICAL_DIFFICULTIES: "BOOKING_TECHNICAL_DIFFICULTIES",
-  BOOKING_CARD_INFO_NOT_AVAILABLE: "BOOKING_CARD_INFO_NOT_AVAILABLE",
   BOOKING_TOO_MANY_ATTEMPTS: "BOOKING_TOO_MANY_ATTEMPTS",
 } as const;
 
@@ -30,9 +29,6 @@ export const BOOKING_SIGN_IN_TRY_AGAIN_LATER_MESSAGE =
 
 export const BOOKING_TECHNICAL_DIFFICULTIES_MESSAGE =
   `"We're having technical difficulties – try again later" shows in Booking.com`;
-
-export const BOOKING_CARD_INFO_NOT_AVAILABLE_MESSAGE =
-  "Card info not available, try after 7-8 hours later";
 
 export const BOOKING_TOO_MANY_ATTEMPTS_MESSAGE =
   '"Too many attempts – try again later" shows in booking.com';
@@ -77,8 +73,6 @@ const FAILED_REASON_MESSAGES: Record<FailedReasonCode, string> = {
     BOOKING_SIGN_IN_TRY_AGAIN_LATER_MESSAGE,
   [FAILED_REASON.BOOKING_TECHNICAL_DIFFICULTIES]:
     BOOKING_TECHNICAL_DIFFICULTIES_MESSAGE,
-  [FAILED_REASON.BOOKING_CARD_INFO_NOT_AVAILABLE]:
-    BOOKING_CARD_INFO_NOT_AVAILABLE_MESSAGE,
   [FAILED_REASON.BOOKING_TOO_MANY_ATTEMPTS]: BOOKING_TOO_MANY_ATTEMPTS_MESSAGE,
 };
 
@@ -122,18 +116,6 @@ export function isStatusAlreadySaved(error: any): boolean {
 }
 
 /**
- * Build the error thrown when the very first reservation/card attempt of a
- * job comes back with no card info — Booking.com typically needs 7-8 hours
- * before card details become available, so we fail fast instead of burning
- * through the rest of the reservations.
- */
-export function createBookingCardInfoNotAvailableError(): Error {
-  const err = new Error(BOOKING_CARD_INFO_NOT_AVAILABLE_MESSAGE);
-  setFailedReasonCode(err, FAILED_REASON.BOOKING_CARD_INFO_NOT_AVAILABLE);
-  return err;
-}
-
-/**
  * Booking.com shows "Too many attempts – try again later" on the phone-selection
  * page (before OTP input). The scraper pauses and retries the current property
  * scrape; this marker distinguishes that case from the same banner elsewhere.
@@ -150,14 +132,6 @@ export function createBookingPhoneSelectionTooManyAttemptsError(
       visibleText;
   }
   return err;
-}
-
-export function isBookingPhoneSelectionTooManyAttemptsError(error: any): boolean {
-  return (
-    hasFailedReasonCode(error) &&
-    error.failedReasonCode === FAILED_REASON.BOOKING_TOO_MANY_ATTEMPTS &&
-    error._bookingPhoneSelectionRateLimit === true
-  );
 }
 
 /**
@@ -188,11 +162,6 @@ export function inferBookingOtpFailedReasonCode(
  */
 const FATAL_GROUP_ABORT_REASONS: ReadonlySet<FailedReasonCode> = new Set([
   FAILED_REASON.BOOKING_TOO_MANY_ATTEMPTS,
-  // Booking.com not having card details ready is a backend-wide delay
-  // (typically 7-8 hours), not specific to one property — every other
-  // queued property in the same account/session would almost certainly
-  // hit the same "no card info yet" wall too.
-  FAILED_REASON.BOOKING_CARD_INFO_NOT_AVAILABLE,
   // Both are Booking.com server-side sign-in errors (not credential issues)
   // that can also surface from a mid-group re-login (e.g. session dropped
   // between properties) — every other queued property re-logging in on
@@ -222,7 +191,7 @@ export function isFatalBookingGroupAbortError(error: any): boolean {
 /**
  * Subset of the fatal group-abort reasons where Booking.com never even
  * shows an OTP input to begin with (rate-limit banner, server error page,
- * "check back in 7-8 hours" message) — there is no field for a human to
+ * server error page) — there is no field for a human to
  * manually solve no matter the environment, so the Browserless "wait for
  * manual 2FA" fallback should never be attempted for these. This is
  * intentionally a *subset* of {@link FATAL_GROUP_ABORT_REASONS}: OTP
@@ -232,7 +201,6 @@ export function isFatalBookingGroupAbortError(error: any): boolean {
  */
 const NO_MANUAL_2FA_SOLVE_REASONS: ReadonlySet<FailedReasonCode> = new Set([
   FAILED_REASON.BOOKING_TOO_MANY_ATTEMPTS,
-  FAILED_REASON.BOOKING_CARD_INFO_NOT_AVAILABLE,
   FAILED_REASON.BOOKING_SIGN_IN_TRY_AGAIN_LATER,
   FAILED_REASON.BOOKING_TECHNICAL_DIFFICULTIES,
 ]);

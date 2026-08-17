@@ -3,7 +3,7 @@
     tags:
       - Authentication
     summary: Initiate OAuth authentication
-    description: Start the OAuth authentication flow for accessing Expedia services
+    description: Start the OAuth authentication flow used to read Booking.com verification codes from the mailbox
     responses:
       '200':
         description: Authentication flow initiated
