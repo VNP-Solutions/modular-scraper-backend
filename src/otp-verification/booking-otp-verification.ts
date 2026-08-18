@@ -313,6 +313,216 @@ async function ensureBookingOtpInputSelector(
   return found;
 }
 
+async function getBookingOtpInputValue(
+  page: Page,
+  selector: string
+): Promise<string> {
+  try {
+    return await page.evaluate((sel) => {
+      const input = document.querySelector(sel) as HTMLInputElement | null;
+      return input?.value ?? "";
+    }, selector);
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Clears the Booking OTP field in an OS-independent way.
+ *
+ * Triple-click + Backspace is unreliable: Chrome's triple-click timing differs
+ * on Windows / macOS / Linux (and Browserless), so often only one character is
+ * selected. Direct `input.value = ""` is also ignored by Booking's React
+ * controlled input, which restores the previous digits — the next `page.type`
+ * then appends instead of replacing.
+ */
+async function clearBookingOtpInput(
+  page: Page,
+  selector: string
+): Promise<boolean> {
+  const pressSelectAll = async (modifier: "Control" | "Meta"): Promise<void> => {
+    try {
+      await page.keyboard.down(modifier);
+      await page.keyboard.press("KeyA");
+    } finally {
+      try {
+        await page.keyboard.up(modifier);
+      } catch {
+        // Modifier may already be up if the page navigated.
+      }
+    }
+  };
+
+  for (let round = 0; round < 3; round++) {
+    await page.waitForSelector(selector, { visible: true, timeout: 10000 });
+    await page.click(selector, { delay: 30 }).catch(() => page.focus(selector));
+    await delay(80);
+
+    // 1. DOM select-all (not OS-dependent) then delete the selection.
+    await page.evaluate((sel) => {
+      const input = document.querySelector(sel) as HTMLInputElement | null;
+      if (!input) return;
+      input.focus();
+      if (typeof input.select === "function") {
+        input.select();
+      }
+      try {
+        input.setSelectionRange(0, input.value.length);
+      } catch {
+        // type=number / some mobile inputs throw on setSelectionRange
+      }
+    }, selector);
+    await page.keyboard.press("Backspace");
+    await page.keyboard.press("Delete");
+    await delay(80);
+
+    // 2. Ctrl+A (Windows/Linux Chrome) and Cmd+A (macOS Chrome).
+    // Match the *browser* OS, not Node's process.platform — local Mac vs
+    // Browserless Linux can differ from the scraper host.
+    await pressSelectAll("Control");
+    await page.keyboard.press("Backspace");
+    await pressSelectAll("Meta");
+    await page.keyboard.press("Backspace");
+    await delay(80);
+
+    // 3. React 16+ native setter + value tracker so controlled state actually
+    //    drops the digits instead of snapping them back on the next render.
+    await page.evaluate((sel) => {
+      const input = document.querySelector(sel) as HTMLInputElement | null;
+      if (!input) return;
+
+      const lastValue = input.value;
+      const prototypeSetter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype,
+        "value"
+      )?.set;
+      if (prototypeSetter) {
+        prototypeSetter.call(input, "");
+      } else {
+        input.value = "";
+      }
+
+      const tracker = (
+        input as HTMLInputElement & {
+          _valueTracker?: { setValue: (value: string) => void };
+        }
+      )._valueTracker;
+      if (tracker) {
+        tracker.setValue(lastValue);
+      }
+
+      try {
+        input.dispatchEvent(
+          new InputEvent("input", {
+            bubbles: true,
+            cancelable: true,
+            composed: true,
+            inputType: "deleteContentBackward",
+            data: null,
+          })
+        );
+      } catch {
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    }, selector);
+    await delay(80);
+
+    // 4. If anything remains, delete it character-by-character from the end.
+    const remaining = await getBookingOtpInputValue(page, selector);
+    if (remaining.length > 0) {
+      await page.focus(selector);
+      await page.keyboard.press("End").catch(() => {});
+      for (let i = 0; i < remaining.length + 2; i++) {
+        await page.keyboard.press("Backspace");
+      }
+      await delay(80);
+    }
+
+    if ((await getBookingOtpInputValue(page, selector)) === "") {
+      return true;
+    }
+  }
+
+  return (await getBookingOtpInputValue(page, selector)) === "";
+}
+
+async function typeBookingOtpCode(
+  page: Page,
+  selector: string,
+  code: string
+): Promise<void> {
+  const cleared = await clearBookingOtpInput(page, selector);
+  const leftover = await getBookingOtpInputValue(page, selector);
+  if (!cleared || leftover) {
+    await dualLogInfo(
+      `OTP field not empty before type (leftover="${leftover}"); selecting all and replacing`
+    );
+    await page.focus(selector);
+    await page.evaluate((sel) => {
+      const input = document.querySelector(sel) as HTMLInputElement | null;
+      if (!input) return;
+      input.focus();
+      if (typeof input.select === "function") input.select();
+      try {
+        input.setSelectionRange(0, input.value.length);
+      } catch {
+        // type=number may throw
+      }
+    }, selector);
+    await page.keyboard.type(code, { delay: 100 });
+  } else {
+    await page.type(selector, code, { delay: 100 });
+  }
+
+  const typed = await getBookingOtpInputValue(page, selector);
+  if (typed === code) return;
+
+  await dualLogInfo(
+    `OTP field value mismatch after type (got="${typed}", expected="${code}"); using native replace`
+  );
+  await page.evaluate(
+    (sel, nextCode) => {
+      const input = document.querySelector(sel) as HTMLInputElement | null;
+      if (!input) return;
+      const lastValue = input.value;
+      const prototypeSetter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype,
+        "value"
+      )?.set;
+      if (prototypeSetter) {
+        prototypeSetter.call(input, nextCode);
+      } else {
+        input.value = nextCode;
+      }
+      const tracker = (
+        input as HTMLInputElement & {
+          _valueTracker?: { setValue: (value: string) => void };
+        }
+      )._valueTracker;
+      if (tracker) {
+        tracker.setValue(lastValue);
+      }
+      try {
+        input.dispatchEvent(
+          new InputEvent("input", {
+            bubbles: true,
+            cancelable: true,
+            composed: true,
+            inputType: "insertText",
+            data: nextCode,
+          })
+        );
+      } catch {
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    },
+    selector,
+    code
+  );
+}
+
 /**
  * Checks whether a direct OTP input already appears on the current page,
  * without running the full ~30-selector exhaustive search. Cheap/quick
@@ -826,7 +1036,7 @@ async function handleBookingOtpVerification(
       );
 
       try {
-        await page.type(otpInputSelector, code, { delay: 100 });
+        await typeBookingOtpCode(page, otpInputSelector, code);
       } catch (e) {
         if (isStalePageContextError(e)) {
           await dualLogInfo(
@@ -837,7 +1047,7 @@ async function handleBookingOtpVerification(
             null,
             otpPerSelectorMs
           );
-          await page.type(otpInputSelector, code, { delay: 100 });
+          await typeBookingOtpCode(page, otpInputSelector, code);
         } else {
           throw e;
         }
@@ -912,51 +1122,28 @@ async function handleBookingOtpVerification(
           throw error;
         }
 
-        // Clear input field after error detected, before trying next code
+        // Clear before the next attempt. The next loop also clears before
+        // typing; doing it here avoids leaving invalid digits in a React
+        // field that may restore them on re-render.
         await dualLogInfo("Clearing input field for next attempt...");
-
-        // More robust clearing approach - try multiple methods
         try {
           otpInputSelector = await ensureBookingOtpInputSelector(
             page,
             otpInputSelector,
             otpPerSelectorMs
           );
-          // Method 1: Triple-click to select all, then delete
-          await page.click(otpInputSelector, { clickCount: 3 });
-          await delay(200);
-          await page.keyboard.press("Backspace");
-          await delay(200);
-
-          // Method 2: Use evaluate to clear the value directly
-          await page.evaluate((selector) => {
-            const input = document.querySelector(selector) as HTMLInputElement;
-            if (input) {
-              input.value = "";
-              input.dispatchEvent(new Event("input", { bubbles: true }));
-              input.dispatchEvent(new Event("change", { bubbles: true }));
-            }
-          }, otpInputSelector);
-          await delay(200);
-
-          // Verify the field is actually empty
-          const isEmpty = await page.evaluate((selector) => {
-            const input = document.querySelector(selector) as HTMLInputElement;
-            return input ? input.value === "" : false;
-          }, otpInputSelector);
-
+          const isEmpty = await clearBookingOtpInput(page, otpInputSelector);
           if (isEmpty) {
-            await dualLogInfo("✅ Input field cleared successfully");
+            await dualLogInfo("OTP input field cleared successfully");
           } else {
             await dualLogInfo(
-              "⚠️ Input field may not be fully cleared, but continuing..."
+              "OTP input still not empty after clear; next type will force-replace"
             );
           }
         } catch (clearError) {
           await dualLogInfo(
             `Warning: Error during field clearing: ${clearError}`
           );
-          // Continue anyway - sometimes the field clears even if we get an error
         }
 
         // Continue to next attempt
