@@ -119,6 +119,17 @@ export interface IProperty extends Document {
   agoda_revised_date?: string;
   agoda_credential_verified?: boolean;
   agoda_otp_number?: string;
+  /**
+   * Screenshots captured during the most recent Agoda property check, uploaded
+   * to S3. Replaced on every run, so this always reflects the latest check
+   * rather than an unbounded history.
+   */
+  agoda_screenshot_urls?: {
+    step: string;
+    url: string;
+    timestamp: string;
+    type: "step" | "error";
+  }[];
 
   sales_rep?: string;
 
@@ -335,6 +346,18 @@ const PropertySchema = new Schema<IProperty>(
     agoda_revised_date: { type: String, required: false },
     agoda_credential_verified: { type: Boolean, required: false },
     agoda_otp_number: { type: String, required: false },
+    agoda_screenshot_urls: {
+      type: [
+        {
+          step: { type: String, required: true },
+          url: { type: String, required: true },
+          timestamp: { type: String, required: true },
+          type: { type: String, enum: ["step", "error"], required: true },
+        },
+      ],
+      required: false,
+      default: undefined,
+    },
 
     sales_rep: { type: String, required: false },
 

@@ -4,6 +4,8 @@ import path from "path";
 import { Page } from "puppeteer";
 import { jobService } from "../services/job.service.js";
 import { dualLogError, dualLogInfo } from "./log-helper.js";
+import { OtaPlatform } from "./ota-verification-patch.js";
+import { addPropertyScreenshot } from "./property-screenshot-store.js";
 
 /**
  * Screenshot helper — takes a screenshot of the current page, uploads it to S3,
@@ -27,6 +29,33 @@ export class ScreenshotHelper {
   }
 
   /**
+   * When set, screenshots are recorded on these property documents instead of
+   * a Job. The property check has no Job — the id it passes around is the
+   * first property's `_id` — so writing to Job would silently match nothing.
+   *
+   * Set for the duration of a check run and cleared in its `finally`, so the
+   * screenshots already taken inside login/search are attributed correctly
+   * without threading a new argument through those call sites.
+   */
+  private static propertyTarget: {
+    runId: string;
+    propertyIds: string[];
+    platform: OtaPlatform;
+  } | null = null;
+
+  public static setPropertyTarget(
+    runId: string,
+    propertyIds: string[],
+    platform: OtaPlatform = "agoda"
+  ): void {
+    this.propertyTarget = { runId, propertyIds, platform };
+  }
+
+  public static clearPropertyTarget(): void {
+    this.propertyTarget = null;
+  }
+
+  /**
    * Core screenshot method — take screenshot, upload to S3, save URL to DB.
    *
    * @param page      Puppeteer Page instance
@@ -43,6 +72,18 @@ export class ScreenshotHelper {
     type: "step" | "error",
     platform: string = "agoda"
   ): Promise<string | null> {
+    const target = this.propertyTarget;
+    if (target) {
+      return this.takeScreenshotForProperties(
+        page,
+        target.runId,
+        target.propertyIds,
+        step,
+        type,
+        target.platform
+      );
+    }
+
     if (!page || !jobId) {
       await dualLogError("takeScreenshot: missing page or jobId", {
         hasPage: !!page,
@@ -114,15 +155,113 @@ export class ScreenshotHelper {
     }
   }
 
+  /**
+   * Take a screenshot, upload it to S3 once, and record the resulting URL on
+   * every given property.
+   *
+   * The property check has no Job to hang screenshots off, so this is the
+   * property-side counterpart of {@link takeScreenshot}. Account-level captures
+   * (login, OTP) happen before any single property is identified, so one upload
+   * is shared by all properties in the run rather than duplicated.
+   *
+   * Never throws: screenshot failures must not interrupt the check.
+   */
+  public static async takeScreenshotForProperties(
+    page: Page | null,
+    runId: string,
+    propertyIds: string[],
+    step: string,
+    type: "step" | "error",
+    platform: OtaPlatform = "agoda"
+  ): Promise<string | null> {
+    if (!page || !runId || propertyIds.length === 0) {
+      return null;
+    }
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const filename = `${step}_${timestamp}.png`;
+    const localDir = path.join(
+      this.baseDir,
+      platform,
+      runId,
+      type === "error" ? "error" : "step"
+    );
+    const localPath = path.join(localDir, filename);
+
+    try {
+      await fs.mkdir(localDir, { recursive: true });
+
+      await page.screenshot({
+        path: localPath as `${string}.png`,
+        fullPage: false,
+        type: "png",
+      });
+
+      const s3Key = `property-screenshots/${runId}/${type}/${filename}`;
+      const s3Url = await this.uploadKeyToS3(localPath, s3Key, {
+        runId,
+        propertyCount: String(propertyIds.length),
+      });
+
+      // Clean up local file regardless of S3 outcome
+      await fs.unlink(localPath).catch(() => {});
+
+      if (!s3Url) {
+        await dualLogError(
+          `Property screenshot S3 upload failed for step: ${step}`,
+          { runId, step }
+        );
+        return null;
+      }
+
+      await addPropertyScreenshot(platform, propertyIds, {
+        step,
+        url: s3Url,
+        timestamp: new Date().toISOString(),
+        type,
+      });
+
+      await dualLogInfo(`Screenshot captured: ${step}`, {
+        runId,
+        platform,
+        step,
+        type,
+        s3Url,
+        properties: propertyIds.length,
+      });
+
+      return s3Url;
+    } catch (error: any) {
+      await dualLogError(
+        `Failed to take property screenshot for step: ${step}`,
+        { runId, step, type, error: error.message }
+      );
+      await fs.unlink(localPath).catch(() => {});
+      return null;
+    }
+  }
+
   private static async uploadToS3(
     localPath: string,
     jobId: string,
     type: "step" | "error",
     filename: string
   ): Promise<string | null> {
+    return this.uploadKeyToS3(
+      localPath,
+      `job-screenshots/${jobId}/${type}/${filename}`,
+      { jobId }
+    );
+  }
+
+  /** Uploads one local PNG to the given S3 key and returns its public URL. */
+  private static async uploadKeyToS3(
+    localPath: string,
+    s3Key: string,
+    metadata: Record<string, string> = {}
+  ): Promise<string | null> {
     try {
       const fileContent = await fs.readFile(localPath);
-      const s3Key = `job-screenshots/${jobId}/${type}/${filename}`;
 
       const command = new PutObjectCommand({
         Bucket: this.s3BucketName,
@@ -130,7 +269,7 @@ export class ScreenshotHelper {
         Body: fileContent,
         ContentType: "image/png",
         Metadata: {
-          jobId,
+          ...metadata,
           uploadedAt: new Date().toISOString(),
         },
       });

@@ -5,6 +5,8 @@ import { searchAgodaProperty } from "../property-search/property-search.js";
 import { browserSetupLocal } from "../../browser-setup/browser-local.js";
 import { browserSetupProduction } from "../../browser-setup/browser-prod.js";
 import { configs, useRemoteBrowser } from "../../config/index.js";
+import { clearPropertyScreenshots } from "../../common/property-screenshot-store.js";
+import { ScreenshotHelper } from "../../common/screenshot-helper.js";
 import { isAgodaCredentialLoginFailure } from "../../common/failed-reason.js";
 import { dualLogError, dualLogInfo } from "../../common/log-helper.js";
 import {
@@ -170,7 +172,25 @@ export async function checkAgodaProperties(
 
   scrapingStateManager.startScraping(sessionId, jobId || sessionId);
 
+  const propertyIds = properties.map((p) => p._id);
+
   try {
+    // This run's screenshots replace whatever an earlier run stored, so the
+    // property always shows the latest check rather than an endless history.
+    try {
+      await clearPropertyScreenshots("agoda", propertyIds);
+    } catch (clearError) {
+      await dualLogError(
+        "Failed to clear previous Agoda property screenshots:",
+        clearError
+      );
+    }
+
+    // There is no Job here — the id threaded through this flow is the first
+    // property's _id — so route every screenshot taken during login/search to
+    // the property documents instead.
+    ScreenshotHelper.setPropertyTarget(sessionId, propertyIds, "agoda");
+
     const setup = remoteBrowser
       ? await browserSetupProduction(jobId)
       : await browserSetupLocal(jobId);
@@ -201,6 +221,17 @@ export async function checkAgodaProperties(
           startDate,
           endDate,
           jobId
+        );
+
+        // Capture what the search returned, against this property only — this
+        // is the evidence for the verdict written below.
+        await ScreenshotHelper.takeScreenshotForProperties(
+          page,
+          sessionId,
+          [property._id],
+          `property_search_${agodaId}_${searchResult.found ? "found" : "not_found"}`,
+          "step",
+          "agoda"
         );
 
         if (searchResult.found) {
@@ -234,6 +265,7 @@ export async function checkAgodaProperties(
 
     return results;
   } finally {
+    ScreenshotHelper.clearPropertyTarget();
     if (browser) {
       try {
         await browser.close();
