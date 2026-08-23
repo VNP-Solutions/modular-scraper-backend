@@ -109,6 +109,17 @@ export interface IProperty extends Document {
   booking_revised_date?: string;
   booking_credential_verified?: boolean;
   booking_otp_number?: string;
+  /**
+   * Screenshots captured during the most recent Booking.com property check,
+   * uploaded to S3. Replaced on every run, so this always reflects the latest
+   * check rather than an unbounded history.
+   */
+  booking_screenshot_urls?: {
+    step: string;
+    url: string;
+    timestamp: string;
+    type: "step" | "error";
+  }[];
 
   // Agoda integration detail
   agoda_billing_type_id?: Types.ObjectId;
@@ -327,6 +338,18 @@ const PropertySchema = new Schema<IProperty>(
     booking_revised_date: { type: String, required: false },
     booking_credential_verified: { type: Boolean, required: false },
     booking_otp_number: { type: String, required: false },
+    booking_screenshot_urls: {
+      type: [
+        {
+          step: { type: String, required: true },
+          url: { type: String, required: true },
+          timestamp: { type: String, required: true },
+          type: { type: String, enum: ["step", "error"], required: true },
+        },
+      ],
+      required: false,
+      default: undefined,
+    },
 
     // Agoda integration detail
     agoda_billing_type_id: {

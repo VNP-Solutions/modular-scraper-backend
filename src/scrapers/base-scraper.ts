@@ -4,6 +4,7 @@ import {
   dualLogInfo,
   dualLogWarn,
 } from "../common/log-helper.js";
+import { OtaPlatform } from "../common/ota-verification-patch.js";
 import { ScreenshotHelper } from "../common/screenshot-helper.js";
 
 export interface LoginCredentials {
@@ -35,6 +36,10 @@ export abstract class BaseScraper {
   protected jobId?: string;
   protected propertyIdForDb?: string;
   protected credentials?: LoginCredentials;
+  /** Property-check runs have no Job, so screenshots are recorded on these properties instead. */
+  protected screenshotPropertyIds?: string[];
+  /** Groups one property-check run's screenshots under a single S3 prefix. */
+  protected screenshotRunId?: string;
 
   constructor(platform: string, baseUrl: string) {
     this.platform = platform;
@@ -66,8 +71,6 @@ export abstract class BaseScraper {
   protected async takeScreenshot(stepName?: string): Promise<void> {
     if (!this.page) return;
 
-    const jobId = this.jobId || `trust_verify-${this.propertyIdForDb}`;
-
     // Derive a clean step label: strip file extension and timestamp noise if a
     // filename was passed (legacy callers), otherwise use "step" + counter.
     let step: string;
@@ -84,14 +87,33 @@ export abstract class BaseScraper {
     // Determine type: treat names containing "error" as error screenshots
     const type: "step" | "error" = /error/i.test(step) ? "error" : "step";
 
-    await ScreenshotHelper.takeScreenshot(
-      this.page,
-      jobId,
-      step,
-      type,
-      this.platform,
-      this.getScreenshotMirrorJobIds()
-    );
+    if (this.jobId) {
+      await ScreenshotHelper.takeScreenshot(
+        this.page,
+        this.jobId,
+        step,
+        type,
+        this.platform,
+        this.getScreenshotMirrorJobIds()
+      );
+      return;
+    }
+
+    if (this.screenshotRunId && this.screenshotPropertyIds?.length) {
+      await ScreenshotHelper.takeScreenshotForProperties(
+        this.page,
+        this.screenshotRunId,
+        this.screenshotPropertyIds,
+        step,
+        type,
+        this.platform as OtaPlatform
+      );
+      return;
+    }
+
+    // No Job and no properties to attribute this to — skip rather than upload
+    // an image to S3 that nothing will ever reference.
+    await this.logWarn(`Screenshot skipped, no destination: ${step}`);
   }
 
   protected async delay(ms: number): Promise<void> {
@@ -112,6 +134,19 @@ export abstract class BaseScraper {
 
   public setPropertyIdForDb(propertyId: string): void {
     this.propertyIdForDb = propertyId;
+  }
+
+  /**
+   * Route screenshots to property documents instead of a Job.
+   *
+   * Used by the Booking.com property check, which runs without a Job: every
+   * screenshot the scraper takes during login/captcha/2FA is recorded against
+   * all properties in the run, since those steps happen before any single
+   * property is identified.
+   */
+  public setScreenshotProperties(runId: string, propertyIds: string[]): void {
+    this.screenshotRunId = runId;
+    this.screenshotPropertyIds = propertyIds;
   }
 
 }

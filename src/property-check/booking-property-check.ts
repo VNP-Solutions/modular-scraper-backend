@@ -1,6 +1,8 @@
 import mongoose from "mongoose";
 import { Page } from "puppeteer";
 import { BOOKING_SELECTORS } from "../common/booking-selectors.js";
+import { clearPropertyScreenshots } from "../common/property-screenshot-store.js";
+import { ScreenshotHelper } from "../common/screenshot-helper.js";
 import { delay } from "../common/delay.js";
 import {
   getFailedReasonForUser,
@@ -160,7 +162,9 @@ function readLandedHotelId(page: Page): string | null {
 async function searchSingleProperty(
   page: Page,
   searchInputSelector: string,
-  bookingId: string
+  bookingId: string,
+  runId: string,
+  propertyId: string
 ): Promise<boolean> {
   // Clear whatever is currently in the search box.
   await page.click(searchInputSelector, { clickCount: 3 });
@@ -184,6 +188,17 @@ async function searchSingleProperty(
     // Fall back to matching the id as visible text in the results.
     return links.some((link) => link.textContent?.trim() === searchId);
   }, bookingId);
+
+  // Capture what the search actually returned, against this property only —
+  // this is the evidence for the verdict written below.
+  await ScreenshotHelper.takeScreenshotForProperties(
+    page,
+    runId,
+    [propertyId],
+    `property_search_${bookingId}_${found ? "found" : "not_found"}`,
+    "step",
+    "booking"
+  );
 
   await dualLogInfo(
     `[booking-property-check] Search for hotel_id=${bookingId}: ${
@@ -209,11 +224,27 @@ export async function checkBookingProperties(
 ): Promise<BookingPropertyCheckResult[]> {
   const sessionId = `booking-property-check_${Date.now()}`;
   const scraper = new BookingScraper(ScraperContext.TRUST_VERIFICATION);
+  const propertyIds = properties.map((p) => p._id);
 
   // login/2FA guards require the scraping state to be "running".
   scrapingStateManager.startScraping("booking-property-check", sessionId);
 
   try {
+    // 0. This run's screenshots replace whatever an earlier run stored, so the
+    // property always shows the latest check rather than an endless history.
+    try {
+      await clearPropertyScreenshots("booking", propertyIds);
+    } catch (clearError) {
+      await dualLogError(
+        "Failed to clear previous Booking.com property screenshots:",
+        clearError
+      );
+    }
+
+    // There is no Job here, so the scraper records every screenshot it takes
+    // during login/captcha/2FA against all properties in this run.
+    scraper.setScreenshotProperties(sessionId, propertyIds);
+
     // 1. Set up the browser at the Booking.com login page.
     const { browser, page } = await scraper.setupBrowser(undefined, username);
     scraper.setBrowserData(page, browser);
@@ -275,9 +306,28 @@ export async function checkBookingProperties(
     for (const [index, property] of properties.entries()) {
       const bookingId = String(property.booking_id);
       try {
-        const found = searchInputSelector
-          ? await searchSingleProperty(page, searchInputSelector, bookingId)
-          : landedHotelId === bookingId;
+        let found: boolean;
+        if (searchInputSelector) {
+          found = await searchSingleProperty(
+            page,
+            searchInputSelector,
+            bookingId,
+            sessionId,
+            property._id
+          );
+        } else {
+          // Single-property account: the verdict comes from the dashboard we
+          // landed on, so capture that page as this property's evidence.
+          found = landedHotelId === bookingId;
+          await ScreenshotHelper.takeScreenshotForProperties(
+            page,
+            sessionId,
+            [property._id],
+            `property_landed_${bookingId}_${found ? "found" : "not_found"}`,
+            "step",
+            "booking"
+          );
+        }
 
         if (found) {
           await markPropertyVerified(property._id);
