@@ -83,6 +83,17 @@ export interface IProperty extends Document {
   expedia_db_duration?: number;
   expedia_credential_verified?: boolean;
   expedia_otp_number?: string;
+  /**
+   * Screenshots captured during the most recent Expedia property check,
+   * uploaded to S3. Replaced on every run, so this always reflects the latest
+   * check rather than an unbounded history.
+   */
+  expedia_screenshot_urls?: {
+    step: string;
+    url: string;
+    timestamp: string;
+    type: "step" | "error";
+  }[];
   from_db?: string;
   to_db?: string;
 
@@ -267,6 +278,18 @@ const PropertySchema = new Schema<IProperty>(
     expedia_db_duration: { type: Number, required: false },
     expedia_credential_verified: { type: Boolean, required: false },
     expedia_otp_number: { type: String, required: false },
+    expedia_screenshot_urls: {
+      type: [
+        {
+          step: { type: String, required: true },
+          url: { type: String, required: true },
+          timestamp: { type: String, required: true },
+          type: { type: String, enum: ["step", "error"], required: true },
+        },
+      ],
+      required: false,
+      default: undefined,
+    },
     from_db: { type: String, required: false },
     to_db: { type: String, required: false },
 

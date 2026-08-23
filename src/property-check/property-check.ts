@@ -9,6 +9,8 @@ import {
   patchManyOtaVerificationFields,
   patchOtaVerificationFields,
 } from "../common/ota-verification-patch.js";
+import { clearPropertyScreenshots } from "../common/property-screenshot-store.js";
+import { ScreenshotHelper } from "../common/screenshot-helper.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import login from "../login/login.js";
 import handleOtpVerification from "../otp-verification/otp-verification.js";
@@ -156,7 +158,9 @@ async function markAccessLevelFalse(propertyId: string): Promise<void> {
  */
 async function searchSingleProperty(
   page: Page,
-  expediaId: string
+  expediaId: string,
+  runId: string,
+  propertyId: string
 ): Promise<boolean> {
   // Clear whatever is currently in the search box.
   await page.click(PROPERTY_SEARCH_INPUT, { clickCount: 3 });
@@ -176,6 +180,17 @@ async function searchSingleProperty(
       return !!idEl?.textContent && idEl.textContent.includes(searchId);
     });
   }, expediaId);
+
+  // Capture what the search actually returned, against this property only —
+  // this is the evidence for the verdict written below.
+  await ScreenshotHelper.takeScreenshotForProperties(
+    page,
+    runId,
+    [propertyId],
+    `property_search_${expediaId}_${found ? "found" : "not_found"}`,
+    "step",
+    "expedia"
+  );
 
   console.log(
     `[property-check] Expedia search for id=${expediaId}: ${found ? "found" : "not found"}`
@@ -200,10 +215,23 @@ export async function checkExpediaProperties(
   const sessionId = `property-check_${Date.now()}`;
   let browser: Browser | null = null;
 
+  const propertyIds = properties.map((p) => p._id);
+
   // login/OTP guards require the scraping state to be "running".
   scrapingStateManager.startScraping("property-check", sessionId);
 
   try {
+    // This run's screenshots replace whatever an earlier run stored, so the
+    // property always shows the latest check rather than an endless history.
+    try {
+      await clearPropertyScreenshots("expedia", propertyIds);
+    } catch (clearError) {
+      await dualLogError(
+        "Failed to clear previous Expedia property screenshots:",
+        clearError
+      );
+    }
+
     // 1. Set up the browser at the Expedia login page.
     const setup =
       environment === "browserless"
@@ -225,10 +253,26 @@ export async function checkExpediaProperties(
       throw loginError;
     }
     await dualLogInfo("Login completed for property check.");
+    await ScreenshotHelper.takeScreenshotForProperties(
+      page,
+      sessionId,
+      propertyIds,
+      "login_complete",
+      "step",
+      "expedia"
+    );
 
     // 3. Resolve 2FA / OTP.
     await handleOtpVerification(browser, page);
     await dualLogInfo("OTP verification completed for property check.");
+    await ScreenshotHelper.takeScreenshotForProperties(
+      page,
+      sessionId,
+      propertyIds,
+      "otp_complete",
+      "step",
+      "expedia"
+    );
 
     // 4. Wait for the all-properties table and its search box.
     await page.waitForSelector(".fds-data-table-wrapper", { visible: true });
@@ -242,7 +286,12 @@ export async function checkExpediaProperties(
     for (const property of properties) {
       const expediaId = String(property.expedia_id);
       try {
-        const found = await searchSingleProperty(page, expediaId);
+        const found = await searchSingleProperty(
+          page,
+          expediaId,
+          sessionId,
+          property._id
+        );
         if (found) {
           console.log(
             `[property-check] Property ${expediaId} FOUND → calling markPropertyVerified(_id=${property._id})`
