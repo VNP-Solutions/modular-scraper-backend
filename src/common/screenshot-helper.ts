@@ -7,6 +7,12 @@ import { dualLogError, dualLogInfo } from "./log-helper.js";
 import { OtaPlatform } from "./ota-verification-patch.js";
 import { addPropertyScreenshot } from "./property-screenshot-store.js";
 
+export interface PropertyScreenshotContext {
+  runId: string;
+  propertyIds: string[];
+  platform: OtaPlatform;
+}
+
 /**
  * Screenshot helper — takes a screenshot of the current page, uploads it to S3,
  * and appends the S3 URL to the job or retrieval's screenshot_urls array in DB.
@@ -23,6 +29,19 @@ export class ScreenshotHelper {
   });
 
   private static s3BucketName = process.env.S3_BUCKET_NAME || "vnpstorage";
+
+  /**
+   * Property-check runs have no Job ID. Login/OTP still call takeScreenshot
+   * with an empty entityId; this context lets those captures go to the same
+   * property-screenshot S3/DB path as login_complete / otp_complete.
+   */
+  private static propertyContext: PropertyScreenshotContext | null = null;
+
+  public static setPropertyScreenshotContext(
+    context: PropertyScreenshotContext | null
+  ): void {
+    this.propertyContext = context;
+  }
 
   private static get baseDir(): string {
     return path.join(process.cwd(), "screenshots");
@@ -47,9 +66,30 @@ export class ScreenshotHelper {
     platform: string = "expedia",
     entityType: "job" | "retrieval" = "job"
   ): Promise<string | null> {
-    if (!page || !entityId) {
+    if (!page) {
       await dualLogError("takeScreenshot: missing page or entityId", {
-        hasPage: !!page,
+        hasPage: false,
+        entityId,
+        step,
+      });
+      return null;
+    }
+
+    if (!entityId) {
+      const ctx = this.propertyContext;
+      if (ctx?.runId && ctx.propertyIds.length > 0) {
+        return this.takeScreenshotForProperties(
+          page,
+          ctx.runId,
+          ctx.propertyIds,
+          step,
+          type,
+          ctx.platform
+        );
+      }
+
+      await dualLogError("takeScreenshot: missing page or entityId", {
+        hasPage: true,
         entityId,
         step,
       });

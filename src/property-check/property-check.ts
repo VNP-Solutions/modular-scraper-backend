@@ -220,6 +220,15 @@ export async function checkExpediaProperties(
   // login/OTP guards require the scraping state to be "running".
   scrapingStateManager.startScraping("property-check", sessionId);
 
+  // Login and OTP take screenshots without a Job ID. Point those captures at
+  // this run so they upload like login_complete / otp_complete instead of
+  // logging "takeScreenshot: missing page or entityId".
+  ScreenshotHelper.setPropertyScreenshotContext({
+    runId: sessionId,
+    propertyIds,
+    platform: "expedia",
+  });
+
   try {
     // This run's screenshots replace whatever an earlier run stored, so the
     // property always shows the latest check rather than an endless history.
@@ -328,6 +337,7 @@ export async function checkExpediaProperties(
 
     return results;
   } finally {
+    ScreenshotHelper.setPropertyScreenshotContext(null);
     if (browser) {
       try {
         await browser.close();
