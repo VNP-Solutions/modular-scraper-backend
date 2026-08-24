@@ -824,10 +824,25 @@ class ScrapingWorker {
         user_password: finalUserPassword,
       });
 
-      // 7. Get final job statistics
+      // 7. Filter out reservations where charge_before > end_date
+      await dualLogInfo(`Filtering reservations by job end_date for job ${jobId}...`);
+      const filterResult = await jobService.filterReservationsByEndDate(jobId);
+      if (filterResult.endDate) {
+        await dualLogInfo(
+          `Reservation filtering completed: removed ${filterResult.removedCount}, kept ${filterResult.keptCount}`,
+          {
+            jobId,
+            endDate: filterResult.endDate,
+            removedCount: filterResult.removedCount,
+            keptCount: filterResult.keptCount,
+          }
+        );
+      }
+
+      // 8. Get final job statistics (after filtering)
       const progress = await jobService.getJobProgress(jobId);
 
-      // 8. Determine final status based on completion
+      // 9. Determine final status based on completion
       let finalStatus = JobStatus.Completed;
       if (progress.totalItems === 0) {
         finalStatus = JobStatus.Failed;
@@ -835,7 +850,7 @@ class ScrapingWorker {
         finalStatus = JobStatus.Partial;
       }
 
-      // 9. Update final job status (with failed_reason if no reservations found)
+      // 10. Update final job status (with failed_reason if no reservations found)
       if (finalStatus === JobStatus.Failed) {
         await jobService.updateJobStatusWithReason(
           jobId,
@@ -1038,9 +1053,28 @@ class ScrapingWorker {
       await progressManager.handleJobError(leaseJobId, error).catch(() => {});
       throw error;
     } finally {
-      // Bulk / booking-run-group: upload for every property job even if the group throws after
+      // Bulk / booking-run-group: filter and upload for every property job even if the group throws after
       // some steps (earlier jobs may already be Completed or Partial in MongoDB).
       for (const step of bookingGroup) {
+        // Filter out reservations where charge_before > end_date
+        try {
+          await dualLogInfo(`Filtering reservations by end_date for group job ${step.jobId}...`);
+          const filterResult = await jobService.filterReservationsByEndDate(step.jobId);
+          if (filterResult.endDate) {
+            await dualLogInfo(
+              `Group job ${step.jobId}: removed ${filterResult.removedCount}, kept ${filterResult.keptCount}`,
+              {
+                jobId: step.jobId,
+                endDate: filterResult.endDate,
+                removedCount: filterResult.removedCount,
+                keptCount: filterResult.keptCount,
+              }
+            );
+          }
+        } catch (filterError) {
+          await dualLogError(`Failed to filter reservations for group job ${step.jobId}`, filterError);
+        }
+        
         await this.maybeUploadBookingJobItemsToDrive(step.jobId);
         await this.maybeNotifyDbmsHistoricalRunDate(step.jobId);
       }

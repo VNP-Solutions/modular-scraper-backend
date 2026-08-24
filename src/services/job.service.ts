@@ -1028,6 +1028,132 @@ export class JobService {
   }
 
   /**
+   * Filter and remove job items where charge_before date is greater than job's end_date
+   * This should be called BEFORE marking job as completed
+   * 
+   * Date formats:
+   * - job.end_date: "MM/DD/YYYY" (e.g., "07/31/2027")
+   * - payment_info.charge_before: "YYYY-MM-DD" (e.g., "2027-07-30")
+   */
+  async filterReservationsByEndDate(jobId: string): Promise<{ 
+    removedCount: number; 
+    keptCount: number;
+    endDate: string | null;
+  }> {
+    try {
+      const objectId = this.validateObjectId(jobId, "jobId");
+      
+      // Get job to fetch end_date
+      const job = await Job.findById(objectId).select("end_date").exec();
+      
+      if (!job || !job.end_date) {
+        console.log(`No end_date found for job ${jobId}, skipping charge_before filtering`);
+        const totalItems = await JobItem.countDocuments({ job_id: objectId });
+        return { removedCount: 0, keptCount: totalItems, endDate: null };
+      }
+
+      // Parse end_date from MM/DD/YYYY format to Date object
+      const [month, day, year] = job.end_date.split("/");
+      const endDate = new Date(
+        parseInt(year),
+        parseInt(month) - 1,
+        parseInt(day)
+      );
+      endDate.setHours(23, 59, 59, 999); // Set to end of day for comparison
+
+      console.log(`Filtering reservations for job ${jobId} with end_date: ${job.end_date} (${endDate.toISOString()})`);
+
+      // Get all job items for this job
+      const allItems = await JobItem.find({ job_id: objectId }).exec();
+      console.log(`Total reservations before filtering: ${allItems.length}`);
+
+      // Find items where charge_before > end_date
+      const itemsToRemove: string[] = [];
+      
+      for (const item of allItems) {
+        if (item.payment_info && item.payment_info.charge_before) {
+          try {
+            // Parse charge_before date
+            // Expected format: "YYYY-MM-DD" (e.g., "2027-07-30")
+            const chargeBeforeStr = item.payment_info.charge_before;
+            let chargeBeforeDate: Date;
+
+            if (chargeBeforeStr.includes("-") && chargeBeforeStr.length === 10) {
+              // YYYY-MM-DD format (standard in database)
+              const [year, month, day] = chargeBeforeStr.split("-");
+              chargeBeforeDate = new Date(
+                parseInt(year),
+                parseInt(month) - 1,
+                parseInt(day)
+              );
+              chargeBeforeDate.setHours(0, 0, 0, 0); // Set to start of day
+            } else if (chargeBeforeStr.includes("/")) {
+              // MM/DD/YYYY format (fallback)
+              const parts = chargeBeforeStr.split("/");
+              if (parts.length === 3) {
+                chargeBeforeDate = new Date(
+                  parseInt(parts[2]),
+                  parseInt(parts[0]) - 1,
+                  parseInt(parts[1])
+                );
+                chargeBeforeDate.setHours(0, 0, 0, 0);
+              } else {
+                chargeBeforeDate = new Date(chargeBeforeStr);
+              }
+            } else {
+              // Try parsing as-is (ISO or other standard format)
+              chargeBeforeDate = new Date(chargeBeforeStr);
+            }
+
+            // Validate the parsed date
+            if (isNaN(chargeBeforeDate.getTime())) {
+              console.error(
+                `Invalid charge_before date for reservation ${item.reservation_id}: ${chargeBeforeStr}`
+              );
+              continue;
+            }
+
+            // Check if charge_before date is AFTER end_date
+            if (chargeBeforeDate > endDate) {
+              itemsToRemove.push(item._id.toString());
+              console.log(
+                `Will remove reservation ${item.reservation_id}: charge_before (${chargeBeforeStr}) > end_date (${job.end_date})`
+              );
+            }
+          } catch (parseError) {
+            console.error(
+              `Failed to parse charge_before date for reservation ${item.reservation_id}: ${item.payment_info.charge_before}`,
+              parseError
+            );
+          }
+        }
+      }
+
+      // Delete the items that exceed end_date
+      let removedCount = 0;
+      if (itemsToRemove.length > 0) {
+        const deleteResult = await JobItem.deleteMany({
+          _id: { $in: itemsToRemove.map(id => new Types.ObjectId(id)) }
+        });
+        removedCount = deleteResult.deletedCount || 0;
+        console.log(`Removed ${removedCount} reservations with charge_before > end_date`);
+      }
+
+      const keptCount = allItems.length - removedCount;
+      console.log(`Kept ${keptCount} reservations with charge_before <= end_date`);
+
+      return { 
+        removedCount, 
+        keptCount,
+        endDate: job.end_date 
+      };
+    } catch (error) {
+      console.error(`Error filtering reservations by end_date for job ${jobId}:`, error);
+      return { removedCount: 0, keptCount: 0, endDate: null };
+    }
+  }
+
+  /**
    * Get latest job items for monitoring
    */
   async getLatestJobItems(limit: number = 10): Promise<IJobItem[]> {
