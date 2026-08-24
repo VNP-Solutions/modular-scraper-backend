@@ -5156,6 +5156,21 @@ export class BookingScraper extends BaseScraper {
           break;
         }
 
+        // Filter out reservations where charge_before > end_date BEFORE calculating progress
+        await dualLogInfo(`[booking] Group: filtering reservations by end_date for job ${step.jobId}...`);
+        const filterResult = await jobService.filterReservationsByEndDate(step.jobId);
+        if (filterResult.endDate) {
+          await dualLogInfo(
+            `[booking] Group: job ${step.jobId} filtering completed: removed ${filterResult.removedCount}, kept ${filterResult.keptCount}`,
+            {
+              jobId: step.jobId,
+              endDate: filterResult.endDate,
+              removedCount: filterResult.removedCount,
+              keptCount: filterResult.keptCount,
+            }
+          );
+        }
+
         const progress = await jobService.getJobProgress(step.jobId);
         let finalStatus = JobStatus.Completed;
         if (progress.totalItems === 0) {

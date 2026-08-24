@@ -1053,28 +1053,10 @@ class ScrapingWorker {
       await progressManager.handleJobError(leaseJobId, error).catch(() => {});
       throw error;
     } finally {
-      // Bulk / booking-run-group: filter and upload for every property job even if the group throws after
+      // Bulk / booking-run-group: upload for every property job even if the group throws after
       // some steps (earlier jobs may already be Completed or Partial in MongoDB).
+      // Note: Filtering by end_date is now done inside booking-scraper.ts before status update
       for (const step of bookingGroup) {
-        // Filter out reservations where charge_before > end_date
-        try {
-          await dualLogInfo(`Filtering reservations by end_date for group job ${step.jobId}...`);
-          const filterResult = await jobService.filterReservationsByEndDate(step.jobId);
-          if (filterResult.endDate) {
-            await dualLogInfo(
-              `Group job ${step.jobId}: removed ${filterResult.removedCount}, kept ${filterResult.keptCount}`,
-              {
-                jobId: step.jobId,
-                endDate: filterResult.endDate,
-                removedCount: filterResult.removedCount,
-                keptCount: filterResult.keptCount,
-              }
-            );
-          }
-        } catch (filterError) {
-          await dualLogError(`Failed to filter reservations for group job ${step.jobId}`, filterError);
-        }
-        
         await this.maybeUploadBookingJobItemsToDrive(step.jobId);
         await this.maybeNotifyDbmsHistoricalRunDate(step.jobId);
       }
