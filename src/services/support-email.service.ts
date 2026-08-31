@@ -14,9 +14,6 @@ import {
 } from "../models/support-email.model.js";
 import type { SupportEmail as ParsedSupportEmail } from "../agoda/support-email/support-email.types.js";
 
-/** Guards against a pathological report blowing past Mongo's 16MB doc limit. */
-const MAX_STORED_ROWS = 5000;
-
 export interface StoreSupportEmailContext {
   agodaId: string;
   jobId?: string;
@@ -36,52 +33,25 @@ function toObjectId(value?: string): Types.ObjectId | undefined {
 }
 
 /**
- * Mongo rejects top-level field names beginning with `$`. Report headers never
- * look like that in practice, but a row is raw third-party data, so the key is
- * prefixed rather than risking a failed insert. The untouched header list is
- * kept alongside in `columns`.
+ * Only metadata is kept. The rows themselves stay in the archived file on S3,
+ * so the record cannot drift from what Agoda actually sent.
  */
-function safeRowKey(key: string): string {
-  return key.startsWith("$") ? `_${key}` : key;
-}
-
-function toStorableRows(
-  rows: Record<string, string>[]
-): { rows: Record<string, string>[]; truncated: boolean } {
-  const capped = rows.slice(0, MAX_STORED_ROWS);
-  const safe = capped.map((row) => {
-    const out: Record<string, string> = {};
-    for (const [key, value] of Object.entries(row)) {
-      out[safeRowKey(key)] = value;
-    }
-    return out;
-  });
-
-  return { rows: safe, truncated: rows.length > MAX_STORED_ROWS };
-}
-
 function toStorableAttachments(
   email: ParsedSupportEmail
 ): ISupportEmailAttachment[] {
-  return email.attachments.map((attachment) => {
-    const { rows, truncated } = toStorableRows(attachment.rows);
-
-    return {
-      filename: attachment.filename,
-      mime_type: attachment.mimeType,
-      size_bytes: attachment.sizeBytes,
-      format: attachment.format,
-      columns: attachment.columns,
-      row_count: attachment.rowCount,
-      rows,
-      rows_truncated: truncated,
-      sheet_type: attachment.reopenDecision?.sheetType,
-      parse_error: attachment.parseError,
-      s3_url: attachment.s3Url ?? null,
-      s3_key: attachment.s3Key ?? null,
-      upload_error: attachment.uploadError,
-    };
-  });
+  return email.attachments.map((attachment) => ({
+    filename: attachment.filename,
+    mime_type: attachment.mimeType,
+    size_bytes: attachment.sizeBytes,
+    format: attachment.format,
+    columns: attachment.columns,
+    row_count: attachment.rowCount,
+    sheet_type: attachment.reopenDecision?.sheetType,
+    parse_error: attachment.parseError,
+    s3_url: attachment.s3Url ?? null,
+    s3_key: attachment.s3Key ?? null,
+    upload_error: attachment.uploadError,
+  }));
 }
 
 export class SupportEmailService {
@@ -146,7 +116,6 @@ export class SupportEmailService {
         should_reopen: email.reopen.shouldReopen,
         reopen_booking_ids: email.reopen.reopenBookingIds,
         collect_booking_ids: email.reopen.collectBookingIds,
-        total_collect_amount_usd: email.reopen.totalCollectAmountUsd,
       });
 
       await dualLogInfo(`🗃️ Stored support email ${email.messageId}`, {

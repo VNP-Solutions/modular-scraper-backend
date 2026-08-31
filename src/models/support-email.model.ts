@@ -2,7 +2,12 @@ import mongoose, { Document, Schema, Types } from "mongoose";
 
 export type SupportEmailAttachmentFormat = "csv" | "xlsx" | "unknown";
 
-/** A stored copy of one CSV / XLSX file Agoda attached to its reply. */
+/**
+ * Metadata for one CSV / XLSX file Agoda attached to its reply. The parsed rows
+ * are deliberately not kept: the untouched original is archived to S3, and rows
+ * stored here would be an unindexable second copy that goes stale as soon as
+ * the reopen rules change.
+ */
 export interface ISupportEmailAttachment {
   filename: string;
   mime_type: string;
@@ -10,15 +15,8 @@ export interface ISupportEmailAttachment {
   format: SupportEmailAttachmentFormat;
   /** Header names exactly as they appear in the file. */
   columns: string[];
-  /** Number of rows the file actually had, before any truncation. */
+  /** How many rows the file held. The rows themselves live in S3, not here. */
   row_count: number;
-  /**
-   * Parsed rows keyed by header. Mongo rejects field names starting with `$`,
-   * so those keys are prefixed on write; `columns` always holds the originals.
-   */
-  rows: Record<string, string>[];
-  /** True when the file was larger than the row cap and only part was kept. */
-  rows_truncated: boolean;
   /** Which report layout the reopen rules recognised. */
   sheet_type?: string;
   parse_error?: string;
@@ -64,7 +62,6 @@ export interface ISupportEmail extends Document {
   should_reopen: boolean;
   reopen_booking_ids: string[];
   collect_booking_ids: string[];
-  total_collect_amount_usd?: number | null;
 
   createdAt: Date;
   updatedAt: Date;
@@ -82,10 +79,6 @@ const SupportEmailAttachmentSchema = new Schema<ISupportEmailAttachment>(
     },
     columns: { type: [String], default: [] },
     row_count: { type: Number, required: true, default: 0 },
-    // Stored as an opaque blob: the keys are third-party headers, so there is
-    // no fixed shape for Mongoose to cast against.
-    rows: { type: Schema.Types.Mixed, default: [] },
-    rows_truncated: { type: Boolean, default: false },
     sheet_type: { type: String, required: false },
     parse_error: { type: String, required: false },
     s3_url: { type: String, required: false, default: null },
@@ -131,7 +124,6 @@ const SupportEmailSchema = new Schema<ISupportEmail>(
     should_reopen: { type: Boolean, default: false },
     reopen_booking_ids: { type: [String], default: [] },
     collect_booking_ids: { type: [String], default: [] },
-    total_collect_amount_usd: { type: Number, required: false, default: null },
   },
   {
     timestamps: true,
