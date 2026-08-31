@@ -15,6 +15,7 @@ import { loadAndSetCredentials } from "../../common/load-token.js";
 import { dualLogError, dualLogInfo, dualLogWarn } from "../../common/log-helper.js";
 import { oauth2Client } from "../../config/google-config.js";
 import { jobService } from "../../services/job.service.js";
+import { supportEmailService } from "../../services/support-email.service.js";
 import { downloadAndParseAttachments } from "./attachment-parser.js";
 import {
   findHeader,
@@ -268,7 +269,18 @@ export async function scrapeAgodaSupportEmail(
     collectBookings: email.reopen.collectBookingIds.length,
   });
 
-  return { status: "parsed", email };
+  // Gmail keeps returning the same message for the whole lookback window, so
+  // the store is a no-op after the first sighting.
+  const storage =
+    options.persist === false
+      ? { stored: false, duplicate: false, recordId: null }
+      : await supportEmailService.storeIfNew(email, {
+          agodaId,
+          jobId: options.jobId,
+          propertyId: options.propertyId,
+        });
+
+  return { status: "parsed", email, storage };
 }
 
 /**
@@ -303,10 +315,11 @@ export async function scrapeSupportEmailsForJobs(
         continue;
       }
 
-      const outcome = await scrapeAgodaSupportEmail(
-        propertyData.agodaId,
-        options
-      );
+      const outcome = await scrapeAgodaSupportEmail(propertyData.agodaId, {
+        ...options,
+        jobId,
+        propertyId: job.property_id?.toString(),
+      });
 
       const result: JobSupportEmailResult = {
         jobId,

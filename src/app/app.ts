@@ -2886,7 +2886,11 @@ app.post("/api/agoda/bulk-property-run-job", (async (
  *       In both layouts a blank or unreadable amount is `REOPEN`, and an amount below
  *       $2 is `SKIP`.
  *
- *       Nothing is persisted — everything is returned in the response.
+ *       Every parsed email is saved to the `support_emails` collection — subject,
+ *       body text, headers, timestamps, and each attachment's columns and rows.
+ *       Gmail's `message_id` is the deduplication key, so a message seen again
+ *       inside the 10-day window is not stored twice. Each parsed result carries a
+ *       `storage` object with `stored`, `duplicate` and `recordId`.
  *     requestBody:
  *       required: true
  *       content:
@@ -2990,10 +2994,14 @@ app.post("/api/agoda/support-email-run-job", (async (
       (result) =>
         result.outcome.status === "parsed" && result.outcome.email.reopen.shouldReopen
     ).length;
+    const newlyStored = parsed.filter(
+      (result) =>
+        result.outcome.status === "parsed" && result.outcome.storage.stored
+    ).length;
 
     return res.status(200).json({
       status: 200,
-      message: `Processed ${job_ids.length} jobs. ${parsed.length} support email(s) parsed, ${toReopen} need reopening, ${withoutReply} without a Partner Support reply, ${results.invalid.length} invalid, ${results.errors.length} with errors.`,
+      message: `Processed ${job_ids.length} jobs. ${parsed.length} support email(s) parsed (${newlyStored} newly stored, ${parsed.length - newlyStored} already on record), ${toReopen} need reopening, ${withoutReply} without a Partner Support reply, ${results.invalid.length} invalid, ${results.errors.length} with errors.`,
       results,
     });
   } catch (err: any) {
@@ -3178,7 +3186,10 @@ app.post("/api/agoda/reopen-case-run-job", (async (
         }
 
         const { agodaId } = propertyData;
-        const outcome = await scrapeAgodaSupportEmail(agodaId);
+        const outcome = await scrapeAgodaSupportEmail(agodaId, {
+          jobId,
+          propertyId: job.property_id?.toString(),
+        });
 
         if (outcome.status === "no_email_found") {
           results.skipped.push({

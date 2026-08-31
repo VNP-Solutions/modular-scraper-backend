@@ -116,9 +116,18 @@ export interface SupportEmail {
   reopen: ReopenSummary;
 }
 
+/** What persisting the parsed email did, or why it was not attempted. */
+export interface SupportEmailStorage {
+  /** True when this run was the one that wrote the record. */
+  stored: boolean;
+  /** True when the message was already captured by an earlier run. */
+  duplicate: boolean;
+  recordId: string | null;
+}
+
 export type SupportEmailOutcome =
   /** Latest matching message was from Agoda Partner Support and was parsed. */
-  | { status: "parsed"; email: SupportEmail }
+  | { status: "parsed"; email: SupportEmail; storage: SupportEmailStorage }
   /** Messages matched the Agoda ID but the newest one came from someone else. */
   | { status: "not_from_partner_support"; from: string; receivedAt: string | null }
   /** No message mentioning the Agoda ID within the lookback window. */
@@ -133,6 +142,11 @@ export interface ScrapeSupportEmailOptions {
   includeAttachments?: boolean;
   /** Overrides for the reopen thresholds. */
   reopenRules?: ReopenRuleOptions;
+  /** Recorded on the stored email as the run that first captured it. */
+  jobId?: string;
+  propertyId?: string;
+  /** Skip writing the email to the database. Defaults to storing it. */
+  persist?: boolean;
 }
 
 /** Per-job result for the bulk endpoint. */
