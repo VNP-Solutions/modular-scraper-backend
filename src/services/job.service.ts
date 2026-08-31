@@ -6,6 +6,7 @@ import {
   PaymentInfo,
 } from "../models/job-item.model.js";
 import {
+  CaseStatus,
   IJob,
   Job,
   JobStatus,
@@ -257,6 +258,36 @@ export class JobService {
   }
 
   /**
+   * Update the outcome of the Agoda reopen-case flow. Deliberately leaves
+   * `job_status` untouched — a reopen must not rewrite the result of the
+   * property run it followed.
+   */
+  async updateJobCaseStatus(
+    jobId: string,
+    caseStatus: CaseStatus
+  ): Promise<IJob | null> {
+    try {
+      const objectId = this.validateObjectId(jobId, "jobId");
+      const updatedJob = await Job.findByIdAndUpdate(
+        objectId,
+        { case_status: caseStatus, updatedAt: new Date() },
+        { new: true }
+      ).exec();
+
+      if (!updatedJob) {
+        console.error(`Job not found: ${jobId}`);
+        return null;
+      }
+
+      console.log(`✅ Updated case_status to ${caseStatus} for job: ${jobId}`);
+      return updatedJob;
+    } catch (error) {
+      console.error(`Error updating case_status for job ${jobId}:`, error);
+      return null;
+    }
+  }
+
+  /**
    * Create job (external jobs creation - read only for scraper)
    */
   async createJob(jobData: CreateJobData): Promise<IJob> {
@@ -273,6 +304,7 @@ export class JobService {
         ? this.validateObjectId(jobData.sub_portfolio_id, "sub_portfolio_id")
         : undefined,
       job_status: JobStatus.Pending,
+      case_status: CaseStatus.Pending,
       current_stage: "initialized",
       progress_percentage: 0,
       worker_assigned: null,

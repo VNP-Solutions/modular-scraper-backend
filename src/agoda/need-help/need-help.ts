@@ -36,6 +36,12 @@ export interface NeedHelpOptions {
   cleanupAfter?: boolean; // Auto cleanup CSV files after process (default: false)
   agodaId?: string; // Agoda ID for cleanup (auto-detected if not provided)
   propertyName?: string; // Property name for cleanup (auto-detected if not provided)
+  /**
+   * Mark the job as Failed in the database when this process fails (default: true).
+   * The reopen flow turns this off — it reports through `case_status` and must not
+   * rewrite the job_status of the run that came before it.
+   */
+  updateJobStatusOnFailure?: boolean;
 }
 
 /**
@@ -191,6 +197,7 @@ export async function automateNeedHelpProcess(
     cleanupAfter = false,
     agodaId,
     propertyName,
+    updateJobStatusOnFailure = true,
   } = options;
 
   /** Track which steps actually succeeded so we don't report success when something failed */
@@ -1039,25 +1046,32 @@ export async function automateNeedHelpProcess(
       );
 
       // Explicitly fail the job in the database with failed_reason
-      try {
-        const failedReason =
-          error?.message ?? "Need Help process failed (unknown reason)";
-        await jobService.updateJobStatusWithReason(
-          jobId,
-          JobStatus.Failed,
-          failedReason,
-        );
-        await dualLogInfo(
-          "❌ Job marked as Failed in database with failed_reason",
-          {
+      if (updateJobStatusOnFailure) {
+        try {
+          const failedReason =
+            error?.message ?? "Need Help process failed (unknown reason)";
+          await jobService.updateJobStatusWithReason(
             jobId,
+            JobStatus.Failed,
             failedReason,
-          },
-        );
-      } catch (failError: any) {
-        await dualLogError(
-          "Failed to update job status to Failed:",
-          failError.message,
+          );
+          await dualLogInfo(
+            "❌ Job marked as Failed in database with failed_reason",
+            {
+              jobId,
+              failedReason,
+            },
+          );
+        } catch (failError: any) {
+          await dualLogError(
+            "Failed to update job status to Failed:",
+            failError.message,
+            { jobId },
+          );
+        }
+      } else {
+        await dualLogInfo(
+          "Skipping job_status update — the caller tracks this failure itself",
           { jobId },
         );
       }

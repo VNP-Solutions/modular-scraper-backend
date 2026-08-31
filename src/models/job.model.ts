@@ -11,6 +11,22 @@ export enum JobStatus {
   InQueue = "InQueue",
 }
 
+/**
+ * Outcome of the Agoda "reopen case" flow. Tracked separately from
+ * `job_status` so reopening a case never rewrites the result of the
+ * property run that produced it.
+ */
+export enum CaseStatus {
+  /** No reopen has been attempted yet — the state every new job starts in. */
+  Pending = "Pending",
+  /** Need Help request was filed successfully; the case is open with Agoda. */
+  CaseReopen = "CaseReopen",
+  /** The reopen run could not complete. */
+  ParserCaseReopeningFailed = "ParserCaseReopeningFailed",
+  /** Nothing outstanding on the case. */
+  CaseClose = "CaseClose",
+}
+
 export enum PostingType {
   OTA = "OTA",
   OTA_PLUS = "OTA_PLUS",
@@ -61,6 +77,7 @@ export interface IJob extends Document {
   live_url?: string;
   watcher_emails?: string[];
   case_open?: boolean;
+  case_status?: CaseStatus;
   queue_name?: string;
   worker_assigned?: string;
   batch_execution_id?: string;
@@ -220,6 +237,12 @@ const JobSchema = new Schema<IJob>(
       type: Boolean,
       required: false,
       default: false,
+    },
+    case_status: {
+      type: String,
+      enum: Object.values(CaseStatus),
+      required: false,
+      default: CaseStatus.Pending,
     },
     start_date: {
       type: String,

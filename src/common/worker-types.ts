@@ -6,6 +6,7 @@ export interface WorkerJobData {
     | "graphql-run"
     | "agoda-property-run"
     | "agoda-rerun-failed"
+    | "agoda-reopen-case"
     | "stop";
   jobId: string;
   startDate?: string;
@@ -18,6 +19,10 @@ export interface WorkerJobData {
   agodaPassword?: string;
   reservations?: any[];
   originalStatus?: string;
+  /** Bookings the reopen rules flagged; used by `agoda-reopen-case` jobs. */
+  reopenBookingIds?: string[];
+  /** Case ID from the Partner Support reply, quoted back in the new request. */
+  caseId?: string | null;
   // Bright Data isolation config
   brightDataSessionId?: string; // Session ID for Bright Data proxy
   windowSize?: { width: number; height: number }; // Window size for browser

@@ -1,0 +1,8 @@
+Dear Agoda Support Team,
+
+We are reviewing Agoda transactions for our property and have followed all required guidelines. Some reservations still have outstanding balances, and attempts to charge the remaining amounts via VCCs were declined. The reservations are {{BOOKING_IDS}}. Could you please provide the latest Open Payment Report, including Matched, Match-over, and Match-under bookings, to help us reconcile our records. 
+
+Thank you for your support and assistance.
+
+Best regards,
+Revenue Control Team

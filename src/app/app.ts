@@ -1,6 +1,10 @@
 import bodyParser from "body-parser";
 import cors from "cors";
 import express from "express";
+import {
+  scrapeAgodaSupportEmail,
+  scrapeSupportEmailsForJobs,
+} from "../agoda/support-email/support-email-scraper.js";
 import createError from "../common/error.js";
 import {
   getAcceptLanguage,
@@ -14,7 +18,7 @@ import { scrapingStateManager } from "../common/scraping-state.js";
 import { WorkerJobData } from "../common/worker-types.js";
 import { specs, swaggerUi } from "../config/swagger.js";
 import { getAccess, getOauth2Callback } from "../get-access/access.js";
-import { JobStatus } from "../models/job.model.js";
+import { CaseStatus, JobStatus } from "../models/job.model.js";
 import { ScheduledJob } from "../models/scheduled-job.model.js";
 import { propertyCredentialsService } from "../services/job-credentials.service.js";
 import { jobService } from "../services/job.service.js";
@@ -2842,6 +2846,424 @@ app.post("/api/agoda/bulk-property-run-job", (async (
     res.status(500).json({
       status: 500,
       message: "Error processing bulk Agoda property run jobs",
+      error: err.message,
+    });
+  }
+}) as any);
+
+/**
+ * @swagger
+ * /api/agoda/support-email-run-job:
+ *   post:
+ *     tags:
+ *       - Agoda Scraping
+ *     summary: Scrape the latest Agoda Partner Support reply for each job
+ *     description: |
+ *       For every job ID the property's `agoda_id` is resolved, Gmail is searched for
+ *       messages mentioning that Agoda ID in the last 10 days, and the newest match
+ *       is inspected.
+ *
+ *       The message is only parsed when it was sent by `PartnerSupport@agoda.com`.
+ *       Parsing extracts the Case ID, property details and the listed reservation IDs,
+ *       and downloads any CSV / XLSX attachment into rows.
+ *
+ *       Each attachment is then run through the reopen rules. Every row is given one
+ *       of three actions — `COLLECT` (amount known, property can charge it), `REOPEN`
+ *       (still owed but the amount is unavailable, so the case goes back to Agoda), or
+ *       `SKIP`.
+ *
+ *       Rows more than 150 days past checkout are skipped first, for both layouts.
+ *       Then:
+ *
+ *       - Type 1 `payment_status` — `PAID` is skipped. With a `Booking Status` column
+ *         a row needs `Pending Collection` **and** `Departed`; without one,
+ *         `Pending Collection` alone is enough. The amount comes from `LP(USD)`, and
+ *         a missing column means `REOPEN`.
+ *       - Type 2 `booking_matched_status` — only `Open` and `Matched-under` are still
+ *         owed. The amount comes from `USD Total Include GST`, and a missing column
+ *         means `REOPEN`.
+ *
+ *       In both layouts a blank or unreadable amount is `REOPEN`, and an amount below
+ *       $2 is `SKIP`.
+ *
+ *       Nothing is persisted — everything is returned in the response.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - job_ids
+ *             properties:
+ *               job_ids:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 description: Array of job IDs to look up support emails for
+ *                 example: ["507f1f77bcf86cd799439011", "507f1f77bcf86cd799439012"]
+ *     responses:
+ *       200:
+ *         description: Support emails processed
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 200
+ *                 message:
+ *                   type: string
+ *                   example: "Processed 2 jobs. 1 support email parsed, 1 without a Partner Support reply, 0 invalid, 0 with errors."
+ *                 results:
+ *                   type: object
+ *                   properties:
+ *                     processed:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           jobId:
+ *                             type: string
+ *                           agodaId:
+ *                             type: string
+ *                           outcome:
+ *                             type: object
+ *                             description: |
+ *                               `status` is one of `parsed`, `not_from_partner_support`
+ *                               or `no_email_found`. When `parsed`, an `email` object
+ *                               carries the headers, parsed body, attachments and a
+ *                               `reopen` summary with `shouldReopen`,
+ *                               `reopenBookingIds`, `collectBookingIds` and
+ *                               `totalCollectAmountUsd`. Each attachment also carries
+ *                               its own `reopenDecision` with the `collect`, `reopen`
+ *                               and `skipped` rows.
+ *                     invalid:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           jobId:
+ *                             type: string
+ *                           reason:
+ *                             type: string
+ *                           currentStatus:
+ *                             type: string
+ *                     errors:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           jobId:
+ *                             type: string
+ *                           error:
+ *                             type: string
+ *       400:
+ *         description: Missing required fields
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
+app.post("/api/agoda/support-email-run-job", (async (
+  req: express.Request,
+  res: express.Response
+) => {
+  try {
+    const { job_ids } = req.body;
+
+    if (!job_ids || !Array.isArray(job_ids) || job_ids.length === 0) {
+      return res.status(400).json({
+        status: 400,
+        message: "job_ids array is required and must not be empty",
+      });
+    }
+
+    const results = await scrapeSupportEmailsForJobs(job_ids);
+
+    const parsed = results.processed.filter(
+      (result) => result.outcome.status === "parsed"
+    );
+    const withoutReply = results.processed.length - parsed.length;
+    const toReopen = parsed.filter(
+      (result) =>
+        result.outcome.status === "parsed" && result.outcome.email.reopen.shouldReopen
+    ).length;
+
+    return res.status(200).json({
+      status: 200,
+      message: `Processed ${job_ids.length} jobs. ${parsed.length} support email(s) parsed, ${toReopen} need reopening, ${withoutReply} without a Partner Support reply, ${results.invalid.length} invalid, ${results.errors.length} with errors.`,
+      results,
+    });
+  } catch (err: any) {
+    console.error("Error in /api/agoda/support-email-run-job:", err);
+    res.status(500).json({
+      status: 500,
+      message: "Error scraping Agoda support emails",
+      error: err.message,
+    });
+  }
+}) as any);
+
+/**
+ * @swagger
+ * /api/agoda/reopen-case-run-job:
+ *   post:
+ *     tags:
+ *       - Agoda Scraping
+ *     summary: Ask Agoda to reopen a case for the bookings flagged by the reopen rules
+ *     description: |
+ *       Re-reads the latest Agoda Partner Support reply for each job (the same lookup
+ *       `/api/agoda/support-email-run-job` performs) and, when the reopen rules flagged
+ *       at least one booking as `REOPEN`, submits an Agoda scraping run to the worker
+ *       pool.
+ *
+ *       That run mirrors the property run — browser setup, login with OTP, then the
+ *       property page — but skips the date-range booking lookup entirely and goes
+ *       straight to Need Help. The flagged booking IDs are written into the request
+ *       message from `src/agoda/need-help/reopen-message.txt`; no file is attached.
+ *
+ *       Jobs are submitted without waiting for them to finish, so the response reports
+ *       submission only. The outcome lands on the job's `case_status` field —
+ *       `CaseReopen` when the Need Help request goes through, otherwise
+ *       `ParserCaseReopeningFailed`. `job_status` is deliberately left untouched, so
+ *       the result of the property run that produced the case is preserved.
+ *       `case_open` is still set back to `true` on success.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - job_ids
+ *             properties:
+ *               job_ids:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 description: Array of job IDs to evaluate and, where needed, reopen
+ *                 example: ["507f1f77bcf86cd799439011", "507f1f77bcf86cd799439012"]
+ *     responses:
+ *       200:
+ *         description: Jobs evaluated; those needing a reopen were submitted
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 200
+ *                 message:
+ *                   type: string
+ *                   example: "Processed 2 jobs. 1 submitted for reopen, 1 skipped, 0 invalid, 0 with errors."
+ *                 results:
+ *                   type: object
+ *                   properties:
+ *                     submitted:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           jobId:
+ *                             type: string
+ *                           agodaId:
+ *                             type: string
+ *                           caseId:
+ *                             type: string
+ *                             nullable: true
+ *                           reopenBookingIds:
+ *                             type: array
+ *                             items:
+ *                               type: string
+ *                           status:
+ *                             type: string
+ *                             example: "submitted"
+ *                     skipped:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           jobId:
+ *                             type: string
+ *                           agodaId:
+ *                             type: string
+ *                           reason:
+ *                             type: string
+ *                             example: "No booking needs the case reopened"
+ *                     invalid:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           jobId:
+ *                             type: string
+ *                           reason:
+ *                             type: string
+ *                     errors:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           jobId:
+ *                             type: string
+ *                           error:
+ *                             type: string
+ *       400:
+ *         description: Missing required fields
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
+app.post("/api/agoda/reopen-case-run-job", (async (
+  req: express.Request,
+  res: express.Response
+) => {
+  try {
+    const { job_ids } = req.body;
+
+    if (!job_ids || !Array.isArray(job_ids) || job_ids.length === 0) {
+      return res.status(400).json({
+        status: 400,
+        message: "job_ids array is required and must not be empty",
+      });
+    }
+
+    const results: {
+      submitted: Array<{
+        jobId: string;
+        agodaId: string;
+        caseId: string | null;
+        reopenBookingIds: string[];
+        status: string;
+      }>;
+      skipped: Array<{ jobId: string; agodaId?: string; reason: string }>;
+      invalid: Array<{ jobId: string; reason: string; currentStatus?: string }>;
+      errors: Array<{ jobId: string; error: string }>;
+    } = { submitted: [], skipped: [], invalid: [], errors: [] };
+
+    for (const jobId of job_ids) {
+      try {
+        const job = await jobService.getJobById(jobId);
+        if (!job) {
+          results.invalid.push({ jobId, reason: "Job not found" });
+          continue;
+        }
+
+        const propertyData = await jobService.getAgodaIdFromJob(jobId);
+        if (!propertyData?.agodaId) {
+          results.invalid.push({
+            jobId,
+            reason: `Cannot retrieve a valid agoda_id for job ${jobId}. The property may not have agoda_id assigned or it is "0".`,
+            currentStatus: job.job_status,
+          });
+          continue;
+        }
+
+        const propertyCredentials =
+          await propertyCredentialsService.getCredentialsByJobId(jobId);
+        if (
+          !propertyCredentials?.agodaUsername ||
+          !propertyCredentials?.agodaPassword
+        ) {
+          results.invalid.push({
+            jobId,
+            reason: `Cannot retrieve valid agodaUsername or agodaPassword for job ${jobId}.`,
+            currentStatus: job.job_status,
+          });
+          continue;
+        }
+
+        const { agodaId } = propertyData;
+        const outcome = await scrapeAgodaSupportEmail(agodaId);
+
+        if (outcome.status === "no_email_found") {
+          results.skipped.push({
+            jobId,
+            agodaId,
+            reason: "No Agoda email found in the lookback window",
+          });
+          continue;
+        }
+
+        if (outcome.status === "not_from_partner_support") {
+          results.skipped.push({
+            jobId,
+            agodaId,
+            reason: `Latest email is from ${outcome.from || "an unknown sender"}, not Partner Support`,
+          });
+          continue;
+        }
+
+        const { reopen, body } = outcome.email;
+        if (!reopen.shouldReopen || reopen.reopenBookingIds.length === 0) {
+          results.skipped.push({
+            jobId,
+            agodaId,
+            reason: "No booking needs the case reopened",
+          });
+          continue;
+        }
+
+        const workerJobData: WorkerJobData = {
+          jobType: "agoda-reopen-case",
+          jobId,
+          agodaId,
+          agodaUsername: propertyCredentials.agodaUsername,
+          agodaPassword: propertyCredentials.agodaPassword,
+          reopenBookingIds: reopen.reopenBookingIds,
+          caseId: body.caseId,
+          brightDataSessionId: getBrightDataSessionId(jobId),
+          windowSize: getWindowSize(jobId),
+          timezone: getTimezone(jobId),
+          acceptLanguage: getAcceptLanguage(jobId),
+        };
+
+        // Fire and forget — the pool runs it now or queues it behind the OTP.
+        otpAwareWorkerPool.executeJob(workerJobData).catch(async (error) => {
+          console.error(`Error submitting Agoda reopen job ${jobId}:`, error);
+          try {
+            await jobService.updateJobCaseStatus(
+              jobId,
+              CaseStatus.ParserCaseReopeningFailed
+            );
+          } catch (statusError) {
+            console.error(
+              `Error updating case_status for job ${jobId}:`,
+              statusError
+            );
+          }
+        });
+
+        results.submitted.push({
+          jobId,
+          agodaId,
+          caseId: body.caseId,
+          reopenBookingIds: reopen.reopenBookingIds,
+          status: "submitted",
+        });
+      } catch (error: any) {
+        console.error(`Error preparing reopen for job ${jobId}:`, error);
+        results.errors.push({
+          jobId,
+          error: error?.message || String(error),
+        });
+      }
+    }
+
+    return res.status(200).json({
+      status: 200,
+      message: `Processed ${job_ids.length} jobs. ${results.submitted.length} submitted for reopen, ${results.skipped.length} skipped, ${results.invalid.length} invalid, ${results.errors.length} with errors.`,
+      results,
+    });
+  } catch (err: any) {
+    console.error("Error in /api/agoda/reopen-case-run-job:", err);
+    res.status(500).json({
+      status: 500,
+      message: "Error processing Agoda reopen-case jobs",
       error: err.message,
     });
   }

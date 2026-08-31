@@ -413,16 +413,27 @@ export class OtpAwareWorkerPool extends EventEmitter {
 
   private jobRequiresOtp(jobData: WorkerJobData): boolean {
     // Jobs that require OTP verification
-    return ["property-run", "graphql-run", "agoda-property-run"].includes(
-      jobData.jobType
-    );
+    return [
+      "property-run",
+      "graphql-run",
+      "agoda-property-run",
+      "agoda-reopen-case",
+    ].includes(jobData.jobType);
   }
 
   /**
    * Update job status to InQueue if jobId is a valid MongoDB ObjectId
    * This is called when a job is added to the queue
    */
-  private async updateJobStatusToInQueue(jobId: string): Promise<void> {
+  private async updateJobStatusToInQueue(jobData: WorkerJobData): Promise<void> {
+    const { jobId, jobType } = jobData;
+
+    // Reopen runs report through case_status and must leave job_status alone,
+    // since the job they attach to has usually already finished.
+    if (jobType === "agoda-reopen-case") {
+      return;
+    }
+
     try {
       // Only update status for valid MongoDB ObjectIds (database jobs)
       // Some jobs like reservation-run use generated IDs and don't exist in database
@@ -447,7 +458,11 @@ export class OtpAwareWorkerPool extends EventEmitter {
     ) {
       return OtpPlatform.Expedia;
     } else if (
-      ["agoda-property-run", "agoda-rerun-failed"].includes(jobData.jobType)
+      [
+        "agoda-property-run",
+        "agoda-rerun-failed",
+        "agoda-reopen-case",
+      ].includes(jobData.jobType)
     ) {
       return OtpPlatform.Agoda;
     }
@@ -461,7 +476,7 @@ export class OtpAwareWorkerPool extends EventEmitter {
     if (!availableWorker) {
       // No workers available, add to queue
       this.jobQueue.push(queuedJob);
-      await this.updateJobStatusToInQueue(queuedJob.jobData.jobId);
+      await this.updateJobStatusToInQueue(queuedJob.jobData);
       console.log(
         `\x1b[33mJob ${queuedJob.jobData.jobId} queued (no workers). Queue size: ${this.jobQueue.length}\x1b[0m`
       );
@@ -472,7 +487,7 @@ export class OtpAwareWorkerPool extends EventEmitter {
     if (queuedJob.requiresOtp && !this.otpManager.isOtpAvailable()) {
       // OTP not available, add to queue
       this.jobQueue.push(queuedJob);
-      await this.updateJobStatusToInQueue(queuedJob.jobData.jobId);
+      await this.updateJobStatusToInQueue(queuedJob.jobData);
       console.log(
         `\x1b[33mJob ${queuedJob.jobData.jobId} queued (OTP occupied). Queue size: ${this.jobQueue.length}\x1b[0m`
       );
@@ -490,7 +505,7 @@ export class OtpAwareWorkerPool extends EventEmitter {
       if (!otpReserved) {
         // Failed to reserve OTP (race condition), add to queue
         this.jobQueue.push(queuedJob);
-        await this.updateJobStatusToInQueue(queuedJob.jobData.jobId);
+        await this.updateJobStatusToInQueue(queuedJob.jobData);
         console.log(
           `Job ${queuedJob.jobData.jobId} queued (OTP reservation failed). Queue size: ${this.jobQueue.length}`
         );
