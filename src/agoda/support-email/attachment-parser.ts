@@ -7,6 +7,7 @@ import type { gmail_v1 } from "googleapis";
 import Papa from "papaparse";
 import XLSX from "xlsx";
 import { dualLogInfo, dualLogWarn } from "../../common/log-helper.js";
+import { uploadAttachmentToS3 } from "./attachment-storage.js";
 import { evaluateReopenDecision } from "./reopen-rules.js";
 import type {
   AttachmentFormat,
@@ -18,6 +19,8 @@ export interface AttachmentContext {
   /** Agoda property ID, used to reject rows belonging to another hotel. */
   agodaId?: string | null;
   reopenRules?: ReopenRuleOptions;
+  /** Archive the original file to S3. Defaults to true. */
+  uploadToS3?: boolean;
 }
 
 interface AttachmentRef {
@@ -207,6 +210,20 @@ export async function downloadAndParseAttachments(
         buffer
       );
 
+      if (context.uploadToS3 !== false) {
+        const upload = await uploadAttachmentToS3({
+          agodaId: context.agodaId,
+          messageId,
+          filename: ref.filename,
+          mimeType: ref.mimeType,
+          format: attachment.format,
+          buffer,
+        });
+        attachment.s3Url = upload.s3Url;
+        attachment.s3Key = upload.s3Key;
+        attachment.uploadError = upload.uploadError;
+      }
+
       attachment.reopenDecision = evaluateReopenDecision(
         attachment,
         { agodaId: context.agodaId },
@@ -221,6 +238,7 @@ export async function downloadAndParseAttachments(
           collectCount: attachment.reopenDecision.collect.length,
           reopenCount: attachment.reopenDecision.reopen.length,
           skippedCount: attachment.reopenDecision.skipped.length,
+          s3Url: attachment.s3Url,
         }
       );
       parsed.push(attachment);

@@ -170,6 +170,9 @@ async function buildSupportEmail(
     ? await downloadAndParseAttachments(gmail, messageId, payload, {
         agodaId,
         reopenRules: options.reopenRules,
+        // A run that is not writing the record should not leave an orphaned
+        // file behind either.
+        uploadToS3: options.persist !== false,
       })
     : [];
 

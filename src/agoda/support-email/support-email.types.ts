@@ -77,6 +77,11 @@ export interface ParsedAttachment {
   parseError?: string;
   /** Verdict from the reopen rules; absent for attachments that were skipped. */
   reopenDecision?: ReopenDecision;
+  /** Where the original file was archived; null when the upload failed. */
+  s3Url?: string | null;
+  s3Key?: string | null;
+  /** Why the archive upload failed, when it did. */
+  uploadError?: string;
 }
 
 export interface ParsedSupportEmailBody {

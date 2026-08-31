@@ -77,6 +77,9 @@ function toStorableAttachments(
       rows_truncated: truncated,
       sheet_type: attachment.reopenDecision?.sheetType,
       parse_error: attachment.parseError,
+      s3_url: attachment.s3Url ?? null,
+      s3_key: attachment.s3Key ?? null,
+      upload_error: attachment.uploadError,
     };
   });
 }

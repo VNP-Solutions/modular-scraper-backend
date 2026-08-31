@@ -22,6 +22,11 @@ export interface ISupportEmailAttachment {
   /** Which report layout the reopen rules recognised. */
   sheet_type?: string;
   parse_error?: string;
+  /** Archived copy of the original file Agoda sent. */
+  s3_url?: string | null;
+  s3_key?: string | null;
+  /** Why the archive upload failed, when it did. */
+  upload_error?: string;
 }
 
 /**
@@ -83,6 +88,9 @@ const SupportEmailAttachmentSchema = new Schema<ISupportEmailAttachment>(
     rows_truncated: { type: Boolean, default: false },
     sheet_type: { type: String, required: false },
     parse_error: { type: String, required: false },
+    s3_url: { type: String, required: false, default: null },
+    s3_key: { type: String, required: false, default: null },
+    upload_error: { type: String, required: false },
   },
   { _id: false }
 );
