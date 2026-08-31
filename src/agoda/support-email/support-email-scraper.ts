@@ -114,7 +114,6 @@ function summarizeReopen(attachments: ParsedAttachment[]): ReopenSummary {
       reason: "No tabular attachment to evaluate",
       reopenBookingIds: [],
       collectBookingIds: [],
-      totalCollectAmountUsd: null,
     };
   }
 
@@ -131,10 +130,6 @@ function summarizeReopen(attachments: ParsedAttachment[]): ReopenSummary {
     )
   );
 
-  const amounts = decisions
-    .map((decision) => decision.totalCollectAmountUsd)
-    .filter((amount): amount is number => amount !== null);
-
   const reasonParts: string[] = [];
   if (reopenBookingIds.length > 0) {
     reasonParts.push(`${reopenBookingIds.length} booking(s) need the case reopened`);
@@ -148,10 +143,6 @@ function summarizeReopen(attachments: ParsedAttachment[]): ReopenSummary {
     reason: reasonParts.join(", ") || "Nothing outstanding in the report",
     reopenBookingIds,
     collectBookingIds,
-    totalCollectAmountUsd:
-      amounts.length > 0
-        ? Number(amounts.reduce((sum, amount) => sum + amount, 0).toFixed(2))
-        : null,
   };
 }
 

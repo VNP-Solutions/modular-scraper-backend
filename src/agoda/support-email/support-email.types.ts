@@ -58,8 +58,6 @@ export interface ReopenDecision {
   reopen: EvaluatedRow[];
   /** Rows that need no action, each with the reason it was dropped. */
   skipped: EvaluatedRow[];
-  /** Sum of the COLLECT amounts, or null when there are none. */
-  totalCollectAmountUsd: number | null;
   /** Which column each rule input was read from, for troubleshooting. */
   detectedColumns: Record<string, string | null>;
 }
@@ -106,7 +104,6 @@ export interface ReopenSummary {
   reopenBookingIds: string[];
   /** Bookings the property can charge directly, deduplicated. */
   collectBookingIds: string[];
-  totalCollectAmountUsd: number | null;
 }
 
 export interface SupportEmail {

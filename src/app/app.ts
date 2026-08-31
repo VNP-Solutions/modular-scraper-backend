@@ -2940,7 +2940,7 @@ app.post("/api/agoda/bulk-property-run-job", (async (
  *                               carries the headers, parsed body, attachments and a
  *                               `reopen` summary with `shouldReopen`,
  *                               `reopenBookingIds`, `collectBookingIds` and
- *                               `totalCollectAmountUsd`. Each attachment also carries
+ *                               `s3Url`, `s3Key` and `uploadError`. Each attachment also carries
  *                               its own `reopenDecision` with the `collect`, `reopen`
  *                               and `skipped` rows.
  *                     invalid:

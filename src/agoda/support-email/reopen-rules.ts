@@ -439,7 +439,6 @@ export function evaluateReopenDecision(
     collect: [],
     reopen: [],
     skipped: [],
-    totalCollectAmountUsd: null,
     detectedColumns: { ...columns },
   };
 
@@ -480,11 +479,6 @@ export function evaluateReopenDecision(
   const amounts = decision.collect
     .map((entry) => entry.amount)
     .filter((amount): amount is number => amount !== null);
-
-  decision.totalCollectAmountUsd =
-    amounts.length > 0
-      ? Number(amounts.reduce((sum, amount) => sum + amount, 0).toFixed(2))
-      : null;
 
   return decision;
 }
