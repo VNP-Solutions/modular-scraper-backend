@@ -1114,7 +1114,9 @@ class ScrapingWorker {
       );
       await jobService.updateJobCaseStatus(
         jobId,
-        CaseStatus.ParserCaseReopeningFailed
+        CaseStatus.ParserCaseReopeningFailed,
+        preflightError?.message ||
+          "The reopen run could not start. Please try again."
       );
       throw preflightError;
     }
@@ -1132,6 +1134,10 @@ class ScrapingWorker {
     });
 
     scrapingStateManager.startScraping(resolved.agodaId, jobId);
+
+    // Moves off CaseInQueue (or Pending, when it never had to wait) so the
+    // case is visibly under way rather than looking untouched.
+    await jobService.updateJobCaseStatus(jobId, CaseStatus.CaseRunning);
 
     try {
       const reopenResult = await runAgodaReopenCase({
@@ -1186,7 +1192,10 @@ class ScrapingWorker {
 
       await jobService.updateJobCaseStatus(
         jobId,
-        CaseStatus.ParserCaseReopeningFailed
+        CaseStatus.ParserCaseReopeningFailed,
+        getFailedReasonForUser(reopenError) ||
+          reopenError?.message ||
+          "An unexpected error occurred. Please try again."
       );
 
       await finalizeJobLogging("failed");

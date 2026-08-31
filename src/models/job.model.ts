@@ -12,13 +12,17 @@ export enum JobStatus {
 }
 
 /**
- * Outcome of the Agoda "reopen case" flow. Tracked separately from
+ * Progress and outcome of the Agoda "reopen case" flow. Tracked separately from
  * `job_status` so reopening a case never rewrites the result of the
  * property run that produced it.
  */
 export enum CaseStatus {
   /** No reopen has been attempted yet — the state every new job starts in. */
   Pending = "Pending",
+  /** Accepted by the worker pool, waiting on a free worker or the OTP. */
+  CaseInQueue = "CaseInQueue",
+  /** A worker has picked it up and the browser run is under way. */
+  CaseRunning = "CaseRunning",
   /** Need Help request was filed successfully; the case is open with Agoda. */
   CaseReopen = "CaseReopen",
   /** The reopen run could not complete. */
@@ -84,6 +88,8 @@ export interface IJob extends Document {
   start_date?: string;
   end_date?: string;
   failed_reason?: string;
+  /** Why the reopen-case run failed. The `case_status` counterpart of `failed_reason`. */
+  case_failed_reason?: string | null;
   /** Ordered list of screenshots taken during job execution, uploaded to S3 */
   screenshot_urls?: ScreenshotEntry[];
   /**
@@ -263,6 +269,11 @@ const JobSchema = new Schema<IJob>(
     failed_reason: {
       type: String,
       required: false,
+    },
+    case_failed_reason: {
+      type: String,
+      required: false,
+      default: null,
     },
     screenshot_urls: {
       type: [

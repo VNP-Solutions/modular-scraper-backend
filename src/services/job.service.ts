@@ -259,21 +259,38 @@ export class JobService {
   }
 
   /**
-   * Update the outcome of the Agoda reopen-case flow. Deliberately leaves
+   * Update the progress of the Agoda reopen-case flow. Deliberately leaves
    * `job_status` untouched — a reopen must not rewrite the result of the
    * property run it followed.
+   *
+   * `case_failed_reason` is cleared on every non-failure state so a retry does
+   * not carry the previous run's error, mirroring how `failed_reason` is reset
+   * when a job goes back to Running.
    */
   async updateJobCaseStatus(
     jobId: string,
-    caseStatus: CaseStatus
+    caseStatus: CaseStatus,
+    caseFailedReason?: string | null
   ): Promise<IJob | null> {
     try {
       const objectId = this.validateObjectId(jobId, "jobId");
-      const updatedJob = await Job.findByIdAndUpdate(
-        objectId,
-        { case_status: caseStatus, updatedAt: new Date() },
-        { new: true }
-      ).exec();
+
+      const updateData: Record<string, unknown> = {
+        case_status: caseStatus,
+        updatedAt: new Date(),
+      };
+
+      if (caseStatus === CaseStatus.ParserCaseReopeningFailed) {
+        if (caseFailedReason !== undefined) {
+          updateData.case_failed_reason = caseFailedReason;
+        }
+      } else {
+        updateData.case_failed_reason = null;
+      }
+
+      const updatedJob = await Job.findByIdAndUpdate(objectId, updateData, {
+        new: true,
+      }).exec();
 
       if (!updatedJob) {
         console.error(`Job not found: ${jobId}`);

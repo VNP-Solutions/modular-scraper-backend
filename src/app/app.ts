@@ -3033,10 +3033,14 @@ app.post("/api/agoda/support-email-run-job", (async (
  *       message from `src/agoda/need-help/reopen-message.txt`; no file is attached.
  *
  *       Jobs are submitted without waiting for them to finish, so the response reports
- *       submission only. The outcome lands on the job's `case_status` field —
- *       `CaseReopen` when the Need Help request goes through, otherwise
- *       `ParserCaseReopeningFailed`. `job_status` is deliberately left untouched, so
- *       the result of the property run that produced the case is preserved.
+ *       submission only. Progress is tracked on the job's `case_status` field:
+ *       `CaseInQueue` while it waits for a worker or the OTP, `CaseRunning` once the
+ *       browser run starts, then `CaseReopen` when the Need Help request goes through
+ *       or `ParserCaseReopeningFailed` if it does not. On a failure the explanation is
+ *       written to `case_failed_reason`, which is cleared again on the next attempt.
+ *       `job_status` is deliberately
+ *       left untouched, so the result of the property run that produced the case is
+ *       preserved.
  *       `case_open` is still set back to `true` on success.
  *     requestBody:
  *       required: true
@@ -3239,7 +3243,9 @@ app.post("/api/agoda/reopen-case-run-job", (async (
           try {
             await jobService.updateJobCaseStatus(
               jobId,
-              CaseStatus.ParserCaseReopeningFailed
+              CaseStatus.ParserCaseReopeningFailed,
+              error?.message ||
+                "The reopen run could not be submitted. Please try again."
             );
           } catch (statusError) {
             console.error(

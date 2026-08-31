@@ -4,7 +4,7 @@ import { Types } from "mongoose";
 import path from "path";
 import { fileURLToPath } from "url";
 import { Worker } from "worker_threads";
-import { JobStatus } from "../models/job.model.js";
+import { CaseStatus, JobStatus } from "../models/job.model.js";
 import { OtpPlatform } from "../models/otp-status.model.js";
 import { jobService } from "../services/job.service.js";
 import { otpStatusManager, OtpStatusManager } from "./otp-status-manager.js";
@@ -431,6 +431,16 @@ export class OtpAwareWorkerPool extends EventEmitter {
     // Reopen runs report through case_status and must leave job_status alone,
     // since the job they attach to has usually already finished.
     if (jobType === "agoda-reopen-case") {
+      try {
+        if (Types.ObjectId.isValid(jobId)) {
+          await jobService.updateJobCaseStatus(jobId, CaseStatus.CaseInQueue);
+        }
+      } catch (error) {
+        console.error(
+          `Error updating job ${jobId} case_status to CaseInQueue:`,
+          error
+        );
+      }
       return;
     }
 
