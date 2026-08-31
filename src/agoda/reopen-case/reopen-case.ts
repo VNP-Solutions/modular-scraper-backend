@@ -24,6 +24,8 @@ import { otpCompletionNotifier } from "../../common/otp-completion-notifier.js";
 import { progressManager } from "../../common/progress-manager.js";
 import { scrapingStateManager } from "../../common/scraping-state.js";
 import {
+  clearScreenshotTarget,
+  setScreenshotTarget,
   takeErrorScreenshot,
   takeSuccessScreenshot,
 } from "../../common/screenshot-helper.js";
@@ -213,6 +215,11 @@ export async function runAgodaReopenCase(
   let propertyPage: Page | null = null;
 
   await timeManager.startSession(jobId);
+
+  // Everything captured from here on — including inside login and Need Help —
+  // belongs to this reopen attempt, replacing whatever the last one left behind.
+  setScreenshotTarget(jobId, "case_opening_screenshot");
+  await jobService.clearCaseOpeningScreenshots(jobId);
 
   try {
     await dualLogInfo("Starting Agoda reopen-case process", {
@@ -444,6 +451,8 @@ export async function runAgodaReopenCase(
         });
       }
     }
+
+    clearScreenshotTarget(jobId);
   }
 }
 

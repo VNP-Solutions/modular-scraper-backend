@@ -12,6 +12,7 @@ import {
   JobStatus,
   OTAProvider,
   PostingType,
+  ScreenshotEntry,
 } from "../models/job.model.js";
 import {
   getFailedReasonForUser,
@@ -476,6 +477,42 @@ export class JobService {
       });
     } catch (error) {
       console.error(`Error adding screenshot URL to job: ${error}`);
+    }
+  }
+
+  /**
+   * Append a screenshot entry to the job's case_opening_screenshot array.
+   * Kept separate from `screenshot_urls` so a reopen run never disturbs the
+   * property run's screenshot trail.
+   */
+  async addCaseOpeningScreenshotUrl(
+    jobId: string,
+    entry: ScreenshotEntry
+  ): Promise<void> {
+    try {
+      const objectId = this.validateObjectId(jobId, "jobId");
+      await Job.findByIdAndUpdate(objectId, {
+        $push: { case_opening_screenshot: entry },
+        updatedAt: new Date(),
+      });
+    } catch (error) {
+      console.error(`Error adding case opening screenshot URL to job: ${error}`);
+    }
+  }
+
+  /**
+   * Drops the screenshots from the previous reopen run so each attempt starts
+   * with a clean trail, mirroring how `screenshot_urls` is reset on Running.
+   */
+  async clearCaseOpeningScreenshots(jobId: string): Promise<void> {
+    try {
+      const objectId = this.validateObjectId(jobId, "jobId");
+      await Job.findByIdAndUpdate(objectId, {
+        $set: { case_opening_screenshot: [] },
+        updatedAt: new Date(),
+      });
+    } catch (error) {
+      console.error(`Error clearing case opening screenshots: ${error}`);
     }
   }
 

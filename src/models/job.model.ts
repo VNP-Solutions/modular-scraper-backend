@@ -85,14 +85,22 @@ export interface IJob extends Document {
   end_date?: string;
   failed_reason?: string;
   /** Ordered list of screenshots taken during job execution, uploaded to S3 */
-  screenshot_urls?: {
-    step: string;
-    url: string;
-    timestamp: string;
-    type: "step" | "error";
-  }[];
+  screenshot_urls?: ScreenshotEntry[];
+  /**
+   * Screenshots from the Agoda reopen-case run. Kept apart from
+   * `screenshot_urls` so a reopen never overwrites the property run's trail;
+   * replaced wholesale each time a reopen starts.
+   */
+  case_opening_screenshot?: ScreenshotEntry[];
   createdAt: Date;
   updatedAt: Date;
+}
+
+export interface ScreenshotEntry {
+  step: string;
+  url: string;
+  timestamp: string;
+  type: "step" | "error";
 }
 
 // Mongoose Schema (read-only, updates only)
@@ -257,6 +265,18 @@ const JobSchema = new Schema<IJob>(
       required: false,
     },
     screenshot_urls: {
+      type: [
+        {
+          step: { type: String, required: true },
+          url: { type: String, required: true },
+          timestamp: { type: String, required: true },
+          type: { type: String, enum: ["step", "error"], required: true },
+        },
+      ],
+      required: false,
+      default: [],
+    },
+    case_opening_screenshot: {
       type: [
         {
           step: { type: String, required: true },

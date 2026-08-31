@@ -5,9 +5,33 @@ import { Page } from "puppeteer";
 import { jobService } from "../services/job.service.js";
 import { dualLogError, dualLogInfo } from "./log-helper.js";
 
+/** Which job field a run's screenshots are recorded against. */
+export type ScreenshotTarget = "screenshot_urls" | "case_opening_screenshot";
+
+/**
+ * Per-job screenshot destination. Login and Need Help are shared by the
+ * property run and the reopen run and capture screenshots deep inside their own
+ * call stacks, so the destination is registered once per run rather than
+ * threaded through every call. Keyed by job ID, so concurrent jobs stay
+ * independent.
+ */
+const screenshotTargets = new Map<string, ScreenshotTarget>();
+
+export function setScreenshotTarget(
+  jobId: string,
+  target: ScreenshotTarget
+): void {
+  screenshotTargets.set(jobId, target);
+}
+
+export function clearScreenshotTarget(jobId: string): void {
+  screenshotTargets.delete(jobId);
+}
+
 /**
  * Screenshot helper — takes a screenshot of the current page, uploads it to S3,
- * and appends the S3 URL to the job's screenshot_urls array in DB.
+ * and appends the S3 URL to the job's screenshot array in DB. Which array is
+ * decided by `setScreenshotTarget`, defaulting to `screenshot_urls`.
  *
  * Never throws: screenshot failures must not interrupt the scraping process.
  */
@@ -71,7 +95,15 @@ export class ScreenshotHelper {
         type: "png",
       });
 
-      const s3Url = await this.uploadToS3(localPath, jobId, type, filename);
+      const target = screenshotTargets.get(jobId) ?? "screenshot_urls";
+
+      const s3Url = await this.uploadToS3(
+        localPath,
+        jobId,
+        type,
+        filename,
+        target
+      );
 
       // Clean up local file regardless of S3 outcome
       await fs.unlink(localPath).catch(() => {});
@@ -84,13 +116,18 @@ export class ScreenshotHelper {
           type,
         };
 
-        await jobService.addScreenshotUrl(jobId, entry);
+        if (target === "case_opening_screenshot") {
+          await jobService.addCaseOpeningScreenshotUrl(jobId, entry);
+        } else {
+          await jobService.addScreenshotUrl(jobId, entry);
+        }
 
         await dualLogInfo(`Screenshot captured: ${step}`, {
           jobId,
           platform,
           step,
           type,
+          target,
           s3Url,
         });
 
@@ -118,11 +155,16 @@ export class ScreenshotHelper {
     localPath: string,
     jobId: string,
     type: "step" | "error",
-    filename: string
+    filename: string,
+    target: ScreenshotTarget = "screenshot_urls"
   ): Promise<string | null> {
     try {
       const fileContent = await fs.readFile(localPath);
-      const s3Key = `job-screenshots/${jobId}/${type}/${filename}`;
+      const prefix =
+        target === "case_opening_screenshot"
+          ? `job-screenshots/${jobId}/case-opening`
+          : `job-screenshots/${jobId}`;
+      const s3Key = `${prefix}/${type}/${filename}`;
 
       const command = new PutObjectCommand({
         Bucket: this.s3BucketName,
