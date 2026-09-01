@@ -154,7 +154,14 @@ export type SupportEmailOutcome =
   | { status: "no_email_found" };
 
 export interface ScrapeSupportEmailOptions {
-  /** Lookback window in days. Defaults to `DEFAULT_LOOKBACK_DAYS`. */
+  /**
+   * Only consider messages received after this moment, instead of the rolling
+   * day window. Callers pass the job's `updatedAt` so a run sees just what has
+   * arrived since the job was last touched. Takes precedence over
+   * `lookbackDays`.
+   */
+  since?: Date;
+  /** Lookback window in days, used when `since` is not given. */
   lookbackDays?: number;
   /** How many Gmail search hits to consider when picking the newest message. */
   maxCandidates?: number;

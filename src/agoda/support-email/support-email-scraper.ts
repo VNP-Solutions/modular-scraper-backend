@@ -2,9 +2,13 @@
  * Agoda Partner Support email scraper.
  *
  * For each job it resolves the property's Agoda ID, searches the Agoda label in
- * Gmail for messages mentioning that ID within a lookback window, takes the
- * newest one sent by `PartnerSupport@agoda.com`, and parses its body and any
- * CSV / XLSX attachment.
+ * Gmail for messages mentioning that ID, takes the newest one sent by
+ * `PartnerSupport@agoda.com`, and parses its body and any CSV / XLSX
+ * attachment.
+ *
+ * The window is either a rolling number of days or everything since a caller
+ * supplied cutoff — the reopen flow passes the job's `updatedAt` so it only
+ * sees what has arrived since the job was last touched.
  *
  * The captured email is persisted once per Gmail message; results are also
  * returned to the caller.
@@ -15,6 +19,7 @@ import { google, type gmail_v1 } from "googleapis";
 import { loadAndSetCredentials } from "../../common/load-token.js";
 import { dualLogError, dualLogInfo, dualLogWarn } from "../../common/log-helper.js";
 import { oauth2Client } from "../../config/google-config.js";
+import { JobStatus } from "../../models/job.model.js";
 import { jobService } from "../../services/job.service.js";
 import { supportEmailService } from "../../services/support-email.service.js";
 import { downloadAndParseAttachments } from "./attachment-parser.js";
@@ -59,13 +64,22 @@ async function getGmailClient(): Promise<gmail_v1.Gmail> {
 
 /**
  * Scoped to the Agoda label so the whole conversation is in range, replies and
- * sent mail included. Gmail's `newer_than:Nd` keeps the window server-side, and
- * quoting the Agoda ID stops Gmail from tokenizing it into unrelated numeric
- * matches. The label is quoted too, so a renamed label containing spaces still
- * works.
+ * sent mail included. Quoting the Agoda ID stops Gmail from tokenizing it into
+ * unrelated numeric matches, and the label is quoted too so a renamed label
+ * containing spaces still works.
+ *
+ * `after:` narrows the window server-side, but Gmail applies it at day
+ * granularity, so the exact cutoff is enforced again on the results.
  */
-function buildSearchQuery(agodaId: string, lookbackDays: number): string {
-  return `label:"${SUPPORT_EMAIL_LABEL}" "${agodaId}" newer_than:${lookbackDays}d`;
+function buildSearchQuery(
+  agodaId: string,
+  window: { since?: Date; lookbackDays: number }
+): string {
+  const scope = window.since
+    ? `after:${Math.floor(window.since.getTime() / 1000)}`
+    : `newer_than:${window.lookbackDays}d`;
+
+  return `label:"${SUPPORT_EMAIL_LABEL}" "${agodaId}" ${scope}`;
 }
 
 function toIsoDate(internalDate: string | null | undefined): string | null {
@@ -286,9 +300,13 @@ export async function scrapeAgodaSupportEmail(
   const lookbackDays = options.lookbackDays ?? DEFAULT_LOOKBACK_DAYS;
   const maxCandidates = options.maxCandidates ?? DEFAULT_MAX_CANDIDATES;
   const includeAttachments = options.includeAttachments ?? true;
+  const since = options.since;
+  const windowLabel = since
+    ? `since ${since.toISOString()}`
+    : `in the last ${lookbackDays} days`;
 
   const gmail = await getGmailClient();
-  const query = buildSearchQuery(agodaId, lookbackDays);
+  const query = buildSearchQuery(agodaId, { since, lookbackDays });
 
   await dualLogInfo(`📧 Searching Gmail for Agoda ID ${agodaId}`, { query });
 
@@ -304,7 +322,7 @@ export async function scrapeAgodaSupportEmail(
 
   if (messageIds.length === 0) {
     await dualLogInfo(
-      `📭 No emails mentioning Agoda ID ${agodaId} in the last ${lookbackDays} days`
+      `📭 No emails mentioning Agoda ID ${agodaId} ${windowLabel}`
     );
     return { status: "no_email_found" };
   }
@@ -313,8 +331,19 @@ export async function scrapeAgodaSupportEmail(
     `📬 Found ${messageIds.length} candidate email(s) for Agoda ID ${agodaId}`
   );
 
-  const candidates = await loadCandidates(gmail, messageIds);
+  const loaded = await loadCandidates(gmail, messageIds);
+
+  // Gmail resolves `after:` to whole days, so it can hand back mail from
+  // earlier on the cutoff day. Re-apply the cutoff exactly.
+  const candidates = since
+    ? loaded.filter((candidate) => candidate.millis > since.getTime())
+    : loaded;
+
   if (candidates.length === 0) {
+    await dualLogInfo(
+      `📭 Nothing new for Agoda ID ${agodaId} ${windowLabel}`,
+      { discardedByCutoff: loaded.length }
+    );
     return { status: "no_email_found" };
   }
 
@@ -416,6 +445,10 @@ export async function scrapeAgodaSupportEmail(
 /**
  * Runs the scrape for a batch of job IDs, isolating per-job failures the same
  * way the Agoda bulk property run endpoint does.
+ *
+ * Only jobs whose property run finished are worth looking at, and each is read
+ * from its own `updatedAt` so a run reports what has arrived since the job was
+ * last touched rather than re-reading mail an earlier run already saw.
  */
 export async function scrapeSupportEmailsForJobs(
   jobIds: string[],
@@ -435,6 +468,15 @@ export async function scrapeSupportEmailsForJobs(
         continue;
       }
 
+      if (job.job_status !== JobStatus.Completed) {
+        results.invalid.push({
+          jobId,
+          reason: `Job ${jobId} is ${job.job_status}; only Completed jobs have a case to look up.`,
+          currentStatus: job.job_status,
+        });
+        continue;
+      }
+
       const propertyData = await jobService.getAgodaIdFromJob(jobId);
       if (!propertyData?.agodaId) {
         results.invalid.push({
@@ -446,6 +488,7 @@ export async function scrapeSupportEmailsForJobs(
       }
 
       const outcome = await scrapeAgodaSupportEmail(propertyData.agodaId, {
+        since: job.updatedAt,
         ...options,
         jobId,
         propertyId: job.property_id?.toString(),

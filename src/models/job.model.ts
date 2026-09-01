@@ -31,6 +31,22 @@ export enum CaseStatus {
   CaseClose = "CaseClose",
 }
 
+/**
+ * Where the job stands with Agoda Partner Support, judged from the newest reply
+ * to land after the property run. Set by `/api/agoda/support-email-run-job`.
+ */
+export enum ReplyStatus {
+  /** Nothing back from Agoda yet. Past `reply_deadline_at` it is overdue. */
+  NoReplied = "NoReplied",
+  /** Agoda replied and at least one booking needs the case reopened. */
+  RepliedRed = "RepliedRed",
+  /** Agoda replied and nothing needs reopening — the balance is collectable. */
+  RepliedGreen = "RepliedGreen",
+}
+
+/** Grace period Agoda gets to reply before a job counts as unanswered. */
+export const REPLY_DEADLINE_HOURS = 48;
+
 export enum PostingType {
   OTA = "OTA",
   OTA_PLUS = "OTA_PLUS",
@@ -82,6 +98,13 @@ export interface IJob extends Document {
   watcher_emails?: string[];
   case_open?: boolean;
   case_status?: CaseStatus;
+  reply_status?: ReplyStatus;
+  /**
+   * When Agoda's reply stops being merely absent and starts being late — the
+   * property run's completion plus `REPLY_DEADLINE_HOURS`. Rewritten every time
+   * the job completes, so a rerun restarts the clock.
+   */
+  reply_deadline_at?: Date | null;
   queue_name?: string;
   worker_assigned?: string;
   batch_execution_id?: string;
@@ -257,6 +280,17 @@ const JobSchema = new Schema<IJob>(
       enum: Object.values(CaseStatus),
       required: false,
       default: CaseStatus.Pending,
+    },
+    reply_status: {
+      type: String,
+      enum: Object.values(ReplyStatus),
+      required: false,
+      default: ReplyStatus.NoReplied,
+    },
+    reply_deadline_at: {
+      type: Date,
+      required: false,
+      default: null,
     },
     start_date: {
       type: String,

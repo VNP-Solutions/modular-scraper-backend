@@ -12,6 +12,8 @@ import {
   JobStatus,
   OTAProvider,
   PostingType,
+  REPLY_DEADLINE_HOURS,
+  ReplyStatus,
   ScreenshotEntry,
 } from "../models/job.model.js";
 import {
@@ -323,6 +325,7 @@ export class JobService {
         : undefined,
       job_status: JobStatus.Pending,
       case_status: CaseStatus.Pending,
+      reply_status: ReplyStatus.NoReplied,
       current_stage: "initialized",
       progress_percentage: 0,
       worker_assigned: null,
@@ -405,9 +408,57 @@ export class JobService {
         updateData.failed_reason = null;
       }
 
+      Object.assign(updateData, this.replyWaitFields(status));
+
       return await Job.findByIdAndUpdate(objectId, updateData, { new: true });
     } catch (error) {
       console.error(`Error updating job status: ${error}`);
+      return null;
+    }
+  }
+
+  /**
+   * Fields that restart the Agoda reply wait. A finished run is the point from
+   * which a reply can be expected, so completing puts the job back to
+   * `NoReplied` and starts a fresh deadline — a rerun therefore does not
+   * inherit the previous run's verdict.
+   */
+  private replyWaitFields(status: JobStatus): Record<string, unknown> {
+    if (status !== JobStatus.Completed) return {};
+
+    return {
+      reply_status: ReplyStatus.NoReplied,
+      reply_deadline_at: new Date(
+        Date.now() + REPLY_DEADLINE_HOURS * 60 * 60 * 1000
+      ),
+    };
+  }
+
+  /**
+   * Records how Agoda answered, derived from the newest Partner Support reply.
+   */
+  async updateJobReplyStatus(
+    jobId: string,
+    replyStatus: ReplyStatus
+  ): Promise<IJob | null> {
+    try {
+      const objectId = this.validateObjectId(jobId, "jobId");
+
+      const updatedJob = await Job.findByIdAndUpdate(
+        objectId,
+        { reply_status: replyStatus, updatedAt: new Date() },
+        { new: true }
+      ).exec();
+
+      if (!updatedJob) {
+        console.error(`Job not found: ${jobId}`);
+        return null;
+      }
+
+      console.log(`✅ Updated reply_status to ${replyStatus} for job: ${jobId}`);
+      return updatedJob;
+    } catch (error) {
+      console.error(`Error updating reply_status for job ${jobId}:`, error);
       return null;
     }
   }
@@ -467,6 +518,7 @@ export class JobService {
       if (failedReason !== undefined) {
         updateData.failed_reason = failedReason ?? null;
       }
+      Object.assign(updateData, this.replyWaitFields(status));
       return await Job.findByIdAndUpdate(objectId, updateData, { new: true });
     } catch (error) {
       console.error(`Error updating job status with reason: ${error}`);

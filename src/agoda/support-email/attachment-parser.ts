@@ -224,20 +224,21 @@ export async function downloadAndParseAttachments(
         attachment.uploadError = upload.uploadError;
       }
 
-      attachment.reopenDecision = evaluateReopenDecision(
+      const decision = evaluateReopenDecision(
         attachment,
         { agodaId: context.agodaId },
         context.reopenRules
       );
+      attachment.reopenDecision = decision;
 
       await dualLogInfo(
         `✅ Parsed attachment ${ref.filename} (${attachment.rowCount} rows)`,
         {
-          sheetType: attachment.reopenDecision.sheetType,
-          shouldReopen: attachment.reopenDecision.shouldReopen,
-          collectCount: attachment.reopenDecision.collect.length,
-          reopenCount: attachment.reopenDecision.reopen.length,
-          skippedCount: attachment.reopenDecision.skipped.length,
+          sheetType: decision.sheetType,
+          shouldReopen: decision.shouldReopen,
+          collectCount: decision.collect.length,
+          reopenCount: decision.reopen.length,
+          skippedCount: decision.skipped.length,
           s3Url: attachment.s3Url,
         }
       );
