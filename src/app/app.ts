@@ -2998,10 +2998,17 @@ app.post("/api/agoda/support-email-run-job", (async (
       (result) =>
         result.outcome.status === "parsed" && result.outcome.storage.stored
     ).length;
+    const conversationStored = parsed.reduce(
+      (sum, result) =>
+        result.outcome.status === "parsed"
+          ? sum + result.outcome.storage.conversationStored
+          : sum,
+      0
+    );
 
     return res.status(200).json({
       status: 200,
-      message: `Processed ${job_ids.length} jobs. ${parsed.length} support email(s) parsed (${newlyStored} newly stored, ${parsed.length - newlyStored} already on record), ${toReopen} need reopening, ${withoutReply} without a Partner Support reply, ${results.invalid.length} invalid, ${results.errors.length} with errors.`,
+      message: `Processed ${job_ids.length} jobs. ${parsed.length} support email(s) parsed (${newlyStored} newly stored, ${parsed.length - newlyStored} already on record), ${conversationStored} further conversation message(s) captured, ${toReopen} need reopening, ${withoutReply} without a Partner Support reply, ${results.invalid.length} invalid, ${results.errors.length} with errors.`,
       results,
     });
   } catch (err: any) {

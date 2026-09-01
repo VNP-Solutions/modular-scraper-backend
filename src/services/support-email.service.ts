@@ -93,6 +93,7 @@ export class SupportEmailService {
       const created = await SupportEmail.create({
         message_id: email.messageId,
         thread_id: email.threadId,
+        direction: email.direction,
         agoda_id: context.agodaId,
         job_id: toObjectId(context.jobId),
         property_id: toObjectId(context.propertyId),
@@ -121,6 +122,7 @@ export class SupportEmailService {
       await dualLogInfo(`🗃️ Stored support email ${email.messageId}`, {
         agodaId: context.agodaId,
         jobId: context.jobId,
+        direction: email.direction,
         caseId: email.body.caseId,
         attachmentCount: email.attachments.length,
         recordId: String(created._id),

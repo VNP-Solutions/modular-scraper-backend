@@ -1,12 +1,13 @@
 /**
  * Agoda Partner Support email scraper.
  *
- * For each job it resolves the property's Agoda ID, searches Gmail for messages
- * mentioning that ID within a lookback window, takes the newest one, and — only
- * when it came from `PartnerSupport@agoda.com` — parses the body and any
+ * For each job it resolves the property's Agoda ID, searches the Agoda label in
+ * Gmail for messages mentioning that ID within a lookback window, takes the
+ * newest one sent by `PartnerSupport@agoda.com`, and parses its body and any
  * CSV / XLSX attachment.
  *
- * Reads only; nothing is persisted. Results are returned to the caller.
+ * The captured email is persisted once per Gmail message; results are also
+ * returned to the caller.
  */
 
 import dotenv from "dotenv";
@@ -25,18 +26,23 @@ import {
 import {
   AGODA_PARTNER_SUPPORT_ADDRESS,
   DEFAULT_LOOKBACK_DAYS,
+  DEFAULT_SUPPORT_EMAIL_LABEL,
   type BulkSupportEmailResults,
   type JobSupportEmailResult,
   type ParsedAttachment,
   type ReopenSummary,
   type ScrapeSupportEmailOptions,
   type SupportEmail,
+  type SupportEmailDirection,
   type SupportEmailOutcome,
 } from "./support-email.types.js";
 
 dotenv.config();
 
 const DEFAULT_MAX_CANDIDATES = 10;
+
+const SUPPORT_EMAIL_LABEL =
+  process.env.AGODA_SUPPORT_EMAIL_LABEL || DEFAULT_SUPPORT_EMAIL_LABEL;
 
 async function getGmailClient(): Promise<gmail_v1.Gmail> {
   const tokenPath = process.env.TOKEN_PATH || "token.json";
@@ -52,11 +58,14 @@ async function getGmailClient(): Promise<gmail_v1.Gmail> {
 }
 
 /**
- * Gmail's `newer_than:Nd` keeps the window server-side; quoting the Agoda ID
- * stops Gmail from tokenizing it into unrelated numeric matches.
+ * Scoped to the Agoda label so the whole conversation is in range, replies and
+ * sent mail included. Gmail's `newer_than:Nd` keeps the window server-side, and
+ * quoting the Agoda ID stops Gmail from tokenizing it into unrelated numeric
+ * matches. The label is quoted too, so a renamed label containing spaces still
+ * works.
  */
 function buildSearchQuery(agodaId: string, lookbackDays: number): string {
-  return `"${agodaId}" newer_than:${lookbackDays}d`;
+  return `label:"${SUPPORT_EMAIL_LABEL}" "${agodaId}" newer_than:${lookbackDays}d`;
 }
 
 function toIsoDate(internalDate: string | null | undefined): string | null {
@@ -65,16 +74,25 @@ function toIsoDate(internalDate: string | null | undefined): string | null {
   return Number.isFinite(millis) ? new Date(millis).toISOString() : null;
 }
 
+interface CandidateMessage {
+  id: string;
+  millis: number;
+  from: string;
+  sender: string;
+  receivedAt: string | null;
+  direction: SupportEmailDirection;
+}
+
 /**
- * Gmail lists newest first, but ordering is re-checked against `internalDate`
- * so "the last mail" is right even if the listing order shifts.
+ * Loads just enough of each hit to order and attribute it, newest first. Gmail
+ * lists newest first already, but ordering is re-derived from `internalDate` so
+ * "the last mail" is right even if the listing order shifts.
  */
-async function findNewestMessageId(
+async function loadCandidates(
   gmail: gmail_v1.Gmail,
   messageIds: string[]
-): Promise<string | null> {
-  let newestId: string | null = null;
-  let newestMillis = -1;
+): Promise<CandidateMessage[]> {
+  const candidates: CandidateMessage[] = [];
 
   for (const id of messageIds) {
     try {
@@ -82,14 +100,24 @@ async function findNewestMessageId(
         userId: "me",
         id,
         format: "metadata",
-        metadataHeaders: ["Date"],
+        metadataHeaders: ["Date", "From"],
       });
 
-      const millis = Number(meta.data.internalDate ?? 0);
-      if (millis > newestMillis) {
-        newestMillis = millis;
-        newestId = id;
-      }
+      const from =
+        findHeader(meta.data.payload?.headers ?? undefined, "From") ?? "";
+
+      candidates.push({
+        id,
+        millis: Number(meta.data.internalDate ?? 0),
+        from,
+        sender: normalizeSenderAddress(from),
+        receivedAt: toIsoDate(meta.data.internalDate),
+        // Gmail's own SENT label is more reliable than matching the From
+        // address against whichever alias the mailbox happens to send as.
+        direction: (meta.data.labelIds ?? []).includes("SENT")
+          ? "outgoing"
+          : "incoming",
+      });
     } catch (error) {
       await dualLogWarn(`⚠️ Could not read metadata for message ${id}`, {
         error: error instanceof Error ? error.message : String(error),
@@ -97,7 +125,7 @@ async function findNewestMessageId(
     }
   }
 
-  return newestId;
+  return candidates.sort((a, b) => b.millis - a.millis);
 }
 
 /** Rolls the per-attachment verdicts up into one answer for the email. */
@@ -151,7 +179,8 @@ async function buildSupportEmail(
   message: gmail_v1.Schema$Message,
   agodaId: string,
   options: ScrapeSupportEmailOptions,
-  includeAttachments: boolean
+  includeAttachments: boolean,
+  direction: SupportEmailDirection
 ): Promise<SupportEmail> {
   const payload = message.payload ?? undefined;
   const headers = payload?.headers ?? undefined;
@@ -170,6 +199,7 @@ async function buildSupportEmail(
   return {
     messageId,
     threadId: message.threadId ?? null,
+    direction,
     receivedAt: toIsoDate(message.internalDate),
     headers: {
       from: findHeader(headers, "From") ?? "",
@@ -181,6 +211,69 @@ async function buildSupportEmail(
     attachments,
     reopen: summarizeReopen(attachments),
   };
+}
+
+/**
+ * Stores the rest of the labelled conversation — our own submissions and any
+ * older replies — so the exchange is on record, not just the one message the
+ * reopen rules ran against.
+ *
+ * Messages already captured by an earlier run are skipped before Gmail is asked
+ * for the body, so a repeat scrape costs one cheap database lookup each.
+ */
+async function captureRemainingConversation(
+  gmail: gmail_v1.Gmail,
+  candidates: CandidateMessage[],
+  primaryMessageId: string,
+  agodaId: string,
+  options: ScrapeSupportEmailOptions,
+  includeAttachments: boolean
+): Promise<{ stored: number; duplicates: number }> {
+  let stored = 0;
+  let duplicates = 0;
+
+  for (const candidate of candidates) {
+    if (candidate.id === primaryMessageId) continue;
+
+    try {
+      if (await supportEmailService.isStored(candidate.id)) {
+        duplicates += 1;
+        continue;
+      }
+
+      const message = await gmail.users.messages.get({
+        userId: "me",
+        id: candidate.id,
+        format: "full",
+      });
+
+      const email = await buildSupportEmail(
+        gmail,
+        message.data,
+        agodaId,
+        options,
+        includeAttachments,
+        candidate.direction
+      );
+
+      const result = await supportEmailService.storeIfNew(email, {
+        agodaId,
+        jobId: options.jobId,
+        propertyId: options.propertyId,
+      });
+
+      if (result.stored) stored += 1;
+      else if (result.duplicate) duplicates += 1;
+    } catch (error) {
+      // One unreadable message must not cost us the rest of the conversation.
+      await dualLogWarn(
+        `⚠️ Could not capture conversation message ${candidate.id}`,
+        { error: error instanceof Error ? error.message : String(error) }
+      );
+    }
+  }
+
+  return { stored, duplicates };
 }
 
 /**
@@ -220,30 +313,38 @@ export async function scrapeAgodaSupportEmail(
     `📬 Found ${messageIds.length} candidate email(s) for Agoda ID ${agodaId}`
   );
 
-  const newestId = await findNewestMessageId(gmail, messageIds);
-  if (!newestId) {
+  const candidates = await loadCandidates(gmail, messageIds);
+  if (candidates.length === 0) {
     return { status: "no_email_found" };
+  }
+
+  // The label covers both directions, so the newest hit is often our own reply.
+  // Take the newest message Agoda actually sent rather than stopping at the
+  // newest overall and calling it a day.
+  const latestReply = candidates.find(
+    (candidate) => candidate.sender === AGODA_PARTNER_SUPPORT_ADDRESS
+  );
+
+  if (!latestReply) {
+    const newest = candidates[0];
+    await dualLogInfo(
+      `↩️ No Partner Support message among the ${candidates.length} hit(s) for Agoda ID ${agodaId}; newest is from ${newest.sender || "unknown"}`
+    );
+    return {
+      status: "not_from_partner_support",
+      from: newest.from,
+      receivedAt: newest.receivedAt,
+    };
   }
 
   const message = await gmail.users.messages.get({
     userId: "me",
-    id: newestId,
+    id: latestReply.id,
     format: "full",
   });
 
-  const from = findHeader(message.data.payload?.headers ?? undefined, "From") ?? "";
-  const sender = normalizeSenderAddress(from);
-  const receivedAt = toIsoDate(message.data.internalDate);
-
-  if (sender !== AGODA_PARTNER_SUPPORT_ADDRESS) {
-    await dualLogInfo(
-      `↩️ Latest email for Agoda ID ${agodaId} is from ${sender || "unknown"}, not Partner Support`
-    );
-    return { status: "not_from_partner_support", from, receivedAt };
-  }
-
   await dualLogInfo(
-    `✅ Latest email for Agoda ID ${agodaId} is from Agoda Partner Support, parsing`
+    `✅ Latest Partner Support reply for Agoda ID ${agodaId} received ${latestReply.receivedAt}, parsing`
   );
 
   const email = await buildSupportEmail(
@@ -251,7 +352,8 @@ export async function scrapeAgodaSupportEmail(
     message.data,
     agodaId,
     options,
-    includeAttachments
+    includeAttachments,
+    latestReply.direction
   );
 
   await dualLogInfo(`📄 Parsed support email for Agoda ID ${agodaId}`, {
@@ -263,18 +365,52 @@ export async function scrapeAgodaSupportEmail(
     collectBookings: email.reopen.collectBookingIds.length,
   });
 
+  if (options.persist === false) {
+    return {
+      status: "parsed",
+      email,
+      storage: {
+        stored: false,
+        duplicate: false,
+        recordId: null,
+        conversationStored: 0,
+        conversationDuplicates: 0,
+      },
+    };
+  }
+
   // Gmail keeps returning the same message for the whole lookback window, so
   // the store is a no-op after the first sighting.
-  const storage =
-    options.persist === false
-      ? { stored: false, duplicate: false, recordId: null }
-      : await supportEmailService.storeIfNew(email, {
-          agodaId,
-          jobId: options.jobId,
-          propertyId: options.propertyId,
-        });
+  const primaryStorage = await supportEmailService.storeIfNew(email, {
+    agodaId,
+    jobId: options.jobId,
+    propertyId: options.propertyId,
+  });
 
-  return { status: "parsed", email, storage };
+  const conversation = await captureRemainingConversation(
+    gmail,
+    candidates,
+    latestReply.id,
+    agodaId,
+    options,
+    includeAttachments
+  );
+
+  if (conversation.stored > 0) {
+    await dualLogInfo(
+      `🗂️ Captured ${conversation.stored} further message(s) from the Agoda ${agodaId} conversation`
+    );
+  }
+
+  return {
+    status: "parsed",
+    email,
+    storage: {
+      ...primaryStorage,
+      conversationStored: conversation.stored,
+      conversationDuplicates: conversation.duplicates,
+    },
+  };
 }
 
 /**

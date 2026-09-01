@@ -8,6 +8,13 @@ export const AGODA_PARTNER_SUPPORT_ADDRESS = "partnersupport@agoda.com";
 /** How far back to search Gmail when the caller does not specify a window. */
 export const DEFAULT_LOOKBACK_DAYS = 10;
 
+/**
+ * Gmail label holding the Agoda correspondence, both directions. Scoping the
+ * search to it keeps unrelated mail that happens to mention the Agoda ID out of
+ * the candidate set. Override with `AGODA_SUPPORT_EMAIL_LABEL`.
+ */
+export const DEFAULT_SUPPORT_EMAIL_LABEL = "agoda-responses";
+
 export interface SupportEmailHeaders {
   from: string;
   to: string | null;
@@ -106,9 +113,14 @@ export interface ReopenSummary {
   collectBookingIds: string[];
 }
 
+/** Which way a message in the labelled conversation was travelling. */
+export type SupportEmailDirection = "incoming" | "outgoing";
+
 export interface SupportEmail {
   messageId: string;
   threadId: string | null;
+  /** Derived from Gmail's `SENT` label rather than the sender address. */
+  direction: SupportEmailDirection;
   /** Gmail internalDate as an ISO string. */
   receivedAt: string | null;
   headers: SupportEmailHeaders;
@@ -125,6 +137,12 @@ export interface SupportEmailStorage {
   /** True when the message was already captured by an earlier run. */
   duplicate: boolean;
   recordId: string | null;
+  /**
+   * The rest of the labelled conversation — our own submissions and any older
+   * replies — captured alongside the message the rules ran against.
+   */
+  conversationStored: number;
+  conversationDuplicates: number;
 }
 
 export type SupportEmailOutcome =

@@ -2,6 +2,8 @@ import mongoose, { Document, Schema, Types } from "mongoose";
 
 export type SupportEmailAttachmentFormat = "csv" | "xlsx" | "unknown";
 
+export type SupportEmailDirection = "incoming" | "outgoing";
+
 /**
  * Metadata for one CSV / XLSX file Agoda attached to its reply. The parsed rows
  * are deliberately not kept: the untouched original is archived to S3, and rows
@@ -28,14 +30,18 @@ export interface ISupportEmailAttachment {
 }
 
 /**
- * One Agoda Partner Support email, captured from Gmail and kept so the same
- * message is never processed twice. `message_id` is Gmail's own immutable ID
- * and is the deduplication key.
+ * One message from the labelled Agoda conversation — Agoda's replies and our
+ * own submissions alike — captured from Gmail and kept so the same message is
+ * never processed twice. `message_id` is Gmail's own immutable ID and is the
+ * deduplication key. Only the newest incoming reply drives the reopen rules;
+ * the rest are stored purely as a record of the exchange.
  */
 export interface ISupportEmail extends Document {
   _id: Types.ObjectId;
   message_id: string;
   thread_id?: string | null;
+  /** `outgoing` when Gmail marked the message as sent by us. */
+  direction: SupportEmailDirection;
   agoda_id: string;
   /** Job whose run first captured this email. */
   job_id?: Types.ObjectId;
@@ -97,6 +103,12 @@ const SupportEmailSchema = new Schema<ISupportEmail>(
       unique: true,
     },
     thread_id: { type: String, required: false },
+    direction: {
+      type: String,
+      enum: ["incoming", "outgoing"],
+      required: true,
+      default: "incoming",
+    },
     agoda_id: { type: String, required: true },
     job_id: { type: Schema.Types.ObjectId, ref: "Job", required: false },
     property_id: {
