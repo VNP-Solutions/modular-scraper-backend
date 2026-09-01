@@ -6,13 +6,17 @@
  * once. Nothing is overwritten on a repeat sighting.
  */
 
-import { Types } from "mongoose";
+import { Types, type FilterQuery } from "mongoose";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
 import {
+  ISupportEmail,
   ISupportEmailAttachment,
   SupportEmail,
 } from "../models/support-email.model.js";
-import type { SupportEmail as ParsedSupportEmail } from "../agoda/support-email/support-email.types.js";
+import {
+  AGODA_PARTNER_SUPPORT_ADDRESS,
+  type SupportEmail as ParsedSupportEmail,
+} from "../agoda/support-email/support-email.types.js";
 
 export interface StoreSupportEmailContext {
   agodaId: string;
@@ -54,7 +58,47 @@ function toStorableAttachments(
   }));
 }
 
+/**
+ * The `from_address` on record is the raw header, e.g.
+ * `Agoda <PartnerSupport@agoda.com>`, so the sender is matched inside it.
+ */
+const PARTNER_SUPPORT_FROM = new RegExp(
+  AGODA_PARTNER_SUPPORT_ADDRESS.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+  "i"
+);
+
 export class SupportEmailService {
+  /**
+   * Newest Agoda reply already on record for a property.
+   *
+   * Reads what an earlier `/api/agoda/support-email-run-job` captured instead of
+   * going back to Gmail, so downstream callers act on the stored record rather
+   * than re-fetching and risking a different answer.
+   *
+   * Only inbound Partner Support mail counts: our own submissions carry the same
+   * label and would otherwise win on recency.
+   */
+  async findLatestPartnerSupportReply(
+    agodaId: string,
+    options: { since?: Date | null } = {}
+  ): Promise<ISupportEmail | null> {
+    const filter: FilterQuery<ISupportEmail> = {
+      agoda_id: agodaId,
+      direction: "incoming",
+      from_address: PARTNER_SUPPORT_FROM,
+    };
+
+    // Served by the { agoda_id, received_at } index.
+    if (options.since) {
+      filter.received_at = { $gt: options.since };
+    }
+
+    return await SupportEmail.findOne(filter)
+      .sort({ received_at: -1 })
+      .lean<ISupportEmail>()
+      .exec();
+  }
+
   /** Whether this Gmail message has already been captured. */
   async isStored(messageId: string): Promise<boolean> {
     const existing = await SupportEmail.findOne({ message_id: messageId })

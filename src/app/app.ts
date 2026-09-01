@@ -18,7 +18,12 @@ import { scrapingStateManager } from "../common/scraping-state.js";
 import { WorkerJobData } from "../common/worker-types.js";
 import { specs, swaggerUi } from "../config/swagger.js";
 import { getAccess, getOauth2Callback } from "../get-access/access.js";
-import { CaseStatus, JobStatus, ReplyStatus } from "../models/job.model.js";
+import {
+  CaseStatus,
+  JobStatus,
+  REPLY_DEADLINE_HOURS,
+  ReplyStatus,
+} from "../models/job.model.js";
 import { ScheduledJob } from "../models/scheduled-job.model.js";
 import { propertyCredentialsService } from "../services/job-credentials.service.js";
 import { jobService } from "../services/job.service.js";
@@ -26,6 +31,7 @@ import {
   retrievalService,
   type CollectRetrievalInput,
 } from "../services/retrieval.service.js";
+import { supportEmailService } from "../services/support-email.service.js";
 
 const app = express();
 
@@ -3387,12 +3393,21 @@ app.post("/api/agoda/reopen-case-run-job", (async (
  *       - Agoda Scraping
  *     summary: Turn the bookings a property can charge itself into retrievals
  *     description: |
- *       Re-reads the latest Agoda Partner Support reply for each job and hands the
- *       bookings the reopen rules marked `COLLECT` to the retrieval side.
+ *       Reads the Agoda Partner Support reply already stored in `support_emails`
+ *       and hands the bookings the reopen rules marked `COLLECT` to the retrieval
+ *       side. Gmail is not contacted: capturing is
+ *       `POST /api/agoda/support-email-run-job`'s job, and this endpoint acts on
+ *       what that call stored, so both see the same reply.
  *
- *       Only jobs whose `job_status` is `Completed` are considered, and the Gmail
- *       search starts at the job's `updatedAt`, exactly as
- *       `POST /api/agoda/reopen-case-run-job` does.
+ *       Run the capture endpoint first. With no stored reply for the property the
+ *       job is skipped rather than treated as having nothing to collect.
+ *
+ *       Only jobs whose `job_status` is `Completed` are considered, and the reply
+ *       must have arrived after that run finished. The cutoff is derived from
+ *       `reply_deadline_at` minus the 48-hour grace period rather than from
+ *       `updatedAt`, which capturing the email moves past the arrival time. Jobs
+ *       completed before `reply_deadline_at` existed have no cutoff, so their
+ *       newest stored reply is used.
  *
  *       A job is only sent when nothing on it still needs reopening. If the reply
  *       flags even one booking as `REOPEN` the job is skipped, because the case is
@@ -3454,7 +3469,7 @@ app.post("/api/agoda/reopen-case-run-job", (async (
  *                             example: "2 booking(s) still need the case reopened"
  *                     invalid:
  *                       type: array
- *                       description: Jobs rejected before the Gmail search, e.g. not Completed
+ *                       description: Jobs rejected before the stored reply was read, e.g. not Completed
  *                       items:
  *                         type: object
  *                         properties:
@@ -3564,49 +3579,50 @@ app.post("/api/agoda/send-to-retrieval", (async (
         }
 
         const { agodaId } = propertyData;
-        const since = job.updatedAt;
-        const outcome = await scrapeAgodaSupportEmail(agodaId, {
-          jobId,
-          propertyId: job.property_id?.toString(),
-          since,
-        });
 
-        if (outcome.status === "no_email_found") {
+        // `updatedAt` is no use as the cutoff here: capturing the email writes
+        // reply_status back to the job and pushes it past the email's arrival.
+        // The completion time behind reply_deadline_at is not moved by those
+        // writes, so it still marks the run this reply has to be answering.
+        const runCompletedAt = job.reply_deadline_at
+          ? new Date(
+              job.reply_deadline_at.getTime() -
+                REPLY_DEADLINE_HOURS * 60 * 60 * 1000
+            )
+          : null;
+
+        const email = await supportEmailService.findLatestPartnerSupportReply(
+          agodaId,
+          { since: runCompletedAt }
+        );
+
+        if (!email) {
           results.skipped.push({
             jobId,
             agodaId,
-            reason: `No new Agoda email since the job was last updated (${since.toISOString()})`,
+            reason: runCompletedAt
+              ? `No stored Agoda reply that arrived after the run finished (${runCompletedAt.toISOString()}). Capture it with POST /api/agoda/support-email-run-job first.`
+              : "No stored Agoda reply for this property. Capture it with POST /api/agoda/support-email-run-job first.",
           });
           continue;
         }
-
-        if (outcome.status === "not_from_partner_support") {
-          results.skipped.push({
-            jobId,
-            agodaId,
-            reason: `Latest email is from ${outcome.from || "an unknown sender"}, not Partner Support`,
-          });
-          continue;
-        }
-
-        const { reopen } = outcome.email;
 
         // The case has to be settled with Agoda before the balance can be
         // treated as collectable, so anything still needing a reopen waits.
-        if (reopen.shouldReopen && reopen.reopenBookingIds.length > 0) {
+        if (email.should_reopen && email.reopen_booking_ids.length > 0) {
           results.skipped.push({
             jobId,
             agodaId,
-            reason: `${reopen.reopenBookingIds.length} booking(s) still need the case reopened`,
+            reason: `${email.reopen_booking_ids.length} booking(s) still need the case reopened`,
           });
           continue;
         }
 
-        if (reopen.collectBookingIds.length === 0) {
+        if (email.collect_booking_ids.length === 0) {
           results.skipped.push({
             jobId,
             agodaId,
-            reason: "No collectable booking in the latest reply",
+            reason: "No collectable booking in the stored reply",
           });
           continue;
         }
@@ -3614,7 +3630,7 @@ app.post("/api/agoda/send-to-retrieval", (async (
         collectCandidates.push({
           job,
           agodaId,
-          reservations: reopen.collectBookingIds,
+          reservations: email.collect_booking_ids,
         });
       } catch (error: any) {
         console.error(`Error preparing retrieval for job ${jobId}:`, error);

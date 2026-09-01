@@ -94,6 +94,11 @@ export interface IJob extends Document {
   log_link?: string;
   /** Google Drive URL for exported Agoda job_items XLSX after Completed/Partial */
   job_items_file_link?: string;
+  /**
+   * S3 URL of the CSV attached during Agoda Need Help. Written only when
+   * `job_status` becomes Completed — never for Partial, Failed, or in-flight runs.
+   */
+  need_help_file_url?: string | null;
   live_url?: string;
   watcher_emails?: string[];
   case_open?: boolean;
@@ -248,6 +253,11 @@ const JobSchema = new Schema<IJob>(
     job_items_file_link: {
       type: String,
       required: false,
+    },
+    need_help_file_url: {
+      type: String,
+      required: false,
+      default: null,
     },
     live_url: {
       type: String,

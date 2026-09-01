@@ -2,6 +2,10 @@ import fs from "fs";
 import path from "path";
 import { Page } from "puppeteer";
 import { dualLogError, dualLogInfo } from "../../common/log-helper.js";
+import {
+  setPendingNeedHelpFileUrl,
+  uploadNeedHelpCsvToS3,
+} from "../../common/need-help-file.js";
 import { progressManager } from "../../common/progress-manager.js";
 import { scrapingStateManager } from "../../common/scraping-state.js";
 import {
@@ -848,6 +852,20 @@ export async function automateNeedHelpProcess(
                   { jobId },
                 );
                 stepResults.csvUploaded = true;
+
+                if (jobId) {
+                  const s3Url = await uploadNeedHelpCsvToS3(
+                    jobId,
+                    csvFilePathToUpload,
+                  );
+                  if (s3Url) {
+                    setPendingNeedHelpFileUrl(jobId, s3Url);
+                    await dualLogInfo(
+                      "Need Help CSV archived to S3 (job field saved only on Completed)",
+                      { jobId, s3Url },
+                    );
+                  }
+                }
 
                 // Update progress - CSV file uploaded
                 if (jobId) {

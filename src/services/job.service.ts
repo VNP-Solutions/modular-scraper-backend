@@ -30,6 +30,7 @@ import {
   PropertyCredentials,
 } from "../models/property-cred.model.js";
 import { IProperty, Property } from "../models/property.model.js";
+import { takePendingNeedHelpFileUrl } from "../common/need-help-file.js";
 
 export interface CreateJobData {
   name?: string;
@@ -409,6 +410,7 @@ export class JobService {
       }
 
       Object.assign(updateData, this.replyWaitFields(status));
+      this.applyNeedHelpFileUrl(jobId, status, updateData);
 
       return await Job.findByIdAndUpdate(objectId, updateData, { new: true });
     } catch (error) {
@@ -432,6 +434,41 @@ export class JobService {
         Date.now() + REPLY_DEADLINE_HOURS * 60 * 60 * 1000
       ),
     };
+  }
+
+  /**
+   * Persist the Need Help CSV S3 URL only when the job becomes Completed.
+   * Partial / Failed / Stopped drop the in-memory URL so it is never stored.
+   * Running / Pending clear any previous value so a rerun starts clean.
+   */
+  private applyNeedHelpFileUrl(
+    jobId: string,
+    status: JobStatus,
+    updateData: Record<string, unknown>
+  ): void {
+    if (status === JobStatus.Completed) {
+      const url = takePendingNeedHelpFileUrl(jobId);
+      if (url) {
+        updateData.need_help_file_url = url;
+        console.log(
+          `✅ Saved need_help_file_url for completed job ${jobId}`
+        );
+      }
+      return;
+    }
+
+    if (
+      status === JobStatus.Partial ||
+      status === JobStatus.Failed ||
+      status === JobStatus.Stopped
+    ) {
+      takePendingNeedHelpFileUrl(jobId);
+      return;
+    }
+
+    if (status === JobStatus.Running || status === JobStatus.Pending) {
+      updateData.need_help_file_url = null;
+    }
   }
 
   /**
@@ -519,6 +556,7 @@ export class JobService {
         updateData.failed_reason = failedReason ?? null;
       }
       Object.assign(updateData, this.replyWaitFields(status));
+      this.applyNeedHelpFileUrl(jobId, status, updateData);
       return await Job.findByIdAndUpdate(objectId, updateData, { new: true });
     } catch (error) {
       console.error(`Error updating job status with reason: ${error}`);
@@ -599,11 +637,13 @@ export class JobService {
       const existing = await Job.findById(objectId).select("failed_reason");
       const reason =
         existing?.failed_reason ?? fallbackReason ?? null;
-      return await Job.findByIdAndUpdate(
-        objectId,
-        { job_status: JobStatus.Failed, failed_reason: reason, updatedAt: new Date() },
-        { new: true }
-      );
+      const updateData: Record<string, unknown> = {
+        job_status: JobStatus.Failed,
+        failed_reason: reason,
+        updatedAt: new Date(),
+      };
+      this.applyNeedHelpFileUrl(jobId, JobStatus.Failed, updateData);
+      return await Job.findByIdAndUpdate(objectId, updateData, { new: true });
     } catch (error) {
       console.error(`Error in failJobSafe: ${error}`);
       return null;
