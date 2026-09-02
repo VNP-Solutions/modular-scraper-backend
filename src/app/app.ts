@@ -1,10 +1,7 @@
 import bodyParser from "body-parser";
 import cors from "cors";
 import express from "express";
-import {
-  scrapeAgodaSupportEmail,
-  scrapeSupportEmailsForJobs,
-} from "../agoda/support-email/support-email-scraper.js";
+import { scrapeSupportEmailsForJobs } from "../agoda/support-email/support-email-scraper.js";
 import createError from "../common/error.js";
 import {
   getAcceptLanguage,
@@ -3085,33 +3082,46 @@ app.post("/api/agoda/support-email-run-job", (async (
  *       - Agoda Scraping
  *     summary: Ask Agoda to reopen a case for the bookings flagged by the reopen rules
  *     description: |
- *       Re-reads the latest Agoda Partner Support reply for each job and, when the
- *       reopen rules flagged at least one booking as `REOPEN`, submits an Agoda
- *       scraping run to the worker pool.
+ *       Reads the latest **stored** Agoda Partner Support reply for each job from
+ *       the `support_emails` collection and, when the reopen rules flagged at
+ *       least one booking as `REOPEN`, submits an Agoda scraping run to the
+ *       worker pool.
+ *
+ *       **This endpoint does not talk to Gmail.** It only reads what an earlier
+ *       call to `POST /api/agoda/support-email-run-job` already captured. If
+ *       that capture has not been run yet (or not run again since the latest
+ *       reply arrived), this endpoint will find nothing and every job will be
+ *       reported under `skipped`.
  *
  *       Only jobs whose `job_status` is `Completed` are considered — a case only
  *       exists once the property run has finished, so a job in any other status is
- *       reported under `invalid` and no Gmail search is made for it.
+ *       reported under `invalid` and no lookup is made for it.
  *
- *       The Gmail search starts at the job's `updatedAt` rather than a fixed window,
- *       so a run only sees mail that arrived since the job was last touched. Because
- *       writing `case_status` moves `updatedAt` forward, a handled case will report
- *       no new email on the next call rather than acting on the same reply twice.
+ *       The stored reply must have arrived after the property run finished —
+ *       `reply_deadline_at` minus the 48-hour grace window gives that finish
+ *       time, and only a reply timestamped after it counts. This is deliberately
+ *       not `job.updatedAt`, since capturing a reply (or a previous reopen
+ *       attempt) writes back to the job and would otherwise push the cutoff past
+ *       the very reply this endpoint needs to see.
  *
- *       That run mirrors the property run — browser setup, login with OTP, then the
- *       property page — but skips the date-range booking lookup entirely and goes
- *       straight to Need Help. The flagged booking IDs are written into the request
- *       message from `src/agoda/need-help/reopen-message.txt`; no file is attached.
+ *       This endpoint does not check whether the case was already reopened for
+ *       this exact reply — repeat calls will resubmit the same reopen if
+ *       nothing has changed in `support_emails`. It is intended to be run by an
+ *       operator who has already confirmed a reopen is warranted, not on an
+ *       automatic schedule.
+ *
+ *       The submitted run mirrors the property run — browser setup, login with
+ *       OTP, then the property page — but skips the date-range booking lookup
+ *       entirely and goes straight to Need Help. The flagged booking IDs are
+ *       written into the request message from
+ *       `src/agoda/need-help/reopen-message.txt`; no file is attached.
  *
  *       Jobs are submitted without waiting for them to finish, so the response reports
- *       submission only. Progress is tracked on the job's `case_status` field:
- *       `CaseInQueue` while it waits for a worker or the OTP, `CaseRunning` once the
- *       browser run starts, then `CaseReopen` when the Need Help request goes through
- *       or `ParserCaseReopeningFailed` if it does not. On a failure the explanation is
- *       written to `case_failed_reason`, which is cleared again on the next attempt.
- *       `job_status` is deliberately
- *       left untouched, so the result of the property run that produced the case is
- *       preserved.
+ *       submission only. Progress is tracked the same way a bulk/property run
+ *       tracks it: `job_status` moves `InQueue` → `Running` → `Completed`/`Failed`,
+ *       screenshots are appended to `screenshot_urls`, and on failure the reason is
+ *       written to `failed_reason`. This overwrites the `Completed` status left by
+ *       the property run that produced the case, same as re-running any other job.
  *       `case_open` is still set back to `true` on success.
  *
  *       This endpoint only ever reopens. A job whose bookings are all collectable is
@@ -3182,7 +3192,7 @@ app.post("/api/agoda/support-email-run-job", (async (
  *                             example: "No booking needs the case reopened"
  *                     invalid:
  *                       type: array
- *                       description: Jobs rejected before the Gmail search, e.g. not Completed
+ *                       description: Jobs rejected before the support_emails lookup, e.g. not Completed
  *                       items:
  *                         type: object
  *                         properties:
@@ -3281,42 +3291,42 @@ app.post("/api/agoda/reopen-case-run-job", (async (
 
         const { agodaId } = propertyData;
 
-        // Only look at mail that landed after the job was last touched, so a
-        // run answers "has Agoda replied since?" rather than re-reading a
-        // message an earlier run already acted on.
-        const since = job.updatedAt;
-        const outcome = await scrapeAgodaSupportEmail(agodaId, {
-          jobId,
-          propertyId: job.property_id?.toString(),
-          since,
-        });
+        // `updatedAt` is no use as the cutoff here: capturing the email (via
+        // POST /api/agoda/support-email-run-job) writes reply_status back to
+        // the job and pushes updatedAt past the email's actual arrival. The
+        // property run's completion time behind reply_deadline_at is not
+        // moved by those writes, so it still marks the run this reply has to
+        // be answering — same reference point send-to-retrieval uses.
+        const runCompletedAt = job.reply_deadline_at
+          ? new Date(
+              job.reply_deadline_at.getTime() -
+                REPLY_DEADLINE_HOURS * 60 * 60 * 1000
+            )
+          : null;
 
-        if (outcome.status === "no_email_found") {
+        const email = await supportEmailService.findLatestPartnerSupportReply(
+          agodaId,
+          { since: runCompletedAt }
+        );
+
+        if (!email) {
           results.skipped.push({
             jobId,
             agodaId,
-            reason: `No new Agoda email since the job was last updated (${since.toISOString()})`,
+            reason: runCompletedAt
+              ? `No stored Agoda reply that arrived after the run finished (${runCompletedAt.toISOString()}). Capture it with POST /api/agoda/support-email-run-job first.`
+              : "No stored Agoda reply for this property. Capture it with POST /api/agoda/support-email-run-job first.",
           });
           continue;
         }
 
-        if (outcome.status === "not_from_partner_support") {
-          results.skipped.push({
-            jobId,
-            agodaId,
-            reason: `Latest email is from ${outcome.from || "an unknown sender"}, not Partner Support`,
-          });
-          continue;
-        }
-
-        const { reopen, body } = outcome.email;
-        if (!reopen.shouldReopen || reopen.reopenBookingIds.length === 0) {
+        if (!email.should_reopen || email.reopen_booking_ids.length === 0) {
           results.skipped.push({
             jobId,
             agodaId,
             reason:
-              reopen.collectBookingIds.length > 0
-                ? `No booking needs the case reopened; ${reopen.collectBookingIds.length} booking(s) are collectable via POST /api/agoda/send-to-retrieval`
+              email.collect_booking_ids.length > 0
+                ? `No booking needs the case reopened; ${email.collect_booking_ids.length} booking(s) are collectable via POST /api/agoda/send-to-retrieval`
                 : "No booking needs the case reopened",
           });
           continue;
@@ -3328,8 +3338,8 @@ app.post("/api/agoda/reopen-case-run-job", (async (
           agodaId,
           agodaUsername: propertyCredentials.agodaUsername,
           agodaPassword: propertyCredentials.agodaPassword,
-          reopenBookingIds: reopen.reopenBookingIds,
-          caseId: body.caseId,
+          reopenBookingIds: email.reopen_booking_ids,
+          caseId: email.case_id,
           startDate: (job as any).start_date,
           endDate: (job as any).end_date,
           brightDataSessionId: getBrightDataSessionId(jobId),
@@ -3342,15 +3352,10 @@ app.post("/api/agoda/reopen-case-run-job", (async (
         otpAwareWorkerPool.executeJob(workerJobData).catch(async (error) => {
           console.error(`Error submitting Agoda reopen job ${jobId}:`, error);
           try {
-            await jobService.updateJobCaseStatus(
-              jobId,
-              CaseStatus.ParserCaseReopeningFailed,
-              error?.message ||
-                "The reopen run could not be submitted. Please try again."
-            );
+            await jobService.updateJobStatus(jobId, JobStatus.Failed);
           } catch (statusError) {
             console.error(
-              `Error updating case_status for job ${jobId}:`,
+              `Error updating job ${jobId} status to Failed:`,
               statusError
             );
           }
@@ -3359,8 +3364,8 @@ app.post("/api/agoda/reopen-case-run-job", (async (
         results.submitted.push({
           jobId,
           agodaId,
-          caseId: body.caseId,
-          reopenBookingIds: reopen.reopenBookingIds,
+          caseId: email.case_id ?? null,
+          reopenBookingIds: email.reopen_booking_ids,
           status: "submitted",
         });
       } catch (error: any) {

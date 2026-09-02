@@ -24,8 +24,6 @@ import { otpCompletionNotifier } from "../../common/otp-completion-notifier.js";
 import { progressManager } from "../../common/progress-manager.js";
 import { scrapingStateManager } from "../../common/scraping-state.js";
 import {
-  clearScreenshotTarget,
-  setScreenshotTarget,
   takeErrorScreenshot,
   takeSuccessScreenshot,
 } from "../../common/screenshot-helper.js";
@@ -261,11 +259,6 @@ export async function runAgodaReopenCase(
 
   await timeManager.startSession(jobId);
 
-  // Everything captured from here on — including inside login and Need Help —
-  // belongs to this reopen attempt, replacing whatever the last one left behind.
-  setScreenshotTarget(jobId, "case_opening_screenshot");
-  await jobService.clearCaseOpeningScreenshots(jobId);
-
   try {
     await dualLogInfo("Starting Agoda reopen-case process", {
       jobId,
@@ -409,8 +402,6 @@ export async function runAgodaReopenCase(
       customMessage,
       // Nothing is attached on a reopen — the booking IDs go in the message.
       skipFileUpload: true,
-      // Failures surface as `case_status`, not as a job_status rewrite.
-      updateJobStatusOnFailure: false,
     });
 
     await progressManager.markJobCompleted(jobId);
@@ -471,9 +462,6 @@ export async function runAgodaReopenCase(
       );
     }
 
-    // job_status is intentionally left alone here — the caller records the
-    // outcome on `case_status` instead.
-
     try {
       await emailNotifier.notifyJobError(
         jobId,
@@ -503,8 +491,6 @@ export async function runAgodaReopenCase(
         });
       }
     }
-
-    clearScreenshotTarget(jobId);
   }
 }
 

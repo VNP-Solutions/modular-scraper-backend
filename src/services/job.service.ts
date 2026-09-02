@@ -386,7 +386,8 @@ export class JobService {
    */
   async updateJobStatus(
     jobId: string,
-    status: JobStatus
+    status: JobStatus,
+    options?: { preserveNeedHelpFileUrl?: boolean }
   ): Promise<IJob | null> {
     try {
       const objectId = this.validateObjectId(jobId, "jobId");
@@ -410,7 +411,12 @@ export class JobService {
       }
 
       Object.assign(updateData, this.replyWaitFields(status));
-      this.applyNeedHelpFileUrl(jobId, status, updateData);
+      this.applyNeedHelpFileUrl(
+        jobId,
+        status,
+        updateData,
+        options?.preserveNeedHelpFileUrl
+      );
 
       return await Job.findByIdAndUpdate(objectId, updateData, { new: true });
     } catch (error) {
@@ -439,12 +445,16 @@ export class JobService {
   /**
    * Persist the Need Help CSV S3 URL only when the job becomes Completed.
    * Partial / Failed / Stopped drop the in-memory URL so it is never stored.
-   * Running / Pending clear any previous value so a rerun starts clean.
+   * Running / Pending clear any previous value so a rerun starts clean —
+   * unless `preserveOnRunning` is set, which a reopen-case run passes since it
+   * never uploads a new file and must not erase the one from the property
+   * run that produced the case.
    */
   private applyNeedHelpFileUrl(
     jobId: string,
     status: JobStatus,
-    updateData: Record<string, unknown>
+    updateData: Record<string, unknown>,
+    preserveOnRunning?: boolean
   ): void {
     if (status === JobStatus.Completed) {
       const url = takePendingNeedHelpFileUrl(jobId);
@@ -467,7 +477,9 @@ export class JobService {
     }
 
     if (status === JobStatus.Running || status === JobStatus.Pending) {
-      updateData.need_help_file_url = null;
+      if (!preserveOnRunning) {
+        updateData.need_help_file_url = null;
+      }
     }
   }
 
@@ -503,8 +515,11 @@ export class JobService {
   /**
    * Start job - Update status to Running
    */
-  async startJob(jobId: string): Promise<IJob | null> {
-    return await this.updateJobStatus(jobId, JobStatus.Running);
+  async startJob(
+    jobId: string,
+    options?: { preserveNeedHelpFileUrl?: boolean }
+  ): Promise<IJob | null> {
+    return await this.updateJobStatus(jobId, JobStatus.Running, options);
   }
 
   /**

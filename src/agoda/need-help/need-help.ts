@@ -42,8 +42,6 @@ export interface NeedHelpOptions {
   propertyName?: string; // Property name for cleanup (auto-detected if not provided)
   /**
    * Mark the job as Failed in the database when this process fails (default: true).
-   * The reopen flow turns this off — it reports through `case_status` and must not
-   * rewrite the job_status of the run that came before it.
    */
   updateJobStatusOnFailure?: boolean;
 }

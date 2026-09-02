@@ -18,7 +18,7 @@ import { progressManager } from "../common/progress-manager.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import graphqlScraping from "../expedia-graphql.js";
 import main from "../main.js";
-import { CaseStatus, JobStatus } from "../models/job.model.js";
+import { JobStatus } from "../models/job.model.js";
 import reservation from "../reservation/reservation.js";
 import { propertyCredentialsService } from "../services/job-credentials.service.js";
 import { jobService } from "../services/job.service.js";
@@ -1056,112 +1056,84 @@ class ScrapingWorker {
       throw new Error("jobId is required for agoda-reopen-case jobs");
     }
 
-    // Anything that goes wrong from here on is a failed reopen attempt, so it
-    // has to land on case_status too — not just the browser run below.
-    let resolved: {
-      agodaId: string;
-      agodaUsername: string;
-      agodaPassword: string;
-      bookingIds: string[];
-      startDate?: string;
-      endDate?: string;
-    };
+    if (!reopenBookingIds || reopenBookingIds.length === 0) {
+      throw new Error(
+        "reopenBookingIds is required and must not be empty for agoda-reopen-case jobs"
+      );
+    }
 
-    try {
-      if (!reopenBookingIds || reopenBookingIds.length === 0) {
+    // The job has usually already run to completion, so `canRun` is not
+    // checked here — only that the job still exists.
+    const validation = await jobService.validateJob(jobId);
+    if (!validation.exists) {
+      throw new Error(`Job with ID ${jobId} not found`);
+    }
+
+    let finalAgodaId = agodaId;
+    let finalAgodaUsername = agodaUsername;
+    let finalAgodaPassword = agodaPassword;
+
+    if (!finalAgodaId || !finalAgodaUsername || !finalAgodaPassword) {
+      const propertyData = await jobService.getAgodaIdFromJob(jobId);
+      const propertyCredentials =
+        await propertyCredentialsService.getCredentialsByJobId(jobId);
+
+      if (!propertyData || !propertyData.agodaId) {
         throw new Error(
-          "reopenBookingIds is required and must not be empty for agoda-reopen-case jobs"
+          `Cannot retrieve valid agoda_id for job ${jobId}. Property may not have agoda_id assigned or agoda_id is "0".`
         );
       }
 
-      // The job has usually already run to completion, so `canRun` is not
-      // checked here — only that the job still exists.
-      const validation = await jobService.validateJob(jobId);
-      if (!validation.exists) {
-        throw new Error(`Job with ID ${jobId} not found`);
+      if (
+        !propertyCredentials?.agodaUsername ||
+        !propertyCredentials?.agodaPassword
+      ) {
+        throw new Error(
+          `Cannot retrieve valid agodaUsername or agodaPassword for job ${jobId}. Property may not have agodaUsername or agodaPassword assigned.`
+        );
       }
 
-      let finalAgodaId = agodaId;
-      let finalAgodaUsername = agodaUsername;
-      let finalAgodaPassword = agodaPassword;
-
-      if (!finalAgodaId || !finalAgodaUsername || !finalAgodaPassword) {
-        const propertyData = await jobService.getAgodaIdFromJob(jobId);
-        const propertyCredentials =
-          await propertyCredentialsService.getCredentialsByJobId(jobId);
-
-        if (!propertyData || !propertyData.agodaId) {
-          throw new Error(
-            `Cannot retrieve valid agoda_id for job ${jobId}. Property may not have agoda_id assigned or agoda_id is "0".`
-          );
-        }
-
-        if (
-          !propertyCredentials?.agodaUsername ||
-          !propertyCredentials?.agodaPassword
-        ) {
-          throw new Error(
-            `Cannot retrieve valid agodaUsername or agodaPassword for job ${jobId}. Property may not have agodaUsername or agodaPassword assigned.`
-          );
-        }
-
-        finalAgodaId = propertyData.agodaId;
-        finalAgodaUsername = propertyCredentials.agodaUsername;
-        finalAgodaPassword = propertyCredentials.agodaPassword;
-      }
-
-      // Fall back to the job's own date range (same fields bulk-property-run
-      // uses) so the property page opens on the same range a property run
-      // would have used — purely cosmetic, no booking data is fetched.
-      resolved = {
-        agodaId: finalAgodaId,
-        agodaUsername: finalAgodaUsername,
-        agodaPassword: finalAgodaPassword,
-        bookingIds: reopenBookingIds,
-        startDate: startDate || (validation.job as any)?.start_date,
-        endDate: endDate || (validation.job as any)?.end_date,
-      };
-    } catch (preflightError: any) {
-      console.error(
-        `Worker: Agoda reopen-case job ${jobId} could not start:`,
-        preflightError
-      );
-      await jobService.updateJobCaseStatus(
-        jobId,
-        CaseStatus.ParserCaseReopeningFailed,
-        preflightError?.message ||
-          "The reopen run could not start. Please try again."
-      );
-      throw preflightError;
+      finalAgodaId = propertyData.agodaId;
+      finalAgodaUsername = propertyCredentials.agodaUsername;
+      finalAgodaPassword = propertyCredentials.agodaPassword;
     }
 
+    // Fall back to the job's own date range (same fields bulk-property-run
+    // uses) so the property page opens on the same range a property run
+    // would have used — purely cosmetic, no booking data is fetched.
+    const finalStartDate = startDate || (validation.job as any)?.start_date;
+    const finalEndDate = endDate || (validation.job as any)?.end_date;
+
     console.log(
-      `Worker: Reopening Agoda case for job ${jobId} (agoda_id: ${resolved.agodaId}, ${resolved.bookingIds.length} booking(s))`
+      `Worker: Reopening Agoda case for job ${jobId} (agoda_id: ${finalAgodaId}, ${reopenBookingIds.length} booking(s))`
     );
+
+    // 1. Update job status to Running (same as a normal property run — resets
+    // the screenshot trail and failed_reason so this attempt starts clean).
+    // need_help_file_url is preserved: this run never uploads a new file, so
+    // it must not erase the one the property run that produced this case
+    // already filed.
+    await jobService.startJob(jobId, { preserveNeedHelpFileUrl: true });
 
     initializeJobLogging(jobId);
     await dualLogInfo(`Worker: Starting Agoda reopen-case job ${jobId}`, {
       jobId,
-      agodaId: resolved.agodaId,
+      agodaId: finalAgodaId,
       caseId,
-      reopenBookingIds: resolved.bookingIds,
+      reopenBookingIds,
     });
 
-    scrapingStateManager.startScraping(resolved.agodaId, jobId);
-
-    // Moves off CaseInQueue (or Pending, when it never had to wait) so the
-    // case is visibly under way rather than looking untouched.
-    await jobService.updateJobCaseStatus(jobId, CaseStatus.CaseRunning);
+    scrapingStateManager.startScraping(finalAgodaId, jobId);
 
     try {
       const reopenResult = await runAgodaReopenCase({
-        agodaId: resolved.agodaId,
+        agodaId: finalAgodaId,
         jobId,
-        agodaUsername: resolved.agodaUsername,
-        agodaPassword: resolved.agodaPassword,
-        startDate: resolved.startDate,
-        endDate: resolved.endDate,
-        reopenBookingIds: resolved.bookingIds,
+        agodaUsername: finalAgodaUsername,
+        agodaPassword: finalAgodaPassword,
+        startDate: finalStartDate,
+        endDate: finalEndDate,
+        reopenBookingIds,
         caseId,
         brightDataSessionId,
         windowSize,
@@ -1169,9 +1141,20 @@ class ScrapingWorker {
         acceptLanguage,
       });
 
-      // Reported through case_status only; job_status still belongs to the
-      // property run that produced this case.
-      await jobService.updateJobCaseStatus(jobId, CaseStatus.CaseReopen);
+      // Update final job status only if job is still Running (never
+      // overwrite Failed/Stopped with Completed)
+      const currentJob = await jobService.getJobById(jobId);
+      const alreadyTerminal =
+        currentJob?.job_status === JobStatus.Failed ||
+        currentJob?.job_status === JobStatus.Stopped;
+      if (alreadyTerminal) {
+        await dualLogInfo(
+          `Worker: Skipping status update to Completed; job ${jobId} is already ${currentJob?.job_status}`,
+          { jobId, currentStatus: currentJob?.job_status }
+        );
+      } else {
+        await jobService.updateJobStatus(jobId, JobStatus.Completed);
+      }
 
       scrapingStateManager.stopScraping();
       await finalizeJobLogging("success");
@@ -1190,11 +1173,11 @@ class ScrapingWorker {
       return {
         status: 200,
         message: `Agoda case reopened for ${reopenResult.reopenBookingIds.length} booking(s)`,
-        agodaId: resolved.agodaId,
+        agodaId: finalAgodaId,
         jobId,
         caseId: reopenResult.caseId,
         reopenBookingIds: reopenResult.reopenBookingIds,
-        caseStatus: CaseStatus.CaseReopen,
+        finalStatus: JobStatus.Completed,
         logInfo,
       };
     } catch (reopenError: any) {
@@ -1206,13 +1189,13 @@ class ScrapingWorker {
       await progressManager.handleJobError(jobId, reopenError);
       scrapingStateManager.stopScraping();
 
-      await jobService.updateJobCaseStatus(
-        jobId,
-        CaseStatus.ParserCaseReopeningFailed,
-        getFailedReasonForUser(reopenError) ||
-          reopenError?.message ||
-          "An unexpected error occurred. Please try again."
-      );
+      if (!isStatusAlreadySaved(reopenError)) {
+        const failedReason =
+          getFailedReasonForUser(reopenError) ||
+          "An unexpected error occurred. Please try again.";
+        await jobService.failJobSafe(jobId, failedReason);
+        markStatusSaved(reopenError);
+      }
 
       await finalizeJobLogging("failed");
 
