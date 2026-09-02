@@ -19,6 +19,7 @@ import {
   fetchBookingDataFromAPI,
   mapApiResponseToCsvRecords,
 } from "../api/booking-api.js";
+import { convertDateFormat } from "../utils/date-format.js";
 import { automateNeedHelpWithCleanup } from "../need-help/need-help.js";
 import {
   checkAndDeleteExistingFile,
@@ -417,29 +418,6 @@ async function exportBookingDataToCsv(
  * @param dateString - Date in YYYY-MM-DD format (e.g., "2024-01-31")
  * @returns Date in DD-MM-YYYY format (e.g., "31-01-2024")
  */
-function convertDateFormat(dateString: string): string {
-  // Handle both YYYY-MM-DD and MM/DD/YYYY formats for backward compatibility
-  let year: string, month: string, day: string;
-
-  if (dateString.includes("/")) {
-    // MM/DD/YYYY format (User input) -> DD-MM-YYYY (Agoda API)
-    const parts = dateString.split("/");
-    month = parts[0].padStart(2, "0"); // First part is Month
-    day = parts[1].padStart(2, "0");   // Second part is Day
-    year = parts[2];
-  } else if (dateString.includes("-")) {
-    // YYYY-MM-DD format
-    const parts = dateString.split("-");
-    year = parts[0];
-    month = parts[1].padStart(2, "0");
-    day = parts[2].padStart(2, "0");
-  } else {
-    throw new Error(`Unsupported date format: ${dateString}`);
-  }
-
-  return `${day}-${month}-${year}`;
-}
-
 /**
  * Parses an input date string (YYYY-MM-DD or MM/DD/YYYY) into a Date object.
  */

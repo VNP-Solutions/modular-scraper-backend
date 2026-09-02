@@ -4,9 +4,11 @@
  * must not persist the URL on the job.
  */
 
-import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import fsSync from "fs";
 import fs from "fs/promises";
 import path from "path";
+import { pipeline } from "stream/promises";
 import { dualLogInfo, dualLogWarn } from "./log-helper.js";
 
 const s3Client = new S3Client({
@@ -45,6 +47,44 @@ export function buildNeedHelpFileS3Key(
   filename: string
 ): string {
   return `need-help-files/${jobId}/${sanitizeFilename(filename)}`;
+}
+
+/** Recovers the S3 object key from a URL built by `uploadNeedHelpCsvToS3`. */
+function extractS3KeyFromUrl(url: string): string {
+  const pathname = new URL(url).pathname;
+  return decodeURIComponent(pathname.replace(/^\/+/, ""));
+}
+
+/**
+ * Downloads the CSV previously archived for a job's `need_help_file_url` back
+ * to a local path, so it can be re-attached on a fresh Need Help request
+ * without re-scraping reservations.
+ */
+export async function downloadNeedHelpFileFromUrl(
+  jobId: string,
+  url: string,
+  destPath: string
+): Promise<void> {
+  const s3Key = extractS3KeyFromUrl(url);
+
+  await fs.mkdir(path.dirname(destPath), { recursive: true });
+
+  const response = await s3Client.send(
+    new GetObjectCommand({ Bucket: bucketName, Key: s3Key })
+  );
+
+  const body = response.Body;
+  if (!body) {
+    throw new Error(`Need Help file S3 object has no body: ${s3Key}`);
+  }
+
+  await pipeline(body as NodeJS.ReadableStream, fsSync.createWriteStream(destPath));
+
+  await dualLogInfo(`⬇️ Downloaded Need Help file from S3`, {
+    jobId,
+    s3Key,
+    destPath,
+  });
 }
 
 /**

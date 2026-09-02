@@ -7,6 +7,7 @@ import { WorkerJobData, WorkerMessage } from "../common/worker-types.js";
 // Import the main functions
 import agoda from "../agoda.js";
 import { runAgodaReopenCase } from "../agoda/reopen-case/reopen-case.js";
+import { runAgodaReopenAllReservations } from "../agoda/reopen-case/reopen-all-reservations.js";
 import {
   dualLogError,
   dualLogInfo,
@@ -292,6 +293,10 @@ class ScrapingWorker {
 
         case "agoda-reopen-case":
           result = await this.handleAgodaReopenCase(jobData);
+          break;
+
+        case "agoda-reopen-all-reservations":
+          result = await this.handleAgodaReopenAllReservations(jobData);
           break;
 
         case "stop":
@@ -1039,6 +1044,8 @@ class ScrapingWorker {
       agodaPassword,
       reopenBookingIds,
       caseId,
+      startDate,
+      endDate,
       brightDataSessionId,
       windowSize,
       timezone,
@@ -1056,6 +1063,8 @@ class ScrapingWorker {
       agodaUsername: string;
       agodaPassword: string;
       bookingIds: string[];
+      startDate?: string;
+      endDate?: string;
     };
 
     try {
@@ -1101,11 +1110,16 @@ class ScrapingWorker {
         finalAgodaPassword = propertyCredentials.agodaPassword;
       }
 
+      // Fall back to the job's own date range (same fields bulk-property-run
+      // uses) so the property page opens on the same range a property run
+      // would have used — purely cosmetic, no booking data is fetched.
       resolved = {
         agodaId: finalAgodaId,
         agodaUsername: finalAgodaUsername,
         agodaPassword: finalAgodaPassword,
         bookingIds: reopenBookingIds,
+        startDate: startDate || (validation.job as any)?.start_date,
+        endDate: endDate || (validation.job as any)?.end_date,
       };
     } catch (preflightError: any) {
       console.error(
@@ -1145,6 +1159,8 @@ class ScrapingWorker {
         jobId,
         agodaUsername: resolved.agodaUsername,
         agodaPassword: resolved.agodaPassword,
+        startDate: resolved.startDate,
+        endDate: resolved.endDate,
         reopenBookingIds: resolved.bookingIds,
         caseId,
         brightDataSessionId,
@@ -1201,6 +1217,174 @@ class ScrapingWorker {
       await finalizeJobLogging("failed");
 
       throw reopenError;
+    }
+  }
+
+  /**
+   * Reopen-with-all-reservations run: like a normal Agoda property run
+   * (browser setup → login → property page → Need Help), but skips the
+   * date-range booking lookup entirely and re-attaches the CSV a previous
+   * completed run already filed with Need Help (`need_help_file_url`).
+   */
+  private async handleAgodaReopenAllReservations(
+    jobData: WorkerJobData
+  ): Promise<any> {
+    const {
+      jobId,
+      agodaId,
+      agodaUsername,
+      agodaPassword,
+      needHelpFileUrl,
+      brightDataSessionId,
+      windowSize,
+      timezone,
+      acceptLanguage,
+    } = jobData;
+
+    if (!jobId) {
+      throw new Error(
+        "jobId is required for agoda-reopen-all-reservations jobs"
+      );
+    }
+
+    if (!needHelpFileUrl) {
+      throw new Error(
+        "needHelpFileUrl is required for agoda-reopen-all-reservations jobs"
+      );
+    }
+
+    let finalAgodaId = agodaId;
+    let finalAgodaUsername = agodaUsername;
+    let finalAgodaPassword = agodaPassword;
+
+    // Fall back to the job's own date range (same fields bulk-property-run
+    // uses) so the property page opens on the same range a property run
+    // would have used — purely cosmetic, no booking data is fetched.
+    let finalStartDate = jobData.startDate;
+    let finalEndDate = jobData.endDate;
+    if (!finalStartDate || !finalEndDate) {
+      const job = await jobService.getJobById(jobId);
+      finalStartDate = finalStartDate || (job as any)?.start_date;
+      finalEndDate = finalEndDate || (job as any)?.end_date;
+    }
+
+    if (!finalAgodaId || !finalAgodaUsername || !finalAgodaPassword) {
+      const propertyData = await jobService.getAgodaIdFromJob(jobId);
+      const propertyCredentials =
+        await propertyCredentialsService.getCredentialsByJobId(jobId);
+
+      if (!propertyData || !propertyData.agodaId) {
+        throw new Error(
+          `Cannot retrieve valid agoda_id for job ${jobId}. Property may not have agoda_id assigned or agoda_id is "0".`
+        );
+      }
+
+      if (
+        !propertyCredentials?.agodaUsername ||
+        !propertyCredentials?.agodaPassword
+      ) {
+        throw new Error(
+          `Cannot retrieve valid agodaUsername or agodaPassword for job ${jobId}. Property may not have agodaUsername or agodaPassword assigned.`
+        );
+      }
+
+      finalAgodaId = propertyData.agodaId;
+      finalAgodaUsername = propertyCredentials.agodaUsername;
+      finalAgodaPassword = propertyCredentials.agodaPassword;
+    }
+
+    console.log(
+      `Worker: Reopening Agoda with all reservations for job ${jobId} (agoda_id: ${finalAgodaId})`
+    );
+
+    // 1. Update job status to Running (same as a normal property run — resets
+    // the screenshot trail and failed_reason so this attempt starts clean).
+    await jobService.startJob(jobId);
+
+    // 2. Initialize job logging
+    initializeJobLogging(jobId);
+    await dualLogInfo(
+      `Worker: Starting Agoda reopen-all-reservations job ${jobId}`,
+      { jobId, agodaId: finalAgodaId, needHelpFileUrl }
+    );
+
+    // 3. Start scraping state manager (no date range for this run type)
+    scrapingStateManager.startScraping(finalAgodaId, jobId);
+
+    try {
+      await runAgodaReopenAllReservations({
+        agodaId: finalAgodaId,
+        jobId,
+        agodaUsername: finalAgodaUsername,
+        agodaPassword: finalAgodaPassword,
+        needHelpFileUrl,
+        startDate: finalStartDate,
+        endDate: finalEndDate,
+        brightDataSessionId,
+        windowSize,
+        timezone,
+        acceptLanguage,
+      });
+
+      // 4. Update final job status only if job is still Running (never
+      // overwrite Failed/Stopped with Completed)
+      const currentJob = await jobService.getJobById(jobId);
+      const alreadyTerminal =
+        currentJob?.job_status === JobStatus.Failed ||
+        currentJob?.job_status === JobStatus.Stopped;
+      if (alreadyTerminal) {
+        await dualLogInfo(
+          `Worker: Skipping status update to Completed; job ${jobId} is already ${currentJob?.job_status}`,
+          { jobId, currentStatus: currentJob?.job_status }
+        );
+      } else {
+        await jobService.updateJobStatus(jobId, JobStatus.Completed);
+      }
+
+      scrapingStateManager.stopScraping();
+      await finalizeJobLogging("success");
+
+      const logger = (global as any).getCurrentJobLogger?.();
+      const logInfo = logger
+        ? {
+            logFilePath: logger.getLogFilePath(),
+            logEntriesCount: logger.getLogEntriesCount(),
+            note: "Log file uploaded to S3 and deleted locally after job completion",
+          }
+        : null;
+
+      console.log(
+        `Worker: ✅ Agoda reopen-all-reservations job ${jobId} completed`
+      );
+
+      return {
+        status: 200,
+        message: `Agoda reopened with all reservations for job ${jobId}`,
+        agodaId: finalAgodaId,
+        jobId,
+        finalStatus: JobStatus.Completed,
+        logInfo,
+      };
+    } catch (scrapingError: any) {
+      await dualLogError(
+        `Worker: Agoda reopen-all-reservations job ${jobId} failed`,
+        scrapingError,
+        { jobId }
+      );
+      await progressManager.handleJobError(jobId, scrapingError);
+      scrapingStateManager.stopScraping();
+
+      if (!isStatusAlreadySaved(scrapingError)) {
+        const failedReason =
+          getFailedReasonForUser(scrapingError) ||
+          "An unexpected error occurred. Please try again.";
+        await jobService.failJobSafe(jobId, failedReason);
+        markStatusSaved(scrapingError);
+      }
+
+      await finalizeJobLogging("failed");
+
+      throw scrapingError;
     }
   }
 

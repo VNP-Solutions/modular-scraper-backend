@@ -7,6 +7,7 @@ export interface WorkerJobData {
     | "agoda-property-run"
     | "agoda-rerun-failed"
     | "agoda-reopen-case"
+    | "agoda-reopen-all-reservations"
     | "stop";
   jobId: string;
   startDate?: string;
@@ -23,6 +24,11 @@ export interface WorkerJobData {
   reopenBookingIds?: string[];
   /** Case ID from the Partner Support reply, quoted back in the new request. */
   caseId?: string | null;
+  /**
+   * S3 URL of the CSV a previous completed run filed with Need Help; used by
+   * `agoda-reopen-all-reservations` jobs to re-attach it without re-scraping.
+   */
+  needHelpFileUrl?: string;
   // Bright Data isolation config
   brightDataSessionId?: string; // Session ID for Bright Data proxy
   windowSize?: { width: number; height: number }; // Window size for browser

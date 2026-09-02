@@ -34,6 +34,7 @@ import { timeoutManager } from "../../common/timeout-manager.js";
 import { jobService } from "../../services/job.service.js";
 import agodaLogin from "../login-system/login.js";
 import { automateNeedHelpWithCleanup } from "../need-help/need-help.js";
+import { convertDateFormat } from "../utils/date-format.js";
 import { cleanupOnError } from "../utils/error-cleanup.js";
 
 dotenv.config();
@@ -61,6 +62,13 @@ export interface ReopenCaseParams {
   reopenBookingIds: string[];
   /** Case ID from the Partner Support reply, quoted back in the new request. */
   caseId?: string | null;
+  /**
+   * The job's own date range (same format bulk-property-run uses). Included
+   * in the property page URL so it matches what a property run would have
+   * opened — no booking data is fetched either way.
+   */
+  startDate?: string;
+  endDate?: string;
   brightDataSessionId?: string;
   windowSize?: { width: number; height: number };
   timezone?: string;
@@ -109,16 +117,51 @@ async function buildReopenMessage(
 }
 
 /**
+ * Builds the same booking-report URL the property run navigates to. When the
+ * job's own `start_date`/`end_date` are available they are included as query
+ * params — same page, same range — even though nothing here reads the
+ * booking table or calls the booking API; Need Help only needs the portal
+ * chrome to be loaded.
+ */
+function buildPropertyPageUrl(
+  agodaId: string,
+  startDate?: string,
+  endDate?: string
+): string {
+  if (!startDate || !endDate) {
+    return `${PROPERTY_PAGE_BASE}/${agodaId}`;
+  }
+
+  const formattedStartDate = convertDateFormat(startDate);
+  const formattedEndDate = convertDateFormat(endDate);
+
+  return `${PROPERTY_PAGE_BASE}/${agodaId}?bookingType=confirmed%2Camended&startDate=${formattedStartDate}&endDate=${formattedEndDate}`;
+}
+
+/**
  * Opens the property's portal page and waits until the portal shell is really
  * there. The booking table itself is irrelevant here — Need Help only needs the
  * portal chrome — so either the Reservations heading or the inbox icon counts.
+ * No booking API calls are made and nothing is saved to the DB, regardless of
+ * whether a date range is included in the URL.
  */
-async function openPropertyPage(
+export async function openPropertyPage(
   browser: Browser,
   agodaId: string,
-  jobId: string
+  jobId: string,
+  startDate?: string,
+  endDate?: string
 ): Promise<Page> {
-  const url = `${PROPERTY_PAGE_BASE}/${agodaId}`;
+  let url: string;
+  try {
+    url = buildPropertyPageUrl(agodaId, startDate, endDate);
+  } catch (formatError: any) {
+    await dualLogWarn(
+      `⚠️ Could not format job dates (${startDate} - ${endDate}), opening the property page without a date range`,
+      { jobId, agodaId, error: formatError?.message }
+    );
+    url = `${PROPERTY_PAGE_BASE}/${agodaId}`;
+  }
   const loadingTimeout = await timeoutManager.getLoadingTimeout(jobId);
 
   const page = await browser.newPage();
@@ -205,6 +248,8 @@ export async function runAgodaReopenCase(
     agodaPassword,
     reopenBookingIds,
     caseId,
+    startDate,
+    endDate,
     brightDataSessionId,
     windowSize,
     timezone,
@@ -327,8 +372,15 @@ export async function runAgodaReopenCase(
       throw stoppedErr;
     }
 
-    // Straight to the property page — no date range, no booking data fetch.
-    propertyPage = await openPropertyPage(browser, agodaId, jobId);
+    // Same page a property run would open, date range included when known —
+    // still no booking data fetch, Need Help only needs the portal loaded.
+    propertyPage = await openPropertyPage(
+      browser,
+      agodaId,
+      jobId,
+      startDate,
+      endDate
+    );
 
     await progressManager.updateJobProgress(
       jobId,

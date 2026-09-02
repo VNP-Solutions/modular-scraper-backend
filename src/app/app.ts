@@ -3330,6 +3330,8 @@ app.post("/api/agoda/reopen-case-run-job", (async (
           agodaPassword: propertyCredentials.agodaPassword,
           reopenBookingIds: reopen.reopenBookingIds,
           caseId: body.caseId,
+          startDate: (job as any).start_date,
+          endDate: (job as any).end_date,
           brightDataSessionId: getBrightDataSessionId(jobId),
           windowSize: getWindowSize(jobId),
           timezone: getTimezone(jobId),
@@ -3380,6 +3382,241 @@ app.post("/api/agoda/reopen-case-run-job", (async (
     res.status(500).json({
       status: 500,
       message: "Error processing Agoda reopen-case jobs",
+      error: err.message,
+    });
+  }
+}) as any);
+
+/**
+ * @swagger
+ * /api/agoda/reopen-all-reservations-run-job:
+ *   post:
+ *     tags:
+ *       - Agoda Scraping
+ *     summary: Re-run Need Help for a batch of jobs without re-scraping reservations
+ *     description: |
+ *       Takes an array of job IDs and starts an Agoda run for each — same
+ *       browser setup, login and property page as a bulk property run — but
+ *       skips the date-range reservation scrape entirely. Once on the
+ *       property page it goes straight to Need Help and re-attaches the CSV
+ *       a previous completed run already filed (`need_help_file_url`),
+ *       downloaded fresh from S3 for this attempt.
+ *
+ *       Only jobs that have a `need_help_file_url` on record can be submitted —
+ *       that field is only ever set once a property run's Need Help step has
+ *       completed successfully. Jobs currently `Running` or `InQueue` are
+ *       rejected too, to avoid a second run colliding with one already
+ *       in flight.
+ *
+ *       Jobs are submitted without waiting for them to finish — same
+ *       fire-and-forget pattern as the other bulk endpoints. `job_status`
+ *       moves to `InQueue` → `Running` → `Completed`/`Failed` like a normal
+ *       property run, and `need_help_file_url` is refreshed only if the run
+ *       reaches `Completed`.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - job_ids
+ *             properties:
+ *               job_ids:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 description: Array of job IDs to re-run Need Help for
+ *                 example: ["507f1f77bcf86cd799439011", "507f1f77bcf86cd799439012"]
+ *     responses:
+ *       200:
+ *         description: Jobs evaluated; valid ones were submitted
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: integer
+ *                   example: 200
+ *                 message:
+ *                   type: string
+ *                   example: "Processed 2 jobs. 1 submitted, 1 invalid, 0 with errors."
+ *                 results:
+ *                   type: object
+ *                   properties:
+ *                     submitted:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           jobId:
+ *                             type: string
+ *                           agodaId:
+ *                             type: string
+ *                           status:
+ *                             type: string
+ *                             example: "submitted"
+ *                     invalid:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           jobId:
+ *                             type: string
+ *                           reason:
+ *                             type: string
+ *                           currentStatus:
+ *                             type: string
+ *                     errors:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           jobId:
+ *                             type: string
+ *                           error:
+ *                             type: string
+ *       400:
+ *         description: Missing required fields
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
+app.post("/api/agoda/reopen-all-reservations-run-job", (async (
+  req: express.Request,
+  res: express.Response
+) => {
+  try {
+    const { job_ids } = req.body;
+
+    if (!job_ids || !Array.isArray(job_ids) || job_ids.length === 0) {
+      return res.status(400).json({
+        status: 400,
+        message: "job_ids array is required and must not be empty",
+      });
+    }
+
+    const results: {
+      submitted: Array<{ jobId: string; agodaId: string; status: string }>;
+      invalid: Array<{ jobId: string; reason: string; currentStatus?: string }>;
+      errors: Array<{ jobId: string; error: string }>;
+    } = { submitted: [], invalid: [], errors: [] };
+
+    for (const jobId of job_ids) {
+      try {
+        const job = await jobService.getJobById(jobId);
+        if (!job) {
+          results.invalid.push({ jobId, reason: "Job not found" });
+          continue;
+        }
+
+        if (
+          job.job_status === JobStatus.Running ||
+          job.job_status === JobStatus.InQueue
+        ) {
+          results.invalid.push({
+            jobId,
+            reason: `Job ${jobId} is already ${job.job_status}.`,
+            currentStatus: job.job_status,
+          });
+          continue;
+        }
+
+        if (!job.need_help_file_url) {
+          results.invalid.push({
+            jobId,
+            reason: `Job ${jobId} has no need_help_file_url on record — nothing to re-attach. A property run must complete successfully first.`,
+            currentStatus: job.job_status,
+          });
+          continue;
+        }
+
+        const propertyData = await jobService.getAgodaIdFromJob(jobId);
+        if (!propertyData?.agodaId) {
+          results.invalid.push({
+            jobId,
+            reason: `Cannot retrieve a valid agoda_id for job ${jobId}. The property may not have agoda_id assigned or it is "0".`,
+            currentStatus: job.job_status,
+          });
+          continue;
+        }
+
+        const propertyCredentials =
+          await propertyCredentialsService.getCredentialsByJobId(jobId);
+        if (
+          !propertyCredentials?.agodaUsername ||
+          !propertyCredentials?.agodaPassword
+        ) {
+          results.invalid.push({
+            jobId,
+            reason: `Cannot retrieve valid agodaUsername or agodaPassword for job ${jobId}.`,
+            currentStatus: job.job_status,
+          });
+          continue;
+        }
+
+        const { agodaId } = propertyData;
+
+        const workerJobData: WorkerJobData = {
+          jobType: "agoda-reopen-all-reservations",
+          jobId,
+          agodaId,
+          agodaUsername: propertyCredentials.agodaUsername,
+          agodaPassword: propertyCredentials.agodaPassword,
+          needHelpFileUrl: job.need_help_file_url,
+          startDate: (job as any).start_date,
+          endDate: (job as any).end_date,
+          brightDataSessionId: getBrightDataSessionId(jobId),
+          windowSize: getWindowSize(jobId),
+          timezone: getTimezone(jobId),
+          acceptLanguage: getAcceptLanguage(jobId),
+        };
+
+        // Fire and forget — the pool runs it now or queues it behind the OTP.
+        otpAwareWorkerPool.executeJob(workerJobData).catch(async (error) => {
+          console.error(
+            `Error submitting Agoda reopen-all-reservations job ${jobId}:`,
+            error
+          );
+          try {
+            await jobService.updateJobStatus(jobId, JobStatus.Failed);
+          } catch (statusError) {
+            console.error(
+              `Error updating job ${jobId} status to Failed:`,
+              statusError
+            );
+          }
+        });
+
+        results.submitted.push({
+          jobId,
+          agodaId,
+          status: "submitted",
+        });
+      } catch (error: any) {
+        console.error(
+          `Error preparing reopen-all-reservations for job ${jobId}:`,
+          error
+        );
+        results.errors.push({
+          jobId,
+          error: error?.message || String(error),
+        });
+      }
+    }
+
+    return res.status(200).json({
+      status: 200,
+      message: `Processed ${job_ids.length} jobs. ${results.submitted.length} submitted, ${results.invalid.length} invalid, ${results.errors.length} with errors.`,
+      results,
+    });
+  } catch (err: any) {
+    console.error("Error in /api/agoda/reopen-all-reservations-run-job:", err);
+    res.status(500).json({
+      status: 500,
+      message: "Error processing Agoda reopen-all-reservations jobs",
       error: err.message,
     });
   }

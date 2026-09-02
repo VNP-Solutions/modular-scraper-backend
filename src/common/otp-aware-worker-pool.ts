@@ -418,6 +418,7 @@ export class OtpAwareWorkerPool extends EventEmitter {
       "graphql-run",
       "agoda-property-run",
       "agoda-reopen-case",
+      "agoda-reopen-all-reservations",
     ].includes(jobData.jobType);
   }
 
@@ -467,11 +468,12 @@ export class OtpAwareWorkerPool extends EventEmitter {
       ].includes(jobData.jobType)
     ) {
       return OtpPlatform.Expedia;
-    } else if (
+    } else     if (
       [
         "agoda-property-run",
         "agoda-rerun-failed",
         "agoda-reopen-case",
+        "agoda-reopen-all-reservations",
       ].includes(jobData.jobType)
     ) {
       return OtpPlatform.Agoda;
