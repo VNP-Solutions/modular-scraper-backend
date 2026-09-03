@@ -65,18 +65,36 @@ function usableGuestName(name?: string | null): string | undefined {
   return trimmed;
 }
 
-function toYmd(date?: Date | string | null): string | undefined {
+function toAgodaCaseItemDate(date?: Date | string | null): string | undefined {
   if (!date) return undefined;
+
+  const formatUtcDate = (value: Date): string | undefined => {
+    if (isNaN(value.getTime())) return undefined;
+    const month = String(value.getUTCMonth() + 1).padStart(2, "0");
+    const day = String(value.getUTCDate()).padStart(2, "0");
+    const year = value.getUTCFullYear();
+    return `${month}/${day}/${year}`;
+  };
+
   if (date instanceof Date) {
-    if (isNaN(date.getTime())) return undefined;
-    return date.toISOString().slice(0, 10);
+    return formatUtcDate(date);
   }
+
   const trimmed = String(date).trim();
-  const isoMatch = trimmed.match(/^(\d{4}-\d{2}-\d{2})/);
-  if (isoMatch) return isoMatch[1];
+  const isoMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (isoMatch) {
+    return `${isoMatch[2]}/${isoMatch[3]}/${isoMatch[1]}`;
+  }
+
+  const usMatch = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (usMatch) {
+    const month = usMatch[1].padStart(2, "0");
+    const day = usMatch[2].padStart(2, "0");
+    return `${month}/${day}/${usMatch[3]}`;
+  }
+
   const parsed = new Date(trimmed);
-  if (isNaN(parsed.getTime())) return undefined;
-  return parsed.toISOString().slice(0, 10);
+  return formatUtcDate(parsed);
 }
 
 function toAmountString(value?: number | string | null): string | undefined {
@@ -639,14 +657,14 @@ export class RetrievalService {
         existingCaseItem?.guest_name
       );
       const checkIn = firstNonEmpty(
-        toYmd(retrievalItem?.check_in_date),
-        toYmd(jobItem?.check_in_date),
-        existingCaseItem?.check_in
+        toAgodaCaseItemDate(retrievalItem?.check_in_date),
+        toAgodaCaseItemDate(jobItem?.check_in_date),
+        toAgodaCaseItemDate(existingCaseItem?.check_in)
       );
       const checkOut = firstNonEmpty(
-        toYmd(retrievalItem?.check_out_date),
-        toYmd(jobItem?.check_out_date),
-        existingCaseItem?.check_out
+        toAgodaCaseItemDate(retrievalItem?.check_out_date),
+        toAgodaCaseItemDate(jobItem?.check_out_date),
+        toAgodaCaseItemDate(existingCaseItem?.check_out)
       );
       const amountToCharge = firstNonEmpty(
         toAmountString(jobItem?.payment_info?.amount_to_charge_or_refund),
