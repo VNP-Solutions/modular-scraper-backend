@@ -10,6 +10,11 @@ import {
   setFailedReasonCode,
 } from "../common/failed-reason.js";
 import {
+  AgodaCaseItem,
+  IAgodaCaseItem,
+} from "../models/agoda-case-item.model.js";
+import { JobItem } from "../models/job-item.model.js";
+import {
   IPropertyCredentials,
   PropertyCredentials,
 } from "../models/property-cred.model.js";
@@ -40,6 +45,48 @@ export interface CreateRetrievalItemData {
   payment_info?: PaymentInfo;
   reservation_status: string;
   additional_text?: string;
+}
+
+function firstNonEmpty(
+  ...values: Array<string | null | undefined>
+): string | undefined {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return undefined;
+}
+
+function usableGuestName(name?: string | null): string | undefined {
+  if (!name) return undefined;
+  const trimmed = name.trim();
+  if (!trimmed || trimmed === "—") return undefined;
+  return trimmed;
+}
+
+function toYmd(date?: Date | string | null): string | undefined {
+  if (!date) return undefined;
+  if (date instanceof Date) {
+    if (isNaN(date.getTime())) return undefined;
+    return date.toISOString().slice(0, 10);
+  }
+  const trimmed = String(date).trim();
+  const isoMatch = trimmed.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (isoMatch) return isoMatch[1];
+  const parsed = new Date(trimmed);
+  if (isNaN(parsed.getTime())) return undefined;
+  return parsed.toISOString().slice(0, 10);
+}
+
+function toAmountString(value?: number | string | null): string | undefined {
+  if (value == null || value === "") return undefined;
+  if (typeof value === "number") {
+    if (isNaN(value)) return undefined;
+    return value.toFixed(2);
+  }
+  const trimmed = String(value).trim();
+  return trimmed || undefined;
 }
 
 export class RetrievalService {
@@ -547,6 +594,118 @@ export class RetrievalService {
       return result;
     } catch (error) {
       console.error(`Error updating retrieval item card info: ${error}`);
+      return null;
+    }
+  }
+
+  /**
+   * After a reservation card scrape, persist VCC + stay/charge fields on AgodaCaseItem.
+   */
+  async updateAgodaCaseItemFromCardScrape(
+    retrievalId: string,
+    reservationId: string,
+    cardInfo: CardInfo
+  ): Promise<IAgodaCaseItem | null> {
+    try {
+      const retrievalObjectId = this.validateObjectId(
+        retrievalId,
+        "retrievalId"
+      );
+
+      const [retrieval, retrievalItem, existingCaseItem] = await Promise.all([
+        Retrieval.findById(retrievalObjectId),
+        RetrievalItem.findOne({
+          retrieval_id: retrievalObjectId,
+          reservation_id: reservationId,
+        }),
+        AgodaCaseItem.findOne({
+          retrieval_id: retrievalObjectId,
+          reservation_id: reservationId,
+        }),
+      ]);
+
+      let jobItem = null;
+      const jobItemFilter: Record<string, unknown> = {
+        reservation_id: reservationId,
+      };
+      if (retrieval?.property_id) {
+        jobItemFilter.property_id = retrieval.property_id;
+      }
+      jobItem = await JobItem.findOne(jobItemFilter).sort({ createdAt: -1 });
+
+      const guestName = firstNonEmpty(
+        usableGuestName(retrievalItem?.guest_name),
+        jobItem?.guest_name,
+        existingCaseItem?.guest_name
+      );
+      const checkIn = firstNonEmpty(
+        toYmd(retrievalItem?.check_in_date),
+        toYmd(jobItem?.check_in_date),
+        existingCaseItem?.check_in
+      );
+      const checkOut = firstNonEmpty(
+        toYmd(retrievalItem?.check_out_date),
+        toYmd(jobItem?.check_out_date),
+        existingCaseItem?.check_out
+      );
+      const amountToCharge = firstNonEmpty(
+        toAmountString(jobItem?.payment_info?.amount_to_charge_or_refund),
+        toAmountString(
+          retrievalItem?.payment_info?.amount_to_charge_or_refund
+        ),
+        existingCaseItem?.amount_to_charge,
+        existingCaseItem?.amount
+      );
+      const currency = firstNonEmpty(
+        jobItem?.payment_info?.amount_to_charge_or_refund_currency,
+        retrievalItem?.payment_info?.amount_to_charge_or_refund_currency,
+        existingCaseItem?.currency
+      );
+
+      const setFields: Record<string, unknown> = {
+        vcc_card_number: cardInfo.card_number,
+        card_expire: cardInfo.expiry_date,
+        retrival_status: "Completed",
+        charge_status: "ready_to_charge",
+        is_missing: false,
+      };
+      if (cardInfo.cvv) setFields.card_cvv = cardInfo.cvv;
+      if (guestName) setFields.guest_name = guestName;
+      if (checkIn) setFields.check_in = checkIn;
+      if (checkOut) setFields.check_out = checkOut;
+      if (amountToCharge) setFields.amount_to_charge = amountToCharge;
+      if (currency) setFields.currency = currency;
+
+      const setOnInsert: Record<string, unknown> = {
+        reservation_id: reservationId,
+        retrieval_id: retrievalObjectId,
+      };
+      if (retrieval?.property_id) setOnInsert.property_id = retrieval.property_id;
+      if (retrieval?.batch_id) setOnInsert.batch_id = retrieval.batch_id;
+      if (retrieval?.portfolio_id)
+        setOnInsert.portfolio_id = retrieval.portfolio_id;
+
+      const result = await AgodaCaseItem.findOneAndUpdate(
+        {
+          retrieval_id: retrievalObjectId,
+          reservation_id: reservationId,
+        },
+        {
+          $set: setFields,
+          $setOnInsert: setOnInsert,
+        },
+        {
+          upsert: true,
+          new: true,
+          setDefaultsOnInsert: true,
+        }
+      );
+
+      return result;
+    } catch (error) {
+      console.error(
+        `Error updating AgodaCaseItem from card scrape: ${error}`
+      );
       return null;
     }
   }

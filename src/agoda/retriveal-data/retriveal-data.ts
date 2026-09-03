@@ -1564,54 +1564,7 @@ export async function searchBookingAndNavigateToPayout(
         console.log("CVC Code:", upcData.cvcCode);
         console.log("======================");
 
-        // Save card info to database if retrievalId is provided
-        if (retrievalId && upcData.cardNumber && upcData.expirationDate) {
-          try {
-            // Format expiration date from "2026/01" to "01/26" or keep as is
-            let formattedExpiryDate = upcData.expirationDate;
-            if (formattedExpiryDate.includes("/")) {
-              // Format: "2026/01" -> "01/26"
-              const [year, month] = formattedExpiryDate.split("/");
-              if (year && month) {
-                const shortYear = year.length === 4 ? year.slice(-2) : year;
-                formattedExpiryDate = `${month}/${shortYear}`;
-              }
-            }
-
-            const cardInfo = {
-              card_number: upcData.cardNumber || "",
-              expiry_date: formattedExpiryDate,
-              cvv: upcData.cvcCode || undefined,
-              reason_for_charge: upcData.cardHolderName || undefined,
-            };
-
-            const updatedItem =
-              await retrievalService.updateRetrievalItemCardInfo(
-                retrievalId,
-                bookingId,
-                cardInfo
-              );
-
-            if (updatedItem) {
-              await dualLogInfo(
-                `✅ Card info saved to database for booking ID: ${bookingId}`,
-                { jobId, bookingId }
-              );
-            } else {
-              await dualLogError(
-                `Failed to save card info to database for booking ID: ${bookingId}. Item may not exist yet.`,
-                undefined,
-                { jobId, bookingId }
-              );
-            }
-          } catch (dbError: any) {
-            await dualLogError(
-              `Error saving card info to database for booking ID ${bookingId}:`,
-              dbError,
-              { jobId, bookingId }
-            );
-          }
-        }
+        await saveUpcCardInfoToDatabase(retrievalId, bookingId, upcData);
       } else {
         await dualLogInfo("UPC widget data not found or not accessible", {
           jobId,
@@ -1640,54 +1593,7 @@ export async function searchBookingAndNavigateToPayout(
           console.log("CVC Code:", upcData.cvcCode);
           console.log("======================");
 
-          // Save card info to database if retrievalId is provided
-          if (retrievalId && upcData.cardNumber && upcData.expirationDate) {
-            try {
-              // Format expiration date from "2026/01" to "01/26" or keep as is
-              let formattedExpiryDate = upcData.expirationDate;
-              if (formattedExpiryDate.includes("/")) {
-                // Format: "2026/01" -> "01/26"
-                const [year, month] = formattedExpiryDate.split("/");
-                if (year && month) {
-                  const shortYear = year.length === 4 ? year.slice(-2) : year;
-                  formattedExpiryDate = `${month}/${shortYear}`;
-                }
-              }
-
-              const cardInfo = {
-                card_number: upcData.cardNumber || "",
-                expiry_date: formattedExpiryDate,
-                cvv: upcData.cvcCode || undefined,
-                reason_for_charge: upcData.cardHolderName || undefined,
-              };
-
-              const updatedItem =
-                await retrievalService.updateRetrievalItemCardInfo(
-                  retrievalId,
-                  bookingId,
-                  cardInfo
-                );
-
-              if (updatedItem) {
-                await dualLogInfo(
-                  `✅ Card info saved to database for booking ID: ${bookingId}`,
-                  { jobId, bookingId }
-                );
-              } else {
-                await dualLogError(
-                  `Failed to save card info to database for booking ID: ${bookingId}. Item may not exist yet.`,
-                  undefined,
-                  { jobId, bookingId }
-                );
-              }
-            } catch (dbError: any) {
-              await dualLogError(
-                `Error saving card info to database for booking ID ${bookingId}:`,
-                dbError,
-                { jobId, bookingId }
-              );
-            }
-          }
+          await saveUpcCardInfoToDatabase(retrievalId, bookingId, upcData);
         }
       } catch (scrapeError) {
         await dualLogError("Error scraping UPC widget data", scrapeError, {
@@ -2763,6 +2669,90 @@ async function reSearchAndNavigateToPayout(
       error
     );
     return false;
+  }
+}
+
+function formatUpcExpiryDate(expirationDate: string): string {
+  if (!expirationDate.includes("/")) return expirationDate;
+  const [year, month] = expirationDate.split("/");
+  if (!year || !month) return expirationDate;
+  const shortYear = year.length === 4 ? year.slice(-2) : year;
+  return `${month}/${shortYear}`;
+}
+
+async function saveUpcCardInfoToDatabase(
+  retrievalId: string | undefined,
+  bookingId: string,
+  upcData: UpcWidgetData
+): Promise<void> {
+  const jobId = getRetrievalJobId();
+  if (!retrievalId || !upcData.cardNumber || !upcData.expirationDate) {
+    return;
+  }
+
+  try {
+    const cardInfo = {
+      card_number: upcData.cardNumber || "",
+      expiry_date: formatUpcExpiryDate(upcData.expirationDate),
+      cvv: upcData.cvcCode || undefined,
+      reason_for_charge: upcData.cardHolderName || undefined,
+    };
+
+    const updatedItem = await retrievalService.updateRetrievalItemCardInfo(
+      retrievalId,
+      bookingId,
+      cardInfo
+    );
+
+    if (updatedItem) {
+      await dualLogInfo(
+        `✅ Card info saved to database for booking ID: ${bookingId}`,
+        { jobId, bookingId }
+      );
+    } else {
+      await dualLogError(
+        `Failed to save card info to database for booking ID: ${bookingId}. Item may not exist yet.`,
+        undefined,
+        { jobId, bookingId }
+      );
+    }
+
+    const updatedCaseItem =
+      await retrievalService.updateAgodaCaseItemFromCardScrape(
+        retrievalId,
+        bookingId,
+        cardInfo
+      );
+
+    if (updatedCaseItem) {
+      await dualLogInfo(
+        `✅ AgodaCaseItem updated with card scrape fields for booking ID: ${bookingId}`,
+        {
+          jobId,
+          bookingId,
+          currency: updatedCaseItem.currency,
+          card_expire: updatedCaseItem.card_expire,
+          guest_name: updatedCaseItem.guest_name,
+          check_in: updatedCaseItem.check_in,
+          check_out: updatedCaseItem.check_out,
+          amount_to_charge: updatedCaseItem.amount_to_charge,
+          has_card_number: !!updatedCaseItem.vcc_card_number,
+          has_cvv: !!updatedCaseItem.card_cvv,
+        }
+      );
+    } else {
+      await dualLogError(
+        `Failed to update AgodaCaseItem for booking ID: ${bookingId}`,
+        undefined,
+        { jobId, bookingId }
+      );
+    }
+  } catch (dbError: any) {
+    await dualLogError(
+      `Error saving card info to database for booking ID ${bookingId}:`,
+      dbError,
+      { jobId, bookingId }
+    );
   }
 }
 
