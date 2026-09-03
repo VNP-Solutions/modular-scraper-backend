@@ -665,7 +665,7 @@ export class RetrievalService {
       const setFields: Record<string, unknown> = {
         vcc_card_number: cardInfo.card_number,
         card_expire: cardInfo.expiry_date,
-        retrival_status: "Completed",
+        retrival_status: "confirmed",
         charge_status: "ready_to_charge",
         is_missing: false,
       };
