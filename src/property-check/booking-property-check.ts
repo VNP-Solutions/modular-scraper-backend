@@ -11,6 +11,7 @@ import {
 } from "../common/failed-reason.js";
 import { humanType } from "../common/human-browser-helper.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
+import { patchDashboardAccessLevel } from "../common/dashboard-access-level.js";
 import {
   patchManyOtaVerificationFields,
   patchOtaVerificationFields,
@@ -98,6 +99,8 @@ async function markPropertyVerified(propertyId: string): Promise<void> {
     await dualLogInfo(
       `Set booking_credential_verified=true and booking_access_level=true for property ${propertyId}.`
     );
+
+    await patchDashboardAccessLevel("booking", propertyId, true);
   } catch (error) {
     await dualLogError(
       `Failed to update Booking.com verification flags for property ${propertyId}:`,
@@ -135,6 +138,8 @@ async function markAccessLevelFalse(propertyId: string): Promise<void> {
     await dualLogInfo(
       `Set booking_credential_verified=true and booking_access_level=false for property ${propertyId} (not found).`
     );
+
+    await patchDashboardAccessLevel("booking", propertyId, false);
   } catch (error) {
     await dualLogError(
       `Failed to update Booking.com verification flags for property ${propertyId}:`,
