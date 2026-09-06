@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 import { browserSetupLocal } from "../browser-setup/browser-local.js";
 import { browserSetupProduction } from "../browser-setup/browser-prod.js";
 import { delay } from "../common/delay.js";
+import { patchDashboardAccessLevel } from "../common/dashboard-access-level.js";
 import { FAILED_REASON } from "../common/failed-reason.js";
 import { dualLogError, dualLogInfo } from "../common/log-helper.js";
 import {
@@ -101,6 +102,8 @@ async function markPropertyVerified(propertyId: string): Promise<void> {
     await dualLogInfo(
       `Set expedia_credential_verified=true and expedia_access_level=true for property ${propertyId}.`
     );
+
+    await patchDashboardAccessLevel("expedia", propertyId, true);
   } catch (error) {
     console.error(
       `[property-check] Failed to update verification flags for property ${propertyId}:`,
@@ -144,6 +147,8 @@ async function markAccessLevelFalse(propertyId: string): Promise<void> {
     await dualLogInfo(
       `Set expedia_credential_verified=true and expedia_access_level=false for property ${propertyId} (not found).`
     );
+
+    await patchDashboardAccessLevel("expedia", propertyId, false);
   } catch (error) {
     await dualLogError(
       `Failed to update Expedia verification flags for property ${propertyId}:`,
