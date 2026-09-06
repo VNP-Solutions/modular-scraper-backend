@@ -9,6 +9,7 @@ import { clearPropertyScreenshots } from "../../common/property-screenshot-store
 import { ScreenshotHelper } from "../../common/screenshot-helper.js";
 import { isAgodaCredentialLoginFailure } from "../../common/failed-reason.js";
 import { dualLogError, dualLogInfo } from "../../common/log-helper.js";
+import { patchDashboardAccessLevel } from "../../common/dashboard-access-level.js";
 import {
   patchManyOtaVerificationFields,
   patchOtaVerificationFields,
@@ -103,6 +104,8 @@ async function markAgodaPropertyVerified(propertyId: string): Promise<void> {
     await dualLogInfo(
       `Set agoda_credential_verified=true and agoda_access_level=true for property ${propertyId}.`
     );
+
+    await patchDashboardAccessLevel("agoda", propertyId, true);
   } catch (error) {
     await dualLogError(
       `Failed to update Agoda verification flags for property ${propertyId}:`,
@@ -136,6 +139,8 @@ async function markAgodaAccessLevelFalse(propertyId: string): Promise<void> {
     await dualLogInfo(
       `Set agoda_credential_verified=true and agoda_access_level=false for property ${propertyId} (not found).`
     );
+
+    await patchDashboardAccessLevel("agoda", propertyId, false);
   } catch (error) {
     await dualLogError(
       `Failed to update Agoda verification flags for property ${propertyId}:`,
