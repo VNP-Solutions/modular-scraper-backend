@@ -392,9 +392,10 @@ export class JobService {
     try {
       const objectId = this.validateObjectId(jobId, "jobId");
 
+      const now = new Date();
       const updateData: any = {
         job_status: status,
-        updatedAt: new Date(),
+        updatedAt: now,
       };
 
       // If changing to Running status, assign current worker and clear previous screenshot trail
@@ -417,12 +418,42 @@ export class JobService {
         updateData,
         options?.preserveNeedHelpFileUrl
       );
+      await this.applyJobCompletedDate(objectId, status, updateData, now);
 
       return await Job.findByIdAndUpdate(objectId, updateData, { new: true });
     } catch (error) {
       console.error(`Error updating job status: ${error}`);
       return null;
     }
+  }
+
+  /**
+   * Stamp `job_completed_date` (as a string, same instant as `updatedAt`)
+   * when an Agoda VCC **property run** finishes with `job_status` Completed.
+   * The Agoda reopen-case flow never calls this — it only ever updates
+   * `case_status` via `updateJobCaseStatus` — so this never fires on a
+   * case-reopen run.
+   */
+  private async applyJobCompletedDate(
+    objectId: Types.ObjectId,
+    status: JobStatus,
+    updateData: Record<string, unknown>,
+    completedAt: Date
+  ): Promise<void> {
+    if (status !== JobStatus.Completed) return;
+
+    const job = await Job.findById(objectId).select("ota_provider").exec();
+    if (job?.ota_provider === OTAProvider.Agoda) {
+      updateData.job_completed_date = this.formatDateMMDDYYYY(completedAt);
+    }
+  }
+
+  /** Formats a Date as "mm/dd/yyyy" (e.g. "09/08/2026"). */
+  private formatDateMMDDYYYY(date: Date): string {
+    const mm = String(date.getMonth() + 1).padStart(2, "0");
+    const dd = String(date.getDate()).padStart(2, "0");
+    const yyyy = date.getFullYear();
+    return `${mm}/${dd}/${yyyy}`;
   }
 
   /**
@@ -554,9 +585,10 @@ export class JobService {
   ): Promise<IJob | null> {
     try {
       const objectId = this.validateObjectId(jobId, "jobId");
+      const now = new Date();
       const updateData: any = {
         job_status: status,
-        updatedAt: new Date(),
+        updatedAt: now,
       };
       if (status === JobStatus.Running) {
         updateData.worker_assigned = process.env.WORKER_ID || "scraper-worker";
@@ -572,6 +604,7 @@ export class JobService {
       }
       Object.assign(updateData, this.replyWaitFields(status));
       this.applyNeedHelpFileUrl(jobId, status, updateData);
+      await this.applyJobCompletedDate(objectId, status, updateData, now);
       return await Job.findByIdAndUpdate(objectId, updateData, { new: true });
     } catch (error) {
       console.error(`Error updating job status with reason: ${error}`);

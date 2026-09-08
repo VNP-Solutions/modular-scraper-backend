@@ -95,6 +95,13 @@ export interface IJob extends Document {
   /** Google Drive URL for exported Agoda job_items XLSX after Completed/Partial */
   job_items_file_link?: string;
   /**
+   * Date this job's property run finished, formatted "mm/dd/yyyy" (e.g.
+   * "09/08/2026") from the same instant as `updatedAt`. Only written for
+   * Agoda VCC property runs when `job_status` becomes Completed — never for
+   * the reopen-case flow, which only touches `case_status`.
+   */
+  job_completed_date?: string | null;
+  /**
    * S3 URL of the CSV attached during Agoda Need Help. Written only when
    * `job_status` becomes Completed — never for Partial, Failed, or in-flight runs.
    */
@@ -253,6 +260,11 @@ const JobSchema = new Schema<IJob>(
     job_items_file_link: {
       type: String,
       required: false,
+    },
+    job_completed_date: {
+      type: String,
+      required: false,
+      default: null,
     },
     need_help_file_url: {
       type: String,
