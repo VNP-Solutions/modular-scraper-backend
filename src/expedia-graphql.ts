@@ -1027,19 +1027,25 @@ function formatDateForEngine(date: Date | undefined | null): string {
 }
 
 /**
- * Merge a CardActivity's `authorizations` (holds only, never posted) with its
- * `settlements` (the actual posted/settled money movement, matched by
- * `authCode`) into the flat `transactions[]` shape the VCC balance engine
- * expects. Each settlement is paired with the first not-yet-matched
- * authorization that shares its `authCode`:
- *   - Matched pair -> one transaction block with authDate from the
- *     authorization and postedDate from the settlement (engine classifies
- *     this as "settled").
- *   - Unmatched authorization -> postedDate "NA" (engine classifies this as
- *     an open hold, unless it's a $10 card test or a decline).
- *   - Unmatched settlement (no authorization shares its authCode) -> its own
- *     block using the settlement's own dates, status defaults to "Approved"
- *     since money only ever settles after an approval.
+ * Turn a CardActivity's `authorizations` (holds only, never posted) and
+ * `settlements` (the actual posted/settled money movement) into the flat
+ * `transactions[]` shape the VCC balance engine expects.
+ *
+ * Deliberately NOT paired/merged by `authCode` here — each authorization and
+ * each settlement is sent through as its own independent transaction block,
+ * exactly as scraped. The engine's own duplicate-detection
+ * (`buildTransactionSignature` / `classifyTransactions`) is responsible for
+ * deciding whether any two blocks represent the same real-world event; this
+ * function does no such judgment call itself.
+ *
+ * Note: when an authorization later settles, its settlement's `authCode` and
+ * `amount` are usually identical, and `transactionDate` usually falls on the
+ * same calendar day as the authorization's `dateTime` — in that (common)
+ * case the engine's signature-based dedup will treat the settlement as a
+ * duplicate of the authorization and ignore it (transactionCode 0), leaving
+ * only the authorization's hold (transactionCode 2) counted. That's the
+ * engine's own logic taking over, per design — not something this function
+ * tries to prevent or work around.
  */
 function buildEngineTransactions(
   cardActivity: CreateCardActivityData | null,
@@ -1049,44 +1055,26 @@ function buildEngineTransactions(
   const authorizations = cardActivity.authorizations || [];
   const settlements = cardActivity.settlements || [];
 
-  const settlementsByAuthCode = new Map<string, typeof settlements>();
-  for (const settlement of settlements) {
-    const key = (settlement.authCode || "").trim().toUpperCase();
-    const bucket = settlementsByAuthCode.get(key) || [];
-    bucket.push(settlement);
-    settlementsByAuthCode.set(key, bucket);
-  }
-
   const transactions: EngineTransactionInput[] = [];
 
   for (const auth of authorizations) {
-    const key = (auth.authCode || "").trim().toUpperCase();
-    const bucket = key ? settlementsByAuthCode.get(key) : undefined;
-    const matchedSettlement = bucket && bucket.length ? bucket.shift() : undefined;
-
     transactions.push({
       authDate: formatDateForEngine(auth.dateTime),
-      postedDate: matchedSettlement
-        ? formatDateForEngine(matchedSettlement.postDate)
-        : "NA",
+      postedDate: "NA", // authorizations never carry their own posted/settled date
       authCode: auth.authCode || "",
-      amount: matchedSettlement?.amount?.amount ?? auth.amount?.amount ?? null,
+      amount: auth.amount?.amount ?? null,
       status: auth.status || "NA",
     });
   }
 
-  // Any settlements left over (no matching authorization by authCode) still
-  // represent real posted money — give them their own transaction block.
-  for (const bucket of settlementsByAuthCode.values()) {
-    for (const settlement of bucket) {
-      transactions.push({
-        authDate: formatDateForEngine(settlement.transactionDate),
-        postedDate: formatDateForEngine(settlement.postDate),
-        authCode: settlement.authCode || "",
-        amount: settlement.amount?.amount ?? null,
-        status: "Approved",
-      });
-    }
+  for (const settlement of settlements) {
+    transactions.push({
+      authDate: formatDateForEngine(settlement.transactionDate),
+      postedDate: formatDateForEngine(settlement.postDate),
+      authCode: settlement.authCode || "",
+      amount: settlement.amount?.amount ?? null,
+      status: "Approved", // settlements only ever exist for money that was approved & posted
+    });
   }
 
   return transactions;
