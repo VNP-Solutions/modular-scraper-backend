@@ -43,7 +43,8 @@ export interface ReopenAllReservationsParams {
   agodaId: string;
   jobId: string;
   agodaUsername: string;
-  agodaPassword: string;
+  /** Not required for login (Agoda uses an email link/OTP flow), kept for compatibility. */
+  agodaPassword?: string;
   /** S3 URL of the CSV a previous completed run filed with Need Help. */
   needHelpFileUrl: string;
   /**
@@ -98,8 +99,8 @@ export async function runAgodaReopenAllReservations(
       timeSession: timeManager.getSessionInfo(),
     });
 
-    if (!agodaUsername || !agodaPassword) {
-      throw new Error("Agoda username or password is not set");
+    if (!agodaUsername) {
+      throw new Error("Agoda username is not set");
     }
 
     if (!agodaId) {

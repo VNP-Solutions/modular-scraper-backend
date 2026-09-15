@@ -877,7 +877,7 @@ class ScrapingWorker {
     let finalAgodaUsername = agodaUsername;
     let finalAgodaPassword = agodaPassword;
 
-    if (!finalAgodaId || !finalAgodaUsername || !finalAgodaPassword) {
+    if (!finalAgodaId || !finalAgodaUsername) {
       console.log(`Getting job data for job ${jobId}...`);
 
       // Get Agoda ID from job
@@ -893,12 +893,9 @@ class ScrapingWorker {
         );
       }
 
-      if (
-        !propertyCredentials?.agodaUsername ||
-        !propertyCredentials?.agodaPassword
-      ) {
+      if (!propertyCredentials?.agodaUsername) {
         throw new Error(
-          `Cannot retrieve valid agodaUsername or agodaPassword for job ${jobId}. Property may not have agodaUsername or agodaPassword assigned.`
+          `Cannot retrieve valid agodaUsername for job ${jobId}. Property may not have agodaUsername assigned.`
         );
       }
 
@@ -1073,7 +1070,7 @@ class ScrapingWorker {
     let finalAgodaUsername = agodaUsername;
     let finalAgodaPassword = agodaPassword;
 
-    if (!finalAgodaId || !finalAgodaUsername || !finalAgodaPassword) {
+    if (!finalAgodaId || !finalAgodaUsername) {
       const propertyData = await jobService.getAgodaIdFromJob(jobId);
       const propertyCredentials =
         await propertyCredentialsService.getCredentialsByJobId(jobId);
@@ -1084,12 +1081,9 @@ class ScrapingWorker {
         );
       }
 
-      if (
-        !propertyCredentials?.agodaUsername ||
-        !propertyCredentials?.agodaPassword
-      ) {
+      if (!propertyCredentials?.agodaUsername) {
         throw new Error(
-          `Cannot retrieve valid agodaUsername or agodaPassword for job ${jobId}. Property may not have agodaUsername or agodaPassword assigned.`
+          `Cannot retrieve valid agodaUsername for job ${jobId}. Property may not have agodaUsername assigned.`
         );
       }
 
@@ -1251,7 +1245,7 @@ class ScrapingWorker {
       finalEndDate = finalEndDate || (job as any)?.end_date;
     }
 
-    if (!finalAgodaId || !finalAgodaUsername || !finalAgodaPassword) {
+    if (!finalAgodaId || !finalAgodaUsername) {
       const propertyData = await jobService.getAgodaIdFromJob(jobId);
       const propertyCredentials =
         await propertyCredentialsService.getCredentialsByJobId(jobId);
@@ -1262,12 +1256,9 @@ class ScrapingWorker {
         );
       }
 
-      if (
-        !propertyCredentials?.agodaUsername ||
-        !propertyCredentials?.agodaPassword
-      ) {
+      if (!propertyCredentials?.agodaUsername) {
         throw new Error(
-          `Cannot retrieve valid agodaUsername or agodaPassword for job ${jobId}. Property may not have agodaUsername or agodaPassword assigned.`
+          `Cannot retrieve valid agodaUsername for job ${jobId}. Property may not have agodaUsername assigned.`
         );
       }
 
@@ -1410,10 +1401,7 @@ class ScrapingWorker {
       throw new Error(`Cannot retrieve valid agoda_id for job ${jobId}`);
     }
 
-    if (
-      !propertyCredentials?.agodaUsername ||
-      !propertyCredentials?.agodaPassword
-    ) {
+    if (!propertyCredentials?.agodaUsername) {
       throw new Error(
         `Cannot retrieve valid Agoda credentials for job ${jobId}`
       );

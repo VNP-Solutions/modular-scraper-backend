@@ -85,8 +85,10 @@ async function agoda(
     }
 
     // Validate credentials and required parameters first
-    if (!agodaUsername || !agodaPassword) {
-      throw new Error("Agoda username or password is not set");
+    // Agoda login only requires the username/email (login flow uses an
+    // email link or OTP, not a password), so password is not required here.
+    if (!agodaUsername) {
+      throw new Error("Agoda username is not set");
     }
 
     if (!agodaId || !startDate || !endDate) {

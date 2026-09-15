@@ -24,7 +24,10 @@ async function agodaLogin(
   browser: Browser,
   page: Page,
   agodaUsername: string,
-  agodaPassword: string,
+  // Not used: Agoda login only needs the email — it authenticates via an
+  // email sign-in link or an emailed OTP code, never a password. Kept as a
+  // parameter for call-site compatibility.
+  agodaPassword?: string,
   jobId?: string
 ): Promise<void> {
   let shouldCloseBrowser = false;

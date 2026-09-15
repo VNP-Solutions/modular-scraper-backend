@@ -55,7 +55,8 @@ export interface ReopenCaseParams {
   agodaId: string;
   jobId: string;
   agodaUsername: string;
-  agodaPassword: string;
+  /** Not required for login (Agoda uses an email link/OTP flow), kept for compatibility. */
+  agodaPassword?: string;
   /** Bookings the reopen rules flagged as still owed with no usable amount. */
   reopenBookingIds: string[];
   /** Case ID from the Partner Support reply, quoted back in the new request. */
@@ -268,8 +269,8 @@ export async function runAgodaReopenCase(
       timeSession: timeManager.getSessionInfo(),
     });
 
-    if (!agodaUsername || !agodaPassword) {
-      throw new Error("Agoda username or password is not set");
+    if (!agodaUsername) {
+      throw new Error("Agoda username is not set");
     }
 
     if (!agodaId) {
