@@ -46,6 +46,27 @@ export interface IJobItem extends Document {
   over_160: boolean | null;
   days_since_checkout: number | null;
   derived_calculated_at: Date | null;
+
+  /**
+   * VCC Remaining Balance Engine output (src/common/vcc-balance-engine.ts).
+   * Computed once per item right after its card activity is scraped
+   * (Expedia GraphQL flow only — see saveGraphQLReservationToDatabase in
+   * src/expedia-graphql.ts). Mirrors EngineResult's public fields.
+   */
+  activityRows: number;
+  postedCharges: number;
+  postedRefunds: number;
+  netCollected: number;
+  impliedCardLimit: number | null;
+  stillOwed: number | null;
+  safeToChargeNow: number | null;
+  phantomBalance: number | null;
+  owedButNotOnCard: number | null;
+  verdict: string | null;
+  redFlags: string[];
+  timesDeclinedAtThisAmount: number;
+  recommendedAction: string | null;
+
   createdAt: Date;
   updatedAt: Date;
 }
@@ -195,6 +216,72 @@ const JobItemSchema = new Schema<IJobItem>(
       required: false,
       default: null,
     },
+    // VCC Remaining Balance Engine output — see IJobItem for details.
+    activityRows: {
+      type: Number,
+      required: false,
+      default: 0,
+    },
+    postedCharges: {
+      type: Number,
+      required: false,
+      default: 0,
+    },
+    postedRefunds: {
+      type: Number,
+      required: false,
+      default: 0,
+    },
+    netCollected: {
+      type: Number,
+      required: false,
+      default: 0,
+    },
+    impliedCardLimit: {
+      type: Number,
+      required: false,
+      default: null,
+    },
+    stillOwed: {
+      type: Number,
+      required: false,
+      default: null,
+    },
+    safeToChargeNow: {
+      type: Number,
+      required: false,
+      default: null,
+    },
+    phantomBalance: {
+      type: Number,
+      required: false,
+      default: null,
+    },
+    owedButNotOnCard: {
+      type: Number,
+      required: false,
+      default: null,
+    },
+    verdict: {
+      type: String,
+      required: false,
+      default: null,
+    },
+    redFlags: {
+      type: [String],
+      required: false,
+      default: [],
+    },
+    timesDeclinedAtThisAmount: {
+      type: Number,
+      required: false,
+      default: 0,
+    },
+    recommendedAction: {
+      type: String,
+      required: false,
+      default: null,
+    },
   },
   {
     timestamps: true,
@@ -211,6 +298,7 @@ JobItemSchema.index({ guest_name: 1 });
 JobItemSchema.index({ check_in_date: 1 });
 JobItemSchema.index({ reservation_status: 1 });
 JobItemSchema.index({ card_activity_id: 1 });
+JobItemSchema.index({ verdict: 1 });
 
 // Compound index for unique constraint
 JobItemSchema.index({ job_id: 1, reservation_id: 1 }, { unique: true });

@@ -4,6 +4,7 @@ import {
   CardActivity,
   ICardActivity,
   MoneyAmount,
+  Settlement,
 } from "../models/card-activity.model.js";
 import { computeDerivedJobItemFields } from "../common/job-item-derived.util.js";
 import {
@@ -51,9 +52,31 @@ export interface CreateJobData {
 export interface CreateCardActivityData {
   totalSettlementAmount?: MoneyAmount;
   authorizations?: Authorization[];
+  settlements?: Settlement[];
 }
 
-export interface CreateJobItemData {
+/**
+ * Output of the VCC Remaining Balance Engine (src/common/vcc-balance-engine.ts),
+ * computed once per item right after its card activity is scraped, and
+ * stored directly on the JobItem. See EngineResult in vcc-balance-engine.ts.
+ */
+export interface BalanceEngineData {
+  activityRows?: number;
+  postedCharges?: number;
+  postedRefunds?: number;
+  netCollected?: number;
+  impliedCardLimit?: number | null;
+  stillOwed?: number | null;
+  safeToChargeNow?: number | null;
+  phantomBalance?: number | null;
+  owedButNotOnCard?: number | null;
+  verdict?: string;
+  redFlags?: string[];
+  timesDeclinedAtThisAmount?: number;
+  recommendedAction?: string;
+}
+
+export interface CreateJobItemData extends BalanceEngineData {
   job_id: string;
   property_id: string;
   guest_name: string;
@@ -668,6 +691,7 @@ export class JobService {
             reservation_id: itemData.reservation_id,
             totalSettlementAmount: card_activity.totalSettlementAmount,
             authorizations: card_activity.authorizations || [],
+            settlements: card_activity.settlements || [],
           });
 
           savedJobItem.has_card_activity = true;
@@ -698,7 +722,9 @@ export class JobService {
         !!data.totalSettlementAmount.currency);
     const hasAuthorizations =
       Array.isArray(data.authorizations) && data.authorizations.length > 0;
-    return hasTotal || hasAuthorizations;
+    const hasSettlements =
+      Array.isArray(data.settlements) && data.settlements.length > 0;
+    return hasTotal || hasAuthorizations || hasSettlements;
   }
 
   /**
@@ -726,6 +752,7 @@ export class JobService {
             reservation_id: jobItem.reservation_id,
             totalSettlementAmount: data.totalSettlementAmount,
             authorizations: data.authorizations || [],
+            settlements: data.settlements || [],
           },
         },
         { new: true, upsert: true, setDefaultsOnInsert: true },

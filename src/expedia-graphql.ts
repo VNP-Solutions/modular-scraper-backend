@@ -37,6 +37,7 @@ import { CardInfo, PaymentInfo } from "./models/job-item.model.js";
 import {
   Authorization as CardActivityAuthorization,
   MoneyAmount as CardActivityMoney,
+  Settlement as CardActivitySettlement,
 } from "./models/card-activity.model.js";
 import { JobStatus } from "./models/job.model.js";
 import handleOtpVerification from "./otp-verification/otp-verification.js";
@@ -45,6 +46,10 @@ import {
   CreateJobItemData,
   jobService,
 } from "./services/job.service.js";
+import {
+  EngineTransactionInput,
+  runEngine,
+} from "./common/vcc-balance-engine.js";
 
 dotenv.config();
 
@@ -986,13 +991,161 @@ function buildCardActivityFromEvc(
       }))
     : [];
 
-  const hasAny = !!totalSettlementAmount || authorizations.length > 0;
+  // `settlements` carries the actual posted/settled money movement for a
+  // prior authorization (matched by `authCode`) — this is where the real
+  // "Posted Date" lives. `authorizations` alone only ever represent a hold.
+  const settlements: CardActivitySettlement[] = Array.isArray(ca.settlements)
+    ? ca.settlements.map((s: any) => ({
+        transactionDate: parseCardActivityDate(s?.transactionDate),
+        postDate: parseCardActivityDate(s?.postDate),
+        authCode: s?.authCode ?? null,
+        referenceNumber: s?.referenceNumber ?? null,
+        amount: parseMoneyAmount(s?.amount),
+      }))
+    : [];
+
+  const hasAny =
+    !!totalSettlementAmount || authorizations.length > 0 || settlements.length > 0;
   if (!hasAny) return null;
 
   return {
     totalSettlementAmount,
     authorizations,
+    settlements,
   };
+}
+
+/** Format a Date as "DD/MM/YYYY" — the format the VCC balance engine expects for
+ * transaction dates (see EngineTransactionInput in vcc-balance-engine.ts). Returns
+ * "NA" when there's no date, so the engine treats it as a placeholder, not a real one. */
+function formatDateForEngine(date: Date | undefined | null): string {
+  if (!date || isNaN(date.getTime())) return "NA";
+  const day = String(date.getDate()).padStart(2, "0");
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const year = date.getFullYear();
+  return `${day}/${month}/${year}`;
+}
+
+/**
+ * Merge a CardActivity's `authorizations` (holds only, never posted) with its
+ * `settlements` (the actual posted/settled money movement, matched by
+ * `authCode`) into the flat `transactions[]` shape the VCC balance engine
+ * expects. Each settlement is paired with the first not-yet-matched
+ * authorization that shares its `authCode`:
+ *   - Matched pair -> one transaction block with authDate from the
+ *     authorization and postedDate from the settlement (engine classifies
+ *     this as "settled").
+ *   - Unmatched authorization -> postedDate "NA" (engine classifies this as
+ *     an open hold, unless it's a $10 card test or a decline).
+ *   - Unmatched settlement (no authorization shares its authCode) -> its own
+ *     block using the settlement's own dates, status defaults to "Approved"
+ *     since money only ever settles after an approval.
+ */
+function buildEngineTransactions(
+  cardActivity: CreateCardActivityData | null,
+): EngineTransactionInput[] {
+  if (!cardActivity) return [];
+
+  const authorizations = cardActivity.authorizations || [];
+  const settlements = cardActivity.settlements || [];
+
+  const settlementsByAuthCode = new Map<string, typeof settlements>();
+  for (const settlement of settlements) {
+    const key = (settlement.authCode || "").trim().toUpperCase();
+    const bucket = settlementsByAuthCode.get(key) || [];
+    bucket.push(settlement);
+    settlementsByAuthCode.set(key, bucket);
+  }
+
+  const transactions: EngineTransactionInput[] = [];
+
+  for (const auth of authorizations) {
+    const key = (auth.authCode || "").trim().toUpperCase();
+    const bucket = key ? settlementsByAuthCode.get(key) : undefined;
+    const matchedSettlement = bucket && bucket.length ? bucket.shift() : undefined;
+
+    transactions.push({
+      authDate: formatDateForEngine(auth.dateTime),
+      postedDate: matchedSettlement
+        ? formatDateForEngine(matchedSettlement.postDate)
+        : "NA",
+      authCode: auth.authCode || "",
+      amount: matchedSettlement?.amount?.amount ?? auth.amount?.amount ?? null,
+      status: auth.status || "NA",
+    });
+  }
+
+  // Any settlements left over (no matching authorization by authCode) still
+  // represent real posted money — give them their own transaction block.
+  for (const bucket of settlementsByAuthCode.values()) {
+    for (const settlement of bucket) {
+      transactions.push({
+        authDate: formatDateForEngine(settlement.transactionDate),
+        postedDate: formatDateForEngine(settlement.postDate),
+        authCode: settlement.authCode || "",
+        amount: settlement.amount?.amount ?? null,
+        status: "Approved",
+      });
+    }
+  }
+
+  return transactions;
+}
+
+/**
+ * Run the VCC Remaining Balance Engine for one item right after its card
+ * activity has been scraped/normalized, and map the result onto the flat
+ * field names stored on JobItem. Returns an empty object (no-op) when the
+ * engine can't produce a result, so callers can safely spread this into
+ * their jobItemData without extra null checks.
+ */
+function computeBalanceEngineFieldsForItem(params: {
+  reservationId: string;
+  checkInDate: Date;
+  checkOutDate: Date;
+  bookingAmount: number;
+  remainingBalance: number | null;
+  cardActivity: CreateCardActivityData | null;
+}): Partial<CreateJobItemData> {
+  const { reservationId, checkInDate, checkOutDate, bookingAmount, remainingBalance, cardActivity } =
+    params;
+
+  try {
+    const transactions = buildEngineTransactions(cardActivity);
+
+    const result = runEngine({
+      reservationId,
+      check_in_date: checkInDate,
+      check_out_date: checkOutDate,
+      remainingBalance,
+      bookingAmount,
+      transactions,
+    });
+
+    if (!result) return {};
+
+    return {
+      activityRows: result.activityRows,
+      postedCharges: result.postedCharges,
+      postedRefunds: result.postedRefunds,
+      netCollected: result.netCollected,
+      impliedCardLimit: result.impliedCardLimit,
+      stillOwed: result.stillOwed,
+      safeToChargeNow: result.safeToChargeNow,
+      phantomBalance: result.phantomBalance,
+      owedButNotOnCard: result.owedButNotOnCard,
+      verdict: result.verdict,
+      redFlags: result.redFlags,
+      timesDeclinedAtThisAmount: result.timesDeclinedAtThisAmount,
+      recommendedAction: result.recommendedAction,
+    };
+  } catch (engineError: any) {
+    console.error(
+      `❌ VCC balance engine failed for reservation ${reservationId}:`,
+      engineError?.message || engineError,
+    );
+    return {};
+  }
 }
 
 /**
@@ -1121,14 +1274,37 @@ async function saveGraphQLReservationToDatabase(
       buildCardActivityFromEvc(evcCardActivityDataV2) ||
       buildCardActivityFromEvc(evcCardData);
 
+    // Same V2-preferred / V1-fallback pattern as cardActivityData above —
+    // this is the "Remaining Balance" the VCC balance engine needs; it's the
+    // same value already used for payment_info.amount_to_charge_or_refund.
+    const remainingBalance: number | null =
+      evcCardActivityDataV2?.cardInformation?.availableBalance?.amount ??
+      evcCardData?.cardInformation?.availableBalance?.amount ??
+      null;
+
+    const parsedCheckInDate = parseDate(checkInDate);
+    const parsedCheckOutDate = parseDate(checkOutDate);
+
+    // Run the VCC Remaining Balance Engine for this single item right now —
+    // after its card activity has been scraped/normalized above, and before
+    // this item is saved (the caller's loop then moves on to the next item).
+    const balanceEngineFields = computeBalanceEngineFieldsForItem({
+      reservationId,
+      checkInDate: parsedCheckInDate,
+      checkOutDate: parsedCheckOutDate,
+      bookingAmount,
+      remainingBalance,
+      cardActivity: cardActivityData,
+    });
+
     const jobItemData: CreateJobItemData = {
       job_id: jobId,
       property_id: propertyId,
       guest_name: guestName,
       reservation_id: reservationId,
       confirmation_number: confirmationCode,
-      check_in_date: parseDate(checkInDate),
-      check_out_date: parseDate(checkOutDate),
+      check_in_date: parsedCheckInDate,
+      check_out_date: parsedCheckOutDate,
       room_type: roomType,
       booking_amount: bookingAmount,
       booked_date: parseDate(bookedDate),
@@ -1139,6 +1315,7 @@ async function saveGraphQLReservationToDatabase(
       card_activity: cardActivityData || undefined,
       reservation_status: reservationStatus,
       additional_text: additionalText,
+      ...balanceEngineFields,
     };
 
     const savedItem = await jobService.createJobItem(jobItemData);

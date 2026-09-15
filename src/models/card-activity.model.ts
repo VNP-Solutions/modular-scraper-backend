@@ -14,6 +14,18 @@ export interface Authorization {
   amount?: MoneyAmount;
 }
 
+// A "settlement" is the actual posted/settled money movement for a prior
+// authorization (matched by `authCode`). This is what the EVC V2 endpoint
+// returns under `cardActivity.settlements` — separate from `authorizations`,
+// which only ever represent a hold, never a posted charge/refund.
+export interface Settlement {
+  transactionDate?: Date;
+  postDate?: Date;
+  authCode?: string | null;
+  referenceNumber?: string | null;
+  amount?: MoneyAmount;
+}
+
 export interface ICardActivity extends Document {
   _id: Types.ObjectId;
   job_item_id: Types.ObjectId;
@@ -22,6 +34,7 @@ export interface ICardActivity extends Document {
   reservation_id?: string;
   totalSettlementAmount?: MoneyAmount;
   authorizations?: Authorization[];
+  settlements?: Settlement[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -73,6 +86,34 @@ const AuthorizationSchema = new Schema<Authorization>(
   { _id: false }
 );
 
+const SettlementSchema = new Schema<Settlement>(
+  {
+    transactionDate: {
+      type: Date,
+      required: false,
+    },
+    postDate: {
+      type: Date,
+      required: false,
+    },
+    authCode: {
+      type: String,
+      required: false,
+      default: null,
+    },
+    referenceNumber: {
+      type: String,
+      required: false,
+      default: null,
+    },
+    amount: {
+      type: MoneyAmountSchema,
+      required: false,
+    },
+  },
+  { _id: false }
+);
+
 const CardActivitySchema = new Schema<ICardActivity>(
   {
     job_item_id: {
@@ -100,6 +141,10 @@ const CardActivitySchema = new Schema<ICardActivity>(
     },
     authorizations: {
       type: [AuthorizationSchema],
+      default: [],
+    },
+    settlements: {
+      type: [SettlementSchema],
       default: [],
     },
   },
