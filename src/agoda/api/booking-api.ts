@@ -387,7 +387,11 @@ export async function fetchBookingDataFromAPI(
     const refererEndDate = toAgodaRefererDate(endDate);
 
     // Construct API URL (portal.agoda.com — ycs.agoda.com now 307-redirects here)
-    const apiUrl = `${AGODA_PORTAL_ORIGIN}/mldc/en-us/api/reporting/Booking/list/${agodaId}`;
+    // NOTE: Agoda moved this endpoint from /api/reporting/Booking/list/ to
+    // /api/postbook/Booking/list/ (observed Sep 2026). Keep the old path as a
+    // fallback below in case it gets reverted/A-B tested.
+    const apiUrl = `${AGODA_PORTAL_ORIGIN}/mldc/en-us/api/postbook/Booking/list/${agodaId}`;
+    const legacyApiUrl = `${AGODA_PORTAL_ORIGIN}/mldc/en-us/api/reporting/Booking/list/${agodaId}`;
     const refererUrl = `${AGODA_PORTAL_ORIGIN}/mldc/en-us/app/reporting/booking/${agodaId}?bookingType=confirmed%2Camended&startDate=${refererStartDate}&endDate=${refererEndDate}`;
 
     const headers = {
@@ -415,7 +419,7 @@ export async function fetchBookingDataFromAPI(
       to: `/Date(${endTimestamp})/`,
     };
 
-    // Current portal API format (as of Aug 2026)
+    // Current portal API format (as of Sep 2026 — /api/postbook/Booking/list/)
     const body = {
       hotelId: parseInt(agodaId, 10),
       customerName: "",
@@ -423,7 +427,7 @@ export async function fetchBookingDataFromAPI(
       checkInDatePeriod,
       pageIndex: 1,
       pageSize: 1000,
-      sortBy: "stay_date__asc",
+      sortBy: "check_in__asc",
     };
 
     await dualLogInfo("Making API request to portal.agoda.com", {
@@ -441,12 +445,36 @@ export async function fetchBookingDataFromAPI(
     if (!response.ok) {
       const errorText = await response.text();
       await dualLogError(
-        `API request failed with status ${response.status}: ${errorText}`,
+        `API request to ${apiUrl} failed with status ${response.status}: ${errorText}`,
         { jobId, status: response.status }
       );
-      throw new Error(
-        `Agoda API failed with status ${response.status}: ${errorText}`
+
+      // Endpoint may have moved/reverted (e.g. postbook <-> reporting path).
+      // Retry once against the legacy path before giving up.
+      await dualLogInfo(
+        "Retrying booking list request against legacy reporting endpoint",
+        { jobId, legacyApiUrl }
       );
+      response = await fetch(legacyApiUrl, {
+        method: "POST",
+        headers: {
+          ...headers,
+          "Request-Id": generateRequestId(),
+          traceparent: generateTraceParent(),
+        },
+        body: JSON.stringify(body),
+      });
+
+      if (!response.ok) {
+        const legacyErrorText = await response.text();
+        await dualLogError(
+          `Legacy API request also failed with status ${response.status}: ${legacyErrorText}`,
+          { jobId, status: response.status }
+        );
+        throw new Error(
+          `Agoda API failed with status ${response.status}: ${errorText}`
+        );
+      }
     }
 
     let responseData = await response.json();
