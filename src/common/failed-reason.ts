@@ -44,7 +44,7 @@ const FAILED_REASON_MESSAGES: Record<FailedReasonCode, string> = {
   [FAILED_REASON.AGODA_CARD_INFO_NOT_FOUND]:
     "Failed to retrieve card information. No card info found for the reservations.",
   [FAILED_REASON.AGODA_CREDENTIALS_NOT_SET]:
-    "Agoda username or password is not set. Please assign Agoda credentials to the property and try again.",
+    "Agoda username is not set. Please assign Agoda credentials to the property and try again.",
 };
 
 /**

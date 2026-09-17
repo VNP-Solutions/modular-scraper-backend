@@ -19,7 +19,7 @@ async function agodaLogin(
   browser: Browser,
   page: Page,
   agodaUsername: string,
-  agodaPassword: string,
+  _agodaPassword?: string,
   jobId?: string,
   entityId?: string,
   entityType: "job" | "retrieval" = "job"

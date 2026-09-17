@@ -47,9 +47,7 @@ export class PropertyCredentialsService {
         hasExpediaCredentials: !!(
           credentials.expediaUsername && credentials.expediaPassword
         ),
-        hasAgodaCredentials: !!(
-          credentials.agodaUsername && credentials.agodaPassword
-        ),
+        hasAgodaCredentials: !!credentials.agodaUsername,
       });
 
       return credentials;
@@ -107,7 +105,7 @@ export class PropertyCredentialsService {
         hasExpediaCredentials: !!(
           result.expediaUsername && result.expediaPassword
         ),
-        hasAgodaCredentials: !!(result.agodaUsername && result.agodaPassword),
+        hasAgodaCredentials: !!result.agodaUsername,
       });
 
       return result;

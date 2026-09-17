@@ -493,13 +493,10 @@ app.post("/api/scraping/resume", (async (
         });
       }
 
-      if (
-        !propertyCredentials?.agodaUsername ||
-        !propertyCredentials?.agodaPassword
-      ) {
+      if (!propertyCredentials?.agodaUsername) {
         return res.status(400).json({
           status: 400,
-          message: `Cannot retrieve valid agodaUsername or agodaPassword for job ${jobId}. Property may not have agodaUsername or agodaPassword assigned.`,
+          message: `Cannot retrieve valid agodaUsername for job ${jobId}. Property may not have agodaUsername assigned.`,
         });
       }
 
@@ -1024,13 +1021,10 @@ app.post("/api/expedia/rerun-failed-job", (async (
         });
       }
 
-      if (
-        !propertyCredentials?.agodaUsername ||
-        !propertyCredentials?.agodaPassword
-      ) {
+      if (!propertyCredentials?.agodaUsername) {
         return res.status(400).json({
           status: 400,
-          message: `Cannot retrieve valid agodaUsername or agodaPassword for job ${jobId}. Property may not have agodaUsername or agodaPassword assigned.`,
+          message: `Cannot retrieve valid agodaUsername for job ${jobId}. Property may not have agodaUsername assigned.`,
         });
       }
 
@@ -2416,13 +2410,10 @@ app.post("/api/agoda/property-run-job", (async (
       });
     }
 
-    if (
-      !propertyCredentials?.agodaUsername ||
-      !propertyCredentials?.agodaPassword
-    ) {
+    if (!propertyCredentials?.agodaUsername) {
       return res.status(400).json({
         status: 400,
-        message: `Cannot retrieve valid agodaUsername or agodaPassword for job ${jobId}. Property may not have agodaUsername or agodaPassword assigned.`,
+        message: `Cannot retrieve valid agodaUsername for job ${jobId}. Property may not have agodaUsername assigned.`,
       });
     }
 

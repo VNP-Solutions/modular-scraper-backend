@@ -119,8 +119,9 @@ async function agodaRetrieval(
     }
 
     // Validate credentials and required parameters first
-    if (!agodaUsername || !agodaPassword) {
-      const credentialsErr = new Error("Agoda username or password is not set");
+    // Password is optional for Agoda (login uses email + OTP)
+    if (!agodaUsername) {
+      const credentialsErr = new Error("Agoda username is not set");
       setFailedReasonCode(credentialsErr, FAILED_REASON.AGODA_CREDENTIALS_NOT_SET);
       throw credentialsErr;
     }

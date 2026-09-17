@@ -741,7 +741,7 @@ class ScrapingWorker {
     let finalAgodaUsername = agodaUsername;
     let finalAgodaPassword = agodaPassword;
 
-    if (!finalAgodaId || !finalAgodaUsername || !finalAgodaPassword) {
+    if (!finalAgodaId || !finalAgodaUsername) {
       console.log(`Getting job data for job ${jobId}...`);
 
       // Get Agoda ID from job
@@ -757,12 +757,9 @@ class ScrapingWorker {
         );
       }
 
-      if (
-        !propertyCredentials?.agodaUsername ||
-        !propertyCredentials?.agodaPassword
-      ) {
+      if (!propertyCredentials?.agodaUsername) {
         throw new Error(
-          `Cannot retrieve valid agodaUsername or agodaPassword for job ${jobId}. Property may not have agodaUsername or agodaPassword assigned.`
+          `Cannot retrieve valid agodaUsername for job ${jobId}. Property may not have agodaUsername assigned.`
         );
       }
 
@@ -888,10 +885,7 @@ class ScrapingWorker {
       throw new Error(`Cannot retrieve valid agoda_id for job ${jobId}`);
     }
 
-    if (
-      !propertyCredentials?.agodaUsername ||
-      !propertyCredentials?.agodaPassword
-    ) {
+    if (!propertyCredentials?.agodaUsername) {
       throw new Error(
         `Cannot retrieve valid Agoda credentials for job ${jobId}`
       );
@@ -1038,8 +1032,8 @@ class ScrapingWorker {
       `Worker: Set retrieval context - retrievalId: ${retrievalId}, parentRetrievalId: ${parentRetrievalId}, jobId: ${finalJobId}`
     );
 
-    // Log credentials info
-    if (user_email && user_password) {
+    // Log credentials info (password is optional for Agoda)
+    if (user_email) {
       console.log(`Worker: Using credentials for retrieval ${retrievalId}`);
       console.log(`Worker: Email: ${user_email}`);
     } else {
@@ -1057,7 +1051,7 @@ class ScrapingWorker {
         retrievalId: retrievalId,
         parentRetrievalId: parentRetrievalId,
         reservationCount: reservations.length,
-        hasCredentials: !!(user_email && user_password),
+        hasCredentials: !!user_email,
         brightDataSessionId,
         windowSize,
       }
