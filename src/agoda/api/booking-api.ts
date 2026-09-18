@@ -392,7 +392,9 @@ export async function fetchBookingDataFromAPI(
     // fallback below in case it gets reverted/A-B tested.
     const apiUrl = `${AGODA_PORTAL_ORIGIN}/mldc/en-us/api/postbook/Booking/list/${agodaId}`;
     const legacyApiUrl = `${AGODA_PORTAL_ORIGIN}/mldc/en-us/api/reporting/Booking/list/${agodaId}`;
-    const refererUrl = `${AGODA_PORTAL_ORIGIN}/mldc/en-us/app/reporting/booking/${agodaId}?bookingType=confirmed%2Camended&startDate=${refererStartDate}&endDate=${refererEndDate}`;
+    // NOTE: Agoda renamed this page from /app/reporting/booking/ to
+    // /app/postbook/booking/ (observed Sep 2026), matching the API path change above.
+    const refererUrl = `${AGODA_PORTAL_ORIGIN}/mldc/en-us/app/postbook/booking/${agodaId}?bookingType=confirmed%2Camended&startDate=${refererStartDate}&endDate=${refererEndDate}`;
 
     const headers = {
       Accept: "application/json, text/plain, */*",
@@ -581,11 +583,16 @@ export async function fetchBookingSummary(
     const browserSettings = await extractBrowserSettings(page);
 
     // Construct API URL - bookingToken should already be URL encoded from the API response
+    // NOTE: Agoda moved this endpoint from /api/reporting/Booking/details/ to
+    // /api/postbook/Booking/details/ (observed Sep 2026), matching the list
+    // endpoint path change. Keep the old path as a fallback below in case it
+    // gets reverted/A-B tested.
     const encodedToken = encodeURIComponent(bookingToken);
-    const apiUrl = `${AGODA_PORTAL_ORIGIN}/mldc/en-us/api/reporting/Booking/details/${agodaId}/bookingSummary?bookingToken=${encodedToken}`;
+    const apiUrl = `${AGODA_PORTAL_ORIGIN}/mldc/en-us/api/postbook/Booking/details/${agodaId}/bookingSummary?bookingToken=${encodedToken}`;
+    const legacyApiUrl = `${AGODA_PORTAL_ORIGIN}/mldc/en-us/api/reporting/Booking/details/${agodaId}/bookingSummary?bookingToken=${encodedToken}`;
 
     // Build Referer header with date parameters (matching browser format)
-    let refererUrl = `${AGODA_PORTAL_ORIGIN}/mldc/en-us/app/reporting/booking/${agodaId}`;
+    let refererUrl = `${AGODA_PORTAL_ORIGIN}/mldc/en-us/app/postbook/booking/${agodaId}`;
     if (startDate && endDate) {
       refererUrl += `?startDate=${startDate}&endDate=${endDate}`;
     }
@@ -601,25 +608,41 @@ export async function fetchBookingSummary(
     });
 
     // Make API request matching EXACT Postman/curl format (no Request-Id, no traceparent)
-    const response = await fetch(apiUrl, {
+    const requestHeaders = {
+      Accept: "application/json, text/plain, */*",
+      "Accept-Language": browserSettings.acceptLanguage,
+      Connection: "keep-alive",
+      Cookie: cookieString,
+      DNT: "1",
+      Referer: refererUrl,
+      "User-Agent": browserSettings.userAgent,
+      "sec-ch-ua": browserSettings.secChUa,
+      "sec-ch-ua-mobile": browserSettings.secChUaMobile,
+      "sec-ch-ua-platform": browserSettings.secChUaPlatform,
+      "Sec-Fetch-Dest": "empty",
+      "Sec-Fetch-Mode": "cors",
+      "Sec-Fetch-Site": "same-origin",
+      // Note: Removed Request-Id and traceparent to match working Postman request
+    };
+
+    let response = await fetch(apiUrl, {
       method: "GET",
-      headers: {
-        Accept: "application/json, text/plain, */*",
-        "Accept-Language": browserSettings.acceptLanguage,
-        Connection: "keep-alive",
-        Cookie: cookieString,
-        DNT: "1",
-        Referer: refererUrl,
-        "User-Agent": browserSettings.userAgent,
-        "sec-ch-ua": browserSettings.secChUa,
-        "sec-ch-ua-mobile": browserSettings.secChUaMobile,
-        "sec-ch-ua-platform": browserSettings.secChUaPlatform,
-        "Sec-Fetch-Dest": "empty",
-        "Sec-Fetch-Mode": "cors",
-        "Sec-Fetch-Site": "same-origin",
-        // Note: Removed Request-Id and traceparent to match working Postman request
-      },
+      headers: requestHeaders,
     });
+
+    // Endpoint may have moved/reverted (e.g. postbook <-> reporting path).
+    // Retry once against the legacy path before giving up (skip for 429s,
+    // which are handled by the rate-limit branch below).
+    if (!response.ok && response.status !== 429) {
+      await dualLogInfo(
+        "Booking summary request failed, retrying against legacy reporting endpoint",
+        { jobId, legacyApiUrl, status: response.status }
+      );
+      response = await fetch(legacyApiUrl, {
+        method: "GET",
+        headers: requestHeaders,
+      });
+    }
 
     // Handle rate limiting (429) with exponential backoff retry
     if (response.status === 429) {

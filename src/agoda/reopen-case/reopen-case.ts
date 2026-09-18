@@ -37,9 +37,11 @@ import { cleanupOnError } from "../utils/error-cleanup.js";
 
 dotenv.config();
 
-/** Same reporting page the property run uses, minus the date-range parameters. */
+/** Same booking page the property run uses, minus the date-range parameters.
+ * NOTE: Agoda renamed this page from /app/reporting/booking/ to
+ * /app/postbook/booking/ (observed Sep 2026). */
 const PROPERTY_PAGE_BASE =
-  "https://portal.agoda.com/mldc/en-us/app/reporting/booking";
+  "https://portal.agoda.com/mldc/en-us/app/postbook/booking";
 
 const MAX_NAVIGATION_ATTEMPTS = 3;
 

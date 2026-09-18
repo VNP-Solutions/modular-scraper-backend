@@ -544,7 +544,10 @@ export async function getAgodaBookingData(
     );
 
     // Construct the booking URL with agoda_id and date range using converted dates
-    const bookingUrl = `https://portal.agoda.com/mldc/en-us/app/reporting/booking/${agodaId}?bookingType=confirmed%2Camended&startDate=${formattedStartDate}&endDate=${formattedEndDate}`;
+    // NOTE: Agoda renamed this page from /app/reporting/booking/ to
+    // /app/postbook/booking/ (observed Sep 2026). Using the old path no longer
+    // renders the "Reservations" section, which caused navigation checks to fail.
+    const bookingUrl = `https://portal.agoda.com/mldc/en-us/app/postbook/booking/${agodaId}?bookingType=confirmed%2Camended&startDate=${formattedStartDate}&endDate=${formattedEndDate}`;
     await dualLogInfo(`Navigating to booking data URL: ${bookingUrl}`);
 
     await delay(5000);
