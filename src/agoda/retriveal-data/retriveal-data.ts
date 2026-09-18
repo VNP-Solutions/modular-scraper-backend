@@ -79,7 +79,8 @@ function parseAgodaRowDate(text: string): Date | null {
 
 /**
  * Parse a stay-date range string into check-in / check-out text parts.
- * Handles "Apr 26, 2026 - Apr 27, 2026" and "Sunday, April 26, 2026 - Monday, April 27, 2026".
+ * Handles "Apr 26, 2026 - Apr 27, 2026", en-dashes, weekday prefixes,
+ * and "Jun 18 - Jun 19, 2026" (year only on the second date).
  */
 function parseStayDateRangeText(text: string): {
   checkInStr: string | null;
@@ -88,15 +89,36 @@ function parseStayDateRangeText(text: string): {
   if (!text?.trim()) return { checkInStr: null, checkOutStr: null };
 
   const matches = [...text.matchAll(AGODA_STAY_DATE_PART_PATTERN)];
-  if (matches.length < 2) return { checkInStr: null, checkOutStr: null };
+  if (matches.length >= 2) {
+    const toShortDate = (m: RegExpMatchArray) => `${m[1]} ${m[2]}, ${m[3]}`;
+    return {
+      checkInStr: toShortDate(matches[0]),
+      checkOutStr: toShortDate(matches[1]),
+    };
+  }
 
-  const toShortDate = (m: RegExpMatchArray) =>
-    `${m[1]} ${m[2]}, ${m[3]}`;
+  const sharedYear = text.match(
+    /([A-Za-z]{3,})\s+(\d{1,2})\s*[-–—]\s*([A-Za-z]{3,})\s+(\d{1,2}),\s*(\d{4})/
+  );
+  if (sharedYear) {
+    return {
+      checkInStr: `${sharedYear[1]} ${sharedYear[2]}, ${sharedYear[5]}`,
+      checkOutStr: `${sharedYear[3]} ${sharedYear[4]}, ${sharedYear[5]}`,
+    };
+  }
 
-  return {
-    checkInStr: toShortDate(matches[0]),
-    checkOutStr: toShortDate(matches[1]),
-  };
+  return { checkInStr: null, checkOutStr: null };
+}
+
+function collectDateStringsFromText(text: string): string[] {
+  if (!text?.trim()) return [];
+  const ranged = parseStayDateRangeText(text);
+  if (ranged.checkInStr && ranged.checkOutStr) {
+    return [ranged.checkInStr, ranged.checkOutStr];
+  }
+  return [...text.matchAll(AGODA_STAY_DATE_PART_PATTERN)].map(
+    (m) => `${m[1]} ${m[2]}, ${m[3]}`
+  );
 }
 
 function bookingRowDataFromDateStrings(
@@ -167,8 +189,8 @@ function bookingRowDataFromApiJson(
   if (items.length === 0) return null;
 
   const bookingIdNum = parseInt(bookingId, 10);
-  const item =
-    items.find((i) => i.bookingId === bookingIdNum) ?? items[0];
+  const item = items.find((i) => String(i.bookingId) === bookingId) ??
+    items.find((i) => i.bookingId === bookingIdNum);
 
   if (!item?.checkinDate || !item?.checkoutDate) return null;
 
@@ -201,15 +223,21 @@ function startBookingListApiCapture(
   return page
     .waitForResponse(
       (res) => {
-        if (res.request().method() !== "POST") return false;
-        if (!res.url().includes(BOOKING_LIST_API_PATH)) return false;
+        const method = res.request().method();
+        if (method !== "POST" && method !== "GET") return false;
+        if (!res.url().toLowerCase().includes(BOOKING_LIST_API_PATH.toLowerCase())) {
+          return false;
+        }
         if (res.status() !== 200) return false;
 
         const postData = res.request().postData() ?? "";
+        const url = res.url();
+        // Prefer a request that mentions this booking; otherwise accept the
+        // next Booking/list call after Search (Agoda sometimes omits bookingId).
         return (
-          postData.includes(`"bookingId":${bookingId}`) ||
-          postData.includes(`"bookingId": ${bookingId}`) ||
-          postData.includes(`"bookingId":"${bookingId}"`)
+          postData.includes(bookingId) ||
+          decodeURIComponent(url).includes(bookingId) ||
+          method === "POST"
         );
       },
       { timeout: 20000 }
@@ -293,8 +321,8 @@ async function persistGuestAndDatesAfterSearch(
 }
 
 /**
- * Wait until sidebar summary or accordion stay-date content is in the DOM.
- * Tab list alone is not enough — summary card loads asynchronously.
+ * Wait until the "Guest details & dates" accordion (with check-in/check-out
+ * value cells) is in the DOM. Tab list alone is not enough — it loads async.
  */
 async function waitForSidebarStayDatesContent(
   page: Page,
@@ -304,15 +332,11 @@ async function waitForSidebarStayDatesContent(
 
   try {
     await Promise.race([
-      page.waitForSelector(BOOKING_DETAIL.SUMMARY_STAY_DATES, {
+      page.waitForSelector(BOOKING_DETAIL.ACCORDION_GUEST_MASTER, {
         visible: true,
         timeout: 15000,
       }),
-      page.waitForSelector(BOOKING_DETAIL.ACCORDION_STAY_DATES, {
-        visible: true,
-        timeout: 15000,
-      }),
-      page.waitForSelector(BOOKING_DETAIL.ACCORDION_STAY_DATES_VALUE, {
+      page.waitForSelector(BOOKING_DETAIL.ACCORDION_CHECKIN_VALUE, {
         visible: true,
         timeout: 15000,
       }),
@@ -335,7 +359,8 @@ async function waitForSidebarStayDatesContent(
 }
 
 /**
- * Wait for accordion "Stay dates" row in booking details (below summary card).
+ * Wait for the accordion check-in/check-out value cells to stop showing
+ * "Loading..." (or timeout and try reading anyway).
  */
 async function waitForAccordionStayDateSection(
   page: Page,
@@ -344,15 +369,29 @@ async function waitForAccordionStayDateSection(
   const jobId = getRetrievalJobId();
 
   try {
-    await page.waitForSelector(BOOKING_DETAIL.ACCORDION_STAY_DATES, {
+    await page.waitForSelector(BOOKING_DETAIL.ACCORDION_CHECKIN_VALUE, {
       visible: true,
       timeout: 10000,
     });
-    await page.evaluate((accordionSelector: string) => {
-      const el = document.querySelector(accordionSelector);
+    await page.evaluate((sel: string) => {
+      const el = document.querySelector(sel);
       el?.scrollIntoView({ block: "center", behavior: "instant" });
-    }, BOOKING_DETAIL.ACCORDION_STAY_DATES);
-    await delay(400);
+    }, BOOKING_DETAIL.ACCORDION_CHECKIN_VALUE);
+
+    // Wait for the skeleton "Loading..." text to be replaced with real content
+    await page
+      .waitForFunction(
+        (sel: string) => {
+          const el = document.querySelector(sel);
+          const text = (el?.textContent || "").trim();
+          return text && text !== "Loading...";
+        },
+        { timeout: 8000 },
+        BOOKING_DETAIL.ACCORDION_CHECKIN_VALUE
+      )
+      .catch(() => undefined);
+
+    await delay(300);
     await dualLogInfo("Accordion stay-date section ready", { jobId, bookingId });
   } catch {
     await dualLogInfo(
@@ -363,15 +402,20 @@ async function waitForAccordionStayDateSection(
 }
 
 /**
- * Extract stay dates from the booking detail sidebar (fallback when table row fails).
- * Tries in order until a full check-in + check-out range is parsed:
- * 1) Summary block — "Apr 26, 2026 - Apr 27, 2026"
- * 2) Accordion value — "Saturday, March 21, 2026 - Sunday, March 22, 2026"
- * 3) Accordion row — same text via parent [data-testid="accordion-staydate"]
+ * Extract guest name and stay dates from the booking detail sidebar
+ * (fallback when the table row fails).
+ *
+ * Agoda's "Guest details & dates" accordion has dedicated value cells:
+ *   [data-testid="accordion-guestname-value"]
+ *   [data-testid="accordion-checkin-value"]
+ *   [data-testid="accordion-checkout-value"]
+ * We read those directly. If they're ever absent, we fall back to scanning
+ * the panel text for date-like tokens.
  */
 async function extractStayDatesFromSidebar(
   page: Page
 ): Promise<{
+  guestNameStr: string | null;
   checkInStr: string | null;
   checkOutStr: string | null;
   source: string;
@@ -380,9 +424,9 @@ async function extractStayDatesFromSidebar(
   const result = await page.evaluate(
     (selectors: {
       panel: string;
-      summary: string;
-      accordionRow: string;
-      accordionValue: string;
+      guestNameValue: string;
+      checkInValue: string;
+      checkOutValue: string;
     }) => {
       const panel =
         document.querySelector("#detail-side-panel") ||
@@ -391,88 +435,103 @@ async function extractStayDatesFromSidebar(
       const queryScoped = (selector: string): Element | null =>
         panel?.querySelector(selector) ?? document.querySelector(selector);
 
-      const dateInText = (text: string) =>
-        /[A-Za-z]{3,}\s+\d{1,2},\s*\d{4}/.test(text);
-
-      const readDateText = (root: Element | null): string | null => {
-        if (!root) return null;
-        for (const p of Array.from(root.querySelectorAll("p"))) {
-          const t = (p.textContent || "").trim();
-          if (t && dateInText(t)) return t;
-        }
-        const cellText = (root.textContent || "").trim();
-        return dateInText(cellText) ? cellText : null;
+      const cleanText = (el: Element | null): string | null => {
+        const t = (el?.textContent || "").trim();
+        if (!t || t === "Loading...") return null;
+        return t;
       };
 
-      const candidates: { text: string; source: string }[] = [];
+      const dateInText = (text: string) =>
+        /[A-Za-z]{3,}\s+\d{1,2}(?:,\s*\d{4})?/.test(text);
 
-      const summaryBlock = queryScoped(selectors.summary);
-      const summaryText = readDateText(summaryBlock);
-      if (summaryText) {
-        candidates.push({ text: summaryText, source: "summary-staydates" });
-      }
+      const guestNameEl = queryScoped(selectors.guestNameValue);
+      const checkInEl = queryScoped(selectors.checkInValue);
+      const checkOutEl = queryScoped(selectors.checkOutValue);
 
-      const accordionValueBlock = queryScoped(selectors.accordionValue);
-      const accordionValueText = readDateText(accordionValueBlock);
-      if (accordionValueText) {
-        candidates.push({
-          text: accordionValueText,
-          source: "accordion-staydate-value",
-        });
-      }
+      const guestNameText = cleanText(guestNameEl);
+      let checkInText = cleanText(checkInEl);
+      let checkOutText = cleanText(checkOutEl);
 
-      const accordionRowBlock = queryScoped(selectors.accordionRow);
-      const accordionRowText = readDateText(accordionRowBlock);
-      if (
-        accordionRowText &&
-        accordionRowText !== accordionValueText
-      ) {
-        candidates.push({
-          text: accordionRowText,
-          source: "accordion-staydate",
-        });
+      // Keep only the date-like portion in case of extra nested text
+      const extractDate = (text: string | null): string | null => {
+        if (!text) return null;
+        const m = text.match(/[A-Za-z]{3,}\s+\d{1,2},\s*\d{4}/);
+        return m ? m[0] : text;
+      };
+      checkInText = extractDate(checkInText);
+      checkOutText = extractDate(checkOutText);
+
+      const panelDateCandidates: string[] = [];
+      if (!checkInText || !checkOutText) {
+        for (const el of Array.from(
+          (panel ?? document).querySelectorAll("p, span, div")
+        )) {
+          const t = (el.textContent || "").trim();
+          if (t && dateInText(t) && t.length < 160) {
+            panelDateCandidates.push(t);
+          }
+        }
       }
 
       return {
-        candidates,
+        guestNameText,
+        checkInText,
+        checkOutText,
+        panelDateCandidates,
         debug: {
           hasPanel: !!panel,
-          hasSummaryBlock: !!summaryBlock,
-          hasAccordionValueBlock: !!accordionValueBlock,
-          hasAccordionRowBlock: !!accordionRowBlock,
-          summarySnippet: summaryBlock?.textContent?.trim().slice(0, 80),
-          accordionSnippet: accordionValueBlock?.textContent?.trim().slice(0, 120),
+          hasGuestNameEl: !!guestNameEl,
+          hasCheckInEl: !!checkInEl,
+          hasCheckOutEl: !!checkOutEl,
+          checkInSnippet: checkInEl?.textContent?.trim().slice(0, 80),
+          checkOutSnippet: checkOutEl?.textContent?.trim().slice(0, 80),
         },
       };
     },
     {
       panel: BOOKING_DETAIL.PANEL,
-      summary: BOOKING_DETAIL.SUMMARY_STAY_DATES,
-      accordionRow: BOOKING_DETAIL.ACCORDION_STAY_DATES,
-      accordionValue: BOOKING_DETAIL.ACCORDION_STAY_DATES_VALUE,
+      guestNameValue: BOOKING_DETAIL.ACCORDION_GUESTNAME_VALUE,
+      checkInValue: BOOKING_DETAIL.ACCORDION_CHECKIN_VALUE,
+      checkOutValue: BOOKING_DETAIL.ACCORDION_CHECKOUT_VALUE,
     }
   );
 
-  for (const candidate of result.candidates) {
-    const { checkInStr, checkOutStr } = parseStayDateRangeText(candidate.text);
-    if (checkInStr && checkOutStr) {
-      return {
-        checkInStr,
-        checkOutStr,
-        source: candidate.source,
-        debug: result.debug,
-      };
-    }
+  if (result.checkInText && result.checkOutText) {
+    return {
+      guestNameStr: result.guestNameText,
+      checkInStr: result.checkInText,
+      checkOutStr: result.checkOutText,
+      source: "accordion-checkin-checkout",
+      debug: result.debug,
+    };
+  }
+
+  // Fallback: scan generic panel text for two distinct date-like strings
+  const combinedDates = [
+    ...new Set(
+      result.panelDateCandidates.flatMap((text) =>
+        collectDateStringsFromText(text)
+      )
+    ),
+  ];
+  if (combinedDates.length >= 2) {
+    return {
+      guestNameStr: result.guestNameText,
+      checkInStr: result.checkInText ?? combinedDates[0],
+      checkOutStr: result.checkOutText ?? combinedDates[1],
+      source: "panel-combined",
+      debug: result.debug,
+    };
   }
 
   return {
-    checkInStr: null,
-    checkOutStr: null,
+    guestNameStr: result.guestNameText,
+    checkInStr: result.checkInText ?? combinedDates[0] ?? null,
+    checkOutStr: result.checkOutText ?? null,
     source: "",
     debug: {
       ...result.debug,
-      candidateCount: result.candidates.length,
-      candidates: result.candidates.map((c) => c.text.slice(0, 80)),
+      candidateCount: result.panelDateCandidates.length,
     },
   };
 }
@@ -549,6 +608,54 @@ async function persistBookingDates(
 }
 
 /**
+ * Save any guest/date fields we already have when the full range is missing.
+ */
+async function persistGuestNameOnly(
+  retrievalId: string,
+  bookingId: string,
+  rowData?: BookingRowData | null
+): Promise<void> {
+  if (!rowData) return;
+
+  const guestName = rowData.guest_name?.trim();
+  const usableGuest =
+    guestName && guestName !== "—" && guestName.toLowerCase() !== "unknown"
+      ? guestName
+      : undefined;
+
+  if (!usableGuest && !rowData.check_in_date && !rowData.check_out_date) {
+    return;
+  }
+
+  try {
+    const updated = await retrievalService.updateRetrievalItemGuestAndDates(
+      retrievalId,
+      bookingId,
+      {
+        guest_name: usableGuest,
+        check_in_date: rowData.check_in_date,
+        check_out_date: rowData.check_out_date,
+      }
+    );
+    if (updated) {
+      await dualLogInfo(`Saved partial guest/dates for booking ${bookingId}`, {
+        jobId: getRetrievalJobId(),
+        bookingId,
+        guest_name: usableGuest,
+        check_in_str: rowData.check_in_str,
+        check_out_str: rowData.check_out_str,
+      });
+    }
+  } catch (err: any) {
+    await dualLogError(
+      `Failed to save partial guest/dates for booking ${bookingId}`,
+      err,
+      { jobId: getRetrievalJobId(), bookingId }
+    );
+  }
+}
+
+/**
  * Save guest name and stay dates from an already-extracted booking row.
  */
 async function persistBookingRowData(
@@ -560,11 +667,13 @@ async function persistBookingRowData(
   if (!rowData) return false;
 
   if (!rowData.check_in_date || !rowData.check_out_date) {
+    await persistGuestNameOnly(retrievalId, bookingId, rowData);
     await dualLogInfo(
       `Table row dates incomplete for booking ${bookingId}, will try sidebar fallback`,
       {
         jobId,
         bookingId,
+        guest_name: rowData.guest_name,
         check_in_str: rowData.check_in_str,
         check_out_str: rowData.check_out_str,
       }
@@ -583,7 +692,7 @@ async function persistBookingDatesFromSidebar(
   bookingId: string,
   retrievalId: string,
   partialRowData?: BookingRowData | null
-): Promise<boolean> {
+): Promise<BookingRowData | null> {
   const jobId = getRetrievalJobId();
 
   await waitForSidebarStayDatesContent(page, bookingId);
@@ -591,14 +700,28 @@ async function persistBookingDatesFromSidebar(
 
   if (!sidebarDates.checkInStr || !sidebarDates.checkOutStr) {
     await dualLogInfo(
-      "Summary stay dates incomplete — trying accordion stay-date section",
+      "Accordion stay dates incomplete — waiting for values to finish loading",
       { jobId, bookingId, debug: sidebarDates.debug }
     );
     await waitForAccordionStayDateSection(page, bookingId);
     sidebarDates = await extractStayDatesFromSidebar(page);
   }
 
+  // Merge sidebar guest name into partialRowData even if dates are still missing
+  if (sidebarDates.guestNameStr) {
+    partialRowData = {
+      guest_name: sidebarDates.guestNameStr,
+      check_in_date: partialRowData?.check_in_date ?? null,
+      check_out_date: partialRowData?.check_out_date ?? null,
+      check_in_str: partialRowData?.check_in_str ?? null,
+      check_out_str: partialRowData?.check_out_str ?? null,
+      reservation_status: partialRowData?.reservation_status ?? "",
+      room_type: partialRowData?.room_type ?? "",
+    };
+  }
+
   if (!sidebarDates.checkInStr || !sidebarDates.checkOutStr) {
+    await persistGuestNameOnly(retrievalId, bookingId, partialRowData);
     await dualLogError(
       `Sidebar stay dates not found for booking ${bookingId}`,
       undefined,
@@ -609,7 +732,7 @@ async function persistBookingDatesFromSidebar(
         debug: sidebarDates.debug,
       }
     );
-    return false;
+    return null;
   }
 
   const rowData = bookingRowDataFromDateStrings(
@@ -630,20 +753,28 @@ async function persistBookingDatesFromSidebar(
         source: sidebarDates.source,
       }
     );
-    return false;
+    return null;
   }
 
-  return persistBookingDates(
+  const saved = await persistBookingDates(
     retrievalId,
     bookingId,
     rowData,
     sidebarDates.source
   );
+  return saved ? rowData : null;
 }
 
 /**
  * Extract guest name, stay dates (check-in/check-out), reservation status, and room type from a booking result row.
- * Row structure: td[0]=booking id+status, td[1]=guest name, td[2]=dates (two p), td[3]=room type.
+ *
+ * Agoda's row markup has dedicated, self-describing cells:
+ *   <p data-testid="guest-name">Bartu izci</p>
+ *   <p data-testid="check-in">May 1, 2026</p>
+ *   <p data-testid="check-out">May 2, 2026</p>
+ *   <p data-testid="room-display-text">1 x ...</p>
+ * We read those directly instead of guessing by td index, with a light
+ * regex fallback only if those testids ever disappear.
  */
 export async function extractBookingRowData(
   page: Page,
@@ -651,61 +782,63 @@ export async function extractBookingRowData(
 ): Promise<BookingRowData | null> {
   try {
     const raw = await page.evaluate(
-      (rowSelector: string) => {
+      (
+        rowSelector: string,
+        selectors: {
+          guestName: string;
+          checkIn: string;
+          checkOut: string;
+          room: string;
+          status: string;
+        }
+      ) => {
         const row = document.querySelector(rowSelector);
         if (!row) return null;
-        const tds = row.querySelectorAll("td");
-        let checkInStr: string | null = null;
-        let checkOutStr: string | null = null;
 
-        // Date cell: td[2] — first <p> is check-in, last <p> is check-out
-        // e.g. <p>Jan 28, 2026 - </p><p>Feb 1, 2026</p>
-        // or single <p>Mar 21, 2026 - Mar 22, 2026</p>
-        const dateRangePattern =
-          /([A-Za-z]{3,}\s+\d{1,2},\s*\d{4})\s*-\s*([A-Za-z]{3,}\s+\d{1,2},\s*\d{4})/;
+        const textOf = (el: Element | null): string =>
+          (el?.textContent || "").trim();
 
-        if (tds.length >= 3) {
-          const datePs = tds[2].querySelectorAll("p");
-          if (datePs.length >= 2) {
-            checkInStr =
-              (datePs[0].textContent || "").replace(/\s*-\s*$/, "").trim() ||
-              null;
-            checkOutStr =
-              (datePs[datePs.length - 1].textContent || "").trim() || null;
-          } else if (datePs.length === 1) {
-            const full = (datePs[0].textContent || "").trim();
-            const rangeMatch = full.match(dateRangePattern);
-            if (rangeMatch) {
-              checkInStr = rangeMatch[1];
-              checkOutStr = rangeMatch[2];
-            } else {
-              checkInStr = full.replace(/\s*-\s*$/, "").trim() || null;
-            }
-          }
+        let checkInStr: string | null =
+          textOf(row.querySelector(selectors.checkIn)) || null;
+        let checkOutStr: string | null =
+          textOf(row.querySelector(selectors.checkOut)) || null;
 
-          // Second <p> may be empty/hidden while td still has full range text
-          if (!checkOutStr && tds[2]) {
-            const cellText = (tds[2].textContent || "").trim();
-            const rangeMatch = cellText.match(dateRangePattern);
-            if (rangeMatch) {
-              checkInStr = rangeMatch[1];
-              checkOutStr = rangeMatch[2];
-            }
-          }
+        // Fallback: if the dedicated testids ever go away, scan row text for
+        // two distinct date-like tokens ("Jan 28, 2026").
+        if (!checkInStr || !checkOutStr) {
+          const dateTokenPattern =
+            /(?:[A-Za-z]+,\s+)?[A-Za-z]{3,}\s+\d{1,2},\s*\d{4}/g;
+          const uniqueDates = [
+            ...new Set(
+              Array.from((row.textContent || "").matchAll(dateTokenPattern)).map(
+                (m) => m[0].trim()
+              )
+            ),
+          ];
+          if (!checkInStr && uniqueDates[0]) checkInStr = uniqueDates[0];
+          if (!checkOutStr && uniqueDates[1]) checkOutStr = uniqueDates[1];
         }
+
+        const guestEl =
+          row.querySelector(selectors.guestName) ||
+          row.querySelector('[data-element-name*="guest"]');
+
         return {
-          guest_name: (row.querySelector('p[data-testid="guest-name"]')?.textContent || "").trim(),
-          reservation_status: (row.querySelector('span[data-testid="booking-ack-view"]')?.textContent || "").trim(),
-          room_type: (() => {
-            if (tds.length < 4) return "";
-            const p = tds[3].querySelector("p");
-            return (p?.textContent || "").trim();
-          })(),
+          guest_name: textOf(guestEl),
+          reservation_status: textOf(row.querySelector(selectors.status)),
+          room_type: textOf(row.querySelector(selectors.room)),
           check_in_str: checkInStr,
           check_out_str: checkOutStr,
         };
       },
-      bookingRowSelector
+      bookingRowSelector,
+      {
+        guestName: BOOKING_RESULTS.GUEST_NAME_STANDALONE,
+        checkIn: BOOKING_RESULTS.ROW_CHECK_IN,
+        checkOut: BOOKING_RESULTS.ROW_CHECK_OUT,
+        room: BOOKING_RESULTS.ROW_ROOM,
+        status: BOOKING_RESULTS.ROW_STATUS,
+      }
     );
 
     if (!raw) return null;
@@ -1013,12 +1146,16 @@ export async function searchBookingAndNavigateToPayout(
           "Trying sidebar fallback for stay dates after panel opened",
           { jobId, bookingId }
         );
-        datesSaved = await persistBookingDatesFromSidebar(
+        const sidebarRowData = await persistBookingDatesFromSidebar(
           page,
           bookingId,
           retrievalId,
           partialRowData
         );
+        if (sidebarRowData) {
+          datesSaved = true;
+          partialRowData = sidebarRowData;
+        }
       }
     } catch (error) {
       await dualLogError("Booking detail sidebar did not appear", error, {
@@ -1564,7 +1701,12 @@ export async function searchBookingAndNavigateToPayout(
         console.log("CVC Code:", upcData.cvcCode);
         console.log("======================");
 
-        await saveUpcCardInfoToDatabase(retrievalId, bookingId, upcData);
+        await saveUpcCardInfoToDatabase(
+          retrievalId,
+          bookingId,
+          upcData,
+          partialRowData
+        );
       } else {
         await dualLogInfo("UPC widget data not found or not accessible", {
           jobId,
@@ -1593,7 +1735,12 @@ export async function searchBookingAndNavigateToPayout(
           console.log("CVC Code:", upcData.cvcCode);
           console.log("======================");
 
-          await saveUpcCardInfoToDatabase(retrievalId, bookingId, upcData);
+          await saveUpcCardInfoToDatabase(
+            retrievalId,
+            bookingId,
+            upcData,
+            partialRowData
+          );
         }
       } catch (scrapeError) {
         await dualLogError("Error scraping UPC widget data", scrapeError, {
@@ -2619,12 +2766,16 @@ async function reSearchAndNavigateToPayout(
           "Trying sidebar fallback for stay dates after panel opened (re-search)",
           { jobId, bookingId }
         );
-        datesSaved = await persistBookingDatesFromSidebar(
+        const sidebarRowData = await persistBookingDatesFromSidebar(
           page,
           bookingId,
           retrievalId,
           partialRowData
         );
+        if (sidebarRowData) {
+          datesSaved = true;
+          partialRowData = sidebarRowData;
+        }
       }
     } catch (error) {
       await dualLogError("Booking detail sidebar did not appear", error, {
@@ -2683,7 +2834,8 @@ function formatUpcExpiryDate(expirationDate: string): string {
 async function saveUpcCardInfoToDatabase(
   retrievalId: string | undefined,
   bookingId: string,
-  upcData: UpcWidgetData
+  upcData: UpcWidgetData,
+  scrapedRowData?: BookingRowData | null
 ): Promise<void> {
   const jobId = getRetrievalJobId();
   if (!retrievalId || !upcData.cardNumber || !upcData.expirationDate) {
@@ -2721,7 +2873,12 @@ async function saveUpcCardInfoToDatabase(
       await retrievalService.updateAgodaCaseItemFromCardScrape(
         retrievalId,
         bookingId,
-        cardInfo
+        cardInfo,
+        {
+          guest_name: scrapedRowData?.guest_name,
+          check_in_date: scrapedRowData?.check_in_date,
+          check_out_date: scrapedRowData?.check_out_date,
+        }
       );
 
     if (updatedCaseItem) {

@@ -62,6 +62,7 @@ function usableGuestName(name?: string | null): string | undefined {
   if (!name) return undefined;
   const trimmed = name.trim();
   if (!trimmed || trimmed === "—") return undefined;
+  if (/^unknown(?: guest)?$/i.test(trimmed)) return undefined;
   return trimmed;
 }
 
@@ -622,7 +623,12 @@ export class RetrievalService {
   async updateAgodaCaseItemFromCardScrape(
     retrievalId: string,
     reservationId: string,
-    cardInfo: CardInfo
+    cardInfo: CardInfo,
+    scraped?: {
+      guest_name?: string | null;
+      check_in_date?: Date | null;
+      check_out_date?: Date | null;
+    }
   ): Promise<IAgodaCaseItem | null> {
     try {
       const retrievalObjectId = this.validateObjectId(
@@ -652,16 +658,19 @@ export class RetrievalService {
       jobItem = await JobItem.findOne(jobItemFilter).sort({ createdAt: -1 });
 
       const guestName = firstNonEmpty(
+        usableGuestName(scraped?.guest_name),
         usableGuestName(retrievalItem?.guest_name),
         jobItem?.guest_name,
         existingCaseItem?.guest_name
       );
       const checkIn = firstNonEmpty(
+        toAgodaCaseItemDate(scraped?.check_in_date),
         toAgodaCaseItemDate(retrievalItem?.check_in_date),
         toAgodaCaseItemDate(jobItem?.check_in_date),
         toAgodaCaseItemDate(existingCaseItem?.check_in)
       );
       const checkOut = firstNonEmpty(
+        toAgodaCaseItemDate(scraped?.check_out_date),
         toAgodaCaseItemDate(retrievalItem?.check_out_date),
         toAgodaCaseItemDate(jobItem?.check_out_date),
         toAgodaCaseItemDate(existingCaseItem?.check_out)
@@ -736,9 +745,9 @@ export class RetrievalService {
     retrievalId: string,
     reservationId: string,
     data: {
-      guest_name: string;
-      check_in_date: Date;
-      check_out_date: Date;
+      guest_name?: string;
+      check_in_date?: Date | null;
+      check_out_date?: Date | null;
       room_type?: string;
       reservation_status?: string;
     }
@@ -750,14 +759,18 @@ export class RetrievalService {
       );
 
       const updateFields: Record<string, unknown> = {
-        guest_name: data.guest_name,
-        check_in_date: data.check_in_date,
-        check_out_date: data.check_out_date,
         updatedAt: new Date(),
       };
+      if (data.guest_name?.trim()) updateFields.guest_name = data.guest_name.trim();
+      if (data.check_in_date) updateFields.check_in_date = data.check_in_date;
+      if (data.check_out_date) updateFields.check_out_date = data.check_out_date;
       if (data.room_type !== undefined) updateFields.room_type = data.room_type;
       if (data.reservation_status !== undefined)
         updateFields.reservation_status = data.reservation_status;
+
+      if (Object.keys(updateFields).length <= 1) {
+        return null;
+      }
 
       const result = await RetrievalItem.findOneAndUpdate(
         {

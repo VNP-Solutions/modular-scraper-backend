@@ -35,7 +35,13 @@ export const BOOKING_RESULTS = {
 
   // Within row: reservation status (e.g. Cancelled, Confirmed)
   ROW_STATUS: 'span[data-testid="booking-ack-view"]',
-  // Dates and room are in td cells by index (3rd td = dates, 4th td = room type)
+
+  // Dedicated check-in / check-out cells within the row (e.g. "May 1, 2026")
+  ROW_CHECK_IN: 'p[data-testid="check-in"]',
+  ROW_CHECK_OUT: 'p[data-testid="check-out"]',
+
+  // Room & occupancy text within the row
+  ROW_ROOM: 'p[data-testid="room-display-text"]',
 } as const;
 
 /**
@@ -57,14 +63,27 @@ export const BOOKING_DETAIL = {
   // Top summary card (loads before tab content)
   SHORT_SUMMARY: '[data-testid="detail-short-summary"]',
 
-  // Summary stay dates (short format: "Apr 26, 2026 - Apr 27, 2026")
+  // Summary stay dates (short format: "Apr 26, 2026 - Apr 27, 2026") — legacy, may not exist
   SUMMARY_STAY_DATES:
     '[data-element-name="ycs-booking-detail-summary-staydates"]',
 
-  // Accordion stay dates row (long format in booking details tab)
-  ACCORDION_STAY_DATES: '[data-testid="accordion-staydate"]',
+  // "Guest details & dates" accordion section (Booking details tab)
+  ACCORDION_GUEST_MASTER: '[data-testid="accordion-guest-master"]',
 
-  // Accordion stay dates value cell
+  // Guest name row/value within the accordion
+  ACCORDION_GUESTNAME: '[data-testid="accordion-guestname"]',
+  ACCORDION_GUESTNAME_VALUE: '[data-testid="accordion-guestname-value"]',
+
+  // Check-in row/value within the accordion
+  ACCORDION_CHECKIN: '[data-testid="accordion-checkin"]',
+  ACCORDION_CHECKIN_VALUE: '[data-testid="accordion-checkin-value"]',
+
+  // Check-out row/value within the accordion
+  ACCORDION_CHECKOUT: '[data-testid="accordion-checkout"]',
+  ACCORDION_CHECKOUT_VALUE: '[data-testid="accordion-checkout-value"]',
+
+  // Legacy combined stay-date testids (kept for backward compatibility, may not exist)
+  ACCORDION_STAY_DATES: '[data-testid="accordion-staydate"]',
   ACCORDION_STAY_DATES_VALUE: '[data-testid="accordion-staydate-value"]',
 } as const;
 
