@@ -607,17 +607,9 @@ export async function getAgodaBookingData(
     // NOTE: Agoda renamed this page from /app/reporting/booking/ to
     // /app/postbook/booking/ (observed Sep 2026). Using the old path no longer
     // renders the "Reservations" section, which caused navigation checks to fail.
-    //
-    // Two-step navigation: hitting the URL with the date range directly
-    // sometimes fails to render the SPA correctly. Hitting the base URL
-    // (no startDate/endDate) first, confirming it loads, and only then
-    // navigating to the same URL with the date range appended has proven
-    // more reliable.
     const baseBookingUrl = `https://portal.agoda.com/mldc/en-us/app/postbook/booking/${agodaId}?bookingType=confirmed%2Camended`;
     const bookingUrl = `${baseBookingUrl}&startDate=${formattedStartDate}&endDate=${formattedEndDate}`;
-    await dualLogInfo(
-      `Navigating to booking data URL (two-step: base first, then with dates): ${bookingUrl}`
-    );
+    await dualLogInfo(`Navigating to booking data URL: ${bookingUrl}`);
 
     await delay(5000);
 
@@ -628,53 +620,16 @@ export async function getAgodaBookingData(
     const maxNavigationAttempts = 3;
     let reservationsFound = false;
 
+    // Primary approach: navigate directly to the URL with the date range
+    // already applied.
     while (navigationAttempts < maxNavigationAttempts && !reservationsFound) {
       navigationAttempts++;
 
+      await dualLogInfo(
+        `Navigation attempt ${navigationAttempts}/${maxNavigationAttempts} to booking data URL: ${bookingUrl}`
+      );
+
       try {
-        // Step 1: Navigate to the base URL WITHOUT the date range first.
-        await dualLogInfo(
-          `Navigation attempt ${navigationAttempts}/${maxNavigationAttempts} - Step 1: base booking URL (no date range): ${baseBookingUrl}`
-        );
-
-        await newPage.goto(baseBookingUrl, {
-          waitUntil: "networkidle2",
-          timeout: loadingTimeout,
-        });
-
-        await newPage.waitForSelector("body", { timeout: loadingTimeout });
-
-        // Wait for the page to load completely
-        await delay(5000);
-
-        await dualLogInfo(
-          "Checking for 'Reservations' text on the base page (no date range)..."
-        );
-        const baseReservationsFound = await checkReservationsTextPresent(
-          newPage
-        );
-
-        if (!baseReservationsFound) {
-          await dualLogInfo(
-            `❌ Reservations text not found on base URL (attempt ${navigationAttempts})`
-          );
-
-          if (navigationAttempts < maxNavigationAttempts) {
-            await dualLogInfo(`Retrying navigation in 3 seconds...`);
-            await delay(3000);
-          }
-          continue;
-        }
-
-        await dualLogInfo(
-          "✅ Base Reservations page loaded. Applying date range..."
-        );
-
-        // Step 2: Now navigate to the same page with the date range applied.
-        await dualLogInfo(
-          `Navigation attempt ${navigationAttempts}/${maxNavigationAttempts} - Step 2: booking URL with date range: ${bookingUrl}`
-        );
-
         await newPage.goto(bookingUrl, {
           waitUntil: "networkidle2",
           timeout: loadingTimeout,
@@ -685,9 +640,7 @@ export async function getAgodaBookingData(
         // Wait for the page to load completely
         await delay(5000);
 
-        await dualLogInfo(
-          "Checking for 'Reservations' text on the page with date range..."
-        );
+        await dualLogInfo("Checking for 'Reservations' text on the page...");
         reservationsFound = await checkReservationsTextPresent(newPage);
 
         if (reservationsFound) {
@@ -701,7 +654,7 @@ export async function getAgodaBookingData(
           break;
         } else {
           await dualLogInfo(
-            `❌ Reservations text not found after applying date range (attempt ${navigationAttempts})`
+            `❌ Reservations text not found on attempt ${navigationAttempts}`
           );
 
           if (navigationAttempts < maxNavigationAttempts) {
@@ -722,9 +675,117 @@ export async function getAgodaBookingData(
       }
     }
 
+    // Fallback approach: direct deep-linking to the dated URL sometimes
+    // fails to render the SPA correctly. If all direct attempts failed,
+    // try navigating to the base URL (no startDate/endDate) first,
+    // confirming that loads, and only then applying the date range.
+    if (!reservationsFound) {
+      await dualLogInfo(
+        `Direct navigation with date range failed after ${maxNavigationAttempts} attempts. ` +
+          `Trying two-step fallback (base URL first, then applying date range)...`
+      );
+
+      let fallbackAttempts = 0;
+      const maxFallbackAttempts = 3;
+
+      while (fallbackAttempts < maxFallbackAttempts && !reservationsFound) {
+        fallbackAttempts++;
+
+        try {
+          // Step 1: Navigate to the base URL WITHOUT the date range first.
+          await dualLogInfo(
+            `[Fallback] Attempt ${fallbackAttempts}/${maxFallbackAttempts} - Step 1: base booking URL (no date range): ${baseBookingUrl}`
+          );
+
+          await newPage.goto(baseBookingUrl, {
+            waitUntil: "networkidle2",
+            timeout: loadingTimeout,
+          });
+
+          await newPage.waitForSelector("body", { timeout: loadingTimeout });
+
+          // Wait for the page to load completely
+          await delay(5000);
+
+          await dualLogInfo(
+            "[Fallback] Checking for 'Reservations' text on the base page (no date range)..."
+          );
+          const baseReservationsFound = await checkReservationsTextPresent(
+            newPage
+          );
+
+          if (!baseReservationsFound) {
+            await dualLogInfo(
+              `❌ [Fallback] Reservations text not found on base URL (attempt ${fallbackAttempts})`
+            );
+
+            if (fallbackAttempts < maxFallbackAttempts) {
+              await dualLogInfo(`[Fallback] Retrying in 3 seconds...`);
+              await delay(3000);
+            }
+            continue;
+          }
+
+          await dualLogInfo(
+            "✅ [Fallback] Base Reservations page loaded. Applying date range..."
+          );
+
+          // Step 2: Now navigate to the same page with the date range applied.
+          await dualLogInfo(
+            `[Fallback] Attempt ${fallbackAttempts}/${maxFallbackAttempts} - Step 2: booking URL with date range: ${bookingUrl}`
+          );
+
+          await newPage.goto(bookingUrl, {
+            waitUntil: "networkidle2",
+            timeout: loadingTimeout,
+          });
+
+          await newPage.waitForSelector("body", { timeout: loadingTimeout });
+
+          // Wait for the page to load completely
+          await delay(5000);
+
+          await dualLogInfo(
+            "[Fallback] Checking for 'Reservations' text on the page with date range..."
+          );
+          reservationsFound = await checkReservationsTextPresent(newPage);
+
+          if (reservationsFound) {
+            console.log(
+              "\x1b[32m%s\x1b[0m",
+              "✅ Reservations text found via two-step fallback navigation!"
+            );
+            await dualLogInfo(
+              "✅ Reservations text found via two-step fallback navigation!"
+            );
+            break;
+          } else {
+            await dualLogInfo(
+              `❌ [Fallback] Reservations text not found after applying date range (attempt ${fallbackAttempts})`
+            );
+
+            if (fallbackAttempts < maxFallbackAttempts) {
+              await dualLogInfo(`[Fallback] Retrying in 3 seconds...`);
+              await delay(3000);
+            }
+          }
+        } catch (fallbackError: any) {
+          await dualLogError(
+            `[Fallback] Error checking for Reservations text on attempt ${fallbackAttempts}:`,
+            fallbackError.message
+          );
+
+          if (fallbackAttempts < maxFallbackAttempts) {
+            await dualLogInfo(`[Fallback] Retrying due to error...`);
+            await delay(3000);
+          }
+        }
+      }
+    }
+
     // Final validation
     if (!reservationsFound) {
-      const errorMessage = `Failed to find 'Reservations' text after ${maxNavigationAttempts} navigation attempts`;
+      const errorMessage = `Failed to find 'Reservations' text after ${maxNavigationAttempts} direct navigation attempts and the two-step fallback`;
       await dualLogError(errorMessage);
       throw new Error(errorMessage);
     }
