@@ -482,6 +482,66 @@ function capDateRangeIfNeeded(
   return { startDate, endDate, wasCapped: false, diffDays };
 }
 
+/**
+ * Checks whether the current page is showing the "Reservations" booking list
+ * (i.e. the page loaded correctly). Reused for both the no-date-range base
+ * page and the final page with the date range applied.
+ */
+async function checkReservationsTextPresent(newPage: Page): Promise<boolean> {
+  // Look for the Reservations heading using multiple selectors
+  const reservationsSelectors = [
+    'h2:has-text("Reservations")',
+    "h2.sc-iMTnTL.sc-krNlru.ioCOri.jnyliE",
+    'h2:contains("Reservations")',
+    '[class*="Reservations"]',
+  ];
+
+  let reservationsElement: any = null;
+
+  // Try to find the reservations element using different approaches
+  for (const selector of reservationsSelectors) {
+    try {
+      // First try with Puppeteer's built-in selector
+      if (selector.includes(":has-text") || selector.includes(":contains")) {
+        // Use evaluate for text-based selectors
+        reservationsElement = await newPage.evaluate(() => {
+          const headings = Array.from(document.querySelectorAll("h2"));
+          return (
+            headings.find((h) => h.textContent?.trim() === "Reservations") ||
+            null
+          );
+        });
+      } else {
+        // Use regular selector
+        reservationsElement = await newPage.$(selector);
+      }
+
+      if (reservationsElement) {
+        await dualLogInfo(
+          `Found Reservations element with selector: ${selector}`
+        );
+        break;
+      }
+    } catch (selectorError) {
+      // Continue to next selector
+      continue;
+    }
+  }
+
+  // Alternative approach: search for "Reservations" text in the page content
+  if (!reservationsElement) {
+    const pageText = await newPage.evaluate(
+      () => document.body.textContent || ""
+    );
+    if (pageText.includes("Reservations")) {
+      await dualLogInfo("Found 'Reservations' text in page content");
+      reservationsElement = true; // Mark as found
+    }
+  }
+
+  return !!reservationsElement;
+}
+
 export async function getAgodaBookingData(
   browser: Browser,
   page: Page,
@@ -543,12 +603,21 @@ export async function getAgodaBookingData(
       `Start Date: ${formattedStartDate}, End Date: ${formattedEndDate}`
     );
 
-    // Construct the booking URL with agoda_id and date range using converted dates
+    // Construct the booking URLs using converted dates.
     // NOTE: Agoda renamed this page from /app/reporting/booking/ to
     // /app/postbook/booking/ (observed Sep 2026). Using the old path no longer
     // renders the "Reservations" section, which caused navigation checks to fail.
-    const bookingUrl = `https://portal.agoda.com/mldc/en-us/app/postbook/booking/${agodaId}?bookingType=confirmed%2Camended&startDate=${formattedStartDate}&endDate=${formattedEndDate}`;
-    await dualLogInfo(`Navigating to booking data URL: ${bookingUrl}`);
+    //
+    // Two-step navigation: hitting the URL with the date range directly
+    // sometimes fails to render the SPA correctly. Hitting the base URL
+    // (no startDate/endDate) first, confirming it loads, and only then
+    // navigating to the same URL with the date range appended has proven
+    // more reliable.
+    const baseBookingUrl = `https://portal.agoda.com/mldc/en-us/app/postbook/booking/${agodaId}?bookingType=confirmed%2Camended`;
+    const bookingUrl = `${baseBookingUrl}&startDate=${formattedStartDate}&endDate=${formattedEndDate}`;
+    await dualLogInfo(
+      `Navigating to booking data URL (two-step: base first, then with dates): ${bookingUrl}`
+    );
 
     await delay(5000);
 
@@ -562,81 +631,66 @@ export async function getAgodaBookingData(
     while (navigationAttempts < maxNavigationAttempts && !reservationsFound) {
       navigationAttempts++;
 
-      await dualLogInfo(
-        `Navigation attempt ${navigationAttempts}/${maxNavigationAttempts} to booking data URL: ${bookingUrl}`
-      );
-
-      await newPage.goto(bookingUrl, {
-        waitUntil: "networkidle2",
-        timeout: loadingTimeout,
-      });
-
-      await newPage.waitForSelector("body", { timeout: loadingTimeout });
-
-      // Wait for the page to load completely
-      await delay(5000);
-
-      // Check for "Reservations" text on the page
       try {
-        await dualLogInfo("Checking for 'Reservations' text on the page...");
+        // Step 1: Navigate to the base URL WITHOUT the date range first.
+        await dualLogInfo(
+          `Navigation attempt ${navigationAttempts}/${maxNavigationAttempts} - Step 1: base booking URL (no date range): ${baseBookingUrl}`
+        );
 
-        // Look for the Reservations heading using multiple selectors
-        const reservationsSelectors = [
-          'h2:has-text("Reservations")',
-          "h2.sc-iMTnTL.sc-krNlru.ioCOri.jnyliE",
-          'h2:contains("Reservations")',
-          '[class*="Reservations"]',
-        ];
+        await newPage.goto(baseBookingUrl, {
+          waitUntil: "networkidle2",
+          timeout: loadingTimeout,
+        });
 
-        let reservationsElement = null;
+        await newPage.waitForSelector("body", { timeout: loadingTimeout });
 
-        // Try to find the reservations element using different approaches
-        for (const selector of reservationsSelectors) {
-          try {
-            // First try with Puppeteer's built-in selector
-            if (
-              selector.includes(":has-text") ||
-              selector.includes(":contains")
-            ) {
-              // Use evaluate for text-based selectors
-              reservationsElement = await newPage.evaluate(() => {
-                const headings = Array.from(document.querySelectorAll("h2"));
-                return (
-                  headings.find(
-                    (h) => h.textContent?.trim() === "Reservations"
-                  ) || null
-                );
-              });
-            } else {
-              // Use regular selector
-              reservationsElement = await newPage.$(selector);
-            }
+        // Wait for the page to load completely
+        await delay(5000);
 
-            if (reservationsElement) {
-              await dualLogInfo(
-                `Found Reservations element with selector: ${selector}`
-              );
-              break;
-            }
-          } catch (selectorError) {
-            // Continue to next selector
-            continue;
-          }
-        }
+        await dualLogInfo(
+          "Checking for 'Reservations' text on the base page (no date range)..."
+        );
+        const baseReservationsFound = await checkReservationsTextPresent(
+          newPage
+        );
 
-        // Alternative approach: search for "Reservations" text in the page content
-        if (!reservationsElement) {
-          const pageText = await newPage.evaluate(
-            () => document.body.textContent || ""
+        if (!baseReservationsFound) {
+          await dualLogInfo(
+            `❌ Reservations text not found on base URL (attempt ${navigationAttempts})`
           );
-          if (pageText.includes("Reservations")) {
-            await dualLogInfo("Found 'Reservations' text in page content");
-            reservationsElement = true; // Mark as found
+
+          if (navigationAttempts < maxNavigationAttempts) {
+            await dualLogInfo(`Retrying navigation in 3 seconds...`);
+            await delay(3000);
           }
+          continue;
         }
 
-        if (reservationsElement) {
-          reservationsFound = true;
+        await dualLogInfo(
+          "✅ Base Reservations page loaded. Applying date range..."
+        );
+
+        // Step 2: Now navigate to the same page with the date range applied.
+        await dualLogInfo(
+          `Navigation attempt ${navigationAttempts}/${maxNavigationAttempts} - Step 2: booking URL with date range: ${bookingUrl}`
+        );
+
+        await newPage.goto(bookingUrl, {
+          waitUntil: "networkidle2",
+          timeout: loadingTimeout,
+        });
+
+        await newPage.waitForSelector("body", { timeout: loadingTimeout });
+
+        // Wait for the page to load completely
+        await delay(5000);
+
+        await dualLogInfo(
+          "Checking for 'Reservations' text on the page with date range..."
+        );
+        reservationsFound = await checkReservationsTextPresent(newPage);
+
+        if (reservationsFound) {
           console.log(
             "\x1b[32m%s\x1b[0m",
             "✅ Reservations text found - page loaded successfully!"
@@ -647,7 +701,7 @@ export async function getAgodaBookingData(
           break;
         } else {
           await dualLogInfo(
-            `❌ Reservations text not found on attempt ${navigationAttempts}`
+            `❌ Reservations text not found after applying date range (attempt ${navigationAttempts})`
           );
 
           if (navigationAttempts < maxNavigationAttempts) {
