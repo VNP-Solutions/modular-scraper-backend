@@ -482,6 +482,227 @@ function capDateRangeIfNeeded(
   return { startDate, endDate, wasCapped: false, diffDays };
 }
 
+/**
+ * Checks whether the current page is showing the "Reservations" booking list
+ * (i.e. the booking data page loaded correctly). Used both for the direct
+ * deep-link navigation attempts and after the manual UI navigation fallback.
+ */
+async function isReservationsPageLoaded(newPage: Page): Promise<boolean> {
+  // Look for the Reservations heading using multiple selectors
+  const reservationsSelectors = [
+    'h2:has-text("Reservations")',
+    "h2.sc-iMTnTL.sc-krNlru.ioCOri.jnyliE",
+    'h2:contains("Reservations")',
+    '[class*="Reservations"]',
+  ];
+
+  let reservationsElement: any = null;
+
+  // Try to find the reservations element using different approaches
+  for (const selector of reservationsSelectors) {
+    try {
+      // First try with Puppeteer's built-in selector
+      if (selector.includes(":has-text") || selector.includes(":contains")) {
+        // Use evaluate for text-based selectors
+        reservationsElement = await newPage.evaluate(() => {
+          const headings = Array.from(document.querySelectorAll("h2"));
+          return (
+            headings.find((h) => h.textContent?.trim() === "Reservations") ||
+            null
+          );
+        });
+      } else {
+        // Use regular selector
+        reservationsElement = await newPage.$(selector);
+      }
+
+      if (reservationsElement) {
+        await dualLogInfo(
+          `Found Reservations element with selector: ${selector}`
+        );
+        break;
+      }
+    } catch (selectorError) {
+      // Continue to next selector
+      continue;
+    }
+  }
+
+  // Alternative approach: search for "Reservations" text in the page content
+  if (!reservationsElement) {
+    const pageText = await newPage.evaluate(
+      () => document.body.textContent || ""
+    );
+    if (pageText.includes("Reservations")) {
+      await dualLogInfo("Found 'Reservations' text in page content");
+      reservationsElement = true; // Mark as found
+    }
+  }
+
+  return !!reservationsElement;
+}
+
+/**
+ * Manual UI-navigation fallback used when directly deep-linking to the
+ * booking (Reservations) page fails to render after several attempts.
+ * Mimics a real user session instead of a cold deep-link:
+ *   1. Property search page (establishes a normal session context)
+ *   2. Property dashboard page for this specific property
+ *   3. Hover the "Bookings" top-nav menu item to reveal its dropdown
+ *   4. Click "Reservations" inside the dropdown (SPA routes to the booking page)
+ *   5. Once landed on the Reservations page, apply the requested date range
+ */
+async function manualNavigateToReservationsPage(
+  newPage: Page,
+  agodaId: string,
+  bookingUrlWithDates: string,
+  loadingTimeout: number,
+  selectorTimeout: number,
+  jobId?: string
+): Promise<void> {
+  // Step 1: Property search page.
+  const propertySearchUrl =
+    "https://portal.agoda.com/mldc/en-gb/app/iam/propertysearch";
+  await dualLogInfo(
+    `[Fallback] Navigating to property search page: ${propertySearchUrl}`,
+    { jobId }
+  );
+  await newPage.goto(propertySearchUrl, {
+    waitUntil: "networkidle2",
+    timeout: loadingTimeout,
+  });
+  await newPage.waitForSelector("body", { timeout: loadingTimeout });
+  await delay(5000);
+
+  // Step 2: Property dashboard page for this specific property.
+  const dashboardUrl = `https://portal.agoda.com/mldc/en-us/app/reporting/dashboard/${agodaId}`;
+  await dualLogInfo(
+    `[Fallback] Navigating to property dashboard: ${dashboardUrl}`,
+    { jobId }
+  );
+  await newPage.goto(dashboardUrl, {
+    waitUntil: "networkidle2",
+    timeout: loadingTimeout,
+  });
+  await newPage.waitForSelector("body", { timeout: loadingTimeout });
+  await delay(5000);
+
+  // Step 3: Hover the "Bookings" top-nav menu item to reveal its dropdown.
+  // NOTE: The dropdown is NOT a hidden child of this menu item that gets
+  // toggled visible — on hover, Agoda inserts a brand-new sibling node
+  // (a `position: fixed` "floater" container, id like "floater-container")
+  // right next to the menu item, holding the "Reservations" link. So we
+  // can't just wait for a class change; we must wait for that new node to
+  // actually appear in the DOM (waitForSelector below polls for exactly that).
+  const bookingsMenuItemSelector =
+    '[data-testid="private-layout-menu-item"][data-menu-component-title="Bookings"]';
+  const bookingsMenuButtonSelector = `${bookingsMenuItemSelector} button`;
+  await dualLogInfo(`[Fallback] Waiting for 'Bookings' menu item...`, {
+    jobId,
+  });
+  await newPage.waitForSelector(bookingsMenuButtonSelector, {
+    timeout: selectorTimeout,
+  });
+
+  // Hover the outer menu-item wrapper (likely holds the mouseenter/mouseleave
+  // listener that controls the floater) — Puppeteer's hover() performs a real
+  // mouse move via CDP, so native mouseenter/mouseover/pointerenter/pointerover
+  // events fire on this element and all its descendants/ancestors naturally.
+  const bookingsMenuHandle = await newPage.$(bookingsMenuItemSelector);
+  if (!bookingsMenuHandle) {
+    throw new Error("'Bookings' menu item not found on the dashboard page");
+  }
+  await bookingsMenuHandle.hover();
+
+  // Also hover the inner button specifically, and dispatch synthetic mouse +
+  // pointer events on both elements as a fallback in case the library relies
+  // on JS event handlers that don't fire reliably from a single hover().
+  const bookingsButtonHandle = await newPage.$(bookingsMenuButtonSelector);
+  if (bookingsButtonHandle) {
+    await bookingsButtonHandle.hover();
+  }
+  await newPage.evaluate(
+    (itemSelector: string, buttonSelector: string) => {
+      const eventTypes = [
+        "mouseover",
+        "mouseenter",
+        "pointerover",
+        "pointerenter",
+      ];
+      for (const sel of [itemSelector, buttonSelector]) {
+        const el = document.querySelector(sel);
+        if (!el) continue;
+        for (const type of eventTypes) {
+          el.dispatchEvent(
+            new MouseEvent(type, { bubbles: true, cancelable: true })
+          );
+        }
+      }
+    },
+    bookingsMenuItemSelector,
+    bookingsMenuButtonSelector
+  );
+
+  await dualLogInfo(
+    `[Fallback] Hovered 'Bookings' menu, waiting for the 'Reservations' floater to appear...`,
+    { jobId }
+  );
+
+  // Step 4: Wait for the newly-inserted floater's "Reservations" item, then
+  // click it. This is a freshly-mounted node, not a pre-existing hidden one.
+  const reservationsItemSelector =
+    '[data-menu-component-title="Reservations"]';
+  await newPage.waitForSelector(reservationsItemSelector, {
+    timeout: selectorTimeout,
+  });
+  // Give the floater a brief moment to finish its show/position animation
+  // ("drone-po-vis" class hints at a fade/visibility transition) before we
+  // try to click inside it.
+  await delay(800);
+
+  await dualLogInfo(`[Fallback] Clicking 'Reservations' menu item...`, {
+    jobId,
+  });
+  const clicked = await newPage.evaluate((selector) => {
+    const inner = document.querySelector(selector);
+    const anchor = inner?.closest("a") as HTMLElement | null;
+    const target = anchor || (inner as HTMLElement | null);
+    if (target) {
+      target.click();
+      return true;
+    }
+    return false;
+  }, reservationsItemSelector);
+
+  if (!clicked) {
+    throw new Error(
+      "'Reservations' menu item found but could not be clicked"
+    );
+  }
+
+  // Step 5: Wait for the SPA to route to the postbook booking page.
+  await newPage.waitForFunction(
+    () => window.location.href.includes("/app/postbook/booking/"),
+    { timeout: loadingTimeout }
+  );
+  await newPage.waitForSelector("body", { timeout: loadingTimeout });
+  await delay(3000);
+
+  await dualLogInfo(
+    `[Fallback] Landed on Reservations page (${newPage.url()}). Applying requested date range...`,
+    { jobId }
+  );
+
+  // Step 6: Now that we're inside an authenticated SPA session on the
+  // Reservations page, apply the date range by navigating to the full URL.
+  await newPage.goto(bookingUrlWithDates, {
+    waitUntil: "networkidle2",
+    timeout: loadingTimeout,
+  });
+  await newPage.waitForSelector("body", { timeout: loadingTimeout });
+  await delay(5000);
+}
+
 export async function getAgodaBookingData(
   browser: Browser,
   page: Page,
@@ -566,77 +787,22 @@ export async function getAgodaBookingData(
         `Navigation attempt ${navigationAttempts}/${maxNavigationAttempts} to booking data URL: ${bookingUrl}`
       );
 
-      await newPage.goto(bookingUrl, {
-        waitUntil: "networkidle2",
-        timeout: loadingTimeout,
-      });
-
-      await newPage.waitForSelector("body", { timeout: loadingTimeout });
-
-      // Wait for the page to load completely
-      await delay(5000);
-
-      // Check for "Reservations" text on the page
       try {
+        await newPage.goto(bookingUrl, {
+          waitUntil: "networkidle2",
+          timeout: loadingTimeout,
+        });
+
+        await newPage.waitForSelector("body", { timeout: loadingTimeout });
+
+        // Wait for the page to load completely
+        await delay(5000);
+
+        // Check for "Reservations" text on the page
         await dualLogInfo("Checking for 'Reservations' text on the page...");
+        reservationsFound = await isReservationsPageLoaded(newPage);
 
-        // Look for the Reservations heading using multiple selectors
-        const reservationsSelectors = [
-          'h2:has-text("Reservations")',
-          "h2.sc-iMTnTL.sc-krNlru.ioCOri.jnyliE",
-          'h2:contains("Reservations")',
-          '[class*="Reservations"]',
-        ];
-
-        let reservationsElement = null;
-
-        // Try to find the reservations element using different approaches
-        for (const selector of reservationsSelectors) {
-          try {
-            // First try with Puppeteer's built-in selector
-            if (
-              selector.includes(":has-text") ||
-              selector.includes(":contains")
-            ) {
-              // Use evaluate for text-based selectors
-              reservationsElement = await newPage.evaluate(() => {
-                const headings = Array.from(document.querySelectorAll("h2"));
-                return (
-                  headings.find(
-                    (h) => h.textContent?.trim() === "Reservations"
-                  ) || null
-                );
-              });
-            } else {
-              // Use regular selector
-              reservationsElement = await newPage.$(selector);
-            }
-
-            if (reservationsElement) {
-              await dualLogInfo(
-                `Found Reservations element with selector: ${selector}`
-              );
-              break;
-            }
-          } catch (selectorError) {
-            // Continue to next selector
-            continue;
-          }
-        }
-
-        // Alternative approach: search for "Reservations" text in the page content
-        if (!reservationsElement) {
-          const pageText = await newPage.evaluate(
-            () => document.body.textContent || ""
-          );
-          if (pageText.includes("Reservations")) {
-            await dualLogInfo("Found 'Reservations' text in page content");
-            reservationsElement = true; // Mark as found
-          }
-        }
-
-        if (reservationsElement) {
-          reservationsFound = true;
+        if (reservationsFound) {
           console.log(
             "\x1b[32m%s\x1b[0m",
             "✅ Reservations text found - page loaded successfully!"
@@ -668,9 +834,54 @@ export async function getAgodaBookingData(
       }
     }
 
+    // Fallback: direct deep-linking to the booking URL sometimes fails to
+    // render the SPA correctly even though the same page loads fine when
+    // reached via normal in-app navigation. If all direct attempts failed,
+    // mimic a real user: property search -> property dashboard -> hover
+    // "Bookings" menu -> click "Reservations" -> apply the date range.
+    if (!reservationsFound) {
+      await dualLogInfo(
+        `Direct URL navigation failed after ${maxNavigationAttempts} attempts. ` +
+          `Trying manual UI navigation fallback (property search -> dashboard -> Bookings menu -> Reservations)...`
+      );
+
+      try {
+        await manualNavigateToReservationsPage(
+          newPage,
+          agodaId,
+          bookingUrl,
+          loadingTimeout,
+          selectorTimeout,
+          jobId
+        );
+
+        reservationsFound = await isReservationsPageLoaded(newPage);
+
+        if (reservationsFound) {
+          console.log(
+            "\x1b[32m%s\x1b[0m",
+            "✅ Reservations text found via manual UI navigation fallback!"
+          );
+          await dualLogInfo(
+            "✅ Reservations text found via manual UI navigation fallback!"
+          );
+        } else {
+          await dualLogInfo(
+            "❌ Reservations text still not found after manual UI navigation fallback"
+          );
+        }
+      } catch (fallbackError: any) {
+        await dualLogError(
+          "Manual UI navigation fallback failed:",
+          fallbackError.message,
+          { jobId }
+        );
+      }
+    }
+
     // Final validation
     if (!reservationsFound) {
-      const errorMessage = `Failed to find 'Reservations' text after ${maxNavigationAttempts} navigation attempts`;
+      const errorMessage = `Failed to find 'Reservations' text after ${maxNavigationAttempts} navigation attempts and the manual UI navigation fallback`;
       await dualLogError(errorMessage);
       throw new Error(errorMessage);
     }
