@@ -51,7 +51,7 @@ export async function browserSetupProduction(jobId?: string): Promise<{
     // });
 
     const launchArgs = {
-      headless: false,
+      headless: true,
       stealth: true,
       humanlike: true,
       slowMo: 1000,
