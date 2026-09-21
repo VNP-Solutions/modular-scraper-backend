@@ -160,6 +160,18 @@ export class JobService {
    * human-readable property name against the group dashboard listing, so
    * that's what's needed here (the DB id is only needed separately, to
    * persist scraped VCC orders as job_items under `property_id`).
+   *
+   * Name lookup has 3 fallbacks, in order:
+   *  1. `job.property_name` — a snapshot taken when the job was created.
+   *     This schema field is `required` on the Job model, so it's the most
+   *     reliable source and is always present for jobs created normally.
+   *  2. `property.property_name` — this schema's own field on the Property
+   *     model.
+   *  3. `property.name` — some Property documents (e.g. ones created by
+   *     another project sharing this DB) store the display name under
+   *     `name` instead of `property_name`; this schema doesn't declare
+   *     that field, so the Property lookup below uses `.lean()` (raw doc,
+   *     bypassing schema hydration) to actually be able to read it.
    */
   async getTripPropertyFromJob(jobId: string): Promise<{
     propertyName: string;
@@ -178,7 +190,15 @@ export class JobService {
         return null;
       }
 
-      const property = await Property.findById(job.property_id);
+      // `.lean()` here on purpose: some Property documents in this shared
+      // DB (e.g. ones created by another project) carry a raw `name` field
+      // that isn't declared on this schema's `IProperty`/`PropertySchema`.
+      // A normal (non-lean) Mongoose query only hydrates schema-declared
+      // paths, so `property.name` would silently read as `undefined` even
+      // when the raw document has it — `.lean()` returns the actual raw
+      // document instead, so the `(property as any).name` fallback below
+      // can actually see it.
+      const property = await Property.findById(job.property_id).lean();
 
       if (!property) {
         console.error(
@@ -187,16 +207,21 @@ export class JobService {
         return null;
       }
 
-      if (!property.property_name) {
-        console.error(`Property ${property._id} has no property_name set`);
+      const propertyName: string | undefined =
+        (job as any).property_name ||
+        property.property_name ||
+        (property as any).name;
+
+      if (!propertyName) {
+        console.error(
+          `Property ${property._id} has no property_name/name set, and job ${jobId} has no property_name snapshot either`
+        );
         return null;
       }
 
-      console.log(
-        `Found property_name: "${property.property_name}" for job: ${jobId}`
-      );
+      console.log(`Found property_name: "${propertyName}" for job: ${jobId}`);
       return {
-        propertyName: property.property_name,
+        propertyName,
         propertyIdForDb: property._id.toString(),
       };
     } catch (error) {
