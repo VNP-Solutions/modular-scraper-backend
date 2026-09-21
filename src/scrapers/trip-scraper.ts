@@ -168,6 +168,17 @@ async function typeWithRandomDelay(
 }
 
 /**
+ * Waits a random duration between `minMs` and `maxMs` — used between
+ * back-to-back API calls (e.g. the per-month VCC order queries) instead of
+ * a fixed delay, since firing requests at an exact, identical interval is
+ * an easy automation tell.
+ */
+async function randomDelay(minMs: number, maxMs: number): Promise<void> {
+  const ms = Math.floor(Math.random() * (maxMs - minMs + 1)) + minMs;
+  await delay(ms);
+}
+
+/**
  * Selectors verified live against https://ebooking.trip.com/login/ (2026-09-21).
  *
  * IMPORTANT: the page reuses the same `id` between a wrapper `<div>` and the real
@@ -1824,18 +1835,30 @@ export class TripScraper extends BaseScraper {
             { chunkCount: vccDateChunks.length, chunks: vccDateChunks }
           );
 
-          for (const chunk of vccDateChunks) {
+          for (let i = 0; i < vccDateChunks.length; i++) {
+            const chunk = vccDateChunks[i];
             await scrapingStateManager.waitWhilePaused();
             if (!scrapingStateManager.isRunning()) {
               throw new Error("Scraping was stopped during VCC order query");
             }
 
+            await this.logInfo(
+              `Trip.com: querying VCC orders for chunk ${i + 1}/${vccDateChunks.length}`,
+              { beginCheckInDate: chunk.beginCheckInDate, endCheckInDate: chunk.endCheckInDate }
+            );
+
             const orders = await this.queryVccOrdersForChunk(template, chunk);
             vccOrders.push(...orders);
 
-            // Small buffer between requests so we don't hammer the endpoint
-            // back-to-back across 6+ chunks.
-            await delay(800);
+            await this.logInfo(
+              `Trip.com: chunk ${i + 1}/${vccDateChunks.length} returned ${orders.length} order(s)`,
+              { beginCheckInDate: chunk.beginCheckInDate, endCheckInDate: chunk.endCheckInDate, orderCount: orders.length }
+            );
+
+            // Human-like randomized buffer between requests (instead of a
+            // fixed delay) so we don't hammer the endpoint at an exact,
+            // identical interval across 6+ chunks — an easy automation tell.
+            await randomDelay(2000, 4000);
           }
 
           await this.logInfo("Trip.com: VCC order query complete", {
