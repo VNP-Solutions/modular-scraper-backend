@@ -13,6 +13,7 @@ export interface IProperty extends Document {
   expedia_id: string;
   booking_id: number;
   agoda_id: string;
+  trip_id?: string;
   property_name: string;
   address?: string;
   city?: string;
@@ -56,6 +57,10 @@ const PropertySchema = new Schema<IProperty>(
       required: false,
     },
     agoda_id: {
+      type: String,
+      required: false,
+    },
+    trip_id: {
       type: String,
       required: false,
     },

@@ -10,6 +10,9 @@ export interface IPropertyCredentials extends Document {
   agodaPassword?: string;
   bookingUsername?: string;
   bookingPassword?: string;
+  tripUsername?: string;
+  tripPassword?: string;
+  tripVccPassword?: string;
   expediaEmailAssociated?: string;
   propertyContactEmail?: string;
   portfolioContactEmail?: string;
@@ -47,6 +50,18 @@ const PropertyCredentialsSchema = new Schema<IPropertyCredentials>(
       required: false,
     },
     bookingPassword: {
+      type: String,
+      required: false,
+    },
+    tripUsername: {
+      type: String,
+      required: false,
+    },
+    tripPassword: {
+      type: String,
+      required: false,
+    },
+    tripVccPassword: {
       type: String,
       required: false,
     },

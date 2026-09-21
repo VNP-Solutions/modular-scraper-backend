@@ -15,6 +15,9 @@ export interface CreatePropertyCredentialsData {
   agodaPassword?: string;
   bookingUsername?: string;
   bookingPassword?: string;
+  tripUsername?: string;
+  tripPassword?: string;
+  tripVccPassword?: string;
   expediaEmailAssociated?: string;
   propertyContactEmail?: string;
   portfolioContactEmail?: string;
@@ -28,6 +31,9 @@ export interface UpdatePropertyCredentialsData {
   agodaPassword?: string;
   bookingUsername?: string;
   bookingPassword?: string;
+  tripUsername?: string;
+  tripPassword?: string;
+  tripVccPassword?: string;
   expediaEmailAssociated?: string;
   propertyContactEmail?: string;
   portfolioContactEmail?: string;
@@ -41,6 +47,9 @@ export interface PropertyCredentialsResponse {
   agodaPassword?: string;
   bookingUsername?: string;
   bookingPassword?: string;
+  tripUsername?: string;
+  tripPassword?: string;
+  tripVccPassword?: string;
   expediaEmailAssociated?: string;
   propertyContactEmail?: string;
   portfolioContactEmail?: string;
@@ -320,12 +329,12 @@ export class PropertyCredentialsService {
   }
 
   /**
-   * Get Expedia credentials from job
+   * Get Trip.com credentials from job
    */
-  async getExpediaCredentialsFromJob(jobId: string): Promise<{
-    expediaUsername?: string;
-    expediaPassword?: string;
-    expediaEmailAssociated?: string;
+  async getTripCredentialsFromJob(jobId: string): Promise<{
+    tripUsername?: string;
+    tripPassword?: string;
+    tripVccPassword?: string;
     propertyId?: string;
   } | null> {
     try {
@@ -352,113 +361,18 @@ export class PropertyCredentialsService {
       }
 
       console.log(
-        `✅ Found Expedia credentials for job: ${jobId}, property: ${job.property_id}`
+        `✅ Found Trip.com credentials for job: ${jobId}, property: ${job.property_id}`
       );
 
       return {
-        expediaUsername: credentials.expediaUsername,
-        expediaPassword: credentials.expediaPassword,
-        expediaEmailAssociated: credentials.expediaEmailAssociated,
+        tripUsername: credentials.tripUsername,
+        tripPassword: credentials.tripPassword,
+        tripVccPassword: credentials.tripVccPassword,
         propertyId: job.property_id.toString(),
       };
     } catch (error) {
       console.error(
-        `Error getting Expedia credentials for job ${jobId}:`,
-        error
-      );
-      return null;
-    }
-  }
-
-  /**
-   * Get Agoda credentials from job
-   */
-  async getAgodaCredentialsFromJob(jobId: string): Promise<{
-    agodaUsername?: string;
-    agodaPassword?: string;
-    propertyId?: string;
-  } | null> {
-    try {
-      const jobObjectId = this.validateObjectId(jobId, "jobId");
-      const job = await Job.findById(jobObjectId);
-
-      if (!job) {
-        console.error(`Job not found: ${jobId}`);
-        return null;
-      }
-
-      if (!job.property_id) {
-        console.error(`Job ${jobId} has no property_id assigned`);
-        return null;
-      }
-
-      const credentials = await PropertyCredentials.findOne({
-        property_id: job.property_id,
-      });
-
-      if (!credentials) {
-        console.error(`No credentials found for property: ${job.property_id}`);
-        return null;
-      }
-
-      console.log(
-        `✅ Found Agoda credentials for job: ${jobId}, property: ${job.property_id}`
-      );
-
-      return {
-        agodaUsername: credentials.agodaUsername,
-        agodaPassword: credentials.agodaPassword,
-        propertyId: job.property_id.toString(),
-      };
-    } catch (error) {
-      console.error(`Error getting Agoda credentials for job ${jobId}:`, error);
-      return null;
-    }
-  }
-
-  /**
-   * Get Booking.com credentials from job
-   */
-  async getBookingCredentialsFromJob(jobId: string): Promise<{
-    bookingUsername?: string;
-    bookingPassword?: string;
-    propertyId?: string;
-  } | null> {
-    try {
-      const jobObjectId = this.validateObjectId(jobId, "jobId");
-      const job = await Job.findById(jobObjectId);
-
-      if (!job) {
-        console.error(`Job not found: ${jobId}`);
-        return null;
-      }
-
-      if (!job.property_id) {
-        console.error(`Job ${jobId} has no property_id assigned`);
-        return null;
-      }
-
-      const credentials = await PropertyCredentials.findOne({
-        property_id: job.property_id,
-      });
-
-      if (!credentials) {
-        console.error(`No credentials found for property: ${job.property_id}`);
-        return null;
-      }
-
-      console.log(
-        `✅ Found Booking credentials for job: ${jobId}, property: ${job.property_id}`
-      );
-
-      return {
-        bookingUsername: credentials.bookingUsername,
-        bookingPassword: credentials.bookingPassword,
-        propertyId: job.property_id.toString(),
-      };
-    } catch (error) {
-      console.error(
-        `Error getting Booking credentials for job ${jobId}:`,
+        `Error getting Trip.com credentials for job ${jobId}:`,
         error
       );
       return null;
@@ -505,6 +419,9 @@ export class PropertyCredentialsService {
         agodaPassword: credentials.agodaPassword,
         bookingUsername: credentials.bookingUsername,
         bookingPassword: credentials.bookingPassword,
+        tripUsername: credentials.tripUsername,
+        tripPassword: credentials.tripPassword,
+        tripVccPassword: credentials.tripVccPassword,
         expediaEmailAssociated: credentials.expediaEmailAssociated,
         propertyContactEmail: credentials.propertyContactEmail,
         portfolioContactEmail: credentials.portfolioContactEmail,

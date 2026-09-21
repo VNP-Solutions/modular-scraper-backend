@@ -12,20 +12,11 @@ import {
   setFailedReasonCode,
 } from "../common/failed-reason.js";
 
-function isBookingPhoneSelectionRateLimitError(error: unknown): boolean {
-  return (
-    error !== null &&
-    typeof error === "object" &&
-    (error as { _bookingPhoneSelectionRateLimit?: boolean })._bookingPhoneSelectionRateLimit ===
-      true
-  );
-}
 import {
   dualLogError,
   dualLogInfo,
   dualLogWarn,
 } from "../common/log-helper.js";
-import { otpStatusManager } from "../common/otp-status-manager.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import { ScreenshotHelper } from "../common/screenshot-helper.js";
 import { JobStatus } from "../models/job.model.js";
@@ -52,14 +43,6 @@ export interface TwoFactorAuthOptions {
   page?: Page;
 }
 
-export interface BookingGroupScrapeStep {
-  jobId: string;
-  propertyIdForDb?: string;
-  /** Booking.com hotel / property id for navigation and VCCS. */
-  bookingId: string;
-  portfolioId?: string;
-}
-
 export interface ScrapingJobParams {
   jobId?: string;
   propertyId?: string;
@@ -69,16 +52,15 @@ export interface ScrapingJobParams {
   credentials?: LoginCredentials;
   maxPages?: number;
   timeoutMinutes?: number;
-  /** When set, BookingScraper logs in once then runs scrapeData per step (same session). */
-  bookingGroupSteps?: BookingGroupScrapeStep[];
-  /** Phone/OTP lease job id (usually first job in group); used when releasing after last property. */
-  groupOtpLeaseJobId?: string;
-  /** If false, skip worker OTP/phone release at start of scrapeData (group middle steps). Default true. */
-  releaseOtpAtScrapeStart?: boolean;
-  /** Target job id for releaseOtpFromWorker; defaults to jobId. */
-  otpReleaseJobId?: string;
   /** Passed from worker for DB `worker_assigned` on Running jobs (parallel workers). */
   workerAssignmentTag?: string;
+  /**
+   * Trip.com-specific: the property's VCC (virtual card) reveal password.
+   * When the total VCC balance exceeds the processing threshold, TripScraper
+   * uses this to open each qualifying order's card-details page. If not
+   * provided, that step is skipped entirely.
+   */
+  tripVccPassword?: string;
 }
 
 export interface ScrapingResult {
@@ -86,8 +68,6 @@ export interface ScrapingResult {
   data?: any;
   error?: string;
   screenshots?: string[];
-  /** Booking.com phone-selection rate limit — retry after pause (see booking-scraper). */
-  bookingPhoneSelectionRateLimit?: boolean;
 }
 
 export abstract class BaseScraper {
@@ -272,12 +252,6 @@ export abstract class BaseScraper {
             await this.logInfo("2FA not required or skipped");
           }
         } catch (error) {
-          const otpReleased = await otpStatusManager.forceReleaseOtp();
-          if (otpReleased) {
-            console.log("OTP force released after login");
-          } else {
-            console.log("Failed to force release OTP after login");
-          }
           await dualLogError("Login process failed", {
             error: error,
             platform: this.platform,
@@ -399,8 +373,6 @@ export abstract class BaseScraper {
         success: false,
         error: error instanceof Error ? error.message : "Unknown error",
         screenshots: [`${this.platform}-error-${Date.now()}.png`],
-        bookingPhoneSelectionRateLimit:
-          isBookingPhoneSelectionRateLimitError(error),
       };
     } finally {
       // Cleanup

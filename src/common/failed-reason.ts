@@ -21,6 +21,15 @@ export const FAILED_REASON = {
   BOOKING_TECHNICAL_DIFFICULTIES: "BOOKING_TECHNICAL_DIFFICULTIES",
   BOOKING_CARD_INFO_NOT_AVAILABLE: "BOOKING_CARD_INFO_NOT_AVAILABLE",
   BOOKING_TOO_MANY_ATTEMPTS: "BOOKING_TOO_MANY_ATTEMPTS",
+  // Trip.com-specific
+  TRIP_VERIFICATION_UI_UNRECOGNIZED: "TRIP_VERIFICATION_UI_UNRECOGNIZED",
+  TRIP_VERIFICATION_LINK_NOT_FOUND: "TRIP_VERIFICATION_LINK_NOT_FOUND",
+  TRIP_VERIFICATION_FAILED: "TRIP_VERIFICATION_FAILED",
+  TRIP_VCC_BALANCE_TOO_LOW: "TRIP_VCC_BALANCE_TOO_LOW",
+  TRIP_VCC_PASSWORD_WRONG: "TRIP_VCC_PASSWORD_WRONG",
+  TRIP_VCC_OTP_CODE_NOT_FOUND: "TRIP_VCC_OTP_CODE_NOT_FOUND",
+  TRIP_VCC_OTP_FAILED: "TRIP_VCC_OTP_FAILED",
+  TRIP_OTP_LOCK_TIMEOUT: "TRIP_OTP_LOCK_TIMEOUT",
 } as const;
 
 export type FailedReasonCode = (typeof FAILED_REASON)[keyof typeof FAILED_REASON];
@@ -80,6 +89,23 @@ const FAILED_REASON_MESSAGES: Record<FailedReasonCode, string> = {
   [FAILED_REASON.BOOKING_CARD_INFO_NOT_AVAILABLE]:
     BOOKING_CARD_INFO_NOT_AVAILABLE_MESSAGE,
   [FAILED_REASON.BOOKING_TOO_MANY_ATTEMPTS]: BOOKING_TOO_MANY_ATTEMPTS_MESSAGE,
+  // Trip.com-specific
+  [FAILED_REASON.TRIP_VERIFICATION_UI_UNRECOGNIZED]:
+    "Trip.com showed an unexpected identity verification screen. Please try again.",
+  [FAILED_REASON.TRIP_VERIFICATION_LINK_NOT_FOUND]:
+    "Trip.com verification email was not found after retrying. Please check the inbox and try again.",
+  [FAILED_REASON.TRIP_VERIFICATION_FAILED]:
+    "Trip.com identity verification failed. Please try again.",
+  [FAILED_REASON.TRIP_VCC_BALANCE_TOO_LOW]:
+    "Total VCC card balance for the queried date range is not greater than the minimum threshold. Nothing to process.",
+  [FAILED_REASON.TRIP_VCC_PASSWORD_WRONG]:
+    "VCC password wrong. Double-check and try again.",
+  [FAILED_REASON.TRIP_VCC_OTP_CODE_NOT_FOUND]:
+    "Trip.com VCC card-details verification email was not found after retrying. Please check the inbox and try again.",
+  [FAILED_REASON.TRIP_VCC_OTP_FAILED]:
+    "Trip.com VCC card-details email verification failed. Please try again.",
+  [FAILED_REASON.TRIP_OTP_LOCK_TIMEOUT]:
+    "Trip.com email verification is shared across jobs (single Gmail inbox) — timed out waiting for another job's verification to finish. Please retry.",
 };
 
 /**
@@ -101,6 +127,20 @@ export function hasFailedReasonCode(error: any): boolean {
     typeof error === "object" &&
     typeof error.failedReasonCode === "string"
   );
+}
+
+/**
+ * Attach a specific, already-formatted user-facing message to an error —
+ * takes priority over the static per-code message in
+ * {@link FAILED_REASON_MESSAGES} when reading via {@link getFailedReasonForUser}.
+ * Use this when the reason needs to include a runtime value (e.g. the
+ * actual computed balance/currency), which a static code->message table
+ * can't express.
+ */
+export function setFailedReasonMessage(error: any, message: string): void {
+  if (error && typeof error === "object") {
+    error.failedReasonMessage = message;
+  }
 }
 
 /**
@@ -256,9 +296,86 @@ export function hasNoManual2FASolvePossible(error: any): boolean {
  */
 export function getFailedReasonForUser(error: any): string | undefined {
   if (!error) return undefined;
+  if (typeof error.failedReasonMessage === "string" && error.failedReasonMessage) {
+    return error.failedReasonMessage;
+  }
   const code = error.failedReasonCode as FailedReasonCode | undefined;
   if (code && FAILED_REASON_MESSAGES[code]) {
     return FAILED_REASON_MESSAGES[code];
   }
   return undefined;
+}
+
+/**
+ * Build the error thrown when the total VCC card balance across all
+ * queried date-range chunks for a property is not greater than the
+ * minimum threshold (default 100, in whatever currency the reservations
+ * themselves report) — there's nothing worth processing, so the job fails
+ * fast instead of continuing.
+ */
+export function createTripVccBalanceTooLowError(
+  totalBalance: number,
+  currency: string,
+  threshold = 100
+): Error {
+  const message = `Card balance is not more than ${threshold} ${currency} (total: ${totalBalance.toFixed(
+    2
+  )} ${currency}).`;
+  const err = new Error(message);
+  setFailedReasonCode(err, FAILED_REASON.TRIP_VCC_BALANCE_TOO_LOW);
+  setFailedReasonMessage(err, message);
+  return err;
+}
+
+/**
+ * Build the error thrown when the property's configured `tripVccPassword`
+ * is rejected by Trip.com's VCC "Enter password" modal (live-verified
+ * 2026-09-21: the exact on-page error is "Wrong password. Double-check and
+ * try again."). The password is per-property, not per-order, so a wrong
+ * password fails the whole job immediately rather than being retried
+ * per-order.
+ */
+export function createTripVccPasswordWrongError(): Error {
+  const err = new Error(FAILED_REASON_MESSAGES[FAILED_REASON.TRIP_VCC_PASSWORD_WRONG]);
+  setFailedReasonCode(err, FAILED_REASON.TRIP_VCC_PASSWORD_WRONG);
+  return err;
+}
+
+/**
+ * Build the error thrown when the one-time "Your Trip eBooking verification
+ * code" email (required once per browser session before VCC card details
+ * can first be revealed) never arrives after retrying.
+ */
+export function createTripVccOtpCodeNotFoundError(): Error {
+  const err = new Error(
+    FAILED_REASON_MESSAGES[FAILED_REASON.TRIP_VCC_OTP_CODE_NOT_FOUND]
+  );
+  setFailedReasonCode(err, FAILED_REASON.TRIP_VCC_OTP_CODE_NOT_FOUND);
+  return err;
+}
+
+/**
+ * Build the error thrown when every candidate OTP code was tried on the
+ * `scene=VIEW_VCC_CARD_DETAIL` verification page and none completed it
+ * (page still shows the OTP inputs / never navigated away).
+ */
+export function createTripVccOtpFailedError(): Error {
+  const err = new Error(FAILED_REASON_MESSAGES[FAILED_REASON.TRIP_VCC_OTP_FAILED]);
+  setFailedReasonCode(err, FAILED_REASON.TRIP_VCC_OTP_FAILED);
+  return err;
+}
+
+/**
+ * Build the error thrown when a job gives up waiting for the shared
+ * Trip.com email-verification lock (`otp_statuses`, platform `trip.com`)
+ * to free up — another concurrently-running Trip job held it past the
+ * configured max wait, so this job's own OTP/verification-link polling
+ * against the single shared Gmail inbox never got a turn.
+ */
+export function createTripOtpLockTimeoutError(): Error {
+  const err = new Error(
+    FAILED_REASON_MESSAGES[FAILED_REASON.TRIP_OTP_LOCK_TIMEOUT]
+  );
+  setFailedReasonCode(err, FAILED_REASON.TRIP_OTP_LOCK_TIMEOUT);
+  return err;
 }

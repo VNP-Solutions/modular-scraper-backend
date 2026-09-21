@@ -15,6 +15,7 @@ export enum OtpPlatform {
   Expedia = "expedia",
   Agoda = "agoda",
   Booking = "booking",
+  Trip = "trip.com",
 }
 
 export interface IOtpStatus extends Document {

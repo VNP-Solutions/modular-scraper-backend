@@ -1,14 +1,5 @@
 export enum JobType {
-  PropertyRun = "property-run",
-  RerunFailed = "rerun-failed",
-  ReservationRun = "reservation-run",
-  BookingRun = "booking-run",
-  /** One session: login once, then scrape each property in bookingGroup (same credentials). */
-  BookingRunGroup = "booking-run-group",
-  BookingRerunFailed = "booking-rerun-failed",
-  GraphqlRun = "graphql-run",
-  AgodaPropertyRun = "agoda-property-run",
-  AgodaRerunFailed = "agoda-rerun-failed",
+  TripPropertyRun = "trip-property-run",
 }
 
 export enum WorkerMessageType {
@@ -22,19 +13,15 @@ export enum WorkerMessageType {
 export interface WorkerJobData {
   jobType: string;
   jobId: string;
-  portfolioId?: string;
   propertyId?: string;
   startDate?: string;
   endDate?: string;
-  expediaId?: string;
-  bookingId?: number;
-  agodaId?: string;
   user_email?: string;
   user_password?: string;
-  reservations?: any[];
-  originalStatus?: string;
-  /** When set, job may only run on this worker thread (e.g. booking bulk credential groups). */
-  pinnedWorkerId?: string;
+  /** Trip.com: DB `_id` of the job's property (job's own `property_id`), for job_item persistence. Not the same as `propertyId`, which holds the human-readable property name for TripScraper.searchProperty(). */
+  propertyIdForDb?: string;
+  /** Trip.com: VCC (virtual card) reveal password, used only if the queried VCC balance is above the processing threshold. */
+  tripVccPassword?: string;
   /** Set by worker pool when assigning (e.g. `worker-0`); combined with WORKER_ID for `worker_assigned`. */
   assignedWorkerPoolId?: string;
   [key: string]: any; // Allow additional properties
@@ -66,7 +53,6 @@ export interface WorkerInfo {
   id: string;
   isAvailable: boolean;
   currentJobId?: string;
-  /** Set while job runs; used to release phone_number_slots vs otp_status correctly. */
   currentJobType?: string;
   startTime?: Date;
   lastActivity?: Date;

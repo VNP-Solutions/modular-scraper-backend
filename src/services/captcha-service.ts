@@ -1,8 +1,14 @@
 import fs from "fs";
 import OpenAI from "openai";
 import { Page } from "puppeteer";
-import { BOOKING_VIEWPORT } from "../common/booking-anti-detection.js";
 import { screenshotManager } from "../common/screenshot-manager.js";
+
+/** Fixed viewport for consistent CAPTCHA screenshot positioning across platforms. */
+const DEFAULT_CAPTCHA_VIEWPORT = {
+  width: 1366,
+  height: 768,
+  deviceScaleFactor: 1,
+} as const;
 
 export interface CaptchaAnalysis {
   instruction: string;
@@ -143,8 +149,8 @@ export class CaptchaService {
         };
       }
 
-      // Set FIXED viewport for consistent positioning - EXACT from openai-booking
-      await page.setViewport(BOOKING_VIEWPORT);
+      // Set FIXED viewport for consistent positioning
+      await page.setViewport(DEFAULT_CAPTCHA_VIEWPORT);
 
       // Take screenshot for analysis using screenshot manager
       await logInfo("📸 Taking screenshot for OpenAI Vision analysis");

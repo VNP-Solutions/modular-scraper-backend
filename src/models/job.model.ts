@@ -21,6 +21,7 @@ export enum OTAProvider {
   Expedia = "Expedia",
   Booking = "Booking",
   Agoda = "Agoda",
+  Trip = "Trip",
 }
 
 export enum InvitationStatus {

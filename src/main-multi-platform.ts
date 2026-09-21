@@ -12,8 +12,6 @@ import { ScraperFactory, SupportedPlatforms, ScrapingJobParams, detectPlatform }
 
 dotenv.config();
 
-import type { BookingGroupScrapeStep } from "./scrapers/base-scraper.js";
-
 interface MultiPlatformJobParams {
   platform?: SupportedPlatforms | string;
   propertyId?: string;
@@ -24,16 +22,13 @@ interface MultiPlatformJobParams {
   user_email?: string;
   user_password?: string;
   url?: string; // For platform detection
-  bookingGroupSteps?: BookingGroupScrapeStep[];
-  groupOtpLeaseJobId?: string;
   workerAssignmentTag?: string;
+  /** Trip.com: VCC (virtual card) reveal password. See `ScrapingJobParams.tripVccPassword`. */
+  tripVccPassword?: string;
 }
 
 async function mainMultiPlatform(params: MultiPlatformJobParams): Promise<void> {
   let jobLogger = null;
-  const isBookingGroup = Boolean(
-    params.bookingGroupSteps && params.bookingGroupSteps.length > 0
-  );
 
   try {
     // Initialize job logging if jobId is provided
@@ -50,7 +45,7 @@ async function mainMultiPlatform(params: MultiPlatformJobParams): Promise<void> 
 
     // Determine platform
     let platform: SupportedPlatforms;
-    
+
     if (params.platform && ScraperFactory.isPlatformSupported(params.platform)) {
       platform = params.platform as SupportedPlatforms;
       await dualLogInfo(`Using specified platform: ${platform}`);
@@ -63,8 +58,8 @@ async function mainMultiPlatform(params: MultiPlatformJobParams): Promise<void> 
         throw new Error(`Could not detect platform from URL: ${params.url}`);
       }
     } else {
-      // Default to Expedia for backward compatibility
-      platform = SupportedPlatforms.EXPEDIA;
+      // Only one platform is supported — default to it.
+      platform = SupportedPlatforms.TRIP;
       await dualLogInfo(`No platform specified, defaulting to: ${platform}`);
     }
 
@@ -113,25 +108,9 @@ async function mainMultiPlatform(params: MultiPlatformJobParams): Promise<void> 
         email,
         password,
       },
-      bookingGroupSteps: params.bookingGroupSteps,
-      groupOtpLeaseJobId: params.groupOtpLeaseJobId,
       workerAssignmentTag: params.workerAssignmentTag,
+      tripVccPassword: params.tripVccPassword,
     };
-
-    if (
-      platform === SupportedPlatforms.BOOKING &&
-      params.bookingGroupSteps &&
-      params.bookingGroupSteps.length > 0
-    ) {
-      const first = params.bookingGroupSteps[0];
-      scrapingParams.propertyId = params.propertyId ?? first.bookingId;
-      scrapingParams.propertyIdForDb =
-        params.propertyIdForDb ?? first.propertyIdForDb;
-      scrapingParams.jobId =
-        params.groupOtpLeaseJobId ?? params.jobId ?? first.jobId;
-      scrapingParams.groupOtpLeaseJobId =
-        params.groupOtpLeaseJobId ?? params.jobId ?? first.jobId;
-    }
 
     // Execute scraping
     await dualLogInfo(`Starting ${platform} scraping process`);
@@ -148,11 +127,7 @@ async function mainMultiPlatform(params: MultiPlatformJobParams): Promise<void> 
     });
 
     if (params.jobId) {
-      if (!isBookingGroup) {
-        await finalizeJobLogging("success");
-      } else if (isJobLoggingActive()) {
-        await finalizeJobLogging("success");
-      }
+      await finalizeJobLogging("success");
     }
   } catch (error) {
     await dualLogError("Multi-platform scraping error:", error);
@@ -164,27 +139,4 @@ async function mainMultiPlatform(params: MultiPlatformJobParams): Promise<void> 
   }
 }
 
-// Backward compatibility function that matches the original main signature
-async function main(
-  expediaId?: string,
-  startDate?: string,
-  endDate?: string,
-  jobId?: string,
-  user_email?: string,
-  user_password?: string,
-  platform?: SupportedPlatforms | string
-): Promise<void> {
-  return mainMultiPlatform({
-    platform: platform || SupportedPlatforms.EXPEDIA,
-    propertyId: expediaId,
-    startDate,
-    endDate,
-    jobId,
-    user_email,
-    user_password
-  });
-}
-
-// Export both functions
-export default main;
 export { mainMultiPlatform, SupportedPlatforms };

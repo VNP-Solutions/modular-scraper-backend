@@ -1,10 +1,8 @@
 import { BaseScraper } from "./base-scraper.js";
-import { BookingScraper } from "./booking-scraper.js";
-import { ExpediaScraper } from "./expedia-scraper.js";
+import { TripScraper } from "./trip-scraper.js";
 
 export enum SupportedPlatforms {
-  EXPEDIA = 'expedia',
-  BOOKING = 'booking'
+  TRIP = 'trip'
 }
 
 export interface ScraperConfig {
@@ -16,8 +14,7 @@ export interface ScraperConfig {
 
 export class ScraperFactory {
   private static scrapers: Map<SupportedPlatforms, () => BaseScraper> = new Map([
-    [SupportedPlatforms.EXPEDIA, () => new ExpediaScraper()],
-    [SupportedPlatforms.BOOKING, () => new BookingScraper()]
+    [SupportedPlatforms.TRIP, () => new TripScraper()]
   ]);
 
   static createScraper(config: ScraperConfig): BaseScraper {
@@ -53,15 +50,11 @@ export class ScraperFactory {
 // Utility function to determine platform from URL or identifier
 export function detectPlatform(url: string): SupportedPlatforms | null {
   const urlLower = url.toLowerCase();
-  
-  if (urlLower.includes('expedia') || urlLower.includes('epc')) {
-    return SupportedPlatforms.EXPEDIA;
+
+  if (urlLower.includes('trip.com') || urlLower.includes('ctrip')) {
+    return SupportedPlatforms.TRIP;
   }
-  
-  if (urlLower.includes('booking') || urlLower.includes('bdc')) {
-    return SupportedPlatforms.BOOKING;
-  }
-  
+
   return null;
 }
 

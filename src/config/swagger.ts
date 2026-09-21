@@ -32,7 +32,7 @@ const options: swaggerJsdoc.Options = {
       title: "Module Scrapper API",
       version: "1.0.0",
       description:
-        "API documentation for the Expedia property scraping service with pause/resume functionality",
+        "API documentation for the Trip.com property scraping service with pause/resume functionality",
       contact: {
         name: "API Support",
         email: "support@example.com",
@@ -169,20 +169,22 @@ const options: swaggerJsdoc.Options = {
         description: "Endpoints for controlling scraping operations",
       },
       {
-        name: "Expedia Jobs",
-        description: "Endpoints for starting Expedia scraping jobs",
-      },
-      {
-        name: "Booking Jobs",
-        description: "Endpoints for starting Booking scraping jobs",
-      },
-      {
         name: "Job Monitoring",
         description: "Endpoints for monitoring job progress and results",
       },
       {
         name: "Cookie Storage",
         description: "Endpoints for managing encrypted property cookies",
+      },
+      {
+        name: "Trip.com Testing",
+        description:
+          "Standalone test endpoints for exercising the Trip.com scraper flow without a Job/DB record",
+      },
+      {
+        name: "Trip.com Jobs",
+        description:
+          "DB-backed endpoints for running Trip.com scraping jobs against existing Job/Property/PropertyCredentials records",
       },
     ],
     paths: loadYamlDocs(),

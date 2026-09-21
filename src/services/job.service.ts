@@ -154,12 +154,16 @@ export class JobService {
   }
 
   /**
-   * Get expedia_id from job's property
+   * Get property_name + property's DB id from job's property, for Trip.com
+   * jobs. Unlike Expedia/Agoda/Booking, Trip.com doesn't navigate by a
+   * numeric platform id — TripScraper.searchProperty() fuzzy-matches the
+   * human-readable property name against the group dashboard listing, so
+   * that's what's needed here (the DB id is only needed separately, to
+   * persist scraped VCC orders as job_items under `property_id`).
    */
-  async getExpediaIdFromJob(jobId: string): Promise<{
-    user_email: string;
-    user_password: string;
-    expediaId: string;
+  async getTripPropertyFromJob(jobId: string): Promise<{
+    propertyName: string;
+    propertyIdForDb: string;
   } | null> {
     try {
       const job = await this.getJobWithProperty(jobId);
@@ -174,7 +178,6 @@ export class JobService {
         return null;
       }
 
-      // Get property details
       const property = await Property.findById(job.property_id);
 
       if (!property) {
@@ -184,130 +187,20 @@ export class JobService {
         return null;
       }
 
-      if (!property.expedia_id || property.expedia_id === "0") {
-        console.error(
-          `Property ${property._id} has no valid expedia_id (current: ${property.expedia_id})`
-        );
+      if (!property.property_name) {
+        console.error(`Property ${property._id} has no property_name set`);
         return null;
       }
 
-      console.log(`Found expedia_id: ${property.expedia_id} for job: ${jobId}`);
+      console.log(
+        `Found property_name: "${property.property_name}" for job: ${jobId}`
+      );
       return {
-        expediaId: property.expedia_id,
-        user_email: property.user_email || "",
-        user_password: property.user_password || "",
+        propertyName: property.property_name,
+        propertyIdForDb: property._id.toString(),
       };
     } catch (error) {
-      console.error(`Error getting expedia_id for job ${jobId}:`, error);
-      return null;
-    }
-  }
-  /**
-   * Get booking_id from job's property
-   */
-  async getBookingIdFromJob(jobId: string): Promise<{
-    bookingId: number;
-    portfolioId?: string;
-    propertyId?: string;
-    bookingUsername?: string;
-    bookingPassword?: string;
-  } | null> {
-    try {
-      const job = await this.getJobWithProperty(jobId);
-      if (!job) {
-        console.error(`Job not found: ${jobId}`);
-        return null;
-      }
-      if (!job.property_id) {
-        console.error(`Job ${jobId} has no property_id assigned`);
-        return null;
-      }
-      // Get property details
-      const property = await Property.findById(job.property_id);
-      if (!property) {
-        console.error(
-          `Property not found for job ${jobId}, property_id: ${job.property_id}`
-        );
-        return null;
-      }
-
-      const credentials = await PropertyCredentials.findOne({
-        property_id: property._id,
-      });
-
-      // Check if booking_id exists and is valid
-      if (!property.booking_id || property.booking_id === 0) {
-        console.error(`Property ${job.property_id} has no valid booking_id`);
-
-        // Send public notification for missing booking_id
-        try {
-          await notificationService.sendPublicNotification({
-            title: "Booking.com Credentials Missing",
-            message: `Booking.com credentials are missing for property ${
-              property.property_name ||
-              job.property_name ||
-              job.property_id._id.toString()
-            }. Property has no valid booking_id. Please update credentials`,
-            metadata: {
-              jobId,
-              propertyId: job.property_id._id.toString(),
-              propertyName: property.property_name || job.property_name,
-              bookingId: property.booking_id,
-              issue: "missing_booking_id",
-              detectedAt: new Date().toISOString(),
-            },
-          });
-        } catch (notificationError) {
-          console.error(
-            `Error sending booking credential missing notification: ${notificationError}`
-          );
-        }
-
-        return null;
-      }
-
-      // Check if booking credentials are missing
-      if (!credentials?.bookingUsername || !credentials?.bookingPassword) {
-        console.error(`Property ${job.property_id} has no booking credentials`);
-
-        // Send public notification for missing booking credentials
-        try {
-          await notificationService.sendPublicNotification({
-            title: "Booking.com Credentials Missing",
-            message: `Booking.com credentials are missing for property ${
-              property.property_name ||
-              job.property_name ||
-              job.property_id._id.toString()
-            }. Please update credentials`,
-            metadata: {
-              jobId,
-              propertyId: job.property_id._id.toString(),
-              propertyName: property.property_name || job.property_name,
-              bookingId: property.booking_id,
-              hasUsername: !!credentials?.bookingUsername,
-              hasPassword: !!credentials?.bookingPassword,
-              issue: "missing_credentials",
-              detectedAt: new Date().toISOString(),
-            },
-          });
-        } catch (notificationError) {
-          console.error(
-            `Error sending booking credential missing notification: ${notificationError}`
-          );
-        }
-      }
-
-      console.log(`Found booking_id: ${property.booking_id} for job: ${jobId}`);
-
-      return {
-        bookingId: property.booking_id,
-        portfolioId: job.portfolio_id?.toString(),
-        propertyId: job.property_id._id.toString(),
-        bookingUsername: credentials?.bookingUsername,
-        bookingPassword: credentials?.bookingPassword,
-      };
-    } catch (error) {
-      console.error(`Error getting booking_id for job ${jobId}:`, error);
+      console.error(`Error getting Trip.com property for job ${jobId}:`, error);
       return null;
     }
   }

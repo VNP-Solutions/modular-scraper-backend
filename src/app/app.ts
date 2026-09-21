@@ -2,29 +2,18 @@ import bodyParser from "body-parser";
 import cors from "cors";
 import express from "express";
 import { isMainThread } from "worker_threads";
-import { emailNotifier } from "../common/email-notifier.js";
 import createError from "../common/error.js";
 import { setCurrentWorkerId } from "../common/log-helper.js";
-import { getDefaultOtpPhoneForGroupedRequest } from "../common/job-phone-store.js";
 import { otpAwareWorkerPool } from "../common/otp-aware-worker-pool.js";
-import { progressManager } from "../common/progress-manager.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
-import { JobType, WorkerJobData } from "../common/worker-types.js";
+import { JobType } from "../common/worker-types.js";
 import { specs, swaggerUi } from "../config/swagger.js";
 import { getAccess, getOauth2Callback } from "../get-access/access.js";
-import { JobStatus } from "../models/job.model.js";
-import { ScheduledJob } from "../models/scheduled-job.model.js";
-import {
-  CronConfig,
-  ScheduleType,
-  TimeUnit,
-  bookingTrustCron,
-} from "../services/booking-trust-cron.service.js";
-import { bookingTrustScheduler } from "../services/booking-trust-scheduler.service.js";
-import { propertyCredentialsService } from "../services/job-credentials.service.js";
-import { propertyCredentialsService as propertyPasswordUpdateService } from "../services/property-credentials.service.js";
 import { jobService } from "../services/job.service.js";
+import { otpStatusService } from "../services/otp-status.service.js";
+import { OtpPlatform } from "../models/otp-status.model.js";
 import cookieStorageRoutes from "../routes/shared/cookie-storage.routes.js";
+import { TripScraper } from "../scrapers/trip-scraper.js";
 
 // Ensure main thread ID is set for API routes and system tasks
 if (isMainThread) {
@@ -69,7 +58,7 @@ app.get("/", (req, res, next) => {
   try {
     res
       .status(200)
-      .json({ messge: "Connection established on booking-thread branch" });
+      .json({ messge: "Connection established" });
   } catch (err: any) {
     next(createError(err.status, err.message));
   }
@@ -79,93 +68,303 @@ app.get("/auth", getAccess as any);
 
 app.get("/oauth2callback", getOauth2Callback as any);
 
-// Test endpoint for CAPTCHA email notification
-app.get("/test-captcha-email", async (req, res) => {
-  try {
-    const testData = {
-      jobId: "test-captcha-job-123",
-      jobName: "Booking.com CAPTCHA Test",
-      propertyName: "Test Hotel Property",
-      expediaId: "TEST123",
-      errorMessage:
-        "CAPTCHA detected during Booking.com login - Manual intervention required",
-      errorDetails: {
-        sessionUrl: "https://chrome.browserless.io/session/test-session-id",
-        currentUrl: "https://admin.booking.com/signin",
-        timestamp: new Date().toISOString(),
-        instructions:
-          "Please visit the session URL to solve the CAPTCHA. The system will automatically detect when solved.",
-      },
-      timestamp: new Date(),
-      stage: "Login - CAPTCHA Challenge",
-    };
+/**
+ * @swagger
+ * /api/trip/test-run:
+ *   post:
+ *     tags:
+ *       - Trip.com Testing
+ *     summary: Test the full Trip.com login -> verification -> property search flow
+ *     description: >
+ *       Standalone test endpoint for exercising the full Trip.com scraper
+ *       flow (login, identity verification with SMS->email mode switch and
+ *       magic-link fallback across candidate emails, and group property
+ *       search with fuzzy name matching) without requiring a Job document
+ *       or a stored PropertyCredentials record — pass everything directly
+ *       in the body. Runs a real (headed in dev) browser against the live
+ *       Trip.com site with the credentials provided. Can take several
+ *       minutes end-to-end when identity verification is triggered (the
+ *       real flow waits ~90s+ for the verification email to arrive before
+ *       polling Gmail).
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - username
+ *               - password
+ *               - propertyName
+ *             properties:
+ *               username:
+ *                 type: string
+ *                 description: Trip.com eBooking username
+ *                 example: "EstorilVNP"
+ *               password:
+ *                 type: string
+ *                 description: Trip.com eBooking password
+ *                 example: "Kirat@2026"
+ *               propertyName:
+ *                 type: string
+ *                 description: Human-readable property name to search for on the group dashboard
+ *                 example: "Aldhafra, a Vignette Collection"
+ *               endDate:
+ *                 type: string
+ *                 description: >
+ *                   Optional. MM/DD/YYYY. If provided, after landing on the
+ *                   property dashboard the scraper navigates to the VCC
+ *                   settlement page and queries `queryVccOrder` across
+ *                   1-month chunks covering the 180 days ending on this date.
+ *                 example: "09/21/2026"
+ *               tripVccPassword:
+ *                 type: string
+ *                 description: >
+ *                   Optional. If the summed VCC balance across all queried
+ *                   orders exceeds 100 (in the orders' own currency), each
+ *                   qualifying order's `vcc-details` page is opened using
+ *                   this password. Skipped entirely if not provided.
+ *     responses:
+ *       200:
+ *         description: Test run completed successfully (login + verification + property search all succeeded)
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 testRunId:
+ *                   type: string
+ *                   example: "trip_test_1758452345123"
+ *                 propertyName:
+ *                   type: string
+ *                   example: "Aldhafra, a Vignette Collection"
+ *                 data:
+ *                   type: object
+ *                   description: Scrape result data (structure is still evolving)
+ *                 error:
+ *                   type: string
+ *                   nullable: true
+ *                 screenshots:
+ *                   type: array
+ *                   items:
+ *                     type: string
+ *       400:
+ *         description: Missing required fields in request body
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: false
+ *                 message:
+ *                   type: string
+ *                   example: "username, password, and propertyName are all required in the request body"
+ *       500:
+ *         description: Test run failed (login, verification, or property search failed)
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: false
+ *                 testRunId:
+ *                   type: string
+ *                 propertyName:
+ *                   type: string
+ *                 error:
+ *                   type: string
+ *                 screenshots:
+ *                   type: array
+ *                   items:
+ *                     type: string
+ */
+app.post("/api/trip/test-run", (async (req: any, res: any) => {
+  const { username, password, propertyName, endDate, tripVccPassword } =
+    req.body || {};
 
-    const recipients = process.env.CAPTCHA_RECIPIENTS
-      ? process.env.CAPTCHA_RECIPIENTS.split(",").map((email) => email.trim())
-      : ["admin@vnpsolutions.com", "developer@vnpsolutions.com"];
-
-    await emailNotifier.sendErrorEmail(recipients, testData);
-
-    res.json({
-      success: true,
-      message: "CAPTCHA test email sent successfully!",
-      recipients: recipients,
-      mailhogUrl: "http://localhost:8025",
-    });
-  } catch (error: any) {
-    console.error("Email test error:", error);
-    res.status(500).json({
+  if (!username || !password || !propertyName) {
+    return res.status(400).json({
       success: false,
-      error: error.message,
+      message:
+        "username, password, and propertyName are all required in the request body",
     });
   }
-});
 
-// Test endpoint for password update and email notification
-app.post("/test-password-update", (async (req: any, res: any) => {
+  const testRunId = `trip_test_${Date.now()}`;
+  console.log(
+    `[trip-test-run] Starting test run ${testRunId} for property "${propertyName}"`
+  );
+
+  // Local-only run state (no DB) so BaseScraper's "scraping stopped" checks
+  // don't immediately abort the flow.
+  scrapingStateManager.startScraping(propertyName, testRunId);
+
+  const scraper = new TripScraper();
+
   try {
-    const { jobId } = req.body;
+    // Deliberately not passing jobId/propertyIdForDb — this keeps the whole
+    // run DB-free (no Job document needed). BaseScraper handles a missing
+    // jobId gracefully throughout (screenshots still upload to S3 under a
+    // generic key; job-status DB writes are skipped entirely).
+    const result = await scraper.executeScraping({
+      propertyId: propertyName,
+      credentials: { email: username, password },
+      endDate,
+      tripVccPassword,
+    });
 
-    if (!jobId) {
-      return res.status(400).json({
-        success: false,
-        error: "jobId is required in request body",
-      });
-    }
-
-    // Test the password update logic (read-only - just fetches data without actually updating)
-    const updateResult = await propertyPasswordUpdateService.updateBookingPasswordByJobId(
-      jobId,
-      "TestPassword123!" // This will be encrypted and stored
+    console.log(
+      `[trip-test-run] Test run ${testRunId} finished with success=${result.success}`
     );
 
-    if (!updateResult.success) {
-      return res.status(400).json({
-        success: false,
-        message: "Failed to update password",
-        result: updateResult,
-      });
-    }
-
-    res.json({
-      success: true,
-      message: "Password update test completed!",
-      data: {
-        totalPropertiesUpdated: updateResult.totalUpdated,
-        username: updateResult.username,
-        affectedProperties: updateResult.affectedProperties,
-        propertyNames: updateResult.affectedProperties.map((p: any) => p.propertyName),
-      },
-      note: "Check the logs for detailed information about property name resolution",
+    res.status(result.success ? 200 : 500).json({
+      success: result.success,
+      testRunId,
+      propertyName,
+      data: result.data,
+      error: result.error,
+      screenshots: result.screenshots,
     });
   } catch (error: any) {
-    console.error("Password update test error:", error);
+    console.error(`[trip-test-run] Test run ${testRunId} threw:`, error);
     res.status(500).json({
       success: false,
-      error: error.message,
-      stack: error.stack,
+      testRunId,
+      propertyName,
+      error: error?.message || "Unknown error",
+    });
+  } finally {
+    scrapingStateManager.stopScraping();
+  }
+}) as any);
+
+/**
+ * @swagger
+ * /api/trip/property-run-job:
+ *   post:
+ *     tags:
+ *       - Trip.com Jobs
+ *     summary: Run one or more DB-backed Trip.com property scraping jobs (multi-threaded)
+ *     description: >
+ *       Batch runner for Trip.com jobs that already exist as Job documents.
+ *       Takes an array of job IDs and submits each one to the same
+ *       OTP-aware worker-thread pool Expedia/Booking use
+ *       (`MAX_WORKER_THREADS` concurrent workers, default 3) — jobs run in
+ *       true parallel worker threads, not sequentially in this request
+ *       handler; anything beyond the pool's worker count is queued
+ *       automatically (job status flips to `InQueue`) and picked up as a
+ *       worker frees up. For each job, the property name (used for
+ *       fuzzy-matching on the group dashboard), Trip.com credentials
+ *       (username/password + VCC reveal password), and end date (the job's
+ *       own `end_date` field; anchors the 180-day VCC lookback window) are
+ *       looked up from the job's own record and its linked
+ *       property/credentials records inside the worker — nothing needs to
+ *       be passed in per-job beyond the id.
+ *
+ *       Concurrency note: multiple Trip jobs *can* run at once here (unlike
+ *       Booking's phone-number gate, nothing in the pool blocks it), but
+ *       every job still shares ONE Gmail inbox for its verification
+ *       emails/links. TripScraper itself serializes that specific step via
+ *       an internal DB lock (`otp_statuses`, platform `trip.com`) — so
+ *       login/property-search/etc. proceed fully in parallel across
+ *       worker threads, and only the email-verification step queues up
+ *       behind whichever job is actively polling Gmail at that moment.
+ *
+ *       A failure on one job does not stop the rest of the batch — every
+ *       job's own outcome is reported individually in the `results` array.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - jobIds
+ *             properties:
+ *               jobIds:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 description: MongoDB ObjectIds of the jobs to run
+ *                 example: ["507f1f77bcf86cd799439011", "507f1f77bcf86cd799439012"]
+ *     responses:
+ *       200:
+ *         description: Every job in the batch completed successfully — see `results` for per-job detail
+ *       207:
+ *         description: Batch finished but at least one job failed/was skipped — see `results` for per-job status
+ *       400:
+ *         description: Missing or invalid jobIds in request body
+ */
+app.post("/api/trip/property-run-job", (async (req: any, res: any) => {
+  const { jobIds } = req.body || {};
+
+  if (!Array.isArray(jobIds) || jobIds.length === 0) {
+    return res.status(400).json({
+      status: 400,
+      message: "jobIds (a non-empty array) is required in request body",
     });
   }
+
+  console.log(
+    `[trip-property-run-job] Submitting ${jobIds.length} job(s) to the OTP-aware worker pool`
+  );
+
+  // Submit every job to the worker pool up-front (not one-at-a-time) so
+  // they compete for the pool's worker threads in parallel — the pool
+  // itself handles queueing anything beyond MAX_WORKER_THREADS. All
+  // per-job validation/lookup/status-update logic lives in
+  // ScrapingWorker.handleTripPropertyRun(), run inside the worker thread.
+  //
+  // `requiresOtp` is intentionally omitted (defaults to false/undefined)
+  // — see the swagger description above for why Trip doesn't use the
+  // pool's Booking-specific OTP gate.
+  const outcomes = await Promise.allSettled(
+    jobIds.map((jobId: string) =>
+      otpAwareWorkerPool.executeJob({
+        jobType: JobType.TripPropertyRun,
+        jobId,
+      })
+    )
+  );
+
+  const results = outcomes.map((outcome, index) => {
+    const jobId = jobIds[index];
+
+    if (outcome.status === "fulfilled") {
+      const response = outcome.value as any;
+      return {
+        jobId,
+        status: 200,
+        ...(response?.data || {}),
+      };
+    }
+
+    const reason: any = outcome.reason;
+    console.error(`[trip-property-run-job] Job ${jobId} failed:`, reason);
+    return {
+      jobId,
+      status: 500,
+      message: `Job ${jobId} failed`,
+      error: reason?.error || reason?.message || String(reason),
+    };
+  });
+
+  const overallSuccess = results.every((r) => r.status === 200);
+
+  res.status(overallSuccess ? 200 : 207).json({
+    status: overallSuccess ? 200 : 207,
+    message: overallSuccess
+      ? "All Trip.com property jobs completed successfully"
+      : "Batch completed with one or more failures — see results for per-job details",
+    results,
+  });
 }) as any);
 
 // API to get scraping status
@@ -219,1188 +418,6 @@ app.post(
     }
   }
 );
-
-app.post("/api/booking/property-run-job", (async (
-  req: express.Request,
-  res: express.Response
-) => {
-  try {
-    const { jobId } = req.body;
-
-    // Validate required parameters
-    if (!jobId) {
-      return res.status(400).json({
-        status: 400,
-        message: "jobId required in request body",
-      });
-    }
-
-    // 1. Validate job exists and can be run
-    const validation = await jobService.validateJob(jobId);
-
-    if (!validation.exists) {
-      return res.status(404).json({
-        status: 404,
-        message: `Job with ID ${jobId} not found`,
-      });
-    }
-
-    if (!validation.canRun) {
-      return res.status(409).json({
-        status: 409,
-        message: `Job ${jobId} is not in a runnable state. Current status: ${validation.job?.job_status}`,
-        currentState: validation.job,
-      });
-    }
-
-    // 2. Get booking_id from job's property
-    console.log(
-      `Getting booking_id and job details for booking job ${jobId}...`
-    );
-    const jobData = await jobService.getBookingIdFromJob(jobId);
-    const bookingCredentials =
-      await propertyCredentialsService.getBookingCredentialsFromJob(jobId);
-
-    if (!jobData || !jobData.bookingId) {
-      return res.status(400).json({
-        status: 400,
-        message: `Cannot retrieve valid booking_id for job ${jobId}. Property may not have booking_id assigned or booking_id is "0".`,
-      });
-    }
-
-    if (
-      !bookingCredentials?.bookingUsername ||
-      !bookingCredentials?.bookingPassword
-    ) {
-      return res.status(400).json({
-        status: 400,
-        message: `Cannot retrieve valid bookingUsername or bookingPassword for job ${jobId}. Property may not have booking credentials assigned.`,
-      });
-    }
-
-    if (!jobData.propertyId) {
-      return res.status(400).json({
-        status: 400,
-        message: `Cannot retrieve valid portfolioId or propertyId for job ${jobId}. Job may be missing required references.`,
-      });
-    }
-
-    const { bookingId, portfolioId, propertyId } = jobData;
-    const { bookingUsername, bookingPassword } = bookingCredentials;
-
-    console.log(`Using booking_id: ${bookingId} for booking scraping`);
-
-    // 3. Prepare worker job data
-    const workerJobData: WorkerJobData = {
-      jobType: JobType.BookingRun,
-      jobId,
-      portfolioId,
-      propertyId,
-      bookingId,
-      user_email: bookingUsername,
-      user_password: bookingPassword,
-    };
-
-    // 4. Execute job in worker thread
-    try {
-      console.log(`Submitting booking job ${jobId} to worker pool...`);
-
-      const result = await otpAwareWorkerPool.executeJob(workerJobData);
-
-      if (result.success) {
-        return res.status(200).json(result.data);
-      } else {
-        return res.status(500).json({
-          status: 500,
-          message: "Booking job execution failed",
-          error: result.error,
-          jobId: result.jobId,
-        });
-      }
-    } catch (workerError) {
-      console.error(`Worker error for booking job ${jobId}:`, workerError);
-
-      // Ensure job is marked as failed
-      try {
-        await progressManager.handleJobError(jobId, workerError);
-      } catch (cleanupError) {
-        console.error("Error during cleanup:", cleanupError);
-      }
-
-      return res.status(500).json({
-        status: 500,
-        message: "Worker execution failed for booking job",
-        error:
-          workerError instanceof Error
-            ? workerError.message
-            : String(workerError),
-        jobId,
-      });
-    }
-  } catch (err: any) {
-    console.error("Error in /api/booking/run-job:", err);
-
-    // Ensure job is marked as failed
-    try {
-      if (req.body.jobId) {
-        await progressManager.handleJobError(req.body.jobId, err);
-      }
-    } catch (cleanupError) {
-      console.error("Error during cleanup:", cleanupError);
-    }
-
-    res.status(500).json({
-      status: 500,
-      message: "Error processing booking job",
-      error: err.message,
-    });
-  }
-}) as any);
-
-/**
- * @swagger
- * /api/booking/bulk-property-run-job:
- *   post:
- *     tags:
- *       - Booking Jobs
- *     summary: Bulk start booking scraping jobs
- *     description: |
- *       Starts multiple booking scraping jobs.
- *       Jobs are submitted asynchronously and the worker pool handles OTP checking and queueing automatically.
- *       Invalid jobs are reported in the response but do not prevent valid jobs from being processed.
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - job_ids
- *             properties:
- *               job_ids:
- *                 type: array
- *                 items:
- *                   type: string
- *                 example: ["6892f4bf9df8bc296bdcdff0", "6892f4bf9df8bc296bdcdff1"]
- *                 description: Array of job IDs to process
- *               scheduler_id:
- *                 type: string
- *                 description: Optional scheduler ID to update with invalid job IDs
- *                 example: "6892f4bf9df8bc296bdcdff2"
- *     responses:
- *       200:
- *         description: Jobs submitted successfully, with details on valid and invalid jobs.
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 status:
- *                   type: number
- *                 message:
- *                   type: string
- *                 results:
- *                   type: object
- *                   properties:
- *                     submitted:
- *                       type: array
- *                       items:
- *                         type: object
- *                         properties:
- *                           jobId: { type: string }
- *                           status: { type: string, enum: ["submitted", "failed"] }
- *                     invalid:
- *                       type: array
- *                       items:
- *                         type: object
- *                         properties:
- *                           jobId: { type: string }
- *                           reason: { type: string }
- *                           currentStatus: { type: string }
- *                     errors:
- *                       type: array
- *                       items:
- *                         type: object
- *                         properties:
- *                           jobId: { type: string }
- *                           error: { type: string }
- *       400:
- *         description: Missing required parameters in request body
- *       500:
- *         description: Error processing bulk booking run jobs
- */
-app.post("/api/booking/bulk-property-run-job", (async (
-  req: express.Request,
-  res: express.Response
-) => {
-  try {
-    const { job_ids, scheduler_id } = req.body;
-
-    if (!job_ids || !Array.isArray(job_ids) || job_ids.length === 0) {
-      return res.status(400).json({
-        status: 400,
-        message:
-          "job_ids array is required and must contain at least one job ID",
-      });
-    }
-
-    // Check if worker threads are available
-    if (
-      !otpAwareWorkerPool.hasAvailableWorkers() &&
-      otpAwareWorkerPool.isQueueFull()
-    ) {
-      return res.status(200).json({
-        status: 200,
-        message: "All server busy, try again",
-        workerStatus: otpAwareWorkerPool.getStatus(),
-      });
-    }
-
-    // Validate all jobs exist and can be run
-    const jobValidations = await Promise.all(
-      job_ids.map(async (jobId: string) => {
-        const validation = await jobService.validateJob(jobId);
-        return { jobId, validation };
-      })
-    );
-
-    // Separate valid and invalid jobs
-    const validJobs = jobValidations.filter(
-      (j) => j.validation.exists && j.validation.canRun
-    );
-    const invalidJobs = jobValidations.filter(
-      (j) => !j.validation.exists || !j.validation.canRun
-    );
-
-    // Get job data for valid jobs only
-    const jobsData = await Promise.all(
-      validJobs.map(async ({ jobId }) => {
-        try {
-          const jobData = await jobService.getBookingIdFromJob(jobId);
-          const bookingCredentials =
-            await propertyCredentialsService.getBookingCredentialsFromJob(
-              jobId
-            );
-
-          if (!jobData || !jobData.bookingId) {
-            return {
-              jobId,
-              error: `Cannot retrieve valid booking_id for job ${jobId}. Property may not have booking_id assigned or booking_id is "0".`,
-            };
-          }
-
-          if (
-            !bookingCredentials?.bookingUsername ||
-            !bookingCredentials?.bookingPassword
-          ) {
-            return {
-              jobId,
-              error: `Cannot retrieve valid bookingUsername or bookingPassword for job ${jobId}. Property may not have booking credentials assigned.`,
-            };
-          }
-
-          if (!jobData.propertyId) {
-            return {
-              jobId,
-              error: `Cannot retrieve valid portfolioId or propertyId for job ${jobId}. Job may be missing required references.`,
-            };
-          }
-
-          return { jobId, jobData, bookingCredentials };
-        } catch (error) {
-          return {
-            jobId,
-            error: error instanceof Error ? error.message : String(error),
-          };
-        }
-      })
-    );
-
-    // Separate jobs with valid data from those with errors
-    const validJobsData = jobsData.filter(
-      (
-        j
-      ): j is {
-        jobId: string;
-        jobData: any;
-        bookingCredentials: any;
-      } => !("error" in j)
-    );
-    const jobsWithErrors = jobsData.filter((j) => "error" in j);
-
-    // Submit all jobs asynchronously without waiting - fire and forget
-    const results: {
-      submitted: Array<{ jobId: string; status: string; data?: any }>;
-      invalid: Array<{ jobId: string; reason: string; currentStatus?: string }>;
-      errors: Array<{ jobId: string; error: string }>;
-    } = {
-      submitted: [],
-      invalid: [],
-      errors: [],
-    };
-
-    // Add invalid jobs to results
-    invalidJobs.forEach(({ jobId, validation }) => {
-      results.invalid.push({
-        jobId,
-        reason: !validation.exists
-          ? "Job not found"
-          : "Job is not in a runnable state",
-        currentStatus: validation.job?.job_status || undefined,
-      });
-    });
-
-    // Add jobs with errors to results
-    jobsWithErrors.forEach((job) => {
-      if ("error" in job && job.error) {
-        results.errors.push({
-          jobId: job.jobId,
-          error: job.error,
-        });
-      }
-    });
-
-    // Submit valid jobs without awaiting - they run in the background
-    validJobsData.forEach((job) => {
-      const { bookingId, portfolioId, propertyId } = job.jobData;
-      const { bookingUsername, bookingPassword } = job.bookingCredentials;
-
-      const workerJobData: WorkerJobData = {
-        jobType: JobType.BookingRun,
-        jobId: job.jobId,
-        portfolioId,
-        propertyId,
-        bookingId,
-        user_email: bookingUsername,
-        user_password: bookingPassword,
-      };
-
-      // executeJob will automatically:
-      // - Run immediately if OTP and worker available
-      // - Queue and set InQueue status if OTP occupied or no worker available
-      // Fire and forget - don't wait for completion
-      otpAwareWorkerPool.executeJob(workerJobData).catch(async (error) => {
-        console.error(`Error submitting booking job ${job.jobId}:`, error);
-        // Update job status to Failed if submission fails
-        try {
-          await jobService.updateJobStatus(job.jobId, JobStatus.Failed);
-        } catch (statusError) {
-          console.error(
-            `Error updating job ${job.jobId} status to Failed:`,
-            statusError
-          );
-        }
-      });
-
-      results.submitted.push({
-        jobId: job.jobId,
-        status: "submitted",
-      });
-    });
-
-    // Update scheduled job comment with invalid job IDs if scheduler_id is provided
-    if (scheduler_id) {
-      try {
-        const invalidJobIds = [
-          ...results.invalid.map((j) => j.jobId),
-          ...results.errors.map((j) => j.jobId),
-        ];
-
-        if (invalidJobIds.length > 0) {
-          const invalidJobIdsString = invalidJobIds.join(", ");
-          const scheduledJob = await ScheduledJob.findById(scheduler_id);
-
-          if (scheduledJob) {
-            const existingComment = scheduledJob.comment || "";
-            const newComment = existingComment
-              ? `${existingComment}\nInvalid job IDs: ${invalidJobIdsString}`
-              : `Invalid job IDs: ${invalidJobIdsString}`;
-
-            await ScheduledJob.findByIdAndUpdate(scheduler_id, {
-              comment: newComment,
-            });
-            console.log(
-              `Updated scheduled job ${scheduler_id} comment with invalid job IDs`
-            );
-          } else {
-            console.warn(
-              `Scheduled job ${scheduler_id} not found, skipping comment update`
-            );
-          }
-        }
-      } catch (schedulerError) {
-        console.error(
-          `Error updating scheduled job ${scheduler_id} comment:`,
-          schedulerError
-        );
-        // Don't fail the request if scheduler update fails
-      }
-    }
-
-    return res.status(200).json({
-      status: 200,
-      message: `Processed ${job_ids.length} jobs. ${results.submitted.length} submitted, ${results.invalid.length} invalid, ${results.errors.length} with errors.`,
-      results,
-    });
-  } catch (err: any) {
-    console.error("Error in /api/booking/bulk-property-run-job:", err);
-
-    res.status(500).json({
-      status: 500,
-      message: "Error processing bulk booking run jobs",
-      error: err.message,
-    });
-  }
-}) as any);
-
-/** One credential group in POST /api/booking/bulk-property-run-job-grouped */
-interface BookingBulkCredentialGroup {
-  job_ids: string[];
-  phone_number?: string | null;
-  slot?: number | null;
-  booking_username: string;
-  booking_password: string;
-}
-
-function resolveGroupedCredentialContact(g: BookingBulkCredentialGroup): {
-  phone: string;
-  port?: string;
-} {
-  const defPhone = getDefaultOtpPhoneForGroupedRequest();
-
-  const raw = g.phone_number;
-  const hasPhone =
-    raw != null && typeof raw === "string" && raw.trim() !== "";
-  const hasSlot = g.slot != null && typeof g.slot === "number";
-
-  const phone = hasPhone ? raw.trim() : defPhone;
-  if (hasSlot) {
-    return { phone, port: String(g.slot) };
-  }
-  return { phone };
-}
-
-/**
- * @swagger
- * /api/booking/bulk-property-run-job-grouped:
- *   post:
- *     tags:
- *       - Booking Jobs
- *     summary: Bulk start booking scraping jobs (grouped endpoint)
- *     description: |
- *       Accepts credential_groups (job_ids plus booking_username/booking_password per group, optional phone_number and slot).
- *       Omitted or null phone_number uses OUR_CONTACT (else built-in fallback). Omitted or null slot means no port (single-phone / IFTTT-style OTP path).
- *       Resolved phone/port are passed as selectedContact on each job; worker pool does not overwrite them.
- *       Each credential group is submitted as one booking-run-group job (single browser session: one login, then each property in job_ids order on one worker thread). OTP worker-pool locking is per phone number: different numbers can run on different workers at once; same number is serialized. `slot` is only for OTP/email matching in the worker, not a separate lock lane.
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required:
- *               - credential_groups
- *             properties:
- *               credential_groups:
- *                 type: array
- *                 minItems: 1
- *                 items:
- *                   type: object
- *                   required:
- *                     - job_ids
- *                     - booking_username
- *                     - booking_password
- *                   properties:
- *                     job_ids:
- *                       type: array
- *                       minItems: 1
- *                       items:
- *                         type: string
- *                     phone_number:
- *                       type: string
- *                       nullable: true
- *                     slot:
- *                       type: integer
- *                       nullable: true
- *                     booking_username:
- *                       type: string
- *                     booking_password:
- *                       type: string
- *               scheduler_id:
- *                 type: string
- *                 description: Optional scheduler ID to update with invalid job IDs
- *                 example: "6892f4bf9df8bc296bdcdff2"
- *     responses:
- *       200:
- *         description: Jobs submitted successfully, with details on valid and invalid jobs.
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 status:
- *                   type: number
- *                 message:
- *                   type: string
- *                 results:
- *                   type: object
- *                   properties:
- *                     submitted:
- *                       type: array
- *                       items:
- *                         type: object
- *                         properties:
- *                           jobId: { type: string }
- *                           status: { type: string, enum: ["submitted", "failed"] }
- *                     invalid:
- *                       type: array
- *                       items:
- *                         type: object
- *                         properties:
- *                           jobId: { type: string }
- *                           reason: { type: string }
- *                           currentStatus: { type: string }
- *                     errors:
- *                       type: array
- *                       items:
- *                         type: object
- *                         properties:
- *                           jobId: { type: string }
- *                           error: { type: string }
- *       400:
- *         description: Missing required parameters in request body
- *       500:
- *         description: Error processing bulk booking run jobs
- */
-app.post("/api/booking/bulk-property-run-job-grouped", (async (
-  req: express.Request,
-  res: express.Response
-) => {
-  try {
-    const { credential_groups, scheduler_id } = req.body;
-
-    if (
-      !credential_groups ||
-      !Array.isArray(credential_groups) ||
-      credential_groups.length === 0
-    ) {
-      return res.status(400).json({
-        status: 400,
-        message:
-          "credential_groups is required and must be a non-empty array",
-      });
-    }
-
-    for (let i = 0; i < credential_groups.length; i++) {
-      const g = credential_groups[i];
-      if (!g || typeof g !== "object") {
-        return res.status(400).json({
-          status: 400,
-          message: `credential_groups[${i}] must be an object`,
-        });
-      }
-      if (!Array.isArray(g.job_ids) || g.job_ids.length === 0) {
-        return res.status(400).json({
-          status: 400,
-          message: `credential_groups[${i}].job_ids must be a non-empty array`,
-        });
-      }
-      const badJobId = g.job_ids.find(
-        (id: unknown) => typeof id !== "string" || id.trim() === ""
-      );
-      if (badJobId !== undefined) {
-        return res.status(400).json({
-          status: 400,
-          message: `credential_groups[${i}].job_ids must contain only non-empty strings`,
-        });
-      }
-      if (
-        typeof g.booking_username !== "string" ||
-        g.booking_username.trim() === ""
-      ) {
-        return res.status(400).json({
-          status: 400,
-          message: `credential_groups[${i}].booking_username is required`,
-        });
-      }
-      if (typeof g.booking_password !== "string") {
-        return res.status(400).json({
-          status: 400,
-          message: `credential_groups[${i}].booking_password must be a string`,
-        });
-      }
-      if (
-        g.phone_number !== null &&
-        g.phone_number !== undefined &&
-        typeof g.phone_number !== "string"
-      ) {
-        return res.status(400).json({
-          status: 400,
-          message: `credential_groups[${i}].phone_number must be a string or null`,
-        });
-      }
-      if (
-        g.slot !== null &&
-        g.slot !== undefined &&
-        typeof g.slot !== "number"
-      ) {
-        return res.status(400).json({
-          status: 400,
-          message: `credential_groups[${i}].slot must be a number or null`,
-        });
-      }
-    }
-
-    const groups = credential_groups as BookingBulkCredentialGroup[];
-    const phoneKeyForGroup = (g: BookingBulkCredentialGroup): string => {
-      const c = resolveGroupedCredentialContact(g);
-      return c.phone;
-    };
-    const phoneUsage = new Map<string, number>();
-    for (const g of groups) {
-      const k = phoneKeyForGroup(g);
-      phoneUsage.set(k, (phoneUsage.get(k) ?? 0) + 1);
-    }
-    for (const [phoneKey, n] of phoneUsage) {
-      if (n > 1) {
-        console.warn(
-          `[bulk-property-run-job-grouped] ${n} credential_groups share the same phone (${phoneKey}). OTP is locked per phone — extra groups for that number queue until the lane is free, even if other workers are idle.`
-        );
-      }
-    }
-
-    const jobIdToSelectedContact = new Map<
-      string,
-      { phone: string; port?: string }
-    >();
-    for (const g of groups) {
-      const contact = resolveGroupedCredentialContact(g);
-      for (const id of g.job_ids) {
-        jobIdToSelectedContact.set(id, contact);
-      }
-    }
-
-    const job_ids = groups.flatMap((g) => g.job_ids);
-
-    // Check if worker threads are available
-    if (
-      !otpAwareWorkerPool.hasAvailableWorkers() &&
-      otpAwareWorkerPool.isQueueFull()
-    ) {
-      return res.status(200).json({
-        status: 200,
-        message: "All server busy, try again",
-        workerStatus: otpAwareWorkerPool.getStatus(),
-      });
-    }
-
-    // Validate all jobs exist and can be run
-    const jobValidations = await Promise.all(
-      job_ids.map(async (jobId: string) => {
-        const validation = await jobService.validateJob(jobId);
-        return { jobId, validation };
-      })
-    );
-
-    // Separate valid and invalid jobs
-    const validJobs = jobValidations.filter(
-      (j) => j.validation.exists && j.validation.canRun
-    );
-    const invalidJobs = jobValidations.filter(
-      (j) => !j.validation.exists || !j.validation.canRun
-    );
-
-    // Get job data for valid jobs only (credentials come from credential_groups, not DB)
-    const jobsData = await Promise.all(
-      validJobs.map(async ({ jobId }) => {
-        try {
-          const jobData = await jobService.getBookingIdFromJob(jobId);
-          const bookingCredentials =
-            await propertyCredentialsService.getBookingCredentialsFromJob(
-              jobId
-            );
-
-          if (!jobData || !jobData.bookingId) {
-            return {
-              jobId,
-              error: `Cannot retrieve valid booking_id for job ${jobId}. Property may not have booking_id assigned or booking_id is "0".`,
-            };
-          }
-
-          if (!jobData.propertyId) {
-            return {
-              jobId,
-              error: `Cannot retrieve valid portfolioId or propertyId for job ${jobId}. Job may be missing required references.`,
-            };
-          }
-
-          return { jobId, jobData, bookingCredentials };
-        } catch (error) {
-          return {
-            jobId,
-            error: error instanceof Error ? error.message : String(error),
-          };
-        }
-      })
-    );
-
-    // Separate jobs with valid data from those with errors
-    const validJobsData = jobsData.filter(
-      (
-        j
-      ): j is {
-        jobId: string;
-        jobData: any;
-        bookingCredentials: any;
-      } => !("error" in j)
-    );
-    const jobsWithErrors = jobsData.filter((j) => "error" in j);
-
-    // Submit all jobs asynchronously without waiting - fire and forget
-    const results: {
-      submitted: Array<{ jobId: string; status: string; data?: any }>;
-      invalid: Array<{ jobId: string; reason: string; currentStatus?: string }>;
-      errors: Array<{ jobId: string; error: string }>;
-    } = {
-      submitted: [],
-      invalid: [],
-      errors: [],
-    };
-
-    // Add invalid jobs to results
-    invalidJobs.forEach(({ jobId, validation }) => {
-      results.invalid.push({
-        jobId,
-        reason: !validation.exists
-          ? "Job not found"
-          : "Job is not in a runnable state",
-        currentStatus: validation.job?.job_status || undefined,
-      });
-    });
-
-    // Add jobs with errors to results
-    jobsWithErrors.forEach((job) => {
-      if ("error" in job && job.error) {
-        results.errors.push({
-          jobId: job.jobId,
-          error: job.error,
-        });
-      }
-    });
-
-    // Same group runs on one worker (one executeJob); totalWorkers parallel feeders pull from a FIFO with a mutex.
-    // No pinnedWorkerId: any idle worker can take the next group when the booking phone slot is free (see otp-aware-worker-pool).
-    type ValidJobEntry = (typeof validJobsData)[number];
-    const validJobById = new Map(
-      validJobsData.map((j) => [j.jobId, j] as const)
-    );
-    const totalWorkers = Math.max(
-      1,
-      otpAwareWorkerPool.getStatus().totalWorkers
-    );
-
-    type GroupRun = {
-      jobs: ValidJobEntry[];
-      booking_username: string;
-      booking_password: string;
-    };
-    const groupRuns: GroupRun[] = [];
-    for (const g of groups) {
-      const jobsInGroup = g.job_ids
-        .map((id: string) => validJobById.get(id))
-        .filter((j): j is ValidJobEntry => j != null);
-      if (jobsInGroup.length > 0) {
-        groupRuns.push({
-          jobs: jobsInGroup,
-          booking_username: g.booking_username.trim(),
-          booking_password: g.booking_password,
-        });
-      }
-    }
-
-    for (const run of groupRuns) {
-      for (const job of run.jobs) {
-        results.submitted.push({
-          jobId: job.jobId,
-          status: "submitted",
-        });
-      }
-    }
-
-    let nextGroupIndex = 0;
-    let groupTakeChain: Promise<void> = Promise.resolve();
-    const takeNextGroup = async (): Promise<GroupRun | null> => {
-      let release!: () => void;
-      const gate = new Promise<void>((r) => {
-        release = r;
-      });
-      const prev = groupTakeChain;
-      groupTakeChain = prev.then(() => gate);
-      await prev;
-      try {
-        if (nextGroupIndex >= groupRuns.length) {
-          return null;
-        }
-        const run = groupRuns[nextGroupIndex];
-        nextGroupIndex += 1;
-        return run;
-      } finally {
-        release();
-      }
-    };
-
-    const runPipeline = async () => {
-      for (;;) {
-        const run = await takeNextGroup();
-        if (!run) {
-          break;
-        }
-        const jobsInGroup = run.jobs;
-        const leaseJobId = jobsInGroup[0].jobId;
-        const selectedContact = jobIdToSelectedContact.get(leaseJobId);
-        const workerJobData: WorkerJobData = {
-          jobType: JobType.BookingRunGroup,
-          jobId: leaseJobId,
-          user_email: run.booking_username,
-          user_password: run.booking_password,
-          bookingGroup: jobsInGroup.map((j) => ({
-            jobId: j.jobId,
-            portfolioId: j.jobData.portfolioId,
-            propertyId: j.jobData.propertyId,
-            bookingId: j.jobData.bookingId,
-          })),
-          ...(selectedContact ? { selectedContact } : {}),
-        };
-
-        try {
-          await otpAwareWorkerPool.executeJob(workerJobData);
-        } catch (error) {
-          console.error(
-            `Error submitting booking group (lease ${leaseJobId}):`,
-            error
-          );
-          for (const j of jobsInGroup) {
-            try {
-              await jobService.updateJobStatus(j.jobId, JobStatus.Failed);
-            } catch (statusError) {
-              console.error(
-                `Error updating job ${j.jobId} status to Failed:`,
-                statusError
-              );
-            }
-          }
-        }
-      }
-    };
-
-    void (async () => {
-      await Promise.all(
-        Array.from({ length: totalWorkers }, () => runPipeline())
-      );
-    })();
-
-    // Update scheduled job comment with invalid job IDs if scheduler_id is provided
-    if (scheduler_id) {
-      try {
-        const invalidJobIds = [
-          ...results.invalid.map((j) => j.jobId),
-          ...results.errors.map((j) => j.jobId),
-        ];
-
-        if (invalidJobIds.length > 0) {
-          const invalidJobIdsString = invalidJobIds.join(", ");
-          const scheduledJob = await ScheduledJob.findById(scheduler_id);
-
-          if (scheduledJob) {
-            const existingComment = scheduledJob.comment || "";
-            const newComment = existingComment
-              ? `${existingComment}\nInvalid job IDs: ${invalidJobIdsString}`
-              : `Invalid job IDs: ${invalidJobIdsString}`;
-
-            await ScheduledJob.findByIdAndUpdate(scheduler_id, {
-              comment: newComment,
-            });
-            console.log(
-              `Updated scheduled job ${scheduler_id} comment with invalid job IDs`
-            );
-          } else {
-            console.warn(
-              `Scheduled job ${scheduler_id} not found, skipping comment update`
-            );
-          }
-        }
-      } catch (schedulerError) {
-        console.error(
-          `Error updating scheduled job ${scheduler_id} comment:`,
-          schedulerError
-        );
-        // Don't fail the request if scheduler update fails
-      }
-    }
-
-    return res.status(200).json({
-      status: 200,
-      message: `Processed ${job_ids.length} jobs. ${results.submitted.length} submitted, ${results.invalid.length} invalid, ${results.errors.length} with errors.`,
-      results,
-    });
-  } catch (err: any) {
-    console.error("Error in /api/booking/bulk-property-run-job-grouped:", err);
-
-    res.status(500).json({
-      status: 500,
-      message: "Error processing bulk booking run jobs",
-      error: err.message,
-    });
-  }
-}) as any);
-
-app.post("/api/booking/stop-job", (async (
-  req: express.Request,
-  res: express.Response
-) => {
-  try {
-    const { jobId } = req.body;
-
-    if (!jobId) {
-      return res.status(400).json({
-        status: 400,
-        message: "Job ID is required",
-      });
-    }
-
-    // 1. Check if job exists
-    const job = await jobService.getJobById(jobId);
-    if (!job) {
-      return res.status(404).json({
-        status: 404,
-        message: `Job with ID ${jobId} not found`,
-      });
-    }
-
-    // 2. Stop the scraping state flag so the scraper exits its loop
-    const wasRunning = scrapingStateManager.isRunning();
-    if (wasRunning) {
-      scrapingStateManager.stopScraping();
-      console.log(`Stopping scraping state for job ${jobId}`);
-    }
-
-    // 3. Update job status to Failed in DB
-    const updatedJob = await jobService.updateJobStatus(
-      jobId,
-      JobStatus.Failed
-    );
-    if (!updatedJob) {
-      return res.status(500).json({
-        status: 500,
-        message: `Failed to update job ${jobId} status`,
-      });
-    }
-
-    // 4. Force-stop the worker thread, release OTP/phone slot, and free the
-    //    worker for the next queued job. workerStopped=false just means the job
-    //    was not found as the active job on any thread (already finished or never
-    //    started), which is not an error.
-    const workerStopped = await otpAwareWorkerPool.stopJob(jobId);
-    console.log(
-      `Job ${jobId} has been stopped and marked as Failed (workerStopped=${workerStopped})`
-    );
-
-    res.status(200).json({
-      status: 200,
-      message: "Booking scraping job stopped successfully",
-      jobId,
-      finalStatus: JobStatus.Failed,
-      wasRunning,
-      workerStopped,
-    });
-  } catch (err: any) {
-    console.error("Error in /api/booking/stop-job:", err);
-    res.status(500).json({
-      status: 500,
-      message: "Error stopping booking job",
-      error: err.message,
-    });
-  }
-}) as any);
-
-app.post("/api/booking/rerun-failed-job", (async (
-  req: express.Request,
-  res: express.Response
-) => {
-  try {
-    const { jobId, ota_provider } = req.body;
-
-    // Validate required parameters
-    if (!jobId || !ota_provider) {
-      return res.status(400).json({
-        status: 400,
-        message: "jobId, ota_provider are required in request body",
-      });
-    }
-
-    // Check if worker threads are available
-    if (
-      !otpAwareWorkerPool.hasAvailableWorkers() &&
-      otpAwareWorkerPool.isQueueFull()
-    ) {
-      return res.status(200).json({
-        status: 200,
-        message: "All server busy, try again",
-        workerStatus: otpAwareWorkerPool.getStatus(),
-      });
-    }
-
-    // 1. Check if job can be retried
-    await jobService.setJobIdForRetryCheck(jobId);
-
-    if (!jobService.canRetry) {
-      return res.status(400).json({
-        status: 400,
-        message: jobService.retryReason,
-        jobId,
-        currentStatus: jobService.currentJob?.job_status,
-        retryAttempts: jobService.currentJob?.retries_attempted,
-        maxRetries: jobService.currentJob?.max_retries,
-      });
-    }
-
-    const job = jobService.currentJob!;
-    const originalStatus = job.job_status;
-
-    // 2. Increment retry attempts
-    const updatedJob = await jobService.incrementRetryAttempts(jobId);
-    if (!updatedJob) {
-      return res.status(500).json({
-        status: 500,
-        message: "Failed to update retry attempts",
-      });
-    }
-
-    // 3. Get booking_id and credentials from job's property
-    console.log(`Getting booking_id for failed job rerun ${jobId}...`);
-    const jobData = await jobService.getBookingIdFromJob(jobId);
-    const bookingCredentials =
-      await propertyCredentialsService.getBookingCredentialsFromJob(jobId);
-
-    if (!jobData || !jobData.bookingId) {
-      return res.status(400).json({
-        status: 400,
-        message: `Cannot retrieve valid booking_id for job ${jobId}. Property may not have booking_id assigned or booking_id is "0".`,
-      });
-    }
-
-    if (
-      !bookingCredentials?.bookingUsername ||
-      !bookingCredentials?.bookingPassword
-    ) {
-      return res.status(400).json({
-        status: 400,
-        message: `Cannot retrieve valid booking credentials for job ${jobId}. Property may not have booking username or password assigned.`,
-      });
-    }
-
-    if (!jobData.propertyId) {
-      return res.status(400).json({
-        status: 400,
-        message: `Cannot retrieve valid portfolioId or propertyId for job ${jobId}. Job may be missing required references.`,
-      });
-    }
-
-    const { bookingId, portfolioId, propertyId } = jobData;
-    const { bookingUsername, bookingPassword } = bookingCredentials;
-
-    console.log(
-      `Rerunning failed booking job ${jobId} (attempt ${updatedJob.retries_attempted}/${updatedJob.max_retries}) with booking_id: ${bookingId}`
-    );
-
-    // 4. Prepare worker job data for rerun
-    const workerJobData: WorkerJobData = {
-      jobType: JobType.BookingRerunFailed,
-      jobId,
-      portfolioId,
-      propertyId,
-      bookingId,
-      user_email: bookingUsername,
-      user_password: bookingPassword,
-      originalStatus,
-    };
-
-    // 5. Execute job in worker thread
-    try {
-      console.log(`Submitting booking rerun job ${jobId} to worker pool...`);
-
-      const result = await otpAwareWorkerPool.executeJob(workerJobData);
-
-      if (result.success) {
-        // Get final progress after rerun
-        const progress = await jobService.getJobProgress(jobId);
-
-        // Clean up retry check state
-        jobService.clearRetryCheck();
-
-        return res.status(200).json({
-          ...result.data,
-          originalStatus,
-          retryAttempt: updatedJob.retries_attempted,
-          progress,
-        });
-      } else {
-        // Clean up retry check state
-        jobService.clearRetryCheck();
-
-        return res.status(500).json({
-          status: 500,
-          message: "Booking job rerun execution failed",
-          error: result.error,
-          jobId: result.jobId,
-          retryAttempt: updatedJob.retries_attempted,
-        });
-      }
-    } catch (workerError) {
-      console.error(
-        `Worker error for booking rerun job ${jobId}:`,
-        workerError
-      );
-
-      // Ensure job is marked as failed
-      try {
-        await progressManager.handleJobError(jobId, workerError);
-      } catch (cleanupError) {
-        console.error("Error during cleanup:", cleanupError);
-      }
-
-      // Clean up retry check state
-      jobService.clearRetryCheck();
-      return res.status(500).json({
-        status: 500,
-        message: "Worker execution failed for booking job rerun",
-        error: workerError instanceof Error ? workerError.message : workerError,
-        jobId,
-        retryAttempt: updatedJob.retries_attempted,
-      });
-    }
-  } catch (err: any) {
-    console.error("Error in /api/booking/rerun-failed-job:", err);
-
-    // Ensure job is marked as failed
-    try {
-      if (req.body.jobId) {
-        await progressManager.handleJobError(req.body.jobId, err);
-      }
-    } catch (cleanupError) {
-      console.error("Error during cleanup:", cleanupError);
-    }
-
-    res.status(500).json({
-      status: 500,
-      message: "Error processing booking job rerun",
-      error: err.message,
-    });
-  } finally {
-    // Clean up retry check state
-    jobService.clearRetryCheck();
-  }
-}) as any);
 
 app.get("/api/jobs/:jobId/progress", (async (
   req: express.Request,
@@ -1578,10 +595,10 @@ app.get("/api/jobs/:jobId/job-items-file", (async (
 
 app.get(
   "/api/worker-pool/status",
-  (req: express.Request, res: express.Response) => {
+  (async (req: express.Request, res: express.Response) => {
     try {
       const otpAwareWorkerPoolStatus = otpAwareWorkerPool.getStatus();
-      const otpStatus = otpAwareWorkerPool.getOtpStatus();
+      const otpStatus = await otpStatusService.getStatus(OtpPlatform.Trip);
 
       res.status(200).json({
         status: 200,
@@ -1597,13 +614,16 @@ app.get(
         error: err.message,
       });
     }
-  }
+  }) as any
 );
 
-// Get OTP status only
-app.get("/api/otp/status", (req: express.Request, res: express.Response) => {
+// Get Trip.com shared-inbox OTP lock status only
+app.get("/api/otp/status", (async (
+  req: express.Request,
+  res: express.Response
+) => {
   try {
-    const otpStatus = otpAwareWorkerPool.getOtpStatus();
+    const otpStatus = await otpStatusService.getStatus(OtpPlatform.Trip);
 
     res.status(200).json({
       status: 200,
@@ -1615,303 +635,6 @@ app.get("/api/otp/status", (req: express.Request, res: express.Response) => {
     res.status(500).json({
       status: 500,
       message: "Error retrieving OTP status",
-      error: err.message,
-    });
-  }
-});
-
-// Booking Trust Scheduler Endpoints
-// API to run booking trust scheduler manually
-app.post("/api/booking/trust-scheduler/run", (async (
-  req: express.Request,
-  res: express.Response
-) => {
-  try {
-    const stats = await bookingTrustScheduler.runTrustScheduler();
-
-    res.status(200).json({
-      status: 200,
-      message: "Booking trust scheduler completed successfully",
-      stats,
-    });
-  } catch (err: any) {
-    console.error("Error in /api/booking/trust-scheduler/run:", err);
-    res.status(500).json({
-      status: 500,
-      message: "Error running booking trust scheduler",
-      error: err.message,
-    });
-  }
-}) as any);
-
-app.get(
-  "/api/booking/trust-scheduler/status",
-  (req: express.Request, res: express.Response) => {
-    try {
-      const status = bookingTrustScheduler.getSchedulerStatus();
-
-      res.status(200).json({
-        status: 200,
-        message: "Trust scheduler status retrieved successfully",
-        data: status,
-      });
-    } catch (err: any) {
-      console.error("Error in /api/booking/trust-scheduler/status:", err);
-      res.status(500).json({
-        status: 500,
-        message: "Error retrieving trust scheduler status",
-        error: err.message,
-      });
-    }
-  }
-);
-
-// API to manually verify a specific property's trust status
-app.post("/api/booking/trust-scheduler/verify/:propertyId", (async (
-  req: express.Request,
-  res: express.Response
-) => {
-  try {
-    const { propertyId } = req.params;
-
-    if (!propertyId) {
-      return res.status(400).json({
-        status: 400,
-        message: "Property ID is required",
-      });
-    }
-
-    const result = await bookingTrustScheduler.verifySpecificProperty(
-      propertyId
-    );
-
-    res.status(200).json({
-      status: 200,
-      message: "Property trust verification completed",
-      result,
-    });
-  } catch (err: any) {
-    console.error(
-      `Error in /api/booking/trust-scheduler/verify/${req.params.propertyId}:`,
-      err
-    );
-    res.status(500).json({
-      status: 500,
-      message: "Error verifying property trust status",
-      error: err.message,
-    });
-  }
-}) as any);
-
-// API to get properties eligible for trust verification
-app.get("/api/booking/trust-scheduler/eligible-properties", (async (
-  req: express.Request,
-  res: express.Response
-) => {
-  try {
-    const properties =
-      await bookingTrustScheduler.getPropertiesForTrustVerification();
-
-    res.status(200).json({
-      status: 200,
-      message: "Eligible properties retrieved successfully",
-      data: {
-        totalProperties: properties.length,
-        properties: properties.map((p) => ({
-          id: p._id,
-          property_name: p.property_name,
-          booking_id: p.booking_id,
-          booking_trusted_status: p.booking_trusted_status,
-          booking_last_login: p.booking_last_login,
-        })),
-      },
-    });
-  } catch (err: any) {
-    console.error(
-      "Error in /api/booking/trust-scheduler/eligible-properties:",
-      err
-    );
-    res.status(500).json({
-      status: 500,
-      message: "Error retrieving eligible properties",
-      error: err.message,
-    });
-  }
-}) as any);
-
-// Booking Trust Cron Management Endpoints
-app.post("/api/booking/trust-scheduler/cron/configuration", (async (
-  req: express.Request,
-  res: express.Response
-) => {
-  try {
-    const { enabled, schedule, timezone } = req.body;
-
-    // Validate required fields
-    if (!schedule || !schedule.type || schedule.value === undefined) {
-      return res.status(400).json({
-        status: 400,
-        message: "Schedule with type and value is required",
-      });
-    }
-
-    // Validate schedule type
-    if (!Object.values(ScheduleType).includes(schedule.type)) {
-      return res.status(400).json({
-        status: 400,
-        message: `Invalid schedule type. Must be one of: ${Object.values(
-          ScheduleType
-        ).join(", ")}`,
-      });
-    }
-
-    // Validate unit for interval type
-    if (
-      schedule.type === ScheduleType.INTERVAL &&
-      (!schedule.unit || !Object.values(TimeUnit).includes(schedule.unit))
-    ) {
-      return res.status(400).json({
-        status: 400,
-        message: `Invalid unit for interval. Must be one of: ${Object.values(
-          TimeUnit
-        ).join(", ")}`,
-      });
-    }
-
-    // Validate specific time format
-    if (schedule.type === ScheduleType.SPECIFIC) {
-      if (typeof schedule.value !== "string") {
-        return res.status(400).json({
-          status: 400,
-          message: "Specific time must be a string in HH:MM format",
-        });
-      }
-      if (!/^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$/.test(schedule.value)) {
-        return res.status(400).json({
-          status: 400,
-          message: "Invalid time format. Use HH:MM format (e.g., '09:00')",
-        });
-      }
-    }
-
-    const config: CronConfig = {
-      enabled: enabled !== undefined ? enabled : true,
-      schedule,
-      timezone: timezone || "UTC",
-    };
-
-    bookingTrustCron.configure(config);
-
-    res.status(200).json({
-      status: 200,
-      message: "Cron configuration updated successfully",
-      data: config,
-    });
-  } catch (err: any) {
-    res.status(400).json({
-      status: 400,
-      message: "Error updating configuration",
-      error: err.message,
-    });
-  }
-}) as any);
-
-// GET /api/booking/trust-scheduler/cron/configuration
-app.get("/api/booking/trust-scheduler/cron/configuration", (async (
-  req: express.Request,
-  res: express.Response
-) => {
-  try {
-    const config = bookingTrustCron.getConfiguration();
-    res.status(200).json({
-      status: 200,
-      message: "Cron configuration retrieved successfully",
-      data: config,
-    });
-  } catch (err: any) {
-    res.status(500).json({
-      status: 500,
-      message: "Error retrieving configuration",
-      error: err.message,
-    });
-  }
-}) as any);
-
-// POST /api/booking/trust-scheduler/cron/enabled
-app.post("/api/booking/trust-scheduler/cron/enabled", (async (
-  req: express.Request,
-  res: express.Response
-) => {
-  try {
-    const { enabled } = req.body;
-
-    if (typeof enabled !== "boolean") {
-      return res.status(400).json({
-        status: 400,
-        message: "Enabled parameter is required and must be a boolean",
-      });
-    }
-
-    const config = bookingTrustCron.getConfiguration();
-    config.enabled = enabled;
-    bookingTrustCron.configure(config);
-
-    res.status(200).json({
-      status: 200,
-      message: `Cron job ${enabled ? "enabled" : "disabled"} successfully`,
-      data: {
-        enabled: config.enabled,
-      },
-    });
-  } catch (err: any) {
-    res.status(500).json({
-      status: 500,
-      message: "Error updating cron job status",
-      error: err.message,
-    });
-  }
-}) as any);
-
-// API to get booking trust cron status
-app.get(
-  "/api/booking/trust-scheduler/cron/status",
-  (req: express.Request, res: express.Response) => {
-    try {
-      const cronStatus = bookingTrustCron.getStatus();
-
-      res.status(200).json({
-        status: 200,
-        message: "Trust scheduler cron status retrieved successfully",
-        data: cronStatus,
-      });
-    } catch (err: any) {
-      console.error("Error in /api/booking/trust-scheduler/cron/status:", err);
-      res.status(500).json({
-        status: 500,
-        message: "Error retrieving cron service status",
-        error: err.message,
-      });
-    }
-  }
-);
-
-// API to manually trigger cron verification (for testing)
-app.post("/api/booking/trust-scheduler/cron/trigger", (async (
-  req: express.Request,
-  res: express.Response
-) => {
-  try {
-    await bookingTrustCron.runManual();
-
-    res.status(200).json({
-      status: 200,
-      message: "Manual booking trust verification triggered successfully",
-    });
-  } catch (err: any) {
-    console.error("Error in /api/booking/trust-scheduler/cron/trigger:", err);
-    res.status(500).json({
-      status: 500,
-      message: "Error triggering manual verification",
       error: err.message,
     });
   }
@@ -1936,10 +659,10 @@ app.use((err: any, req: any, res: any, next: any) => {
 // Simple worker pool status endpoint
 app.get(
   "/api/worker-pool/simple-status",
-  (req: express.Request, res: express.Response) => {
+  (async (req: express.Request, res: express.Response) => {
     try {
       const status = otpAwareWorkerPool.getStatus();
-      const otpStatus = otpAwareWorkerPool.getOtpStatus();
+      const otpStatus = await otpStatusService.getStatus(OtpPlatform.Trip);
 
       res.status(200).json({
         status: "OK",
@@ -1966,7 +689,7 @@ app.get(
         error: error instanceof Error ? error.message : String(error),
       });
     }
-  }
+  }) as any
 );
 
 export default app;
