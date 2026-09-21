@@ -318,60 +318,44 @@ export class TripScraper extends BaseScraper {
       const { loading: loadingTimeout, selector: selectorTimeout } =
         await timeoutManager.getTimeoutConfig(jobId);
 
-      if (process.env.NODE_ENV === "production") {
-        const launchArgs = {
-          headless: false,
-          stealth: true,
-          humanlike: true,
-          slowMo: 1000,
-          ignoreHTTPSErrors: true,
-          args: [
-            "--window-size=1920,1080",
-            "--no-sandbox",
-            "--disable-setuid-sandbox",
-            "--disable-blink-features=AutomationControlled",
-            "--disable-dev-shm-usage",
-            "--disable-background-timer-throttling",
-            "--disable-backgrounding-occluded-windows",
-            "--disable-renderer-backgrounding",
-            "--no-first-run",
-            "--no-default-browser-check",
-          ],
-        };
-        const launch = encodeURIComponent(JSON.stringify(launchArgs));
-
-        browser = await puppeteer.connect({
-          browserWSEndpoint: `wss://production-sfo.browserless.io?token=${process.env.BROWSERLESS_TOKEN}&launch=${launch}`,
-        });
-      } else {
-        browser = await puppeteer.launch({
-          headless: false,
-          defaultViewport: null,
-          args: [
-            "--start-maximized",
-            "--no-sandbox",
-            "--disable-setuid-sandbox",
-            "--disable-blink-features=AutomationControlled",
-          ],
-        });
-      }
+      // Launch a real local Chrome directly (no more Browserless) with
+      // headless:false, in both production and development. On the server
+      // this now renders onto the VNC-backed virtual display (make sure
+      // the `DISPLAY` env var the Node process sees points at that virtual
+      // display, and that the Xvfb/VNC screen resolution is at least
+      // 1920x1080 — `--start-maximized` only maximizes to whatever size
+      // the virtual display actually is). This sidesteps the whole
+      // Browserless-session "Allow Notifications" card issue investigated
+      // 2026-09-22 (it only ever showed up in Browserless's ephemeral
+      // remote sessions, never in a locally-launched Chrome), so no
+      // Browserless-specific workarounds (live URL, stealth/humanlike
+      // launch flags — those were Browserless's own proprietary options,
+      // not real Puppeteer ones) are needed here anymore.
+      browser = await puppeteer.launch({
+        headless: false,
+        defaultViewport: null,
+        args: [
+          "--start-maximized",
+          "--no-sandbox",
+          "--disable-setuid-sandbox",
+          "--disable-dev-shm-usage",
+          "--disable-blink-features=AutomationControlled",
+          "--disable-background-timer-throttling",
+          "--disable-backgrounding-occluded-windows",
+          "--disable-renderer-backgrounding",
+          "--no-first-run",
+          "--no-default-browser-check",
+        ],
+      });
 
       const page: Page = await browser.newPage();
 
-      // Trip.com's eBooking app shows its own "Allow Notifications" card
-      // whenever `Notification.permission` is still "default" for this
-      // origin. Live-observed (2026-09-22) on the server (fresh
-      // Browserless session, no persisted permission decision — unlike a
-      // reused local Chrome profile, which is why this didn't show up
-      // locally): while it's up, the VCC settlement page's own component
-      // never mounts/fires its default queryVccOrder request at all, and
-      // clicking it away via DOM search from the main frame didn't work
-      // (repeated "dismissed" logs with zero visual change — it's likely
-      // rendered inside an iframe our page-level DOM query can't reach).
-      // Pre-granting the permission here means the page's own JS sees
-      // "granted" immediately and has no reason to render that card in
-      // the first place, which fixes the root cause instead of the
-      // symptom.
+      // Cheap defensive measure kept from the Browserless investigation:
+      // pre-grant the notifications permission so `Notification.permission`
+      // never reads "default" for this origin, in case Trip.com's own
+      // "Allow Notifications" card can still show up in some
+      // fresh-profile scenario even outside Browserless (e.g. no
+      // persistent `userDataDir` configured for these launches).
       try {
         await browser
           .defaultBrowserContext()
