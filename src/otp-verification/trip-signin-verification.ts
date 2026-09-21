@@ -162,34 +162,64 @@ export async function getTripSignInVerificationLinks(
       });
 
       const internalDate = Number(email.data.internalDate || 0);
+      const fromHeader = getHeaderValue(email.data, "From");
+      const toHeader = getHeaderValue(email.data, "To");
+      const subjectHeader = getHeaderValue(email.data, "Subject");
+      const snippet = email.data.snippet || "";
+
       if (internalDate && internalDate < sinceMs) {
         // Older than our trigger point — stale/unrelated email from a
         // previous attempt. Gmail returns newest-first, so we can stop here.
+        await dualLogInfo(
+          "Trip sign-in verification: reached an email older than the trigger window, stopping scan",
+          { messageId: msg.id, internalDate, sinceMs, fromHeader, toHeader }
+        );
         break;
       }
 
-      const html = getEmailBodyHtml(email.data);
-      if (!html) continue;
+      // Log every candidate email we actually inspect (not just the one we
+      // end up picking) so it's clear which inbox message is being read —
+      // useful for debugging when the wrong property's email gets grabbed,
+      // or when the picked link turns out not to work.
+      await dualLogInfo(
+        "Trip sign-in verification: inspecting candidate email",
+        { messageId: msg.id, internalDate, fromHeader, toHeader, subjectHeader, snippet }
+      );
 
-      const link = extractLinkNearText(html, VERIFY_LINK_TEXT);
-      if (!link || matchedLinks.includes(link) || unmatchedLinks.includes(link)) {
+      const html = getEmailBodyHtml(email.data);
+      if (!html) {
+        await dualLogWarn(
+          "Trip sign-in verification: email had no readable HTML body, skipping",
+          { messageId: msg.id }
+        );
         continue;
       }
 
-      const toHeader = getHeaderValue(email.data, "To");
+      const link = extractLinkNearText(html, VERIFY_LINK_TEXT);
+      if (!link) {
+        await dualLogWarn(
+          "Trip sign-in verification: could not find a \"Verify it's me\" link in this email's body, skipping",
+          { messageId: msg.id }
+        );
+        continue;
+      }
+      if (matchedLinks.includes(link) || unmatchedLinks.includes(link)) {
+        continue;
+      }
+
       const recipientMatches =
         !expectedRecipientPattern || expectedRecipientPattern.test(toHeader);
 
       if (recipientMatches) {
         await dualLogInfo(
           "Trip sign-in verification: found verification link candidate (recipient matched expected masked email)",
-          { messageId: msg.id, internalDate, toHeader }
+          { messageId: msg.id, internalDate, toHeader, link }
         );
         matchedLinks.push(link);
       } else {
         await dualLogWarn(
           "Trip sign-in verification: found verification link but its recipient did NOT match the masked email shown on-page — keeping as a lower-priority fallback candidate",
-          { messageId: msg.id, internalDate, toHeader }
+          { messageId: msg.id, internalDate, toHeader, link }
         );
         unmatchedLinks.push(link);
       }

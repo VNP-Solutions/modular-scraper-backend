@@ -147,39 +147,63 @@ export async function getTripVccVerificationCodes(
       });
 
       const internalDate = Number(email.data.internalDate || 0);
+      const fromHeader = getHeaderValue(email.data, "From");
+      const toHeader = getHeaderValue(email.data, "To");
+      const subjectHeader = getHeaderValue(email.data, "Subject");
+      const snippet = email.data.snippet || "";
+
       if (internalDate && internalDate < sinceMs) {
         // Older than our trigger point — stale/unrelated email from a
         // previous attempt. Gmail returns newest-first, so we can stop here.
+        await dualLogInfo(
+          "Trip VCC verification: reached an email older than the trigger window, stopping scan",
+          { messageId: msg.id, internalDate, sinceMs, fromHeader, toHeader }
+        );
         break;
       }
 
-      const html = getEmailBodyHtml(email.data);
-      if (!html) continue;
+      // Log every candidate email we actually inspect (not just the one we
+      // end up picking) so it's clear which inbox message is being read.
+      await dualLogInfo(
+        "Trip VCC verification: inspecting candidate email",
+        { messageId: msg.id, internalDate, fromHeader, toHeader, subjectHeader, snippet }
+      );
 
-      const text = stripHtmlToText(html);
-      const match = text.match(/verification code:\s*(\d{6})/i);
-      if (
-        !match ||
-        matchedCodes.includes(match[1]) ||
-        unmatchedCodes.includes(match[1])
-      ) {
+      const html = getEmailBodyHtml(email.data);
+      if (!html) {
+        await dualLogWarn(
+          "Trip VCC verification: email had no readable HTML body, skipping",
+          { messageId: msg.id }
+        );
         continue;
       }
 
-      const toHeader = getHeaderValue(email.data, "To");
+      const text = stripHtmlToText(html);
+      const match = text.match(/verification code:\s*(\d{6})/i);
+      if (!match) {
+        await dualLogWarn(
+          "Trip VCC verification: could not find a 6-digit verification code in this email's body, skipping",
+          { messageId: msg.id, snippet }
+        );
+        continue;
+      }
+      if (matchedCodes.includes(match[1]) || unmatchedCodes.includes(match[1])) {
+        continue;
+      }
+
       const recipientMatches =
         !expectedRecipientPattern || expectedRecipientPattern.test(toHeader);
 
       if (recipientMatches) {
         await dualLogInfo(
           "Trip VCC verification: found verification code candidate (recipient matched expected masked email)",
-          { messageId: msg.id, internalDate, toHeader }
+          { messageId: msg.id, internalDate, toHeader, code: match[1] }
         );
         matchedCodes.push(match[1]);
       } else {
         await dualLogWarn(
           "Trip VCC verification: found verification code but its recipient did NOT match the masked email shown on-page — keeping as a lower-priority fallback candidate",
-          { messageId: msg.id, internalDate, toHeader }
+          { messageId: msg.id, internalDate, toHeader, code: match[1] }
         );
         unmatchedCodes.push(match[1]);
       }
