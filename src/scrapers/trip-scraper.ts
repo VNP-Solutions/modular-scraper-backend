@@ -320,7 +320,7 @@ export class TripScraper extends BaseScraper {
 
       if (process.env.NODE_ENV === "production") {
         const launchArgs = {
-          headless: true,
+          headless: false,
           stealth: true,
           humanlike: true,
           slowMo: 1000,
@@ -345,7 +345,7 @@ export class TripScraper extends BaseScraper {
         });
       } else {
         browser = await puppeteer.launch({
-          headless: true,
+          headless: false,
           defaultViewport: null,
           args: [
             "--start-maximized",
@@ -357,6 +357,34 @@ export class TripScraper extends BaseScraper {
       }
 
       const page: Page = await browser.newPage();
+
+      // Trip.com's eBooking app shows its own "Allow Notifications" card
+      // whenever `Notification.permission` is still "default" for this
+      // origin. Live-observed (2026-09-22) on the server (fresh
+      // Browserless session, no persisted permission decision — unlike a
+      // reused local Chrome profile, which is why this didn't show up
+      // locally): while it's up, the VCC settlement page's own component
+      // never mounts/fires its default queryVccOrder request at all, and
+      // clicking it away via DOM search from the main frame didn't work
+      // (repeated "dismissed" logs with zero visual change — it's likely
+      // rendered inside an iframe our page-level DOM query can't reach).
+      // Pre-granting the permission here means the page's own JS sees
+      // "granted" immediately and has no reason to render that card in
+      // the first place, which fixes the root cause instead of the
+      // symptom.
+      try {
+        await browser
+          .defaultBrowserContext()
+          .overridePermissions(new URL(TRIP_LOGIN_URL).origin, [
+            "notifications",
+          ]);
+      } catch (permError) {
+        await this.logWarn(
+          "Trip.com: failed to pre-grant the notifications permission",
+          permError
+        );
+      }
+
       await page.setDefaultNavigationTimeout(loadingTimeout);
       await page.setDefaultTimeout(selectorTimeout);
 
@@ -1005,67 +1033,85 @@ export class TripScraper extends BaseScraper {
   }
 
   /**
+   * The actual DOM search/click for the "Allow Notifications" card, run
+   * inside a single frame's context. Shared between the main frame and any
+   * same-origin iframes since the card's markup could live in either
+   * (`page.evaluate` only sees the main frame — it can't reach into
+   * iframes at all — which is the leading theory for why the main-frame-only
+   * version of this never actually removed the card on the server).
+   */
+  private static readonly findAndClickNotificationsCard = () => {
+    const heading = Array.from(document.querySelectorAll("body *")).find(
+      (el) => {
+        const text = el.textContent?.trim() || "";
+        return (
+          el.children.length === 0 &&
+          /allow notifications/i.test(text) &&
+          text.length < 60
+        );
+      }
+    );
+    if (!heading) return false;
+
+    // Walk up to find the floating card container (bounded size, not the full page/body).
+    let container: Element | null = heading;
+    for (let i = 0; i < 6 && container; i++) {
+      const parent: Element | null = container.parentElement;
+      if (!parent) break;
+      container = parent;
+      const rect = container.getBoundingClientRect();
+      if (rect.width > 200 && rect.width < 700 && rect.height > 60) {
+        break;
+      }
+    }
+    if (!container) return false;
+
+    const closeBtn = container.querySelector(
+      '[aria-label*="close" i], [class*="close" i]'
+    ) as HTMLElement | null;
+    const allowBtn = Array.from(
+      container.querySelectorAll("button, a, div, span")
+    ).find((el) => /^allow$/i.test(el.textContent?.trim() || "")) as
+      | HTMLElement
+      | undefined;
+
+    const target = closeBtn || allowBtn;
+    if (target) {
+      target.click();
+      return true;
+    }
+    return false;
+  };
+
+  /**
    * Single check-and-dismiss attempt for Trip.com's page-level "Allow
    * Notifications" card (not a native browser permission prompt — it's
-   * rendered by the page itself). Clicks its close (×) control if found,
+   * rendered by the page/an embedded widget, not by Chrome itself). Checks
+   * every frame currently attached to the page (main frame + any
+   * same-origin iframes), clicking the card's close (×) control if found,
    * else its "Allow" button (harmless either way — both just remove the
-   * card). Returns whether it found (and clicked) anything; no-ops
-   * silently (returns false) if the card isn't present.
+   * card). Returns whether it found (and clicked) anything anywhere; no-ops
+   * silently (returns false) if the card isn't present in any frame.
    */
   private async dismissNotificationPermissionPopupIfPresent(): Promise<boolean> {
     if (!this.page) return false;
-    try {
-      const dismissed = await this.page.evaluate(() => {
-        const heading = Array.from(document.querySelectorAll("body *")).find(
-          (el) => {
-            const text = el.textContent?.trim() || "";
-            return (
-              el.children.length === 0 &&
-              /allow notifications/i.test(text) &&
-              text.length < 60
-            );
-          }
+
+    let dismissedAny = false;
+    for (const frame of this.page.frames()) {
+      try {
+        const dismissed = await frame.evaluate(
+          TripScraper.findAndClickNotificationsCard
         );
-        if (!heading) return false;
-
-        // Walk up to find the floating card container (bounded size, not the full page/body).
-        let container: Element | null = heading;
-        for (let i = 0; i < 6 && container; i++) {
-          const parent: Element | null = container.parentElement;
-          if (!parent) break;
-          container = parent;
-          const rect = container.getBoundingClientRect();
-          if (rect.width > 200 && rect.width < 700 && rect.height > 60) {
-            break;
-          }
-        }
-        if (!container) return false;
-
-        const closeBtn = container.querySelector(
-          '[aria-label*="close" i], [class*="close" i]'
-        ) as HTMLElement | null;
-        const allowBtn = Array.from(
-          container.querySelectorAll("button, a, div, span")
-        ).find((el) => /^allow$/i.test(el.textContent?.trim() || "")) as
-          | HTMLElement
-          | undefined;
-
-        const target = closeBtn || allowBtn;
-        if (target) {
-          target.click();
-          return true;
-        }
-        return false;
-      });
-
-      if (dismissed) {
-        await this.logInfo('Trip.com: dismissed "Allow Notifications" popup');
+        if (dismissed) dismissedAny = true;
+      } catch {
+        // Cross-origin/detached frames throw on evaluate — skip, non-fatal.
       }
-      return dismissed;
-    } catch {
-      // Non-fatal — treat as "not present" and let the caller keep polling.
-      return false;
     }
+
+    if (dismissedAny) {
+      await this.logInfo('Trip.com: dismissed "Allow Notifications" popup');
+    }
+    return dismissedAny;
   }
 
   /**
