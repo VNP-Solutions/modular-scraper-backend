@@ -345,7 +345,7 @@ export class TripScraper extends BaseScraper {
         });
       } else {
         browser = await puppeteer.launch({
-          headless: false,
+          headless: true,
           defaultViewport: null,
           args: [
             "--start-maximized",
@@ -1005,6 +1005,70 @@ export class TripScraper extends BaseScraper {
   }
 
   /**
+   * Single check-and-dismiss attempt for Trip.com's page-level "Allow
+   * Notifications" card (not a native browser permission prompt — it's
+   * rendered by the page itself). Clicks its close (×) control if found,
+   * else its "Allow" button (harmless either way — both just remove the
+   * card). Returns whether it found (and clicked) anything; no-ops
+   * silently (returns false) if the card isn't present.
+   */
+  private async dismissNotificationPermissionPopupIfPresent(): Promise<boolean> {
+    if (!this.page) return false;
+    try {
+      const dismissed = await this.page.evaluate(() => {
+        const heading = Array.from(document.querySelectorAll("body *")).find(
+          (el) => {
+            const text = el.textContent?.trim() || "";
+            return (
+              el.children.length === 0 &&
+              /allow notifications/i.test(text) &&
+              text.length < 60
+            );
+          }
+        );
+        if (!heading) return false;
+
+        // Walk up to find the floating card container (bounded size, not the full page/body).
+        let container: Element | null = heading;
+        for (let i = 0; i < 6 && container; i++) {
+          const parent: Element | null = container.parentElement;
+          if (!parent) break;
+          container = parent;
+          const rect = container.getBoundingClientRect();
+          if (rect.width > 200 && rect.width < 700 && rect.height > 60) {
+            break;
+          }
+        }
+        if (!container) return false;
+
+        const closeBtn = container.querySelector(
+          '[aria-label*="close" i], [class*="close" i]'
+        ) as HTMLElement | null;
+        const allowBtn = Array.from(
+          container.querySelectorAll("button, a, div, span")
+        ).find((el) => /^allow$/i.test(el.textContent?.trim() || "")) as
+          | HTMLElement
+          | undefined;
+
+        const target = closeBtn || allowBtn;
+        if (target) {
+          target.click();
+          return true;
+        }
+        return false;
+      });
+
+      if (dismissed) {
+        await this.logInfo('Trip.com: dismissed "Allow Notifications" popup');
+      }
+      return dismissed;
+    } catch {
+      // Non-fatal — treat as "not present" and let the caller keep polling.
+      return false;
+    }
+  }
+
+  /**
    * Navigates to the VCC (virtual card) settlement page and captures the
    * exact `queryVccOrder` request the page fires itself, automatically, on
    * load. This app signs every request with opaque anti-bot headers
@@ -1058,12 +1122,33 @@ export class TripScraper extends BaseScraper {
       timeout: 30000,
     });
 
-    const captured = await page
-      .waitForFunction(() => (window as any).__capturedVccRequest !== null, {
-        timeout: 15000,
-      })
-      .then(() => page.evaluate(() => (window as any).__capturedVccRequest))
-      .catch(() => null);
+    // Trip.com shows a page-level (non-native) "Allow Notifications" card on
+    // top of this page for accounts/sessions that haven't dismissed it yet.
+    // Live-observed (2026-09-21): while it's up, the settlement page's own
+    // component underneath never mounts/fires its default queryVccOrder
+    // request at all — the capture below then times out with nothing to
+    // show. It can render at any point relative to `networkidle2` resolving,
+    // so check for (and dismiss) it on every poll tick below, right
+    // alongside checking for the capture itself, rather than just once
+    // upfront.
+    const captureTimeoutMs = 15000;
+    const pollIntervalMs = 500;
+    const captureStartedAt = Date.now();
+    let captured: {
+      url: string;
+      headers: Record<string, string>;
+      body: string;
+    } | null = null;
+
+    while (Date.now() - captureStartedAt < captureTimeoutMs) {
+      captured = await page
+        .evaluate(() => (window as any).__capturedVccRequest)
+        .catch(() => null);
+      if (captured) break;
+
+      await this.dismissNotificationPermissionPopupIfPresent();
+      await delay(pollIntervalMs);
+    }
 
     if (!captured) {
       await this.takeScreenshot("trip-vcc-request-not-captured");
