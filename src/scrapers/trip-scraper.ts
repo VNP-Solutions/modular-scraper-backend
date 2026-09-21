@@ -320,7 +320,7 @@ export class TripScraper extends BaseScraper {
 
       if (process.env.NODE_ENV === "production") {
         const launchArgs = {
-          headless: true,
+          headless: false,
           stealth: true,
           humanlike: true,
           slowMo: 1000,
@@ -345,7 +345,7 @@ export class TripScraper extends BaseScraper {
         });
       } else {
         browser = await puppeteer.launch({
-          headless: true,
+          headless: false,
           defaultViewport: null,
           args: [
             "--start-maximized",
