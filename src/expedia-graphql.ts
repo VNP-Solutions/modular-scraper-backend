@@ -1240,7 +1240,7 @@ async function saveGraphQLReservationToDatabase(
         ),
         cancellation_fee: 0, // Not available in current response structure
         total_payout: parseAmount(
-          reservationItem.totalAmounts.propertyBookingTotal,
+          reservationItem.totalAmounts.totalAmountForPartners,
         ),
         amount_to_charge_or_refund: amountToChargeOrRefund,
         amount_to_charge_or_refund_currency: amountToChargeOrRefundCurrency,
