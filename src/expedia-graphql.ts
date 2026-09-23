@@ -34,22 +34,13 @@ import { timeManager } from "./common/time-manager.js";
 import { getNextDateFromCompleted } from "./date-split/helper.js";
 import login from "./login/login.js";
 import { CardInfo, PaymentInfo } from "./models/job-item.model.js";
-import {
-  Authorization as CardActivityAuthorization,
-  MoneyAmount as CardActivityMoney,
-  Settlement as CardActivitySettlement,
-} from "./models/card-activity.model.js";
 import { JobStatus } from "./models/job.model.js";
 import handleOtpVerification from "./otp-verification/otp-verification.js";
+import { CreateJobItemData, jobService } from "./services/job.service.js";
 import {
-  CreateCardActivityData,
-  CreateJobItemData,
-  jobService,
-} from "./services/job.service.js";
-import {
-  EngineTransactionInput,
-  runEngine,
-} from "./common/vcc-balance-engine.js";
+  buildCardActivityFromEvc,
+  computeBalanceEngineFieldsForItem,
+} from "./common/vcc-balance-engine-input.js";
 
 dotenv.config();
 
@@ -938,205 +929,6 @@ async function makeGraphQLRequest(
 }
 
 /**
- * Parse a date-like value (ISO, "YYYY-MM-DD HH:mm:ss.SSS", etc.) to a Date,
- * returning undefined when input is empty/invalid.
- */
-function parseCardActivityDate(value: any): Date | undefined {
-  if (!value) return undefined;
-  const d = new Date(value);
-  return isNaN(d.getTime()) ? undefined : d;
-}
-
-function parseMoneyAmount(raw: any): CardActivityMoney | undefined {
-  if (!raw || typeof raw !== "object") return undefined;
-  const amount =
-    typeof raw.amount === "number"
-      ? raw.amount
-      : raw.amount !== undefined && raw.amount !== null
-      ? parseFloat(raw.amount)
-      : undefined;
-  const currency =
-    typeof raw.currency === "string" ? raw.currency : undefined;
-  if ((amount === undefined || isNaN(amount)) && !currency) return undefined;
-  return {
-    amount: amount !== undefined && !isNaN(amount) ? amount : undefined,
-    currency,
-  };
-}
-
-/**
- * Normalize the `cardActivity` block from an EVC response into the shape
- * expected by the CardActivity model.
- */
-function buildCardActivityFromEvc(
-  evcCardData: any | null,
-): CreateCardActivityData | null {
-  const ca = evcCardData?.cardActivity;
-  if (!ca) return null;
-
-  console.log(`🔍 Card Activity:`, ca);
-  const totalSettlementAmount = parseMoneyAmount(ca.totalSettlementAmount);
-
-  const authorizations: CardActivityAuthorization[] = Array.isArray(
-    ca.authorizations,
-  )
-    ? ca.authorizations.map((a: any) => ({
-        dateTime: parseCardActivityDate(a?.dateTime),
-        status: a?.status ?? undefined,
-        authCode: a?.authCode ?? null,
-        declineCode: a?.declineCode ?? null,
-        responseDescription:
-          a?.responseDescription ?? a?.responseDecription ?? null,
-        amount: parseMoneyAmount(a?.amount),
-      }))
-    : [];
-
-  // `settlements` carries the actual posted/settled money movement for a
-  // prior authorization (matched by `authCode`) — this is where the real
-  // "Posted Date" lives. `authorizations` alone only ever represent a hold.
-  const settlements: CardActivitySettlement[] = Array.isArray(ca.settlements)
-    ? ca.settlements.map((s: any) => ({
-        transactionDate: parseCardActivityDate(s?.transactionDate),
-        postDate: parseCardActivityDate(s?.postDate),
-        authCode: s?.authCode ?? null,
-        referenceNumber: s?.referenceNumber ?? null,
-        amount: parseMoneyAmount(s?.amount),
-      }))
-    : [];
-
-  const hasAny =
-    !!totalSettlementAmount || authorizations.length > 0 || settlements.length > 0;
-  if (!hasAny) return null;
-
-  return {
-    totalSettlementAmount,
-    authorizations,
-    settlements,
-  };
-}
-
-/** Format a Date as "DD/MM/YYYY" — the format the VCC balance engine expects for
- * transaction dates (see EngineTransactionInput in vcc-balance-engine.ts). Returns
- * "NA" when there's no date, so the engine treats it as a placeholder, not a real one. */
-function formatDateForEngine(date: Date | undefined | null): string {
-  if (!date || isNaN(date.getTime())) return "NA";
-  const day = String(date.getDate()).padStart(2, "0");
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const year = date.getFullYear();
-  return `${day}/${month}/${year}`;
-}
-
-/**
- * Turn a CardActivity's `authorizations` (holds only, never posted) and
- * `settlements` (the actual posted/settled money movement) into the flat
- * `transactions[]` shape the VCC balance engine expects.
- *
- * Deliberately NOT paired/merged by `authCode` here — each authorization and
- * each settlement is sent through as its own independent transaction block,
- * exactly as scraped. The engine's own duplicate-detection
- * (`buildTransactionSignature` / `classifyTransactions`) is responsible for
- * deciding whether any two blocks represent the same real-world event; this
- * function does no such judgment call itself.
- *
- * Note: when an authorization later settles, its settlement's `authCode` and
- * `amount` are usually identical, and `transactionDate` usually falls on the
- * same calendar day as the authorization's `dateTime` — in that (common)
- * case the engine's signature-based dedup will treat the settlement as a
- * duplicate of the authorization and ignore it (transactionCode 0), leaving
- * only the authorization's hold (transactionCode 2) counted. That's the
- * engine's own logic taking over, per design — not something this function
- * tries to prevent or work around.
- */
-function buildEngineTransactions(
-  cardActivity: CreateCardActivityData | null,
-): EngineTransactionInput[] {
-  if (!cardActivity) return [];
-
-  const authorizations = cardActivity.authorizations || [];
-  const settlements = cardActivity.settlements || [];
-
-  const transactions: EngineTransactionInput[] = [];
-
-  for (const auth of authorizations) {
-    transactions.push({
-      authDate: formatDateForEngine(auth.dateTime),
-      postedDate: "NA", // authorizations never carry their own posted/settled date
-      authCode: auth.authCode || "",
-      amount: auth.amount?.amount ?? null,
-      status: auth.status || "NA",
-    });
-  }
-
-  for (const settlement of settlements) {
-    transactions.push({
-      authDate: formatDateForEngine(settlement.transactionDate),
-      postedDate: formatDateForEngine(settlement.postDate),
-      authCode: settlement.authCode || "",
-      amount: settlement.amount?.amount ?? null,
-      status: "Approved", // settlements only ever exist for money that was approved & posted
-    });
-  }
-
-  return transactions;
-}
-
-/**
- * Run the VCC Remaining Balance Engine for one item right after its card
- * activity has been scraped/normalized, and map the result onto the flat
- * field names stored on JobItem. Returns an empty object (no-op) when the
- * engine can't produce a result, so callers can safely spread this into
- * their jobItemData without extra null checks.
- */
-function computeBalanceEngineFieldsForItem(params: {
-  reservationId: string;
-  checkInDate: Date;
-  checkOutDate: Date;
-  bookingAmount: number;
-  remainingBalance: number | null;
-  cardActivity: CreateCardActivityData | null;
-}): Partial<CreateJobItemData> {
-  const { reservationId, checkInDate, checkOutDate, bookingAmount, remainingBalance, cardActivity } =
-    params;
-
-  try {
-    const transactions = buildEngineTransactions(cardActivity);
-
-    const result = runEngine({
-      reservationId,
-      check_in_date: checkInDate,
-      check_out_date: checkOutDate,
-      remainingBalance,
-      bookingAmount,
-      transactions,
-    });
-
-    if (!result) return {};
-
-    return {
-      activityRows: result.activityRows,
-      postedCharges: result.postedCharges,
-      postedRefunds: result.postedRefunds,
-      netCollected: result.netCollected,
-      impliedCardLimit: result.impliedCardLimit,
-      stillOwed: result.stillOwed,
-      safeToChargeNow: result.safeToChargeNow,
-      phantomBalance: result.phantomBalance,
-      owedButNotOnCard: result.owedButNotOnCard,
-      verdict: result.verdict,
-      redFlags: result.redFlags,
-      timesDeclinedAtThisAmount: result.timesDeclinedAtThisAmount,
-      recommendedAction: result.recommendedAction,
-    };
-  } catch (engineError: any) {
-    console.error(
-      `❌ VCC balance engine failed for reservation ${reservationId}:`,
-      engineError?.message || engineError,
-    );
-    return {};
-  }
-}
-
-/**
  * Helper function to save GraphQL reservation data to database
  */
 async function saveGraphQLReservationToDatabase(
@@ -1273,6 +1065,14 @@ async function saveGraphQLReservationToDatabase(
     const parsedCheckInDate = parseDate(checkInDate);
     const parsedCheckOutDate = parseDate(checkOutDate);
 
+    // The virtual card is funded with the property payout, not the guest's
+    // total, so the engine's "booking amount" is payment_info.total_payout.
+    // null (not 0) when Expedia didn't send it, so the engine flags R7 REVIEW.
+    const engineBookingAmount: number | null =
+      paymentData && reservationItem.totalAmounts?.totalAmountForPartners
+        ? paymentData.total_payout ?? null
+        : null;
+
     // Run the VCC Remaining Balance Engine for this single item right now —
     // after its card activity has been scraped/normalized above, and before
     // this item is saved (the caller's loop then moves on to the next item).
@@ -1280,7 +1080,7 @@ async function saveGraphQLReservationToDatabase(
       reservationId,
       checkInDate: parsedCheckInDate,
       checkOutDate: parsedCheckOutDate,
-      bookingAmount,
+      bookingAmount: engineBookingAmount,
       remainingBalance,
       cardActivity: cardActivityData,
     });

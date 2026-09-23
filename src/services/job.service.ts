@@ -776,6 +776,27 @@ export class JobService {
   }
 
   /**
+   * Write VCC balance engine output onto every job item with this reservation
+   * ID (scoped to one job when jobId is given, since reservation_id is only
+   * unique per job).
+   */
+  async updateJobItemsBalanceEngineFields(
+    reservationId: string,
+    fields: BalanceEngineData,
+    jobId?: string,
+  ): Promise<{ matchedCount: number; modifiedCount: number; items: IJobItem[] }> {
+    const filter: Record<string, unknown> = { reservation_id: reservationId };
+    if (jobId) filter.job_id = this.validateObjectId(jobId, "jobId");
+
+    const { matchedCount, modifiedCount } = await JobItem.updateMany(filter, {
+      $set: fields,
+    });
+    const items = await JobItem.find(filter).lean<IJobItem[]>();
+
+    return { matchedCount, modifiedCount, items };
+  }
+
+  /**
    * Create multiple job items in batch
    */
   async createJobItemsBatch(

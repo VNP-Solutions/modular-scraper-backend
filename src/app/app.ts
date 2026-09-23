@@ -8,6 +8,10 @@ import { progressManager } from "../common/progress-manager.js";
 import { scrapingStateManager } from "../common/scraping-state.js";
 import { brightDataFieldsForExpediaJob } from "../common/job-isolation.js";
 import { WorkerJobData } from "../common/worker-types.js";
+import {
+  buildCardActivityFromEvc,
+  runBalanceEngineForItem,
+} from "../common/vcc-balance-engine-input.js";
 import { specs, swaggerUi } from "../config/swagger.js";
 import { getAccess, getOauth2Callback } from "../get-access/access.js";
 import { JobStatus } from "../models/job.model.js";
@@ -2990,6 +2994,110 @@ app.post("/api/agoda/rerun-failed-job", (async (
     res.status(500).json({
       status: 500,
       message: "Error processing Agoda job rerun",
+      error: err.message,
+    });
+  }
+}) as any);
+
+/**
+ * @swagger
+ * /api/vcc-balance-engine/run:
+ *   post:
+ *     tags:
+ *       - VCC Balance Engine
+ *     summary: Run the VCC balance engine for one reservation and save the result
+ *     description: >
+ *       Runs the same mapping + engine the Expedia GraphQL scraper uses, then
+ *       writes the output fields onto every job item with this reservation ID
+ *       (only within jobId, if given).
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [reservationId, checkInDate, checkOutDate]
+ *             properties:
+ *               reservationId: { type: string, example: "2452577992" }
+ *               jobId: { type: string, description: "Optional — limit the update to this job" }
+ *               checkInDate: { type: string, example: "2026-05-19T00:00:00.000Z" }
+ *               checkOutDate: { type: string, example: "2026-05-22T00:00:00.000Z" }
+ *               bookingAmount: { type: number, nullable: true, description: "payment_info.total_payout", example: 248.19 }
+ *               remainingBalance: { type: number, nullable: true, example: 0 }
+ *               cardActivity:
+ *                 type: object
+ *                 properties:
+ *                   authorizations: { type: array, items: { type: object } }
+ *                   settlements: { type: array, items: { type: object } }
+ *     responses:
+ *       200:
+ *         description: Engine ran and matching job items were updated
+ *       400:
+ *         description: Missing/invalid input
+ *       404:
+ *         description: No job item found for this reservation ID (result is still returned)
+ */
+app.post("/api/vcc-balance-engine/run", (async (
+  req: express.Request,
+  res: express.Response
+) => {
+  try {
+    const {
+      reservationId,
+      jobId,
+      checkInDate,
+      checkOutDate,
+      bookingAmount = null,
+      remainingBalance = null,
+      cardActivity = null,
+    } = req.body || {};
+
+    if (!reservationId || typeof reservationId !== "string") {
+      return res.status(400).json({ status: 400, message: "reservationId (string) is required" });
+    }
+
+    const parsedCheckIn = new Date(checkInDate);
+    const parsedCheckOut = new Date(checkOutDate);
+    if (isNaN(parsedCheckIn.getTime()) || isNaN(parsedCheckOut.getTime())) {
+      return res.status(400).json({
+        status: 400,
+        message: "checkInDate and checkOutDate must be valid dates (e.g. 2026-05-22T00:00:00.000Z)",
+      });
+    }
+
+    const { transactions, result, fields } = runBalanceEngineForItem({
+      reservationId,
+      checkInDate: parsedCheckIn,
+      checkOutDate: parsedCheckOut,
+      bookingAmount,
+      remainingBalance,
+      cardActivity: buildCardActivityFromEvc({ cardActivity }),
+    });
+
+    const update = await jobService.updateJobItemsBalanceEngineFields(
+      reservationId,
+      fields,
+      jobId
+    );
+
+    const found = update.matchedCount > 0;
+    return res.status(found ? 200 : 404).json({
+      status: found ? 200 : 404,
+      message: found
+        ? `Engine ran; updated ${update.modifiedCount} of ${update.matchedCount} job item(s)`
+        : "Engine ran, but no job item matched this reservationId — nothing was saved",
+      transactions,
+      engineResult: result,
+      savedFields: fields,
+      matchedCount: update.matchedCount,
+      modifiedCount: update.modifiedCount,
+      items: update.items,
+    });
+  } catch (err: any) {
+    console.error("Error in /api/vcc-balance-engine/run:", err);
+    res.status(500).json({
+      status: 500,
+      message: "Error running VCC balance engine",
       error: err.message,
     });
   }
