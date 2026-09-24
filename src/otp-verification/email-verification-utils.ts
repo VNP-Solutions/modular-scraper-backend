@@ -17,6 +17,24 @@ const OTP_EMAIL_FROM_RFITSMS = "rfitsms@gmail.com";
 const OTP_EMAIL_TO_ITSUPPORT = "itsupport@vnpsolutions.com";
 /** Fallback Booking.com OTP template, used after the SMS-forwarded template fails twice. */
 const BOOKING_OTP_EMAIL_FROM_EPCHOTELS = "verify@epchotels.com";
+/** Booking OTP emails older than this are ignored to avoid picking up stale codes. */
+export const BOOKING_OTP_EMAIL_MAX_AGE_MS = 2 * 60 * 1000;
+
+export function bookingOtpEmailWindowStart(): number {
+  return Date.now() - BOOKING_OTP_EMAIL_MAX_AGE_MS;
+}
+
+/** Gmail `after:` only has second precision, so received time is re-checked per message. */
+function withReceivedAfter(query: string, receivedAfterMs: number): string {
+  return `(${query}) after:${Math.floor(receivedAfterMs / 1000)}`;
+}
+
+function isReceivedAfter(
+  internalDate: string | null | undefined,
+  receivedAfterMs: number
+): boolean {
+  return Number(internalDate || 0) >= receivedAfterMs;
+}
 
 /** Parsed SMS-forwarded email (e.g. PORT 9 SMS / IFTTT). We match only by slot (from header or Receiver). */
 export interface ParsedOtpEmail {
@@ -241,19 +259,29 @@ export async function getVerificationCode(jobId?: string): Promise<string | null
  * Get last 5 verification codes for Booking.com.
  * Tries the SMS-forwarded template (IFTTT / rfitsms) up to `smsAttempts` times;
  * if every attempt comes back empty, falls back to the epchotels template.
+ * Only emails received after `receivedAfterMs` (default: last 2 minutes) are used.
  */
 export async function getBookingVerificationCodes(
   jobId?: string,
-  options: { smsAttempts?: number; retryDelayMs?: number } = {}
+  options: {
+    smsAttempts?: number;
+    retryDelayMs?: number;
+    receivedAfterMs?: number;
+  } = {}
 ): Promise<string[]> {
   const smsAttempts = options.smsAttempts ?? 2;
   const retryDelayMs = options.retryDelayMs ?? 15000;
+  const receivedAfterMs = options.receivedAfterMs ?? bookingOtpEmailWindowStart();
   const preferNoSlot =
     Boolean(jobId) && getBookingOtpShouldUseNoSlotEmail(jobId);
 
   try {
     for (let attempt = 1; attempt <= smsAttempts; attempt++) {
-      const codes = await getBookingSmsForwardedCodes(jobId, preferNoSlot);
+      const codes = await getBookingSmsForwardedCodes(
+        jobId,
+        preferNoSlot,
+        receivedAfterMs
+      );
       if (codes.length > 0) return codes;
 
       await dualLogInfo(
@@ -267,7 +295,7 @@ export async function getBookingVerificationCodes(
     await dualLogInfo(
       `Booking OTP: falling back to ${BOOKING_OTP_EMAIL_FROM_EPCHOTELS} email template`
     );
-    return await getBookingEpcHotelsVerificationCodes();
+    return await getBookingEpcHotelsVerificationCodes(receivedAfterMs);
   } finally {
     if (jobId && preferNoSlot) {
       clearBookingOtpUseNoSlotEmailForJob(jobId);
@@ -279,7 +307,9 @@ export async function getBookingVerificationCodes(
  * Booking.com codes from the epchotels template:
  * From/To verify@epchotels.com, Subject "Extranet code: 248295 (don't share)".
  */
-export async function getBookingEpcHotelsVerificationCodes(): Promise<string[]> {
+export async function getBookingEpcHotelsVerificationCodes(
+  receivedAfterMs: number = bookingOtpEmailWindowStart()
+): Promise<string[]> {
   try {
     const credentialsLoaded = await loadCredentials();
     if (!credentialsLoaded) {
@@ -292,11 +322,18 @@ export async function getBookingEpcHotelsVerificationCodes(): Promise<string[]> 
     const res = await gmail.users.messages.list({
       userId: "me",
       maxResults: 20,
-      q: `from:${BOOKING_OTP_EMAIL_FROM_EPCHOTELS}`,
+      q: withReceivedAfter(
+        `from:${BOOKING_OTP_EMAIL_FROM_EPCHOTELS}`,
+        receivedAfterMs
+      ),
     });
 
     if (!res.data.messages || res.data.messages.length === 0) {
-      await dualLogInfo(`No ${BOOKING_OTP_EMAIL_FROM_EPCHOTELS} emails found.`);
+      await dualLogInfo(
+        `No ${BOOKING_OTP_EMAIL_FROM_EPCHOTELS} emails found in the last ${
+          BOOKING_OTP_EMAIL_MAX_AGE_MS / 60000
+        } minutes.`
+      );
       return [];
     }
 
@@ -313,6 +350,8 @@ export async function getBookingEpcHotelsVerificationCodes(): Promise<string[]> 
         id: msg.id,
         format: "full",
       });
+
+      if (!isReceivedAfter(email.data.internalDate, receivedAfterMs)) continue;
 
       const headers = email.data.payload?.headers || [];
       const fromHeader = (
@@ -350,7 +389,8 @@ export async function getBookingEpcHotelsVerificationCodes(): Promise<string[]> 
  */
 async function getBookingSmsForwardedCodes(
   jobId: string | undefined,
-  preferNoSlot: boolean
+  preferNoSlot: boolean,
+  receivedAfterMs: number
 ): Promise<string[]> {
   try {
     const credentialsLoaded = await loadCredentials();
@@ -376,11 +416,11 @@ async function getBookingSmsForwardedCodes(
       const res = await gmail.users.messages.list({
         userId: "me",
         maxResults: 20,
-        q: "from:action@ifttt.com",
+        q: withReceivedAfter("from:action@ifttt.com", receivedAfterMs),
       });
 
       if (!res.data.messages || res.data.messages.length === 0) {
-        await dualLogInfo("No IFTTT emails found.");
+        await dualLogInfo("No IFTTT emails found in the last 2 minutes.");
         return [];
       }
 
@@ -395,6 +435,8 @@ async function getBookingSmsForwardedCodes(
           id: msg.id,
           format: "full",
         });
+
+        if (!isReceivedAfter(email.data.internalDate, receivedAfterMs)) continue;
 
         const headers = email.data.payload?.headers || [];
         const subjectHeader = headers.find((h: any) => h.name === "Subject");
@@ -424,11 +466,11 @@ async function getBookingSmsForwardedCodes(
     const res = await gmail.users.messages.list({
       userId: "me",
       maxResults: 20,
-      q: listQuery,
+      q: withReceivedAfter(listQuery, receivedAfterMs),
     });
 
     if (!res.data.messages || res.data.messages.length === 0) {
-      await dualLogInfo("No OTP emails found (IFTTT or rfitsms).");
+      await dualLogInfo("No OTP emails found (IFTTT or rfitsms) in the last 2 minutes.");
       return [];
     }
 
@@ -443,6 +485,8 @@ async function getBookingSmsForwardedCodes(
         id: msg.id,
         format: "full",
       });
+
+      if (!isReceivedAfter(email.data.internalDate, receivedAfterMs)) continue;
 
       const headers = email.data.payload?.headers || [];
       if (!otpEmailMatchesFromTo(headers)) continue;

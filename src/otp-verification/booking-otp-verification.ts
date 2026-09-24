@@ -24,6 +24,7 @@ import {
   setBookingOtpUseNoSlotEmailForJob,
 } from "../common/job-phone-store.js";
 import {
+  bookingOtpEmailWindowStart,
   getBookingEpcHotelsVerificationCodes,
   getBookingVerificationCodes,
 } from "./email-verification-utils.js";
@@ -982,8 +983,11 @@ async function handleBookingOtpVerification(
     await dualLogInfo("Waiting 1 minute for verification email...");
     await delay(60000); // Wait 1 minute for email to arrive
 
-    // Get last 5 verification codes
-    const codes = await getBookingVerificationCodes(jobId);
+    // Get last 5 verification codes (only emails from the last 2 minutes)
+    const emailWindowStart = bookingOtpEmailWindowStart();
+    const codes = await getBookingVerificationCodes(jobId, {
+      receivedAfterMs: emailWindowStart,
+    });
     if (!codes || codes.length === 0) {
       const error = new Error("Failed to get verification codes from email");
       setFailedReasonCode(error, FAILED_REASON.BOOKING_OTP_CODE_NOT_FOUND);
@@ -1030,7 +1034,9 @@ async function handleBookingOtpVerification(
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       if (attempt === 2) {
-        const epcCodes = (await getBookingEpcHotelsVerificationCodes()).filter(
+        const epcCodes = (
+          await getBookingEpcHotelsVerificationCodes(emailWindowStart)
+        ).filter(
           (c) => !triedCodes.includes(c)
         );
         if (epcCodes.length > 0) {
