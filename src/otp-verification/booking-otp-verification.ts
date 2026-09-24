@@ -23,7 +23,10 @@ import {
   getOurContactFromEnv,
   setBookingOtpUseNoSlotEmailForJob,
 } from "../common/job-phone-store.js";
-import { getBookingVerificationCodes } from "./email-verification-utils.js";
+import {
+  getBookingEpcHotelsVerificationCodes,
+  getBookingVerificationCodes,
+} from "./email-verification-utils.js";
 import {
   getTimeoutConfig,
   initializeStateManager,
@@ -1019,12 +1022,28 @@ async function handleBookingOtpVerification(
     );
 
     // Try up to 3 codes (1st, 2nd, 3rd)
-    const maxAttempts = Math.min(3, codes.length);
+    const maxAttempts = 3;
+    const triedCodes: string[] = [];
+    let pendingCodes = [...codes];
     let otpSuccess = false;
     let navDetected = false;
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      const code = codes[attempt];
+      if (attempt === 2) {
+        const epcCodes = (await getBookingEpcHotelsVerificationCodes()).filter(
+          (c) => !triedCodes.includes(c)
+        );
+        if (epcCodes.length > 0) {
+          await dualLogInfo(
+            "Previous template codes failed 2 times; switching to epchotels email template"
+          );
+          pendingCodes = epcCodes;
+        }
+      }
+
+      const code = pendingCodes.shift();
+      if (!code) break;
+      triedCodes.push(code);
       await dualLogInfo(
         `Attempt ${attempt + 1}/${maxAttempts}: Trying OTP ${code}`
       );

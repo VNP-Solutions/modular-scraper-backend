@@ -15,6 +15,8 @@ dotenv.config();
 const OTP_EMAIL_FROM_IFTTT = "action@ifttt.com";
 const OTP_EMAIL_FROM_RFITSMS = "rfitsms@gmail.com";
 const OTP_EMAIL_TO_ITSUPPORT = "itsupport@vnpsolutions.com";
+/** Fallback Booking.com OTP template, used after the SMS-forwarded template fails twice. */
+const BOOKING_OTP_EMAIL_FROM_EPCHOTELS = "verify@epchotels.com";
 
 /** Parsed SMS-forwarded email (e.g. PORT 9 SMS / IFTTT). We match only by slot (from header or Receiver). */
 export interface ParsedOtpEmail {
@@ -237,11 +239,47 @@ export async function getVerificationCode(jobId?: string): Promise<string | null
 
 /**
  * Get last 5 verification codes for Booking.com.
- * - Single phone (no port): OLD behaviour from before e329dfc – IFTTT only, no slot/From/To filter.
- * - Multi-phone with port: NEW behaviour – filter by From/To and slot (PORT X / Receiver).
+ * Tries the SMS-forwarded template (IFTTT / rfitsms) up to `smsAttempts` times;
+ * if every attempt comes back empty, falls back to the epchotels template.
  */
-export async function getBookingVerificationCodes(jobId?: string): Promise<string[]> {
-  let clearNoSlotOverride = false;
+export async function getBookingVerificationCodes(
+  jobId?: string,
+  options: { smsAttempts?: number; retryDelayMs?: number } = {}
+): Promise<string[]> {
+  const smsAttempts = options.smsAttempts ?? 2;
+  const retryDelayMs = options.retryDelayMs ?? 15000;
+  const preferNoSlot =
+    Boolean(jobId) && getBookingOtpShouldUseNoSlotEmail(jobId);
+
+  try {
+    for (let attempt = 1; attempt <= smsAttempts; attempt++) {
+      const codes = await getBookingSmsForwardedCodes(jobId, preferNoSlot);
+      if (codes.length > 0) return codes;
+
+      await dualLogInfo(
+        `Booking OTP: SMS-forwarded email template returned no codes (attempt ${attempt}/${smsAttempts})`
+      );
+      if (attempt < smsAttempts) {
+        await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+      }
+    }
+
+    await dualLogInfo(
+      `Booking OTP: falling back to ${BOOKING_OTP_EMAIL_FROM_EPCHOTELS} email template`
+    );
+    return await getBookingEpcHotelsVerificationCodes();
+  } finally {
+    if (jobId && preferNoSlot) {
+      clearBookingOtpUseNoSlotEmailForJob(jobId);
+    }
+  }
+}
+
+/**
+ * Booking.com codes from the epchotels template:
+ * From/To verify@epchotels.com, Subject "Extranet code: 248295 (don't share)".
+ */
+export async function getBookingEpcHotelsVerificationCodes(): Promise<string[]> {
   try {
     const credentialsLoaded = await loadCredentials();
     if (!credentialsLoaded) {
@@ -250,10 +288,79 @@ export async function getBookingVerificationCodes(jobId?: string): Promise<strin
       );
     }
 
-    const preferNoSlot =
-      Boolean(jobId) && getBookingOtpShouldUseNoSlotEmail(jobId);
+    const gmail = google.gmail({ version: "v1", auth: oauth2Client });
+    const res = await gmail.users.messages.list({
+      userId: "me",
+      maxResults: 20,
+      q: `from:${BOOKING_OTP_EMAIL_FROM_EPCHOTELS}`,
+    });
+
+    if (!res.data.messages || res.data.messages.length === 0) {
+      await dualLogInfo(`No ${BOOKING_OTP_EMAIL_FROM_EPCHOTELS} emails found.`);
+      return [];
+    }
+
+    await dualLogInfo(
+      `Found ${res.data.messages.length} ${BOOKING_OTP_EMAIL_FROM_EPCHOTELS} emails`
+    );
+
+    const codes: string[] = [];
+    for (const msg of res.data.messages) {
+      if (!msg.id || codes.length >= 5) break;
+
+      const email = await gmail.users.messages.get({
+        userId: "me",
+        id: msg.id,
+        format: "full",
+      });
+
+      const headers = email.data.payload?.headers || [];
+      const fromHeader = (
+        headers.find((h) => (h.name || "").toLowerCase() === "from")?.value || ""
+      ).toLowerCase();
+      if (!fromHeader.includes(BOOKING_OTP_EMAIL_FROM_EPCHOTELS)) continue;
+
+      const subject =
+        headers.find((h) => (h.name || "").toLowerCase() === "subject")?.value || "";
+      const bodyText = getEmailBodyText(email.data) || email.data.snippet || "";
+      const match = `${subject} ${bodyText}`.match(
+        /Extranet\s+code:\s*(\d{6})/i
+      );
+      if (match && match[1] && !codes.includes(match[1])) {
+        codes.push(match[1]);
+        await dualLogInfo(`Found verification code (epchotels): ${match[1]}`);
+      }
+    }
+
+    await dualLogInfo(
+      `Total epchotels verification codes found: ${codes.length}`,
+      codes
+    );
+    return codes;
+  } catch (error: any) {
+    await dualLogError("Error fetching epchotels verification codes:", error.message);
+    return [];
+  }
+}
+
+/**
+ * SMS-forwarded template (IFTTT / rfitsms).
+ * - Single phone (no port): OLD behaviour from before e329dfc – IFTTT only, no slot/From/To filter.
+ * - Multi-phone with port: NEW behaviour – filter by From/To and slot (PORT X / Receiver).
+ */
+async function getBookingSmsForwardedCodes(
+  jobId: string | undefined,
+  preferNoSlot: boolean
+): Promise<string[]> {
+  try {
+    const credentialsLoaded = await loadCredentials();
+    if (!credentialsLoaded) {
+      throw new Error(
+        "Failed to load Gmail credentials. Please complete authentication setup first."
+      );
+    }
+
     if (preferNoSlot) {
-      clearNoSlotOverride = true;
       await dualLogInfo(
         `Booking OTP: using no-slot IFTTT email flow (SMS via OUR_CONTACT UI) for job ${jobId}`
       );
@@ -360,10 +467,6 @@ export async function getBookingVerificationCodes(jobId?: string): Promise<strin
   } catch (error: any) {
     await dualLogError("Error fetching verification codes:", error.message);
     return [];
-  } finally {
-    if (jobId && clearNoSlotOverride) {
-      clearBookingOtpUseNoSlotEmailForJob(jobId);
-    }
   }
 }
 
