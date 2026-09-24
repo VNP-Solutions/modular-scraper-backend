@@ -264,7 +264,8 @@ export async function getVerificationCode(jobId?: string): Promise<string | null
  * - SMS-forwarded (IFTTT / rfitsms), Subject/body "Extranet code: XXXXXX" or "PIN code: XXXXXX".
  *   - Single phone (no port): IFTTT only, no slot/From/To filter.
  *   - Multi-phone with port: filter by From/To and slot (PORT X / Receiver).
- * - epchotels: From/To verify@epchotels.com, Subject "Extranet code: 248295 (don't share)".
+ * - epchotels: From/To verify@epchotels.com, Subject "Extranet code: 248295 (don't share)"
+ *   or "PIN code: 708615".
  */
 export async function getBookingVerificationCodes(
   jobId?: string,
@@ -340,7 +341,7 @@ export async function getBookingVerificationCodes(
       let code: string | undefined;
       let template = "";
       if (fromHeader.includes(BOOKING_OTP_EMAIL_FROM_EPCHOTELS)) {
-        code = searchText.match(/Extranet\s+code:\s*(\d{6})/i)?.[1];
+        code = searchText.match(/(?:Extranet|PIN)\s+code:\s*(\d{6})/i)?.[1];
         template = "epchotels";
       } else if (usePortFlow) {
         if (!otpEmailMatchesFromTo(headers)) continue;
