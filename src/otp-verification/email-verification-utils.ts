@@ -15,7 +15,7 @@ dotenv.config();
 const OTP_EMAIL_FROM_IFTTT = "action@ifttt.com";
 const OTP_EMAIL_FROM_RFITSMS = "rfitsms@gmail.com";
 const OTP_EMAIL_TO_ITSUPPORT = "itsupport@vnpsolutions.com";
-/** Fallback Booking.com OTP template, used after the SMS-forwarded template fails twice. */
+/** Booking.com OTP email template sent directly (not SMS-forwarded). */
 const BOOKING_OTP_EMAIL_FROM_EPCHOTELS = "verify@epchotels.com";
 /** Booking OTP emails older than this are ignored to avoid picking up stale codes. */
 export const BOOKING_OTP_EMAIL_MAX_AGE_MS = 2 * 60 * 1000;
@@ -256,142 +256,24 @@ export async function getVerificationCode(jobId?: string): Promise<string | null
 }
 
 /**
- * Get last 5 verification codes for Booking.com.
- * Tries the SMS-forwarded template (IFTTT / rfitsms) up to `smsAttempts` times;
- * if every attempt comes back empty, falls back to the epchotels template.
- * Only emails received after `receivedAfterMs` (default: last 2 minutes) are used.
+ * Get up to 5 Booking.com verification codes, newest first.
+ * All OTP email templates are checked in a single pass; only emails received
+ * after `receivedAfterMs` (default: last 2 minutes) are used.
+ *
+ * Templates:
+ * - SMS-forwarded (IFTTT / rfitsms), Subject/body "Extranet code: XXXXXX" or "PIN code: XXXXXX".
+ *   - Single phone (no port): IFTTT only, no slot/From/To filter.
+ *   - Multi-phone with port: filter by From/To and slot (PORT X / Receiver).
+ * - epchotels: From/To verify@epchotels.com, Subject "Extranet code: 248295 (don't share)".
  */
 export async function getBookingVerificationCodes(
   jobId?: string,
-  options: {
-    smsAttempts?: number;
-    retryDelayMs?: number;
-    receivedAfterMs?: number;
-  } = {}
+  options: { receivedAfterMs?: number } = {}
 ): Promise<string[]> {
-  const smsAttempts = options.smsAttempts ?? 2;
-  const retryDelayMs = options.retryDelayMs ?? 15000;
   const receivedAfterMs = options.receivedAfterMs ?? bookingOtpEmailWindowStart();
   const preferNoSlot =
     Boolean(jobId) && getBookingOtpShouldUseNoSlotEmail(jobId);
 
-  try {
-    for (let attempt = 1; attempt <= smsAttempts; attempt++) {
-      const codes = await getBookingSmsForwardedCodes(
-        jobId,
-        preferNoSlot,
-        receivedAfterMs
-      );
-      if (codes.length > 0) return codes;
-
-      await dualLogInfo(
-        `Booking OTP: SMS-forwarded email template returned no codes (attempt ${attempt}/${smsAttempts})`
-      );
-      if (attempt < smsAttempts) {
-        await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
-      }
-    }
-
-    await dualLogInfo(
-      `Booking OTP: falling back to ${BOOKING_OTP_EMAIL_FROM_EPCHOTELS} email template`
-    );
-    return await getBookingEpcHotelsVerificationCodes(receivedAfterMs);
-  } finally {
-    if (jobId && preferNoSlot) {
-      clearBookingOtpUseNoSlotEmailForJob(jobId);
-    }
-  }
-}
-
-/**
- * Booking.com codes from the epchotels template:
- * From/To verify@epchotels.com, Subject "Extranet code: 248295 (don't share)".
- */
-export async function getBookingEpcHotelsVerificationCodes(
-  receivedAfterMs: number = bookingOtpEmailWindowStart()
-): Promise<string[]> {
-  try {
-    const credentialsLoaded = await loadCredentials();
-    if (!credentialsLoaded) {
-      throw new Error(
-        "Failed to load Gmail credentials. Please complete authentication setup first."
-      );
-    }
-
-    const gmail = google.gmail({ version: "v1", auth: oauth2Client });
-    const res = await gmail.users.messages.list({
-      userId: "me",
-      maxResults: 20,
-      q: withReceivedAfter(
-        `from:${BOOKING_OTP_EMAIL_FROM_EPCHOTELS}`,
-        receivedAfterMs
-      ),
-    });
-
-    if (!res.data.messages || res.data.messages.length === 0) {
-      await dualLogInfo(
-        `No ${BOOKING_OTP_EMAIL_FROM_EPCHOTELS} emails found in the last ${
-          BOOKING_OTP_EMAIL_MAX_AGE_MS / 60000
-        } minutes.`
-      );
-      return [];
-    }
-
-    await dualLogInfo(
-      `Found ${res.data.messages.length} ${BOOKING_OTP_EMAIL_FROM_EPCHOTELS} emails`
-    );
-
-    const codes: string[] = [];
-    for (const msg of res.data.messages) {
-      if (!msg.id || codes.length >= 5) break;
-
-      const email = await gmail.users.messages.get({
-        userId: "me",
-        id: msg.id,
-        format: "full",
-      });
-
-      if (!isReceivedAfter(email.data.internalDate, receivedAfterMs)) continue;
-
-      const headers = email.data.payload?.headers || [];
-      const fromHeader = (
-        headers.find((h) => (h.name || "").toLowerCase() === "from")?.value || ""
-      ).toLowerCase();
-      if (!fromHeader.includes(BOOKING_OTP_EMAIL_FROM_EPCHOTELS)) continue;
-
-      const subject =
-        headers.find((h) => (h.name || "").toLowerCase() === "subject")?.value || "";
-      const bodyText = getEmailBodyText(email.data) || email.data.snippet || "";
-      const match = `${subject} ${bodyText}`.match(
-        /Extranet\s+code:\s*(\d{6})/i
-      );
-      if (match && match[1] && !codes.includes(match[1])) {
-        codes.push(match[1]);
-        await dualLogInfo(`Found verification code (epchotels): ${match[1]}`);
-      }
-    }
-
-    await dualLogInfo(
-      `Total epchotels verification codes found: ${codes.length}`,
-      codes
-    );
-    return codes;
-  } catch (error: any) {
-    await dualLogError("Error fetching epchotels verification codes:", error.message);
-    return [];
-  }
-}
-
-/**
- * SMS-forwarded template (IFTTT / rfitsms).
- * - Single phone (no port): OLD behaviour from before e329dfc – IFTTT only, no slot/From/To filter.
- * - Multi-phone with port: NEW behaviour – filter by From/To and slot (PORT X / Receiver).
- */
-async function getBookingSmsForwardedCodes(
-  jobId: string | undefined,
-  preferNoSlot: boolean,
-  receivedAfterMs: number
-): Promise<string[]> {
   try {
     const credentialsLoaded = await loadCredentials();
     if (!credentialsLoaded) {
@@ -410,59 +292,13 @@ async function getBookingSmsForwardedCodes(
     const usePortFlow = Boolean(jobContact?.port) && !preferNoSlot;
 
     const gmail = google.gmail({ version: "v1", auth: oauth2Client });
-
-    if (!usePortFlow) {
-      // --- OLD: single phone, no port (exactly as before commit e329dfc) ---
-      const res = await gmail.users.messages.list({
-        userId: "me",
-        maxResults: 20,
-        q: withReceivedAfter("from:action@ifttt.com", receivedAfterMs),
-      });
-
-      if (!res.data.messages || res.data.messages.length === 0) {
-        await dualLogInfo("No IFTTT emails found in the last 2 minutes.");
-        return [];
-      }
-
-      await dualLogInfo(`Found ${res.data.messages.length} IFTTT emails`);
-
-      const codes: string[] = [];
-      for (const msg of res.data.messages) {
-        if (!msg.id || codes.length >= 5) break;
-
-        const email = await gmail.users.messages.get({
-          userId: "me",
-          id: msg.id,
-          format: "full",
-        });
-
-        if (!isReceivedAfter(email.data.internalDate, receivedAfterMs)) continue;
-
-        const headers = email.data.payload?.headers || [];
-        const subjectHeader = headers.find((h: any) => h.name === "Subject");
-        const subject = subjectHeader?.value || "";
-        const emailBody = getEmailBodyText(email.data);
-        const snippet = email.data.snippet || "";
-        const bodyText = emailBody || snippet;
-        const searchText = `${subject} ${bodyText}`;
-
-        const codePattern = /(?:Extranet|PIN)\s+code:\s*(\d{6})/i;
-        const match = searchText.match(codePattern);
-        if (match && match[1]) {
-          const code = match[1];
-          if (code.length === 6 && !codes.includes(code)) {
-            codes.push(code);
-            await dualLogInfo(`Found verification code: ${code}`);
-          }
-        }
-      }
-
-      await dualLogInfo(`Total verification codes found: ${codes.length}`, codes);
-      return codes;
-    }
-
-    // --- NEW: multi-phone with port – filter by From/To and slot ---
-    const listQuery = `from:${OTP_EMAIL_FROM_IFTTT} OR from:${OTP_EMAIL_FROM_RFITSMS}`;
+    const listQuery = [
+      OTP_EMAIL_FROM_IFTTT,
+      OTP_EMAIL_FROM_RFITSMS,
+      BOOKING_OTP_EMAIL_FROM_EPCHOTELS,
+    ]
+      .map((from) => `from:${from}`)
+      .join(" OR ");
     const res = await gmail.users.messages.list({
       userId: "me",
       maxResults: 20,
@@ -470,15 +306,19 @@ async function getBookingSmsForwardedCodes(
     });
 
     if (!res.data.messages || res.data.messages.length === 0) {
-      await dualLogInfo("No OTP emails found (IFTTT or rfitsms) in the last 2 minutes.");
+      await dualLogInfo(
+        `No Booking OTP emails found in the last ${
+          BOOKING_OTP_EMAIL_MAX_AGE_MS / 60000
+        } minutes.`
+      );
       return [];
     }
 
-    await dualLogInfo(`Found ${res.data.messages.length} OTP emails (IFTTT / rfitsms)`);
+    await dualLogInfo(`Found ${res.data.messages.length} Booking OTP emails`);
 
-    const codes: string[] = [];
+    const found: { code: string; receivedAt: number; template: string }[] = [];
     for (const msg of res.data.messages) {
-      if (!msg.id || codes.length >= 5) continue;
+      if (!msg.id) continue;
 
       const email = await gmail.users.messages.get({
         userId: "me",
@@ -489,28 +329,54 @@ async function getBookingSmsForwardedCodes(
       if (!isReceivedAfter(email.data.internalDate, receivedAfterMs)) continue;
 
       const headers = email.data.payload?.headers || [];
-      if (!otpEmailMatchesFromTo(headers)) continue;
-
-      const subjectHeader = headers.find((h: any) => h.name === "Subject");
-      const subject = subjectHeader?.value || "";
-      const emailBody = getEmailBodyText(email.data);
-      const snippet = email.data.snippet || "";
-      const bodyText = emailBody || snippet;
+      const fromHeader = (
+        headers.find((h) => (h.name || "").toLowerCase() === "from")?.value || ""
+      ).toLowerCase();
+      const subject =
+        headers.find((h) => (h.name || "").toLowerCase() === "subject")?.value || "";
+      const bodyText = getEmailBodyText(email.data) || email.data.snippet || "";
       const searchText = `${subject} ${bodyText}`;
 
-      const parsed = parseOtpEmailSenderSlotAndCode(searchText, subject);
-      if (!parsed || !otpEmailMatchesJobSlot(parsed, jobContact!.port)) continue;
-      if (parsed.code.length === 6 && !codes.includes(parsed.code)) {
-        codes.push(parsed.code);
-        await dualLogInfo(`Found verification code for job (slot ${parsed.slot}): ${parsed.code}`);
+      let code: string | undefined;
+      let template = "";
+      if (fromHeader.includes(BOOKING_OTP_EMAIL_FROM_EPCHOTELS)) {
+        code = searchText.match(/Extranet\s+code:\s*(\d{6})/i)?.[1];
+        template = "epchotels";
+      } else if (usePortFlow) {
+        if (!otpEmailMatchesFromTo(headers)) continue;
+        const parsed = parseOtpEmailSenderSlotAndCode(searchText, subject);
+        if (!parsed || !otpEmailMatchesJobSlot(parsed, jobContact!.port)) continue;
+        code = parsed.code;
+        template = `sms slot ${parsed.slot}`;
+      } else if (fromHeader.includes(OTP_EMAIL_FROM_IFTTT)) {
+        code = searchText.match(/(?:Extranet|PIN)\s+code:\s*(\d{6})/i)?.[1];
+        template = "sms";
       }
+
+      if (!code || code.length !== 6 || found.some((f) => f.code === code)) {
+        continue;
+      }
+      found.push({
+        code,
+        receivedAt: Number(email.data.internalDate || 0),
+        template,
+      });
+      await dualLogInfo(`Found verification code (${template}): ${code}`);
     }
 
+    const codes = found
+      .sort((a, b) => b.receivedAt - a.receivedAt)
+      .slice(0, 5)
+      .map((f) => f.code);
     await dualLogInfo(`Total verification codes found: ${codes.length}`, codes);
     return codes;
   } catch (error: any) {
     await dualLogError("Error fetching verification codes:", error.message);
     return [];
+  } finally {
+    if (jobId && preferNoSlot) {
+      clearBookingOtpUseNoSlotEmailForJob(jobId);
+    }
   }
 }
 

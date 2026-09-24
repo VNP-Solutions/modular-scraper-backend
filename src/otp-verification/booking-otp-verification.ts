@@ -25,7 +25,6 @@ import {
 } from "../common/job-phone-store.js";
 import {
   bookingOtpEmailWindowStart,
-  getBookingEpcHotelsVerificationCodes,
   getBookingVerificationCodes,
 } from "./email-verification-utils.js";
 import {
@@ -716,6 +715,34 @@ async function reenterBookingCredentialsIfNeeded(
   return true;
 }
 
+/**
+ * Polls all OTP email templates for codes not yet tried, so a newly arrived
+ * OTP email can still be used after the earlier codes were rejected.
+ */
+async function waitForUntriedBookingCodes(
+  jobId: string | undefined,
+  receivedAfterMs: number,
+  triedCodes: string[],
+  polls = 3,
+  pollIntervalMs = 10000
+): Promise<string[]> {
+  for (let poll = 1; poll <= polls; poll++) {
+    await dualLogInfo(
+      `No untried OTP codes left; checking emails again (${poll}/${polls})...`
+    );
+
+    const codes = (
+      await getBookingVerificationCodes(jobId, { receivedAfterMs })
+    ).filter((c) => !triedCodes.includes(c));
+    if (codes.length > 0) return codes;
+
+    if (poll < polls) await delay(pollIntervalMs);
+  }
+
+  await dualLogInfo("No new OTP codes arrived; giving up.");
+  return [];
+}
+
 async function handleBookingOtpVerification(
   page: Page,
   jobId?: string,
@@ -1033,18 +1060,12 @@ async function handleBookingOtpVerification(
     let navDetected = false;
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      if (attempt === 2) {
-        const epcCodes = (
-          await getBookingEpcHotelsVerificationCodes(emailWindowStart)
-        ).filter(
-          (c) => !triedCodes.includes(c)
+      if (pendingCodes.length === 0) {
+        pendingCodes = await waitForUntriedBookingCodes(
+          jobId,
+          emailWindowStart,
+          triedCodes
         );
-        if (epcCodes.length > 0) {
-          await dualLogInfo(
-            "Previous template codes failed 2 times; switching to epchotels email template"
-          );
-          pendingCodes = epcCodes;
-        }
       }
 
       const code = pendingCodes.shift();
@@ -1182,7 +1203,11 @@ async function handleBookingOtpVerification(
     }
 
     if (!otpSuccess) {
-      const error = new Error("OTP verification failed unexpectedly");
+      const error = new Error(
+        triedCodes.length > 0
+          ? `OTP verification failed: all ${triedCodes.length} available code(s) were invalid (${triedCodes.join(", ")})`
+          : "OTP verification failed unexpectedly"
+      );
       setFailedReasonCode(
         error,
         inferBookingOtpFailedReasonCode(error.message)
